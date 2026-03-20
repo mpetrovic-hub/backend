@@ -1,13 +1,19 @@
 document.addEventListener('DOMContentLoaded', function () {
-    const forms = document.querySelectorAll('.kiwi-hlr-form');
+    const forms = document.querySelectorAll('.kiwi-form');
 
     forms.forEach(function (form) {
         form.addEventListener('submit', function () {
-            const button = form.querySelector('.kiwi-hlr-submit-button');
-            const loading = form.querySelector('.kiwi-hlr-loading');
+            const button = form.querySelector('.kiwi-submit-button');
+            const loading = form.querySelector('.kiwi-loading');
 
             if (button) {
-                //button.disabled = true;
+                // optional wieder aktivieren:
+                // button.disabled = true;
+
+                if (!button.dataset.originalText) {
+                    button.dataset.originalText = button.textContent;
+                }
+
                 button.textContent = 'Working...';
             }
 

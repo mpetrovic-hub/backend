@@ -53,21 +53,21 @@ add_action('wp_enqueue_scripts', function () {
         'kiwi-backend-components',
         plugin_dir_url(dirname(__FILE__)) . 'assets/css/components.css',
         [],
-        '0.1'
+        filemtime(dirname(__DIR__) . '/assets/css/components.css')
     );
 
     wp_enqueue_style(
         'kiwi-backend-forms',
         plugin_dir_url(dirname(__FILE__)) . 'assets/css/forms.css',
         ['kiwi-backend-components'],
-        '0.1'
+        filemtime(dirname(__DIR__) . '/assets/css/forms.css')
     );
 
     wp_enqueue_style(
         'kiwi-backend-tables',
         plugin_dir_url(dirname(__FILE__)) . 'assets/css/tables.css',
         ['kiwi-backend-components'],
-        '0.1'
+        filemtime(dirname(__DIR__) . '/assets/css/tables.css')
     );
 
     wp_enqueue_style(
@@ -78,7 +78,7 @@ add_action('wp_enqueue_scripts', function () {
             'kiwi-backend-forms',
             'kiwi-backend-tables',
         ],
-        '0.1'
+        filemtime(dirname(__DIR__) . '/assets/css/frontend.css')
     );
 
     wp_enqueue_script(
