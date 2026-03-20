@@ -117,10 +117,12 @@ class Kiwi_Hlr_Lookup_Shortcode
         $output .= '<form method="post" class="kiwi-form">';
         $output .= wp_nonce_field('kiwi_hlr_lookup_action', 'kiwi_hlr_lookup_nonce', true, false);
         $output .= '<input type="hidden" name="kiwi_hlr_form_action" value="lookup">';
-        $output .= '<p>';        
+
+        $output .= '<p class="kiwi-field">';        
         $output .= '<label for="kiwi_hlr_input"><strong>MSISDNs</strong></label><br>';
         $output .= '<textarea id="kiwi_hlr_input" name="kiwi_hlr_input" class="kiwi-textarea" rows="10" cols="50" placeholder="+30 69...&#10;3069...&#10;69..." style="width:100%; max-width:700px;">' . esc_textarea($submitted_input) . '</textarea>';
         $output .= '</p>';
+
         $output .= '<p>';
         $output .= '<p class="kiwi-hlr-actions">';
         $output .= '<button type="submit" name="kiwi_hlr_lookup_submit" value="1" class="kiwi-button kiwi-submit-button">Run HLR Lookup</button>';
