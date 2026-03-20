@@ -6,9 +6,9 @@
 .kiwi-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 14px;
+    font-size: 12px;
     background: #fff;
-    border-radius: 8px;
+    border-radius: 18px;
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
