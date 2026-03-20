@@ -10,10 +10,11 @@ body {
 .kiwi-results-meta {
     font-size: 14px;
     margin-block-end: 0px;
+    margin: 0px 0px 0px 0px;
 }
 
 .kiwi-field label {
-    font-size: 17px;
+    font-size: 14px;
     color: rgb(238, 238, 238);
 }
 
