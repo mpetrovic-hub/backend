@@ -7,6 +7,15 @@ body {
     content: "⏳ ";
 }
 
+.kiwi-results-meta {
+    font-size: 14px;
+}
+
+.label {
+    font-size: 14px;
+    color: rgb(238, 238, 238);
+}
+
 /* .kiwi-hlr-form {
     font-size: 10px;
 }
