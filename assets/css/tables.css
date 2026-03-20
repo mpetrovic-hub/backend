@@ -9,7 +9,7 @@
     font-size: 12px;
     background: #fff;
     border-color: #37aa32;
-    border-width: 3px;
+    border-width: 7px;
     border-radius: 2px;
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
@@ -24,7 +24,7 @@
     text-align: left;
     padding: 12px 14px;
     font-weight: 600;
-    color: #333;
+    /* color: #333; */
     border-bottom: 1px solid #e5e7eb;
     white-space: nowrap;
 }

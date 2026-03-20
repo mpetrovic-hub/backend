@@ -1,6 +1,6 @@
 body {
-  color: white;
-  background-color: black;
+  color: rgb(238, 238, 238);
+  background-color: rgb(37, 37, 37);
 }
 
 .kiwi-hlr-loading::before {
