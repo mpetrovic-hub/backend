@@ -7,8 +7,8 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
-    background: #fff;
-    border-color: #37aa32;
+    background: #c2c2c2;
+    border-color: #37aa32 !important;
     border-width: 7px;
     border-radius: 2px;
     overflow: hidden;
