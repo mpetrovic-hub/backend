@@ -41,6 +41,7 @@ require_once __DIR__ . '/exporters/class-csv-exporter.php';
  * Shortcodes
  */
 require_once __DIR__ . '/shortcodes/class-hlr-lookup-shortcode.php';
+require_once __DIR__ . '/shortcodes/class-dimoco-refunder-shortcode.php';
 
 /**
  * HTTP / REST
@@ -98,24 +99,46 @@ add_action('wp_enqueue_scripts', function () {
 });
 
 add_action('init', function () {
-    $config      = new Kiwi_Config();
-    $client      = new Kiwi_Lily_Client($config);
-    $parser      = new Kiwi_Lily_Response_Parser();
-    $provider    = new Kiwi_Lily_Hlr_Provider($client, $parser);
-    $normalizer  = new Kiwi_Msisdn_Normalizer();
-    $hlr_service = new Kiwi_Hlr_Service($provider, $normalizer);
-    $batch       = new Kiwi_Batch_Service($hlr_service, $config, $normalizer);
+    $config = new Kiwi_Config();
 
-    $shortcode = new Kiwi_Hlr_Lookup_Shortcode($batch);
-    $shortcode->register();
+    // HLR / Lily
+    $lily_client        = new Kiwi_Lily_Client($config);
+    $lily_parser        = new Kiwi_Lily_Response_Parser();
+    $lily_hlr_provider  = new Kiwi_Lily_Hlr_Provider($lily_client, $lily_parser);
+    $msisdn_normalizer  = new Kiwi_Msisdn_Normalizer();
+    $hlr_service        = new Kiwi_Hlr_Service($lily_hlr_provider, $msisdn_normalizer);
+    $hlr_batch_service  = new Kiwi_Batch_Service($hlr_service, $config, $msisdn_normalizer);
+
+    $hlr_shortcode = new Kiwi_Hlr_Lookup_Shortcode($hlr_batch_service);
+    $hlr_shortcode->register();
+
+    // DIMOCO / Refunder
+    $dimoco_digest               = new Kiwi_Dimoco_Digest();
+    $dimoco_client               = new Kiwi_Dimoco_Client($config, $dimoco_digest);
+    $dimoco_response_parser      = new Kiwi_Dimoco_Response_Parser();
+    $dimoco_refund_batch_service = new Kiwi_Dimoco_Refund_Batch_Service(
+        $dimoco_client,
+        $dimoco_response_parser,
+        $config
+    );
+
+    $dimoco_refund_shortcode = new Kiwi_Dimoco_Refunder_Shortcode(
+        $dimoco_refund_batch_service,
+        $config
+    );
+    $dimoco_refund_shortcode->register();
 });
 
 add_action('init', function () {
-    $config   = new Kiwi_Config();
-    $verifier = new Kiwi_Dimoco_Callback_Verifier();
-    $parser   = new Kiwi_Dimoco_Response_Parser();
+    $config                    = new Kiwi_Config();
+    $dimoco_callback_verifier  = new Kiwi_Dimoco_Callback_Verifier();
+    $dimoco_response_parser    = new Kiwi_Dimoco_Response_Parser();
 
-    $rest_routes = new Kiwi_Rest_Routes($config, $verifier, $parser);
+    $rest_routes = new Kiwi_Rest_Routes(
+        $config,
+        $dimoco_callback_verifier,
+        $dimoco_response_parser
+    );
     $rest_routes->register();
 });
 
@@ -153,9 +176,9 @@ add_action('init', function () {
     $batch   = new Kiwi_Dimoco_Refund_Batch_Service($client, $parser, $config);
 
     $input = <<<TEXT
-RD-p-123456-8338-45c6-af9e-fe43d2ea5201
-RD-p-123456-8338-45c6-af9e-fe43d2ea5201
-RD-p-abcdef12-3456-7890-abcd-1234567890ab
+RD-p-123456-8338-45c6-af9e-fe43d2ea5201bla
+RD-p-123456-8338-45c6-af9e-fe43d2ea5201blub
+RD-p-abcdef12-3456-7890-abcd-1234567890abblurp
 TEXT;
 
     $result = $batch->process('at_service_getstronger', '436641234567', $input);
