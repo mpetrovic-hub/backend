@@ -8,7 +8,9 @@
     border-collapse: collapse;
     font-size: 12px;
     background: #fff;
-    border-radius: 20px;
+    border-color: #37aa32;
+    border-width: 3px;
+    border-radius: 2px;
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }

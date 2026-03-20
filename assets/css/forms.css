@@ -6,7 +6,7 @@
     width: 100%;
     max-width: 100%;
     padding: 10px 12px;
-    font-size: 14px;
+    font-size: 12px;
     line-height: 1.4;
     color: #333;
     background: #fff;
@@ -54,7 +54,7 @@
 }
 
 .kiwi-textarea {
-    font-size: 12px;
+    /* font-size: 12px; */
     resize: vertical;
     min-height: 120px;
 }
@@ -66,6 +66,6 @@
 .kiwi-field label {
     display: inline-block;
     margin-bottom: 6px;
-    font-size: 13px;
+    font-size: 14px;
     color: #555;
 }
