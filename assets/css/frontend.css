@@ -1,0 +1,13 @@
+.kiwi-hlr-loading::before {
+    content: "⏳ ";
+}
+
+
+
+.kiwi-hlr-form {
+    font-size: 10px;
+}
+
+.kiwi-hlr-results-table {
+    font-size: 8px;
+}

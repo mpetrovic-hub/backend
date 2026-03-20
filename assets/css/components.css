@@ -1,0 +1,46 @@
+.kiwi-button {
+    display: inline-block;
+    padding: 10px 16px;
+    border: 1px solid #37aa32;
+    border-radius: 6px;
+    background: #37aa32;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.05s ease;
+}
+
+.kiwi-button:hover {
+    background: #2f952b;
+    border-color: #2f952b;
+    color: #ffffff;
+}
+
+.kiwi-button:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(55, 170, 50, 0.2);
+}
+
+.kiwi-button:active {
+    transform: translateY(1px);
+}
+
+.kiwi-button:disabled,
+.kiwi-button.is-busy {
+    opacity: 0.65;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.kiwi-button--secondary {
+    background: #ffffff;
+    color: #37aa32;
+}
+
+.kiwi-button--secondary:hover {
+    background: #f3fbf3;
+    color: #2f952b;
+}
