@@ -1,0 +1,65 @@
+.kiwi-table-wrap {
+    overflow-x: auto;
+    margin-top: 20px;
+}
+
+.kiwi-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+/* Header */
+.kiwi-table thead {
+    background: #f4f6f8;
+}
+
+.kiwi-table th {
+    text-align: left;
+    padding: 12px 14px;
+    font-weight: 600;
+    color: #333;
+    border-bottom: 1px solid #e5e7eb;
+    white-space: nowrap;
+}
+
+/* Body */
+.kiwi-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #f1f3f5;
+    color: #444;
+}
+
+/* Zebra rows */
+.kiwi-table tbody tr:nth-child(even) {
+    background: #fafbfc;
+}
+
+/* Hover */
+.kiwi-table tbody tr:hover {
+    background: #f1f5f9;
+}
+
+/* Status coloring (optional nice touch) */
+.kiwi-table td:nth-child(6) {
+    font-weight: 500;
+}
+
+/* Pending */
+.kiwi-table td:nth-child(6):contains("Pending") {
+    color: #b08900;
+}
+
+/* Success */
+.kiwi-table td:nth-child(6):contains("Success") {
+    color: #2f9e44;
+}
+
+/* Failure */
+.kiwi-table td:nth-child(6):contains("Failure") {
+    color: #d00000;
+}

@@ -89,16 +89,21 @@ class Kiwi_Dimoco_Refunder_Shortcode
                 foreach ($batch_result['results'] as $row) {
                     $status_text = (string) ($row['action_status_text'] ?? '');
                     $detail = (string) ($row['detail'] ?? '');
+                    $status_class = '';
 
-                    if ($status_text === 'pending') {
-                        $status_text = 'Pending';
-                    } elseif ($status_text === 'success') {
-                        $status_text = 'Success';
-                    } elseif ($status_text === 'failure') {
-                        $status_text = 'Failure';
-                    } elseif ($status_text === 'validation_failed') {
-                        $status_text = 'Validation failed';
-                    }
+                        if ($status_text === 'pending') {
+                            $status_class = 'kiwi-status--pending';
+                            $status_text = 'Pending';
+                        } elseif ($status_text === 'success') {
+                            $status_class = 'kiwi-status--success';
+                            $status_text = 'Success';
+                        } elseif ($status_text === 'failure') {
+                            $status_class = 'kiwi-status--failure';
+                            $status_text = 'Failure';
+                        } elseif ($status_text === 'validation_failed') {
+                            $status_class = 'kiwi-status--warning';
+                            $status_text = 'Validation failed';
+                        }
 
                     $output .= '<tr>';
                     $output .= '<td>' . esc_html((string) ($row['msisdn'] ?? '')) . '</td>';
@@ -106,7 +111,8 @@ class Kiwi_Dimoco_Refunder_Shortcode
                     $output .= '<td>' . esc_html((string) ($row['transaction_id'] ?? $row['input_transaction_id'] ?? '')) . '</td>';
                     $output .= '<td>' . esc_html((string) ($row['reference'] ?? '')) . '</td>';
                     $output .= '<td>' . esc_html((string) ($row['status_code'] ?? '')) . '</td>';
-                    $output .= '<td>' . esc_html($status_text) . '</td>';
+                    /* $output .= '<td>' . esc_html($status_text) . '</td>'; */
+                    $output .= '<td class="' . esc_attr($status_class) . '">' . esc_html($status_text) . '</td>';
                     $output .= '<td>' . esc_html($detail) . '</td>';
                     $output .= '</tr>';
                 }

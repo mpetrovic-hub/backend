@@ -55,6 +55,7 @@ class Kiwi_Hlr_Lookup_Shortcode
             $output .= '</div>';
 
             if (!empty($batch_result['results'])) {
+                $output .= '<div class="kiwi-table-wrap">';
                 $output .= '<table class="kiwi-table">';
                 $output .= '<thead>';
                 $output .= '<tr>';
@@ -113,7 +114,7 @@ class Kiwi_Hlr_Lookup_Shortcode
             }
         }
 
-        $output .= '<form method="post" class="kiwi-hlr-form">';
+        $output .= '<form method="post" class="kiwi-form">';
         $output .= wp_nonce_field('kiwi_hlr_lookup_action', 'kiwi_hlr_lookup_nonce', true, false);
         $output .= '<input type="hidden" name="kiwi_hlr_form_action" value="lookup">';
         $output .= '<p>';        
