@@ -55,7 +55,7 @@ class Kiwi_Hlr_Lookup_Shortcode
             $output .= '</div>';
 
             if (!empty($batch_result['results'])) {
-                $output .= '<table class="kiwi-hlr-results-table">';
+                $output .= '<table class="kiwi-table">';
                 $output .= '<thead>';
                 $output .= '<tr>';
                 $output .= '<th>MSISDN</th>';
@@ -118,7 +118,7 @@ class Kiwi_Hlr_Lookup_Shortcode
         $output .= '<input type="hidden" name="kiwi_hlr_form_action" value="lookup">';
         $output .= '<p>';        
         $output .= '<label for="kiwi_hlr_input"><strong>MSISDNs</strong></label><br>';
-        $output .= '<textarea id="kiwi_hlr_input" name="kiwi_hlr_input" rows="10" cols="50" placeholder="+30 69...&#10;3069...&#10;69..." style="width:100%; max-width:700px;">' . esc_textarea($submitted_input) . '</textarea>';
+        $output .= '<textarea id="kiwi_hlr_input" name="kiwi_hlr_input" class="kiwi-textarea" rows="10" cols="50" placeholder="+30 69...&#10;3069...&#10;69..." style="width:100%; max-width:700px;">' . esc_textarea($submitted_input) . '</textarea>';
         $output .= '</p>';
         $output .= '<p>';
         $output .= '<p class="kiwi-hlr-actions">';
