@@ -4,6 +4,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// Initialize REST routes for callbacks from Aggregators like DIMOCO and Lily
+
 class Kiwi_Rest_Routes
 {
     private $config;

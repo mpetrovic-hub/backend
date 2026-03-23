@@ -24,6 +24,7 @@ require_once __DIR__ . '/providers/dimoco/class-dimoco-client.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-response-parser.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-callback-verifier.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
+require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.php';
 
 /**
  * Services
@@ -140,6 +141,12 @@ add_action('init', function () {
         $dimoco_response_parser
     );
     $rest_routes->register();
+});
+
+// DIMOCO Refund Callback Repository - create table on init if not exists
+add_action('init', function () {
+    $repository = new Kiwi_Dimoco_Callback_Refund_Repository();
+    $repository->create_table();
 });
 
 /* Temporary test route Dimoco Refund */
