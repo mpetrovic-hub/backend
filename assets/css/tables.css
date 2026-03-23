@@ -11,7 +11,7 @@
     /* border-color: #37aa32; */
     border-width: 7px;    
     border: 3px solid #37aa32 !important;
-    border-radius: 6px !important;
+    border-radius: 6px;
     /* overflow: hidden; */
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
@@ -54,16 +54,16 @@
 }
 
 /* Pending */
-.kiwi-table td:nth-child(6):contains("Pending") {
+.kiwi-table td:nth-child(6):contains("pending") {
     color: #b08900;
 }
 
 /* Success */
-.kiwi-table td:nth-child(6):contains("Success") {
+.kiwi-table td:nth-child(6):contains("success") {
     color: #2f9e44;
 }
 
 /* Failure */
-.kiwi-table td:nth-child(6):contains("Failure") {
+.kiwi-table td:nth-child(6):contains("failure") {
     color: #d00000;
 }
