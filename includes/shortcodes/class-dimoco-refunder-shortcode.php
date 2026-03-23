@@ -17,6 +17,9 @@ class Kiwi_Dimoco_Refunder_Shortcode
      */
     private $config;
 
+    // Repository for storing and retrieving DIMOCO callback responses related to refunds     
+    private $callback_refund_repository;
+
     public function __construct(
         Kiwi_Dimoco_Refund_Batch_Service $batch_service,
         Kiwi_Config $config,
