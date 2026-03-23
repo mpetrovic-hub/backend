@@ -19,10 +19,12 @@ class Kiwi_Dimoco_Refunder_Shortcode
 
     public function __construct(
         Kiwi_Dimoco_Refund_Batch_Service $batch_service,
-        Kiwi_Config $config
+        Kiwi_Config $config,
+        Kiwi_Dimoco_Callback_Refund_Repository $callback_refund_repository
     ) {
         $this->batch_service = $batch_service;
         $this->config = $config;
+        $this->callback_refund_repository = $callback_refund_repository;
     }
 
     /**
@@ -49,6 +51,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
         $service_key = '';
         $msisdn = '';
         $transactions_input = '';
+        $async_results = [];
 
         // Batch result from the synchronous refund run
         $batch_result = null;
@@ -80,6 +83,28 @@ class Kiwi_Dimoco_Refunder_Shortcode
                 : '';
 
             $batch_result = $this->batch_service->process($service_key, $msisdn, $transactions_input);
+
+            if (
+                is_array($batch_result) &&
+                !empty($batch_result['results']) &&
+                is_array($batch_result['results'])
+            ) {
+                $transaction_ids = [];
+
+                foreach ($batch_result['results'] as $row) {
+                    $transaction_id = (string) ($row['transaction_id'] ?? $row['input_transaction_id'] ?? '');
+
+                    if ($transaction_id !== '') {
+                        $transaction_ids[] = $transaction_id;
+                    }
+                }
+
+                $transaction_ids = array_values(array_unique($transaction_ids));
+
+                if (!empty($transaction_ids)) {
+                    $async_results = $this->callback_refund_repository->get_recent_by_transaction_ids($transaction_ids, 100);
+                }
+            }
         }
 
         /**
@@ -155,7 +180,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
          * This is intentionally rendered BELOW the form.
          *
          * Important:
-         * This table shows only the synchronous response returned
+         * This table shows the synchronous and then the asynchronous response returned
          * immediately by DIMOCO after the refund request.
          *
          * Final refund status may arrive later via callback.
@@ -267,6 +292,70 @@ class Kiwi_Dimoco_Refunder_Shortcode
             } else {
                 $output .= '<p>No refund results found.</p>';
             }
+
+            /**
+             * ---------------------------------------------------------
+             * ASYNCHRONOUS CALLBACK RESULTS
+             * ---------------------------------------------------------
+             * These rows come from the stored DIMOCO callback responses.
+             * This is the more important/final refund status layer.
+             */
+            if (!empty($async_results) && is_array($async_results)) {
+                $output .= '<div class="kiwi-notice kiwi-notice--info">';
+                $output .= '<p><strong>Asynchronous callback responses:</strong> The table below shows stored DIMOCO callback results for the submitted transaction IDs.</p>';
+                $output .= '</div>';
+
+                $output .= '<div class="kiwi-table-wrap">';
+                $output .= '<table class="kiwi-table">';
+                $output .= '<thead>';
+                $output .= '<tr>';
+                $output .= '<th>Created</th>';
+                $output .= '<th>Service</th>';
+                $output .= '<th>Transaction ID</th>';
+                $output .= '<th>Reference</th>';
+                $output .= '<th>Order ID</th>';
+                $output .= '<th>Status</th>';
+                $output .= '<th>Detail</th>';
+                $output .= '<th>PSP Detail</th>';
+                $output .= '</tr>';
+                $output .= '</thead>';
+                $output .= '<tbody>';
+
+                foreach ($async_results as $row) {
+                    $status_text = (string) ($row['action_status_text'] ?? '');
+                    $status_class = '';
+
+                    if ($status_text === 'pending') {
+                        $status_class = 'kiwi-status--pending';
+                        $status_text = 'Pending';
+                    } elseif ($status_text === 'success') {
+                        $status_class = 'kiwi-status--success';
+                        $status_text = 'Success';
+                    } elseif ($status_text === 'failure') {
+                        $status_class = 'kiwi-status--failure';
+                        $status_text = 'Failure';
+                    } elseif ($status_text === 'validation_failed') {
+                        $status_class = 'kiwi-status--warning';
+                        $status_text = 'Validation failed';
+                    }
+
+                    $output .= '<tr>';
+                    $output .= '<td>' . esc_html((string) ($row['created_at'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['service_label'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['transaction_id'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['reference'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['order_id'] ?? '')) . '</td>';
+                    $output .= '<td class="' . esc_attr($status_class) . '">' . esc_html($status_text) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['detail'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['detail_psp'] ?? '')) . '</td>';
+                    $output .= '</tr>';
+                }
+
+                $output .= '</tbody>';
+                $output .= '</table>';
+                $output .= '</div>';
+            }        
+
         }
 
         return $output;

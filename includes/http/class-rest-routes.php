@@ -11,16 +11,19 @@ class Kiwi_Rest_Routes
     private $config;
     private $dimoco_callback_verifier;
     private $dimoco_response_parser;
+    private $dimoco_callback_refund_repository;    
 
     public function __construct(
-        Kiwi_Config $config,
-        Kiwi_Dimoco_Callback_Verifier $dimoco_callback_verifier,
-        Kiwi_Dimoco_Response_Parser $dimoco_response_parser
-    ) {
-        $this->config = $config;
-        $this->dimoco_callback_verifier = $dimoco_callback_verifier;
-        $this->dimoco_response_parser = $dimoco_response_parser;
-    }
+    Kiwi_Config $config,
+    Kiwi_Dimoco_Callback_Verifier $dimoco_callback_verifier,
+    Kiwi_Dimoco_Response_Parser $dimoco_response_parser,
+    Kiwi_Dimoco_Callback_Refund_Repository $dimoco_callback_refund_repository
+) {
+    $this->config = $config;
+    $this->dimoco_callback_verifier = $dimoco_callback_verifier;
+    $this->dimoco_response_parser = $dimoco_response_parser;
+    $this->dimoco_callback_refund_repository = $dimoco_callback_refund_repository;
+}
 
     public function register(): void
     {
@@ -88,12 +91,12 @@ class Kiwi_Rest_Routes
             'xml'         => $xml,
         ]);
 
-        $this->maybe_log_dimoco_callback($parsed_result);
+        $parsed_result['service_key'] = $service['service_key'] ?? '';
+        $parsed_result['service_label'] = $service['label'] ?? '';
 
-        /* return new WP_REST_Response([
-            'success' => true,
-            'message' => 'OK',
-        ], 200); */
+        $this->dimoco_callback_refund_repository->insert($parsed_result);
+
+        $this->maybe_log_dimoco_callback($parsed_result);      
 
         return new WP_REST_Response('OK', 200);
     }
@@ -114,8 +117,9 @@ class Kiwi_Rest_Routes
             return null;
         }
 
-        foreach ($this->config->get_dimoco_services() as $service) {
+        foreach ($this->config->get_dimoco_services() as $service_key => $service) {
             if (($service['order_id'] ?? '') === $order_id) {
+                $service['service_key'] = $service_key;
                 return $service;
             }
         }

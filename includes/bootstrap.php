@@ -122,10 +122,12 @@ add_action('init', function () {
         $dimoco_response_parser,
         $config
     );
+    $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
 
     $dimoco_refund_shortcode = new Kiwi_Dimoco_Refunder_Shortcode(
         $dimoco_refund_batch_service,
         $config
+        $dimoco_callback_refund_repository
     );
     $dimoco_refund_shortcode->register();
 });
@@ -134,11 +136,13 @@ add_action('init', function () {
     $config                    = new Kiwi_Config();
     $dimoco_callback_verifier  = new Kiwi_Dimoco_Callback_Verifier();
     $dimoco_response_parser    = new Kiwi_Dimoco_Response_Parser();
+    $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
 
     $rest_routes = new Kiwi_Rest_Routes(
         $config,
         $dimoco_callback_verifier,
-        $dimoco_response_parser
+        $dimoco_response_parser,
+        $dimoco_callback_refund_repository
     );
     $rest_routes->register();
 });
