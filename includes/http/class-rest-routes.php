@@ -56,6 +56,8 @@ class Kiwi_Rest_Routes
 
     public function handle_dimoco_callback(WP_REST_Request $request): WP_REST_Response
     {
+        error_log('KIWI DIMOCO CALLBACK HIT');
+        
         $xml = (string) $request->get_param('data');
         $received_digest = (string) $request->get_param('digest');
 
@@ -112,7 +114,7 @@ class Kiwi_Rest_Routes
         }
 
         $order_id = trim((string) ($xml_object->payment_parameters->order ?? ''));
-
+public function handle_dimoco_callback
         if ($order_id === '') {
             return null;
         }
