@@ -114,7 +114,7 @@ class Kiwi_Rest_Routes
         }
 
         $order_id = trim((string) ($xml_object->payment_parameters->order ?? ''));
-//public function handle_dimoco_callback
+
         if ($order_id === '') {
             return null;
         }
@@ -135,6 +135,6 @@ class Kiwi_Rest_Routes
             return;
         }
 
-        error_log('KIWI DIMOCO CALLBACK: ' . wp_json_encode($parsed_result));
+        error_log('KIWI DIMOCO async CALLBACK: ' . wp_json_encode($parsed_result));
     }
 }

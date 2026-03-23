@@ -25,7 +25,7 @@ class Kiwi_Dimoco_Callback_Handler
      */
     public function handle(): void
     {
-        error_log('KIWI DIMOCO CALLBACK HIT pipapo');
+        error_log('KIWI DIMOCO CALLBACK HIT from dimoco-callback-handler');
 
         $xml = isset($_POST['data']) ? wp_unslash($_POST['data']) : '';
         $received_digest = isset($_POST['digest']) ? wp_unslash($_POST['digest']) : '';
