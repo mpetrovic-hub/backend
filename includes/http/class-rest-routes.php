@@ -54,7 +54,7 @@ class Kiwi_Rest_Routes
         ]);
     }
 
-    public function handle_dimoco_callback(WP_REST_Request $request): WP_REST_Response
+    /*public function handle_dimoco_callback(WP_REST_Request $request): WP_REST_Response
     {
         error_log('KIWI DIMOCO CALLBACK HIT');
 
@@ -101,7 +101,92 @@ class Kiwi_Rest_Routes
         $this->maybe_log_dimoco_callback($parsed_result);      
 
         return new WP_REST_Response('OK', 200);
+    } */
+
+    /* handle dimoco callback with error logging */
+    public function handle_dimoco_callback(WP_REST_Request $request): WP_REST_Response
+{
+    error_log('KIWI DIMOCO CALLBACK HIT');
+
+    error_log('KIWI DIMOCO CALLBACK STEP 1: before reading params');
+
+    $xml = (string) $request->get_param('data');
+    $received_digest = (string) $request->get_param('digest');
+
+    error_log('KIWI DIMOCO CALLBACK STEP 2: params read');
+    error_log('KIWI DIMOCO CALLBACK XML LENGTH: ' . strlen($xml));
+    error_log('KIWI DIMOCO CALLBACK DIGEST LENGTH: ' . strlen($received_digest));
+
+    if ($xml === '' || $received_digest === '') {
+        error_log('KIWI DIMOCO CALLBACK: missing data or digest');
+
+        return new WP_REST_Response([
+            'success' => false,
+            'message' => 'Missing callback parameters.',
+        ], 400);
     }
+    error_log('KIWI DIMOCO CALLBACK XML RAW: ' . $xml);
+
+    error_log('KIWI DIMOCO CALLBACK STEP 3: before resolve_service_by_order_from_xml');
+
+    $service = $this->resolve_service_by_order_from_xml($xml);
+
+    error_log('KIWI DIMOCO CALLBACK STEP 4: service resolved');
+
+    if ($service === null) {
+        error_log('KIWI DIMOCO CALLBACK: unknown order');
+
+        return new WP_REST_Response([
+            'success' => false,
+            'message' => 'Unknown DIMOCO order.',
+        ], 400);
+    }
+
+    $secret = $service['secret'] ?? '';
+    error_log('KIWI DIMOCO CALLBACK STEP 5: secret loaded');
+
+    $is_valid = $this->dimoco_callback_verifier->verify($xml, $received_digest, $secret);
+    error_log('KIWI DIMOCO CALLBACK STEP 6: digest checked => ' . ($is_valid ? 'valid' : 'invalid'));
+
+    if (!$is_valid) {
+        error_log('KIWI DIMOCO CALLBACK: invalid digest');
+
+        return new WP_REST_Response([
+            'success' => false,
+            'message' => 'Invalid callback digest.',
+        ], 403);
+    }
+
+    error_log('KIWI DIMOCO CALLBACK STEP 7: before parser');
+
+    $parsed_result = $this->dimoco_response_parser->parse([
+        'success'     => true,
+        'status_code' => 200,
+        'request'     => [],
+        'xml'         => $xml,
+    ]);
+
+    error_log('KIWI DIMOCO CALLBACK STEP 8: parser done');
+    error_log('KIWI DIMOCO CALLBACK PARSED: ' . wp_json_encode($parsed_result));
+
+    $parsed_result['service_key'] = $service['service_key'] ?? '';
+    $parsed_result['service_label'] = $service['label'] ?? '';
+
+    error_log('KIWI DIMOCO CALLBACK STEP 9: before insert');
+
+    $inserted = $this->dimoco_callback_refund_repository->insert($parsed_result);
+
+    error_log('KIWI DIMOCO CALLBACK STEP 10: insert => ' . ($inserted ? 'OK' : 'FAILED'));
+
+    $this->maybe_log_dimoco_callback($parsed_result);
+
+    error_log('KIWI DIMOCO CALLBACK STEP 11: returning 200 OK');
+
+    $response = new WP_REST_Response('OK', 200);
+    $response->header('Content-Type', 'text/plain; charset=utf-8');
+
+    return $response;
+}
 
     private function resolve_dimoco_service_by_order_from_xml(string $xml): ?array
     {
