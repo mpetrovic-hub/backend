@@ -128,19 +128,7 @@ class Kiwi_Hlr_Lookup_Shortcode
             $output .= '<p><strong>Processed:</strong> ' . esc_html((string) ($batch_result['processed'] ?? 0)) . '</p>';
             $output .= '</div>';
 
-            /**
-             * Export button
-             *
-             * Results are stored server-side in a transient.
-             * The export request uses GET + batch_id to avoid POST-replay issues.
-             */
-            if ($batch_id !== '') {
-                $output .= '<form method="get" style="margin-top:20px;">';
-                $output .= '<input type="hidden" name="kiwi_hlr_export" value="1">';
-                $output .= '<input type="hidden" name="batch_id" value="' . esc_attr($batch_id) . '">';
-                $output .= '<button type="submit" class="kiwi-button">Export CSV</button>';
-                $output .= '</form>';
-            }
+            
 
             /**
              * Result table
@@ -203,6 +191,21 @@ class Kiwi_Hlr_Lookup_Shortcode
             } else {
                 $output .= '<p>No results found.</p>';
             }
+
+            /**
+             * Export button
+             *
+             * Results are stored server-side in a transient.
+             * The export request uses GET + batch_id to avoid POST-replay issues.
+             */
+            if ($batch_id !== '') {
+                $output .= '<form method="get" style="margin-top:20px;">';
+                $output .= '<input type="hidden" name="kiwi_hlr_export" value="1">';
+                $output .= '<input type="hidden" name="batch_id" value="' . esc_attr($batch_id) . '">';
+                $output .= '<button type="submit" class="kiwi-button">Export CSV</button>';
+                $output .= '</form>';
+            }    
+
         }
 
         return $output;
