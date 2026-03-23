@@ -127,9 +127,9 @@ class Kiwi_Rest_Routes
     }
     error_log('KIWI DIMOCO CALLBACK XML RAW: ' . $xml);
 
-    error_log('KIWI DIMOCO CALLBACK STEP 3: before resolve_service_by_order_from_xml');
+    error_log('KIWI DIMOCO CALLBACK STEP 3: before resolve_dimoco_service_by_order_from_xml');
 
-    $service = $this->resolve_service_by_order_from_xml($xml);
+    $service = $this->resolve_dimoco_service_by_order_from_xml($xml);
 
     error_log('KIWI DIMOCO CALLBACK STEP 4: service resolved');
 
