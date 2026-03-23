@@ -44,3 +44,21 @@
     background: #f3fbf3;
     color: #2f952b;
 }
+
+.kiwi-notice {
+    padding: 12px 14px;
+    border-radius: 6px;
+    margin: 16px 0;
+}
+
+.kiwi-notice--info {
+    background: #eef6ff;
+    border: 1px solid #cfe3ff;
+    color: #234;
+}
+
+.kiwi-notice--error {
+    background: #fff1f0;
+    border: 1px solid #f5c2c0;
+    color: #7a1f1a;
+}
