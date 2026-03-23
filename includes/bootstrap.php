@@ -126,7 +126,7 @@ add_action('init', function () {
 
     $dimoco_refund_shortcode = new Kiwi_Dimoco_Refunder_Shortcode(
         $dimoco_refund_batch_service,
-        $config
+        $config,
         $dimoco_callback_refund_repository
     );
     $dimoco_refund_shortcode->register();
