@@ -25,26 +25,40 @@ class Kiwi_Dimoco_Callback_Handler
      */
     public function handle(): void
     {
+        error_log('KIWI DIMOCO CALLBACK HIT');
+
         $xml = isset($_POST['data']) ? wp_unslash($_POST['data']) : '';
         $received_digest = isset($_POST['digest']) ? wp_unslash($_POST['digest']) : '';
 
+        error_log('KIWI DIMOCO CALLBACK STEP 1: params read');
+        error_log('KIWI DIMOCO CALLBACK XML LENGTH: ' . strlen($xml));
+        error_log('KIWI DIMOCO CALLBACK DIGEST LENGTH: ' . strlen($received_digest));
+
         if ($xml === '' || $received_digest === '') {
+            error_log('KIWI DIMOCO CALLBACK: missing data or digest');
             status_header(400);
             echo 'Missing callback parameters.';
             exit;
         }
 
         $service = $this->resolve_service_by_order_from_xml($xml);
+        error_log('KIWI DIMOCO CALLBACK STEP 2: service resolved');
 
         if ($service === null) {
+            error_log('KIWI DIMOCO CALLBACK: unknown order');
             status_header(400);
             echo 'Unknown DIMOCO order.';
             exit;
         }
 
         $secret = $service['secret'] ?? '';
+        error_log('KIWI DIMOCO CALLBACK STEP 3: secret loaded');
 
-        if (!$this->verifier->verify($xml, $received_digest, $secret)) {
+        $is_valid = $this->verifier->verify($xml, $received_digest, $secret);
+        error_log('KIWI DIMOCO CALLBACK STEP 4: digest checked => ' . ($is_valid ? 'valid' : 'invalid'));
+
+        if (!$is_valid) {
+            error_log('KIWI DIMOCO CALLBACK: invalid digest');
             status_header(403);
             echo 'Invalid callback digest.';
             exit;
@@ -56,8 +70,13 @@ class Kiwi_Dimoco_Callback_Handler
             'request'     => [],
             'xml'         => $xml,
         ]);
+        error_log('KIWI DIMOCO CALLBACK STEP 5: parsed');
+
+        error_log('KIWI DIMOCO CALLBACK PARSED: ' . wp_json_encode($parsed_result));
 
         $this->maybe_log_callback($parsed_result);
+
+        error_log('KIWI DIMOCO CALLBACK STEP 6: returning 200 OK');
 
         status_header(200);
         echo 'OK';
