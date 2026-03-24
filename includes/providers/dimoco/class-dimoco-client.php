@@ -58,8 +58,9 @@ class Kiwi_Dimoco_Client
 
         //Error logging for debugging purposes - remove in production
         error_log('================ DIMOCO REQUEST START ================');
-        error_log('URL: ' . $url);
-        error_log('PAYLOAD: ' . wp_json_encode($payload));
+        error_log('URL: ' . $base_url);
+        error_log('PAYLOAD: ' . wp_json_encode($params));
+        error_log('DIMOCO DIGEST: ' . ($params['digest'] ?? 'MISSING'));
         error_log('================ DIMOCO REQUEST END ==================');
         error_log('DIMOCO DIGEST: ' . ($payload['digest'] ?? 'MISSING'));
 

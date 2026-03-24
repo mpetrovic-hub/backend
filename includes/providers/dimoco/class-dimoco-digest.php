@@ -18,10 +18,12 @@ class Kiwi_Dimoco_Digest
             $payload .= (string) $value;
         }
 
-        return hash_hmac('sha256', $payload, $password);
+        $digest = hash_hmac('sha256', $payload, $password);
+
+        // Debug logging - remove in production
+        error_log('DIMOCO DIGEST INPUT: ' . $payload);
+        error_log('DIMOCO DIGEST OUTPUT: ' . $digest);
+
+        return $digest;
     }
 }
-
-//Error logging for debugging purposes - remove in production
-error_log('DIMOCO DIGEST INPUT: ' . $string_to_hash);
-error_log('DIMOCO DIGEST OUTPUT: ' . $digest);
