@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Batch_Service
 {
-    private $operator_lookup_service;;
+    private $operator_lookup_service;
     private $config;
     private $normalizer;
 
