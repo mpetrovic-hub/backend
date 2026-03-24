@@ -56,6 +56,13 @@ class Kiwi_Dimoco_Client
 
         $params['digest'] = $this->digest_builder->create($params, $secret);
 
+        //Error logging for debugging purposes - remove in production
+        error_log('================ DIMOCO REQUEST START ================');
+        error_log('URL: ' . $url);
+        error_log('PAYLOAD: ' . wp_json_encode($payload));
+        error_log('================ DIMOCO REQUEST END ==================');
+        error_log('DIMOCO DIGEST: ' . ($payload['digest'] ?? 'MISSING'));
+
         $response = wp_remote_post($base_url, [
             'timeout' => $this->config->get_http_timeout(),
             'headers' => [
@@ -63,6 +70,17 @@ class Kiwi_Dimoco_Client
             ],
             'body' => $params,
         ]);
+
+        //Error logging for debugging purposes - remove in production
+        error_log('================ DIMOCO RESPONSE START ================');
+        if (is_wp_error($response)) {
+            error_log('WP ERROR: ' . $response->get_error_message());
+        } else {
+            error_log('STATUS CODE: ' . wp_remote_retrieve_response_code($response));
+            error_log('BODY: ' . wp_remote_retrieve_body($response));
+        }
+
+error_log('================ DIMOCO RESPONSE END ==================');
 
         if (is_wp_error($response)) {
             return [
