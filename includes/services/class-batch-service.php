@@ -6,16 +6,16 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Batch_Service
 {
-    private $hlr_service;
+    private $operator_lookup_service;;
     private $config;
     private $normalizer;
 
     public function __construct(
-        Kiwi_Hlr_Service $hlr_service,
+        Kiwi_Operator_Lookup_Service $operator_lookup_service,
         Kiwi_Config $config,
         Kiwi_Msisdn_Normalizer $normalizer
     ) {
-        $this->hlr_service = $hlr_service;
+        $this->operator_lookup_service = $operator_lookup_service;
         $this->config = $config;
         $this->normalizer = $normalizer;
     }

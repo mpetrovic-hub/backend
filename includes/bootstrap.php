@@ -14,7 +14,7 @@ require_once __DIR__ . '/core/class-config.php';
  */
 require_once __DIR__ . '/providers/lily/class-lily-client.php';
 require_once __DIR__ . '/providers/lily/class-lily-response-parser.php';
-require_once __DIR__ . '/providers/lily/class-lily-hlr-provider.php';
+require_once __DIR__ . '/providers/lily/class-lily-operator-lookup-provider.php';
 
 /**
  * DIMOCO
@@ -103,14 +103,13 @@ add_action('init', function () {
     $config = new Kiwi_Config();
 
     // HLR / Lily
-    $lily_client        = new Kiwi_Lily_Client($config);
-    $lily_parser        = new Kiwi_Lily_Response_Parser();
-    $lily_hlr_provider  = new Kiwi_Lily_Hlr_Provider($lily_client, $lily_parser);
-    $msisdn_normalizer  = new Kiwi_Msisdn_Normalizer();
-    $hlr_service        = new Kiwi_Hlr_Service($lily_hlr_provider, $msisdn_normalizer);
-    $hlr_batch_service  = new Kiwi_Batch_Service($hlr_service, $config, $msisdn_normalizer);
-
-    $hlr_shortcode = new Kiwi_Hlr_Lookup_Shortcode($hlr_batch_service);
+    $lily_client                    = new Kiwi_Lily_Client($config);
+    $lily_parser                    = new Kiwi_Lily_Response_Parser();
+    $lily_operator_lookup_provider  = new Kiwi_Lily_Operator_Lookup_Provider($lily_client, $lily_parser);
+    $msisdn_normalizer              = new Kiwi_Msisdn_Normalizer();
+    $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($lily_operator_lookup_provider, $msisdn_normalizer);
+    $hlr_batch_service              = new Kiwi_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
+    $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($hlr_batch_service);
     $hlr_shortcode->register();
 
     // DIMOCO / Refunder

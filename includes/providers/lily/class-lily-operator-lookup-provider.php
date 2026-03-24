@@ -4,7 +4,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Kiwi_Lily_Hlr_Provider
+class Kiwi_Lily_Operator_Lookup_Provider
 {
     private $client;
     private $parser;
