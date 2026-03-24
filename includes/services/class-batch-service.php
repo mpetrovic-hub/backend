@@ -63,14 +63,14 @@ class Kiwi_Batch_Service
         $retry_delay_seconds = max(0, $this->config->get_hlr_retry_delay_seconds());
 
         foreach ($msisdns_to_process as $index => $msisdn) {
-            $result = $this->hlr_service->lookup($msisdn);
+            $result = $this->operator_lookup_service->lookup($msisdn);
 
             if (($result['hlr_status'] ?? '') === 'REQUEST THROTTLED') {
                 if ($retry_delay_seconds > 0) {
                     sleep($retry_delay_seconds);
                 }
 
-                $result = $this->hlr_service->lookup($msisdn);
+                $result = $this->operator_lookup_service->lookup($msisdn);
 
                 $existing_messages = [];
                 if (!empty($result['messages']) && is_array($result['messages'])) {

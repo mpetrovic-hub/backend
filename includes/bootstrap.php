@@ -29,7 +29,6 @@ require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.ph
 /**
  * Services
  */
-/* require_once __DIR__ . '/services/class-hlr-service.php'; */
 require_once __DIR__ . '/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/services/class-batch-service.php';
 require_once __DIR__ . '/services/class-operator-lookup-service.php';
