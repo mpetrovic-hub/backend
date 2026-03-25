@@ -17,17 +17,19 @@ require_once __DIR__ . '/providers/lily/class-lily-response-parser.php';
 require_once __DIR__ . '/providers/lily/class-lily-operator-lookup-provider.php';
 
 /**
- * DIMOCO
+ * Dimoco
  */
 require_once __DIR__ . '/providers/dimoco/class-dimoco-digest.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-client.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-response-parser.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-callback-verifier.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
+require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.php';
+require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository.php';
 
 /**
- * Services
+ * Services General / Generic
  */
 require_once __DIR__ . '/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
@@ -43,6 +45,7 @@ require_once __DIR__ . '/exporters/class-csv-exporter.php';
  */
 require_once __DIR__ . '/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-refunder-shortcode.php';
+require_once __DIR__ . '/shortcodes/class-dimoco-blacklist-shortcode.php';
 
 /**
  * HTTP / REST
@@ -112,22 +115,15 @@ add_action('init', function () {
     $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
     $hlr_shortcode->register();
 
-    // DIMOCO / Refunder
-    $dimoco_digest               = new Kiwi_Dimoco_Digest();
-    $dimoco_client               = new Kiwi_Dimoco_Client($config, $dimoco_digest);
-    $dimoco_response_parser      = new Kiwi_Dimoco_Response_Parser();
-    $dimoco_refund_batch_service = new Kiwi_Dimoco_Refund_Batch_Service(
-        $dimoco_client,
-        $dimoco_response_parser,
-        $config
-    );
-    $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
+    // DIMOCO / General
+    $dimoco_digest                  = new Kiwi_Dimoco_Digest();
+    $dimoco_client                  = new Kiwi_Dimoco_Client($config, $dimoco_digest);
+    $dimoco_response_parser         = new Kiwi_Dimoco_Response_Parser();
 
-    $dimoco_refund_shortcode = new Kiwi_Dimoco_Refunder_Shortcode(
-        $dimoco_refund_batch_service,
-        $config,
-        $dimoco_callback_refund_repository
-    );
+    // DIMOCO / Refunder    
+    $dimoco_refund_batch_service    = new Kiwi_Dimoco_Refund_Batch_Service($dimoco_client, $dimoco_response_parser, $config);
+    $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
+    $dimoco_refund_shortcode = new Kiwi_Dimoco_Refunder_Shortcode($dimoco_refund_batch_service, $config, $dimoco_callback_refund_repository);
     $dimoco_refund_shortcode->register();
 });
 
