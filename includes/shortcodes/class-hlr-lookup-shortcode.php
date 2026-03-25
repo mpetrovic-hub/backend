@@ -11,7 +11,8 @@ class Kiwi_Hlr_Lookup_Shortcode
      */
     private $batch_service;
 
-    public function __construct(Kiwi_Batch_Service $batch_service)
+    /* public function __construct(Kiwi_Batch_Service $batch_service) */
+    public function __construct(Kiwi_Operator_Lookup_Batch_Service $batch_service)
     {
         $this->batch_service = $batch_service;
     }
