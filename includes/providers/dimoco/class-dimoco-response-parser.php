@@ -16,12 +16,13 @@ class Kiwi_Dimoco_Response_Parser
         $request     = $response['request'] ?? [];
         $xml         = $response['xml'] ?? '';
         $error       = $response['error'] ?? '';
+        $feature     = $request['action'] ?? 'dimoco';
 
         if ($xml === '' || !is_string($xml)) {
             return [
                 'success'            => false,
                 'provider'           => 'dimoco',
-                'feature'            => 'refund',
+                'feature'            => $feature,
                 'http_success'       => (bool) $success,
                 'status_code'        => $status_code,
                 'action'             => '',
@@ -34,6 +35,8 @@ class Kiwi_Dimoco_Response_Parser
                 'reference'          => '',
                 'transaction_id'     => $request['transaction'] ?? '',
                 'order_id'           => $request['order'] ?? '',
+                'msisdn'             => $request['msisdn'] ?? '',
+                'operator'           => $request['operator'] ?? '',
                 'messages'           => [],
                 'raw'                => $response,
             ];
@@ -54,7 +57,7 @@ class Kiwi_Dimoco_Response_Parser
             return [
                 'success'            => false,
                 'provider'           => 'dimoco',
-                'feature'            => 'refund',
+                'feature'            => $feature,
                 'http_success'       => (bool) $success,
                 'status_code'        => $status_code,
                 'action'             => '',
@@ -67,6 +70,8 @@ class Kiwi_Dimoco_Response_Parser
                 'reference'          => '',
                 'transaction_id'     => $request['transaction'] ?? '',
                 'order_id'           => $request['order'] ?? '',
+                'msisdn'             => $request['msisdn'] ?? '',
+                'operator'           => $request['operator'] ?? '',
                 'messages'           => $messages,
                 'raw'                => $response,
             ];
@@ -95,6 +100,16 @@ class Kiwi_Dimoco_Response_Parser
             $transaction_id = $request['transaction'] ?? '';
         }
 
+         $msisdn = $this->xml_value($xml_object->customer->msisdn ?? null);
+        if ($msisdn === '') {
+            $msisdn = $request['msisdn'] ?? '';
+        }
+
+        $operator = $this->xml_value($xml_object->customer->operator ?? null);
+        if ($operator === '') {
+            $operator = $request['operator'] ?? '';
+        }
+
         $messages = [];
         if ($detail !== '') {
             $messages[] = $detail;
@@ -106,7 +121,7 @@ class Kiwi_Dimoco_Response_Parser
         return [
             'success'            => $this->is_successful($action_status),
             'provider'           => 'dimoco',
-            'feature'            => $action !== '' ? $action : 'refund',
+            'feature'            => $action !== '' ? $action : $feature,
             'http_success'       => (bool) $success,
             'status_code'        => $status_code,
             'action'             => $action,
@@ -119,6 +134,8 @@ class Kiwi_Dimoco_Response_Parser
             'reference'          => $reference,
             'transaction_id'     => $transaction_id,
             'order_id'           => $order_id,
+            'msisdn'             => $msisdn,
+            'operator'           => $operator,
             'messages'           => $messages,
             'raw'                => $response,
         ];

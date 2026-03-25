@@ -17,6 +17,94 @@ class Kiwi_Dimoco_Client
         $this->digest_builder = $digest_builder;
     }
 
+
+    /**
+     * Send O P E R A T O R   L O O K U P   request to DIMOCO
+     */
+    public function operator_lookup(string $service_key, string $msisdn): array
+    {
+        $service = $this->config->get_dimoco_service($service_key);
+
+        if (!is_array($service)) {
+            return [
+                'success' => false,
+                'error'   => 'Unknown DIMOCO service key.',
+            ];
+        }
+
+        $merchant = $service['merchant'] ?? '';
+        $secret   = $service['secret'] ?? '';
+        $order_id = $service['order_id'] ?? '';
+
+        $base_url     = $this->config->get_dimoco_base_url();
+        $callback_url = $this->config->get_dimoco_callback_url();
+
+        if (
+            $merchant === '' ||
+            $secret === '' ||
+            $order_id === '' ||
+            $base_url === '' ||
+            $callback_url === ''
+        ) {
+            return [
+                'success' => false,
+                'error'   => 'Incomplete DIMOCO configuration.',
+            ];
+        }
+
+        $params = [
+            'action'       => 'operator-lookup',
+            'merchant'     => $merchant,
+            'msisdn'       => trim($msisdn),
+            'order'        => $order_id,
+            'request_id'   => $this->generate_request_id(),
+            'url_callback' => $callback_url,
+        ];
+
+        $params['digest'] = $this->digest_builder->create($params, $secret);
+
+        error_log('================ DIMOCO REQUEST START ================');
+        error_log('URL: ' . $base_url);
+        error_log('PAYLOAD: ' . wp_json_encode($params));
+        error_log('DIMOCO DIGEST: ' . ($params['digest'] ?? 'MISSING'));
+        error_log('================ DIMOCO REQUEST END ==================');
+
+        $response = wp_remote_post($base_url, [
+            'timeout' => $this->config->get_http_timeout(),
+            'headers' => [
+                'Content-Type' => 'application/x-www-form-urlencoded; charset=UTF-8',
+            ],
+            'body' => $params,
+        ]);
+
+        error_log('================ DIMOCO RESPONSE START ================');
+        if (is_wp_error($response)) {
+            error_log('WP ERROR: ' . $response->get_error_message());
+        } else {
+            error_log('STATUS CODE: ' . wp_remote_retrieve_response_code($response));
+            error_log('BODY: ' . wp_remote_retrieve_body($response));
+        }
+        error_log('================ DIMOCO RESPONSE END ==================');
+
+        if (is_wp_error($response)) {
+            return [
+                'success' => false,
+                'error'   => $response->get_error_message(),
+            ];
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body        = wp_remote_retrieve_body($response);
+
+        return [
+            'success'     => ($status_code >= 200 && $status_code < 300),
+            'status_code' => $status_code,
+            'request'     => $params,
+            'xml'         => $body,
+        ];
+    }
+
+
     /**
      * Send refund request to DIMOCO
      */
@@ -62,8 +150,7 @@ class Kiwi_Dimoco_Client
         error_log('PAYLOAD: ' . wp_json_encode($params));
         error_log('DIMOCO DIGEST: ' . ($params['digest'] ?? 'MISSING'));
         error_log('================ DIMOCO REQUEST END ==================');
-        error_log('DIMOCO DIGEST: ' . ($params['digest'] ?? 'MISSING'));
-
+        
         $response = wp_remote_post($base_url, [
             'timeout' => $this->config->get_http_timeout(),
             'headers' => [
