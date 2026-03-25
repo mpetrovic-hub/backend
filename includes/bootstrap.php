@@ -26,7 +26,7 @@ require_once __DIR__ . '/providers/dimoco/class-dimoco-callback-verifier.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.php';
-require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository.php';
+// require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository.php';
 
 /**
  * Services General / Generic
@@ -45,7 +45,7 @@ require_once __DIR__ . '/exporters/class-csv-exporter.php';
  */
 require_once __DIR__ . '/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-refunder-shortcode.php';
-require_once __DIR__ . '/shortcodes/class-dimoco-blacklist-shortcode.php';
+// require_once __DIR__ . '/shortcodes/class-dimoco-blacklist-shortcode.php';
 
 /**
  * HTTP / REST
@@ -123,8 +123,20 @@ add_action('init', function () {
     // DIMOCO / Refunder    
     $dimoco_refund_batch_service    = new Kiwi_Dimoco_Refund_Batch_Service($dimoco_client, $dimoco_response_parser, $config);
     $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
-    $dimoco_refund_shortcode = new Kiwi_Dimoco_Refunder_Shortcode($dimoco_refund_batch_service, $config, $dimoco_callback_refund_repository);
+    $dimoco_refund_shortcode        = new Kiwi_Dimoco_Refunder_Shortcode($dimoco_refund_batch_service, $config, $dimoco_callback_refund_repository);
     $dimoco_refund_shortcode->register();
+
+    // DIMOCO / Blacklister    
+    $dimoco_blacklist_batch_service = new Kiwi_Dimoco_Blacklist_Batch_Service(
+        $operator_lookup_service,
+        $dimoco_client,
+        $dimoco_response_parser,
+        $config,
+        $msisdn_normalizer
+    );
+    // $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository(); */
+    // $dimoco_blacklist_shortcode      = new Kiwi_Dimoco_Blacklist_Shortcode($dimoco_blacklist_batch_service, $config, $dimoco_callback_blacklist_repository); */
+    // $dimoco_blacklist_shortcode->register();
 });
 
 add_action('init', function () {
