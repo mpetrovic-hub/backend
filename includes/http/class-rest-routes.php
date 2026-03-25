@@ -11,34 +11,27 @@ class Kiwi_Rest_Routes
     private $config;
     private $dimoco_callback_verifier;
     private $dimoco_response_parser;
-    private $dimoco_callback_refund_repository;    
+    private $dimoco_callback_refund_repository;
+    private $dimoco_callback_blacklist_repository;
 
     public function __construct(
     Kiwi_Config $config,
     Kiwi_Dimoco_Callback_Verifier $dimoco_callback_verifier,
     Kiwi_Dimoco_Response_Parser $dimoco_response_parser,
-    Kiwi_Dimoco_Callback_Refund_Repository $dimoco_callback_refund_repository
+    Kiwi_Dimoco_Callback_Refund_Repository $dimoco_callback_refund_repository,
+    Kiwi_Dimoco_Callback_Blacklist_Repository $dimoco_callback_blacklist_repository
 ) {
     $this->config = $config;
     $this->dimoco_callback_verifier = $dimoco_callback_verifier;
     $this->dimoco_response_parser = $dimoco_response_parser;
     $this->dimoco_callback_refund_repository = $dimoco_callback_refund_repository;
+    $this->dimoco_callback_blacklist_repository = $dimoco_callback_blacklist_repository;
 }
 
     public function register(): void
     {
         add_action('rest_api_init', [$this, 'register_routes']);
-    }
-
-    /* public function register_routes(): void
-    {
-        register_rest_route('kiwi-backend/v1', '/dimoco-callback', [
-            /*'methods'             => 'POST', */ /*
-            'methods' => WP_REST_Server::CREATABLE,
-            'callback'            => [$this, 'handle_dimoco_callback'],
-            'permission_callback' => '__return_true',
-        ]);
-    } */
+    }    
 
     public function register_routes(): void
     {
@@ -172,9 +165,25 @@ class Kiwi_Rest_Routes
     $parsed_result['service_key'] = $service['service_key'] ?? '';
     $parsed_result['service_label'] = $service['label'] ?? '';
 
-    error_log('KIWI DIMOCO CALLBACK STEP 9: before insert');
+    /* error_log('KIWI DIMOCO CALLBACK STEP 9: before insert');
 
-    $inserted = $this->dimoco_callback_refund_repository->insert($parsed_result);
+    $inserted = $this->dimoco_callback_refund_repository->insert($parsed_result); */
+
+    $action = (string) ($parsed_result['action'] ?? '');
+
+    error_log('KIWI DIMOCO CALLBACK STEP 9: before insert, action=' . $action);
+
+    $inserted = false;
+
+    if ($action === 'refund') {
+        error_log('KIWI DIMOCO CALLBACK: routing to refund repository');
+        $inserted = $this->dimoco_callback_refund_repository->insert($parsed_result);
+    } elseif ($action === 'add-blocklist') {
+        error_log('KIWI DIMOCO CALLBACK: routing to blacklist repository');
+        $inserted = $this->dimoco_callback_blacklist_repository->insert($parsed_result);
+    } else {
+        error_log('KIWI DIMOCO CALLBACK: unsupported action "' . $action . '"');
+    }
 
     error_log('KIWI DIMOCO CALLBACK STEP 10: insert => ' . ($inserted ? 'OK' : 'FAILED'));
 
