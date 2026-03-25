@@ -26,7 +26,7 @@ require_once __DIR__ . '/providers/dimoco/class-dimoco-callback-verifier.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.php';
-// require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository.php';
+require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository.php';
 
 /**
  * Services General / Generic
