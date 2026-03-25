@@ -4,7 +4,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Kiwi_Batch_Service
+class Kiwi_Operator_Lookup_Batch_Service
 {
     private $operator_lookup_service;
     private $config;

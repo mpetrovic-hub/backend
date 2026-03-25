@@ -30,7 +30,7 @@ require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.ph
  * Services
  */
 require_once __DIR__ . '/services/class-msisdn-normalizer.php';
-require_once __DIR__ . '/services/class-batch-service.php';
+require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/services/class-operator-lookup-service.php';
 
 /**
@@ -108,8 +108,8 @@ add_action('init', function () {
     $lily_operator_lookup_provider  = new Kiwi_Lily_Operator_Lookup_Provider($lily_client, $lily_parser);
     $msisdn_normalizer              = new Kiwi_Msisdn_Normalizer();
     $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($lily_operator_lookup_provider, $msisdn_normalizer);
-    $hlr_batch_service              = new Kiwi_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
-    $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($hlr_batch_service);
+    $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
+    $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
     $hlr_shortcode->register();
 
     // DIMOCO / Refunder
