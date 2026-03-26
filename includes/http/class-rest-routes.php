@@ -19,7 +19,7 @@ class Kiwi_Rest_Routes
     Kiwi_Dimoco_Callback_Verifier $dimoco_callback_verifier,
     Kiwi_Dimoco_Response_Parser $dimoco_response_parser,
     Kiwi_Dimoco_Callback_Refund_Repository $dimoco_callback_refund_repository,
-    Kiwi_Dimoco_Callback_Blacklist_Repository $dimoco_callback_blacklist_repository
+    /*Kiwi_Dimoco_Callback_Blacklist_Repository*/ $dimoco_callback_blacklist_repository
 ) {
     $this->config = $config;
     $this->dimoco_callback_verifier = $dimoco_callback_verifier;
