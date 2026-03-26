@@ -23,6 +23,7 @@ require_once __DIR__ . '/providers/dimoco/class-dimoco-digest.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-client.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-response-parser.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-callback-verifier.php';
+require_once __DIR__ . '/providers/dimoco/class-dimoco-operator-lookup-provider.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.php';
@@ -107,13 +108,7 @@ add_action('init', function () {
     $config = new Kiwi_Config();
 
     // General
-    $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($routed_operator_lookup_provider, $msisdn_normalizer);
-    $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
     $msisdn_normalizer              = new Kiwi_Msisdn_Normalizer();
-
-    // General Shortcodes
-    $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
-    $hlr_shortcode->register();
 
     // HLR / Lily
     $lily_client                    = new Kiwi_Lily_Client($config);
@@ -127,6 +122,11 @@ add_action('init', function () {
     $dimoco_operator_lookup_provider = new Kiwi_Dimoco_Operator_Lookup_Provider($dimoco_client, $dimoco_response_parser);
     $routed_operator_lookup_provider = new Kiwi_Routed_Operator_Lookup_Provider($config, $lily_operator_lookup_provider, $dimoco_operator_lookup_provider);
 
+    // General    
+    $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($routed_operator_lookup_provider, $msisdn_normalizer);
+    $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
+    
+
     // DIMOCO / Refunder    
     $dimoco_refund_batch_service    = new Kiwi_Dimoco_Refund_Batch_Service($dimoco_client, $dimoco_response_parser, $config);
     $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
@@ -138,7 +138,12 @@ add_action('init', function () {
     $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
     // $dimoco_blacklist_shortcode      = new Kiwi_Dimoco_Blacklist_Shortcode($dimoco_blacklist_batch_service, $config, $dimoco_callback_blacklist_repository); */
     // $dimoco_blacklist_shortcode->register();
+
+    // General Shortcodes
+    $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
+    $hlr_shortcode->register();
 });
+
 
 add_action('init', function () {
     $config                         = new Kiwi_Config();
@@ -160,6 +165,12 @@ add_action('init', function () {
 // DIMOCO Refund Callback Repository - create table on init if not exists
 add_action('init', function () {
     $repository = new Kiwi_Dimoco_Callback_Refund_Repository();
+    $repository->create_table();
+});
+
+// DIMOCO Blacklist Callback Repository - create table on init if not exists
+add_action('init', function () {
+    $repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
     $repository->create_table();
 });
 
