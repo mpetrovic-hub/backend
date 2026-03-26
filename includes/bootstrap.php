@@ -10,32 +10,47 @@ if (!defined('ABSPATH')) {
 require_once __DIR__ . '/core/class-config.php';
 
 /**
- * Lily
+ * Lily Provider
  */
 require_once __DIR__ . '/providers/lily/class-lily-client.php';
 require_once __DIR__ . '/providers/lily/class-lily-response-parser.php';
 require_once __DIR__ . '/providers/lily/class-lily-operator-lookup-provider.php';
 
 /**
- * Dimoco
+ * Dimoco Provider
  */
 require_once __DIR__ . '/providers/dimoco/class-dimoco-digest.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-client.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-response-parser.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-callback-verifier.php';
 require_once __DIR__ . '/providers/dimoco/class-dimoco-operator-lookup-provider.php';
-require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
-require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
-require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.php';
-require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository.php';
 
 /**
- * Services General / Generic
+ * Generic Provider
  */
+require_once __DIR__ . '/providers/class-routed-operator-lookup-provider.php';
+
+/**
+ * Services
+ */
+/*require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
+require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
+require_once __DIR__ . '/services/class-operator-lookup-service.php'; */
+
+require_once __DIR__ . '/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/services/class-operator-lookup-service.php';
-require_once __DIR__ . '/providers/class-routed-operator-lookup-provider.php';
+require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
+require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
+require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
+
+/**
+ * Repositories
+ */
+require_once __DIR__ . '/repositories/class-dimoco-callback-refund-repository.php';
+require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository.php';
+require_once __DIR__ . '/repositories/class-dimoco-callback-operator-lookup-repository.php';
 
 /**
  * Exporters
@@ -53,6 +68,8 @@ require_once __DIR__ . '/shortcodes/class-dimoco-blacklister-shortcode.php';
  * HTTP / REST
  */
 require_once __DIR__ . '/http/class-rest-routes.php';
+
+
 
 add_action('wp_enqueue_scripts', function () {
     wp_enqueue_style(
@@ -154,15 +171,23 @@ add_action('init', function () {
     $dimoco_response_parser         = new Kiwi_Dimoco_Response_Parser();
     $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
     $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
+    $dimoco_callback_operator_lookup_repository = new Kiwi_Dimoco_Callback_Operator_Lookup_Repository();
 
     $rest_routes = new Kiwi_Rest_Routes(
         $config,
         $dimoco_callback_verifier,
         $dimoco_response_parser,
         $dimoco_callback_refund_repository,
-        $dimoco_callback_blacklist_repository
+        $dimoco_callback_blacklist_repository,
+        $dimoco_callback_operator_lookup_repository
     );
     $rest_routes->register();
+});
+
+// DIMOCO Operator Lookup Callback Repository - create table on init if not exists
+add_action('init', function () {
+    $repository = new Kiwi_Dimoco_Callback_Operator_Lookup_Repository();
+    $repository->create_table();
 });
 
 // DIMOCO Refund Callback Repository - create table on init if not exists
@@ -176,6 +201,8 @@ add_action('init', function () {
     $repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
     $repository->create_table();
 });
+
+
 
 /* Temporary test route Dimoco Refund */
 

@@ -13,20 +13,23 @@ class Kiwi_Rest_Routes
     private $dimoco_response_parser;
     private $dimoco_callback_refund_repository;
     private $dimoco_callback_blacklist_repository;
+    private $dimoco_callback_operator_lookup_repository;
 
     public function __construct(
     Kiwi_Config $config,
     Kiwi_Dimoco_Callback_Verifier $dimoco_callback_verifier,
     Kiwi_Dimoco_Response_Parser $dimoco_response_parser,
     Kiwi_Dimoco_Callback_Refund_Repository $dimoco_callback_refund_repository,
-    Kiwi_Dimoco_Callback_Blacklist_Repository $dimoco_callback_blacklist_repository
-) {
+    Kiwi_Dimoco_Callback_Blacklist_Repository $dimoco_callback_blacklist_repository,
+    Kiwi_Dimoco_Callback_Operator_Lookup_Repository $dimoco_callback_operator_lookup_repository
+    ) {
     $this->config = $config;
     $this->dimoco_callback_verifier = $dimoco_callback_verifier;
     $this->dimoco_response_parser = $dimoco_response_parser;
     $this->dimoco_callback_refund_repository = $dimoco_callback_refund_repository;
     $this->dimoco_callback_blacklist_repository = $dimoco_callback_blacklist_repository;
-}
+    $this->dimoco_callback_operator_lookup_repository = $dimoco_callback_operator_lookup_repository;
+    }
 
     public function register(): void
     {
@@ -47,58 +50,9 @@ class Kiwi_Rest_Routes
         ]);
     }
 
-    /*public function handle_dimoco_callback(WP_REST_Request $request): WP_REST_Response
-    {
-        error_log('KIWI DIMOCO CALLBACK HIT');
-
-        $xml = (string) $request->get_param('data');
-        $received_digest = (string) $request->get_param('digest');
-
-        if ($xml === '' || $received_digest === '') {
-            return new WP_REST_Response([
-                'success' => false,
-                'message' => 'Missing callback parameters.',
-            ], 400);
-        }
-
-        $service = $this->resolve_dimoco_service_by_order_from_xml($xml);
-
-        if ($service === null) {
-            return new WP_REST_Response([
-                'success' => false,
-                'message' => 'Unknown DIMOCO order.',
-            ], 400);
-        }
-
-        $secret = $service['secret'] ?? '';
-
-        if (!$this->dimoco_callback_verifier->verify($xml, $received_digest, $secret)) {
-            return new WP_REST_Response([
-                'success' => false,
-                'message' => 'Invalid callback digest.',
-            ], 403);
-        }
-
-        $parsed_result = $this->dimoco_response_parser->parse([
-            'success'     => true,
-            'status_code' => 200,
-            'request'     => [],
-            'xml'         => $xml,
-        ]);
-
-        $parsed_result['service_key'] = $service['service_key'] ?? '';
-        $parsed_result['service_label'] = $service['label'] ?? '';
-
-        $this->dimoco_callback_refund_repository->insert($parsed_result);
-
-        $this->maybe_log_dimoco_callback($parsed_result);      
-
-        return new WP_REST_Response('OK', 200);
-    } */
-
     /* handle dimoco callback with error logging */
     public function handle_dimoco_callback(WP_REST_Request $request): WP_REST_Response
-{
+    {
     error_log('KIWI DIMOCO CALLBACK HIT');
 
     error_log('KIWI DIMOCO CALLBACK STEP 1: before reading params');
@@ -165,9 +119,7 @@ class Kiwi_Rest_Routes
     $parsed_result['service_key'] = $service['service_key'] ?? '';
     $parsed_result['service_label'] = $service['label'] ?? '';
 
-    /* error_log('KIWI DIMOCO CALLBACK STEP 9: before insert');
 
-    $inserted = $this->dimoco_callback_refund_repository->insert($parsed_result); */
 
     $action = (string) ($parsed_result['action'] ?? '');
 
@@ -182,16 +134,19 @@ class Kiwi_Rest_Routes
         error_log('KIWI DIMOCO CALLBACK: routing to blacklist repository');
         $inserted = $this->dimoco_callback_blacklist_repository->insert($parsed_result);
     } elseif ($action === 'operator-lookup') {
-        error_log('KIWI DIMOCO CALLBACK: operator-lookup received, no repository configured');
+        error_log('KIWI DIMOCO CALLBACK: routing to operator lookup repository');
+        $inserted = $this->dimoco_callback_operator_lookup_repository->insert($parsed_result);
     } else {
         error_log('KIWI DIMOCO CALLBACK: unsupported action "' . $action . '"');
     }
 
-    if ($action === 'operator-lookup') {
+    error_log('KIWI DIMOCO CALLBACK STEP 10: insert => ' . ($inserted ? 'OK' : 'FAILED'));
+
+    /* if ($action === 'operator-lookup') {
     error_log('KIWI DIMOCO CALLBACK STEP 10: insert skipped');
     } else {
         error_log('KIWI DIMOCO CALLBACK STEP 10: insert => ' . ($inserted ? 'OK' : 'FAILED'));
-    }
+    } */
 
     $this->maybe_log_dimoco_callback($parsed_result);
 
