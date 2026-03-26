@@ -47,7 +47,7 @@ require_once __DIR__ . '/exporters/class-csv-exporter.php';
  */
 require_once __DIR__ . '/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-refunder-shortcode.php';
-// require_once __DIR__ . '/shortcodes/class-dimoco-blacklister-shortcode.php';
+require_once __DIR__ . '/shortcodes/class-dimoco-blacklister-shortcode.php';
 
 /**
  * HTTP / REST
@@ -136,8 +136,8 @@ add_action('init', function () {
     // DIMOCO / Blacklister    
     $dimoco_blacklist_batch_service = new Kiwi_Dimoco_Blacklist_Batch_Service($operator_lookup_service, $dimoco_client, $dimoco_response_parser, $config, $msisdn_normalizer);
     $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
-    // $dimoco_blacklist_shortcode      = new Kiwi_Dimoco_Blacklist_Shortcode($dimoco_blacklist_batch_service, $config, $dimoco_callback_blacklist_repository); */
-    // $dimoco_blacklist_shortcode->register();
+    $dimoco_blacklist_shortcode      = new Kiwi_Dimoco_Blacklister_Shortcode($dimoco_blacklist_batch_service, $config, $dimoco_callback_blacklist_repository);
+    $dimoco_blacklist_shortcode->register();
 
     // General Shortcodes
     $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
