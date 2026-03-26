@@ -105,43 +105,46 @@ add_action('wp_enqueue_scripts', function () {
 });
 
 add_action('init', function () {
+
+    // Core
     $config = new Kiwi_Config();
 
     // General
     $msisdn_normalizer              = new Kiwi_Msisdn_Normalizer();
 
-    // HLR / Lily
+    // Lily Provider
     $lily_client                    = new Kiwi_Lily_Client($config);
     $lily_parser                    = new Kiwi_Lily_Response_Parser();
     $lily_operator_lookup_provider  = new Kiwi_Lily_Operator_Lookup_Provider($lily_client, $lily_parser);       
 
-    // DIMOCO / General
+    // Dimoco Provider
     $dimoco_digest                  = new Kiwi_Dimoco_Digest();
     $dimoco_client                  = new Kiwi_Dimoco_Client($config, $dimoco_digest);
     $dimoco_response_parser         = new Kiwi_Dimoco_Response_Parser();
     $dimoco_operator_lookup_provider = new Kiwi_Dimoco_Operator_Lookup_Provider($dimoco_client, $dimoco_response_parser);
+    
+    //Generic Provider
     $routed_operator_lookup_provider = new Kiwi_Routed_Operator_Lookup_Provider($config, $lily_operator_lookup_provider, $dimoco_operator_lookup_provider);
 
-    // General    
+    // Services  
     $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($routed_operator_lookup_provider, $msisdn_normalizer);
     $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
+        // Dimoco Refunder    
+        $dimoco_refund_batch_service    = new Kiwi_Dimoco_Refund_Batch_Service($dimoco_client, $dimoco_response_parser, $config);
+        // Dimoco Blacklister    
+        $dimoco_blacklist_batch_service = new Kiwi_Dimoco_Blacklist_Batch_Service($operator_lookup_service, $dimoco_client, $dimoco_response_parser, $config, $msisdn_normalizer);
     
-
-    // DIMOCO / Refunder    
-    $dimoco_refund_batch_service    = new Kiwi_Dimoco_Refund_Batch_Service($dimoco_client, $dimoco_response_parser, $config);
+    // Repositories
     $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
-    $dimoco_refund_shortcode        = new Kiwi_Dimoco_Refunder_Shortcode($dimoco_refund_batch_service, $config, $dimoco_callback_refund_repository);
-    $dimoco_refund_shortcode->register();
+    $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();     
 
-    // DIMOCO / Blacklister    
-    $dimoco_blacklist_batch_service = new Kiwi_Dimoco_Blacklist_Batch_Service($operator_lookup_service, $dimoco_client, $dimoco_response_parser, $config, $msisdn_normalizer);
-    $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
-    $dimoco_blacklist_shortcode      = new Kiwi_Dimoco_Blacklister_Shortcode($dimoco_blacklist_batch_service, $config, $dimoco_callback_blacklist_repository);
-    $dimoco_blacklist_shortcode->register();
-
-    // General Shortcodes
+    // Shortcodes
     $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
     $hlr_shortcode->register();
+    $dimoco_refund_shortcode        = new Kiwi_Dimoco_Refunder_Shortcode($dimoco_refund_batch_service, $config, $dimoco_callback_refund_repository);
+    $dimoco_refund_shortcode->register();
+    $dimoco_blacklist_shortcode     = new Kiwi_Dimoco_Blacklister_Shortcode($dimoco_blacklist_batch_service, $config, $dimoco_callback_blacklist_repository);
+    $dimoco_blacklist_shortcode->register();
 });
 
 
