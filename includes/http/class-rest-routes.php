@@ -181,11 +181,17 @@ class Kiwi_Rest_Routes
     } elseif ($action === 'add-blocklist') {
         error_log('KIWI DIMOCO CALLBACK: routing to blacklist repository');
         $inserted = $this->dimoco_callback_blacklist_repository->insert($parsed_result);
+    } elseif ($action === 'operator-lookup') {
+        error_log('KIWI DIMOCO CALLBACK: operator-lookup received, no repository configured');
     } else {
         error_log('KIWI DIMOCO CALLBACK: unsupported action "' . $action . '"');
     }
 
-    error_log('KIWI DIMOCO CALLBACK STEP 10: insert => ' . ($inserted ? 'OK' : 'FAILED'));
+    if ($action === 'operator-lookup') {
+    error_log('KIWI DIMOCO CALLBACK STEP 10: insert skipped');
+    } else {
+        error_log('KIWI DIMOCO CALLBACK STEP 10: insert => ' . ($inserted ? 'OK' : 'FAILED'));
+    }
 
     $this->maybe_log_dimoco_callback($parsed_result);
 
