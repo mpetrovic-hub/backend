@@ -128,7 +128,7 @@ add_action('init', function () {
 
     // DIMOCO / Blacklister    
     $dimoco_blacklist_batch_service = new Kiwi_Dimoco_Blacklist_Batch_Service($operator_lookup_service, $dimoco_client, $dimoco_response_parser, $config, $msisdn_normalizer);
-    // $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository(); */
+    $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository(); */
     // $dimoco_blacklist_shortcode      = new Kiwi_Dimoco_Blacklist_Shortcode($dimoco_blacklist_batch_service, $config, $dimoco_callback_blacklist_repository); */
     // $dimoco_blacklist_shortcode->register();
 });
