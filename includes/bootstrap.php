@@ -34,6 +34,7 @@ require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository
 require_once __DIR__ . '/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/services/class-operator-lookup-service.php';
+require_once __DIR__ . '/services/class-routed-operator-lookup-provider.php';
 
 /**
  * Exporters
@@ -105,20 +106,26 @@ add_action('wp_enqueue_scripts', function () {
 add_action('init', function () {
     $config = new Kiwi_Config();
 
+    // General
+    $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($routed_operator_lookup_provider, $msisdn_normalizer);
+    $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
+    $msisdn_normalizer              = new Kiwi_Msisdn_Normalizer();
+
+    // Shortcodes
+    $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
+    $hlr_shortcode->register();
+
     // HLR / Lily
     $lily_client                    = new Kiwi_Lily_Client($config);
     $lily_parser                    = new Kiwi_Lily_Response_Parser();
-    $lily_operator_lookup_provider  = new Kiwi_Lily_Operator_Lookup_Provider($lily_client, $lily_parser);
-    $msisdn_normalizer              = new Kiwi_Msisdn_Normalizer();
-    $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($lily_operator_lookup_provider, $msisdn_normalizer);
-    $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
-    $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
-    $hlr_shortcode->register();
+    $lily_operator_lookup_provider  = new Kiwi_Lily_Operator_Lookup_Provider($lily_client, $lily_parser);       
 
     // DIMOCO / General
     $dimoco_digest                  = new Kiwi_Dimoco_Digest();
     $dimoco_client                  = new Kiwi_Dimoco_Client($config, $dimoco_digest);
     $dimoco_response_parser         = new Kiwi_Dimoco_Response_Parser();
+    $dimoco_operator_lookup_provider = new Kiwi_Dimoco_Operator_Lookup_Provider($dimoco_client, $dimoco_response_parser);
+    $routed_operator_lookup_provider = new Kiwi_Routed_Operator_Lookup_Provider($config, $lily_operator_lookup_provider, $dimoco_operator_lookup_provider);
 
     // DIMOCO / Refunder    
     $dimoco_refund_batch_service    = new Kiwi_Dimoco_Refund_Batch_Service($dimoco_client, $dimoco_response_parser, $config);
