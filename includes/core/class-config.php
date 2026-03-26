@@ -168,4 +168,26 @@ class Kiwi_Config
     {
         return defined('KIWI_DIMOCO_DEBUG') && KIWI_DIMOCO_DEBUG === true;
     }
+
+    /**
+     * Operator lookup routes configuration
+     * Returns a mapping of MSISDN prefixes to provider and country, used for routing operator lookup requests to the correct provider based on the phone number's prefix. Configured in wp-config.php as KIWI_OPERATOR_LOOKUP_ROUTES.
+     */
+
+    public function get_operator_lookup_routes(): array
+    {
+        return defined('KIWI_OPERATOR_LOOKUP_ROUTES') && is_array(KIWI_OPERATOR_LOOKUP_ROUTES)
+            ? KIWI_OPERATOR_LOOKUP_ROUTES
+            : [
+                '30' => [
+                    'provider' => 'lily',
+                    'country'  => 'GR',
+                ],
+                '43' => [
+                    'provider' => 'dimoco',
+                    'country'  => 'AT',
+                    'service_key' => 'at_service_getstronger', //mandatory if provider is dimoco, must match a service key in KIWI_DIMOCO_SERVICES
+                ],
+            ];
+    }
 }
