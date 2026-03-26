@@ -34,7 +34,7 @@ require_once __DIR__ . '/repositories/class-dimoco-callback-blacklist-repository
 require_once __DIR__ . '/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/services/class-operator-lookup-service.php';
-require_once __DIR__ . '/services/class-routed-operator-lookup-provider.php';
+require_once __DIR__ . '/providers/class-routed-operator-lookup-provider.php';
 
 /**
  * Exporters
@@ -111,7 +111,7 @@ add_action('init', function () {
     $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
     $msisdn_normalizer              = new Kiwi_Msisdn_Normalizer();
 
-    // Shortcodes
+    // General Shortcodes
     $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
     $hlr_shortcode->register();
 
