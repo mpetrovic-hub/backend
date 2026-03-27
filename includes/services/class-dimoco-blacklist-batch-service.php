@@ -176,10 +176,11 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                     }
                 }
 
-                error_log('KIWI BLACKLIST BATCH: polling callback for request_id ' . $lookup_request_id);
+                error_log('KIWI BLACKLIST BATCH: polling callback for request_id: ' . $lookup_request_id);
 
                 usleep($poll_interval_microseconds);
             } while ((time() - $started_at) < $timeout_seconds);
+
 
             if ($operator === '') {
                 $results[] = [
