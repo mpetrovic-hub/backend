@@ -108,12 +108,21 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
             $lookup_request_id = (string) ($lookup_result['request_id'] ?? '');
             $lookup_messages   = [];
 
+            error_log('KIWI BLACKLIST BATCH: starting operator lookup for ' . $msisdn);
+            error_log('KIWI BLACKLIST BATCH: lookup result = ' . wp_json_encode($lookup_result));
+            error_log('KIWI BLACKLIST BATCH: lookup request_id = ' . $lookup_request_id);
+
             if (!empty($lookup_result['messages']) && is_array($lookup_result['messages'])) {
                 $lookup_messages = $lookup_result['messages'];
             }
 
-            if (!(bool) ($lookup_result['success'] ?? false) || $lookup_request_id === '') {
+            // if (!(bool) ($lookup_result['success'] ?? false) || $lookup_request_id === '') {
+            //    $detail = 'Operator lookup could not be started.';
+
+            if ($lookup_request_id === '') {
+                // ohne request_id können wir nicht auf Callback warten
                 $detail = 'Operator lookup could not be started.';
+
 
                 if (!empty($lookup_messages)) {
                     $detail .= ' ' . implode(' | ', array_filter($lookup_messages));
@@ -123,7 +132,7 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                     'success'            => false,
                     'provider'           => 'dimoco',
                     'feature'            => 'add-blocklist',
-                    'http_success'       => (bool) ($lookup_result['success'] ?? false),
+                    'http_success'       => (bool) (($lookup_result['http_success'] ?? false) || ($lookup_result['success'] ?? false)),
                     'status_code'        => (int) ($lookup_result['status_code'] ?? 0),
                     'action'             => 'add-blocklist',
                     'action_status'      => null,
@@ -150,7 +159,7 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
             }
 
             $operator = '';
-            $lookup_callback_row = null;
+            $lookup_callback_row = null;            
 
             $timeout_seconds = $lookup_timeout_seconds;
             $poll_interval_microseconds = $lookup_poll_interval_microseconds;
@@ -167,6 +176,8 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                     }
                 }
 
+                error_log('KIWI BLACKLIST BATCH: polling callback for request_id ' . $lookup_request_id);
+
                 usleep($poll_interval_microseconds);
             } while ((time() - $started_at) < $timeout_seconds);
 
@@ -175,7 +186,7 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                     'success'            => false,
                     'provider'           => 'dimoco',
                     'feature'            => 'add-blocklist',
-                    'http_success'       => (bool) ($lookup_result['success'] ?? false),
+                    'http_success'       => (bool) (($lookup_result['http_success'] ?? false) || ($lookup_result['success'] ?? false)),
                     'status_code'        => (int) ($lookup_result['status_code'] ?? 0),
                     'action'             => 'add-blocklist',
                     'action_status'      => null,
@@ -199,9 +210,12 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                         'lookup_timeout_seconds'=> $timeout_seconds,
                     ],
                 ];
-
+                error_log('KIWI BLACKLIST BATCH: timeout reached for request_id ' . $lookup_request_id);
                 continue;
             }
+
+            error_log('KIWI BLACKLIST BATCH: operator found via callback = ' . $operator);
+            error_log('KIWI BLACKLIST BATCH: sending add-blocklist for ' . $msisdn);
 
             $raw_result = $this->client->add_blocklist(
                 $service_key,
@@ -222,9 +236,7 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                 ? $parsed_result['operator']
                 : $operator;
 
-            $results[] = $parsed_result;
-
-            
+            $results[] = $parsed_result;                        
         }
 
         return [
