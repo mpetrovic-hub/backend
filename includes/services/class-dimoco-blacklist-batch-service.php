@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Dimoco_Blacklist_Batch_Service
 {
     private $operator_lookup_service;
+    private $operator_lookup_repository;
     private $client;
     private $parser;
     private $config;
@@ -14,12 +15,14 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
 
     public function __construct(
         Kiwi_Operator_Lookup_Service $operator_lookup_service,
+        Kiwi_Dimoco_Callback_Operator_Lookup_Repository $operator_lookup_repository,
         Kiwi_Dimoco_Client $client,
         Kiwi_Dimoco_Response_Parser $parser,
         Kiwi_Config $config,
         Kiwi_Msisdn_Normalizer $normalizer
     ) {
         $this->operator_lookup_service = $operator_lookup_service;
+        $this->operator_lookup_repository  = $operator_lookup_repository;
         $this->client                  = $client;
         $this->parser                  = $parser;
         $this->config                  = $config;
@@ -96,46 +99,104 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
         $unique_msisdns = array_keys($normalized_map);
         $results = [];
 
+        $lookup_timeout_seconds = 30;
+        $lookup_poll_interval_microseconds = 1000000; // 1 second
+
         foreach ($unique_msisdns as $msisdn) {
             $lookup_result = $this->operator_lookup_service->lookup($msisdn);
 
-            $operator = trim((string) ($lookup_result['operator'] ?? ''));
+            $lookup_request_id = (string) ($lookup_result['request_id'] ?? '');
+            $lookup_messages   = [];
 
-            if (!(bool) ($lookup_result['success'] ?? false) || $operator === '') {
-                $messages = [];
+            if (!empty($lookup_result['messages']) && is_array($lookup_result['messages'])) {
+                $lookup_messages = $lookup_result['messages'];
+            }
 
-                if (!empty($lookup_result['messages']) && is_array($lookup_result['messages'])) {
-                    $messages = $lookup_result['messages'];
-                }
+            if (!(bool) ($lookup_result['success'] ?? false) || $lookup_request_id === '') {
+                $detail = 'Operator lookup could not be started.';
 
-                if ($operator === '') {
-                    $messages[] = 'Operator lookup returned no operator.';
+                if (!empty($lookup_messages)) {
+                    $detail .= ' ' . implode(' | ', array_filter($lookup_messages));
                 }
 
                 $results[] = [
                     'success'            => false,
                     'provider'           => 'dimoco',
                     'feature'            => 'add-blocklist',
-                    'http_success'       => false,
+                    'http_success'       => (bool) ($lookup_result['success'] ?? false),
                     'status_code'        => (int) ($lookup_result['status_code'] ?? 0),
                     'action'             => 'add-blocklist',
                     'action_status'      => null,
                     'action_status_text' => 'operator_lookup_failed',
                     'action_code'        => '',
-                    'detail'             => implode(' | ', array_filter($messages)),
+                    'detail'             => trim($detail),
                     'detail_psp'         => '',
-                    'request_id'         => '',
-                    'reference'          => '',
+                    'request_id'         => $lookup_request_id,
+                    'reference'          => (string) ($lookup_result['reference'] ?? ''),
                     'transaction_id'     => '',
                     'order_id'           => '',
                     'msisdn'             => $msisdn,
-                    'operator'           => $operator,
+                    'operator'           => '',
                     'service_key'        => $service_key,
                     'service_label'      => $service['label'] ?? $service_key,
                     'blocklist_scope'    => $blocklist_scope,
-                    'messages'           => $messages,
+                    'messages'           => $lookup_messages,
                     'raw'                => [
                         'lookup_result' => $lookup_result,
+                    ],
+                ];
+
+                continue;
+            }
+
+            $operator = '';
+            $lookup_callback_row = null;
+
+            $timeout_seconds = $lookup_timeout_seconds;
+            $poll_interval_microseconds = $lookup_poll_interval_microseconds;
+            $started_at = time();
+
+            do {
+                $lookup_callback_row = $this->operator_lookup_repository->get_success_by_request_id($lookup_request_id);
+
+                if (is_array($lookup_callback_row)) {
+                    $operator = trim((string) ($lookup_callback_row['operator'] ?? ''));
+
+                    if ($operator !== '') {
+                        break;
+                    }
+                }
+
+                usleep($poll_interval_microseconds);
+            } while ((time() - $started_at) < $timeout_seconds);
+
+            if ($operator === '') {
+                $results[] = [
+                    'success'            => false,
+                    'provider'           => 'dimoco',
+                    'feature'            => 'add-blocklist',
+                    'http_success'       => (bool) ($lookup_result['success'] ?? false),
+                    'status_code'        => (int) ($lookup_result['status_code'] ?? 0),
+                    'action'             => 'add-blocklist',
+                    'action_status'      => null,
+                    'action_status_text' => 'operator_lookup_timeout',
+                    'action_code'        => '',
+                    'detail'             => 'Operator lookup callback not received within timeout.',
+                    'detail_psp'         => '',
+                    'request_id'         => $lookup_request_id,
+                    'reference'          => (string) ($lookup_result['reference'] ?? ''),
+                    'transaction_id'     => '',
+                    'order_id'           => '',
+                    'msisdn'             => $msisdn,
+                    'operator'           => '',
+                    'service_key'        => $service_key,
+                    'service_label'      => $service['label'] ?? $service_key,
+                    'blocklist_scope'    => $blocklist_scope,
+                    'messages'           => $lookup_messages,
+                    'raw'                => [
+                        'lookup_result'         => $lookup_result,
+                        'lookup_callback_row'   => $lookup_callback_row,
+                        'lookup_timeout_seconds'=> $timeout_seconds,
                     ],
                 ];
 
@@ -162,6 +223,8 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                 : $operator;
 
             $results[] = $parsed_result;
+
+            
         }
 
         return [

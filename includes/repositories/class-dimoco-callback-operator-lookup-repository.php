@@ -230,4 +230,38 @@ class Kiwi_Dimoco_Callback_Operator_Lookup_Repository
 
         return is_array($row) ? $row : null;
     }
+
+    /**
+     * Get the successful operator lookup callback for one specific request ID
+     */
+    public function get_success_by_request_id(string $request_id): ?array
+    {
+        global $wpdb;
+
+        $table_name = $this->get_table_name();
+        $request_id = trim($request_id);
+
+        if ($request_id === '') {
+            return null;
+        }
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT *
+                 FROM {$table_name}
+                 WHERE request_id = %s
+                   AND action = %s
+                   AND action_status = %d
+                   AND operator <> ''
+                 ORDER BY id DESC
+                 LIMIT 1",
+                $request_id,
+                'operator-lookup',
+                0
+            ),
+            ARRAY_A
+        );
+
+        return is_array($row) ? $row : null;
+    }
 }

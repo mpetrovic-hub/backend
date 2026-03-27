@@ -143,18 +143,19 @@ add_action('init', function () {
     //Generic Provider
     $routed_operator_lookup_provider = new Kiwi_Routed_Operator_Lookup_Provider($config, $lily_operator_lookup_provider, $dimoco_operator_lookup_provider);
 
+    // Repositories
+    $dimoco_callback_operator_lookup_repository = new Kiwi_Dimoco_Callback_Operator_Lookup_Repository(); 
+    $dimoco_callback_refund_repository  = new Kiwi_Dimoco_Callback_Refund_Repository();
+    $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();    
+
     // Services  
     $operator_lookup_service        = new Kiwi_Operator_Lookup_Service($routed_operator_lookup_provider, $msisdn_normalizer);
     $operator_lookup_batch_service  = new Kiwi_Operator_Lookup_Batch_Service($operator_lookup_service, $config, $msisdn_normalizer);
         // Dimoco Refunder    
         $dimoco_refund_batch_service    = new Kiwi_Dimoco_Refund_Batch_Service($dimoco_client, $dimoco_response_parser, $config);
         // Dimoco Blacklister    
-        $dimoco_blacklist_batch_service = new Kiwi_Dimoco_Blacklist_Batch_Service($operator_lookup_service, $dimoco_client, $dimoco_response_parser, $config, $msisdn_normalizer);
+        $dimoco_blacklist_batch_service = new Kiwi_Dimoco_Blacklist_Batch_Service($operator_lookup_service, $dimoco_callback_operator_lookup_repository, $dimoco_client, $dimoco_response_parser, $config, $msisdn_normalizer);
     
-    // Repositories
-    $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
-    $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();     
-
     // Shortcodes
     $hlr_shortcode                  = new Kiwi_Hlr_Lookup_Shortcode($operator_lookup_batch_service);
     $hlr_shortcode->register();
