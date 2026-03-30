@@ -18,6 +18,7 @@ h4 {
     background-color: #323232;
     margin-block-end: 0px !important;
     margin: 3% 0px 0px 0px !important;
+    padding: 7px 7px 7px 7px !important;
 }
 
 .kiwi-hlr-loading::before {
