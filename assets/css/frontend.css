@@ -12,6 +12,14 @@ p {
     unicode-bidi: isolate;
 }
 
+h4 {
+    font-size: 22px;
+    color: rgb(238, 238, 238);
+    background-color: #323232;
+    margin-block-end: 0px !important;
+    margin: 3% 0px 0px 0px !important;
+}
+
 .kiwi-hlr-loading::before {
     content: "⏳ ";
 }
