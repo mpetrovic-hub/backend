@@ -63,13 +63,14 @@ class Kiwi_Dimoco_Blacklister_Shortcode
         $batch_result = null;
 
         /**
-         * Handle form submission
-         *
-         * This block:
-         * - validates the nonce
-         * - reads service / blocklist scope / msisdn list from POST
-         * - calls the blacklist batch service
-         */
+        * Handle form submission
+        *
+        * This block:
+        * - validates the nonce
+        * - reads service / blocklist scope / msisdn list from POST
+        * - calls the blacklist batch service
+        * - waits briefly for async blacklist callbacks to arrive
+        */
         if (
             isset($_POST['kiwi_dimoco_blacklister_action']) &&
             wp_unslash($_POST['kiwi_dimoco_blacklister_action']) === 'blacklist' &&
@@ -108,7 +109,19 @@ class Kiwi_Dimoco_Blacklister_Shortcode
                 $request_ids = array_values(array_unique($request_ids));
 
                 if (!empty($request_ids)) {
-                    $async_results = $this->callback_blacklist_repository->get_recent_by_request_ids($request_ids, 100);
+                    $async_timeout_seconds = 5;
+                     $async_poll_interval_microseconds = 500000; // 0.5 seconds
+                     $async_started_at = time();
+ 
+                     do {
+                         $async_results = $this->callback_blacklist_repository->get_recent_by_request_ids($request_ids, 100);
+ 
+                         if (!empty($async_results)) {
+                             break;
+                         }
+ 
+                         usleep($async_poll_interval_microseconds);
+                     } while ((time() - $async_started_at) < $async_timeout_seconds);
                 }
             }
         }
