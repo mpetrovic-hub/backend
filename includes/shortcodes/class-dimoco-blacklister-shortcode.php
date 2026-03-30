@@ -113,15 +113,25 @@ class Kiwi_Dimoco_Blacklister_Shortcode
                      $async_poll_interval_microseconds = 500000; // 0.5 seconds
                      $async_started_at = time();
  
-                     do {
-                         $async_results = $this->callback_blacklist_repository->get_recent_by_request_ids($request_ids, 100);
+                    do {
+                        $async_results = $this->callback_blacklist_repository->get_recent_by_request_ids($request_ids, 100);
  
-                         if (!empty($async_results)) {
-                             break;
-                         }
+                        $found_request_ids = [];
+
+                        foreach ($async_results as $async_row) {
+                            $async_request_id = (string) ($async_row['request_id'] ?? '');
+
+                            if ($async_request_id !== '') {
+                                $found_request_ids[$async_request_id] = true;
+                            }
+                        }
+
+                        if (count($found_request_ids) >= count($request_ids)) {
+                            break;
+                        }
  
                          usleep($async_poll_interval_microseconds);
-                     } while ((time() - $async_started_at) < $async_timeout_seconds);
+                    } while ((time() - $async_started_at) < $async_timeout_seconds);
                 }
             }
         }
