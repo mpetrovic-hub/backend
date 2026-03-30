@@ -188,7 +188,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
                 : [];
 
             $output .= '<div class="kiwi-results-meta kiwi-result-summary">';
-            $output .= '<h1>Blacklist Batch Result</h1>';
+            $output .= '<h4>Blacklist Batch Result</h4>';
             $output .= '<p>';
             $output .= '<strong>Service:</strong> ' . esc_html((string) ($batch_result['service_label'] ?? $service_key)) . '<br>';
             $output .= '<strong>Scope:</strong> ' . esc_html((string) ($batch_result['blocklist_scope'] ?? $blocklist_scope)) . '<br>';
@@ -221,7 +221,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
             is_array($batch_result['results'])
         ) {
             $output .= '<div class="kiwi-results-meta kiwi-result-table">';
-            $output .= '<h1>Synchronous Responses</h1>';
+            $output .= '<h4>Synchronous Responses</h4>';
             $output .= '<div class="kiwi-table-wrap">';
             $output .= '<table class="kiwi-table">';
             $output .= '<thead><tr>';
@@ -276,7 +276,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
          */
         if (!empty($async_results) && is_array($async_results)) {
             $output .= '<div class="kiwi-results-meta kiwi-result-table">';
-            $output .= '<h1>Asynchronous Callback Responses</h1>';
+            $output .= '<h4>Asynchronous Callback Responses</h4>';
             $output .= '<div class="kiwi-table-wrap">';
             $output .= '<table class="kiwi-table">';
             $output .= '<thead><tr>';
