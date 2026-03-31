@@ -277,6 +277,8 @@ class Kiwi_Test_Plugin extends Kiwi_Plugin
     public $exported_rows;
     public $hlr_async_export_rows = [];
     public $hlr_async_export_request_ids = [];
+    public $hlr_async_export_rows_by_msisdn = [];
+    public $hlr_async_export_msisdns = [];
 
     protected function export_hlr_rows(array $rows): void
     {
@@ -288,6 +290,13 @@ class Kiwi_Test_Plugin extends Kiwi_Plugin
         $this->hlr_async_export_request_ids[] = $request_ids;
 
         return $this->hlr_async_export_rows;
+    }
+
+    protected function load_hlr_async_export_rows_by_msisdns(array $msisdns): array
+    {
+        $this->hlr_async_export_msisdns[] = $msisdns;
+
+        return $this->hlr_async_export_rows_by_msisdn;
     }
 }
 
@@ -447,11 +456,14 @@ class Kiwi_Test_Refund_Callback_Repository extends Kiwi_Dimoco_Callback_Refund_R
 class Kiwi_Test_Hlr_Callback_Repository extends Kiwi_Dimoco_Callback_Operator_Lookup_Repository
 {
     public $calls = [];
+    public $msisdn_calls = [];
     private $response;
+    private $response_by_msisdn;
 
-    public function __construct(array $response)
+    public function __construct(array $response, array $response_by_msisdn = [])
     {
         $this->response = $response;
+        $this->response_by_msisdn = $response_by_msisdn;
     }
 
     public function get_recent_by_request_ids(array $request_ids, int $limit = 100): array
@@ -462,6 +474,16 @@ class Kiwi_Test_Hlr_Callback_Repository extends Kiwi_Dimoco_Callback_Operator_Lo
         ];
 
         return $this->response;
+    }
+
+    public function get_recent_by_msisdns(array $msisdns, int $limit = 100): array
+    {
+        $this->msisdn_calls[] = [
+            'msisdns' => $msisdns,
+            'limit' => $limit,
+        ];
+
+        return $this->response_by_msisdn;
     }
 }
 
@@ -793,6 +815,7 @@ kiwi_run_test('Kiwi_Plugin exports stored asynchronous HLR callback rows when re
                     'msisdn' => '436641234567',
                     'provider' => 'dimoco',
                     'feature' => 'operator_lookup',
+                    'request_id' => 'lookup-req-1',
                     'success' => false,
                     'status_code' => 200,
                     'api_status' => '',
@@ -846,6 +869,112 @@ kiwi_run_test('Kiwi_Plugin exports stored asynchronous HLR callback rows when re
         ],
         $plugin->exported_rows,
         'Expected async HLR export rows to take precedence over the original sync rows.'
+    );
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Plugin exports asynchronous HLR callback rows for every sync row in a multi-MSISDN batch', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [
+        'kiwi_hlr_async_export_multi' => [
+            'sync_rows' => [
+                [
+                    'msisdn' => '436641234567',
+                    'provider' => 'dimoco',
+                    'feature' => 'operator_lookup',
+                    'request_id' => 'lookup-req-1',
+                    'messages' => ['Pending callback'],
+                ],
+                [
+                    'msisdn' => '436761234567',
+                    'provider' => 'dimoco',
+                    'feature' => 'operator_lookup',
+                    'request_id' => 'lookup-req-2',
+                    'messages' => ['Pending callback'],
+                ],
+            ],
+            'request_ids' => ['lookup-req-1', 'lookup-req-2'],
+        ],
+    ];
+    $_GET = [
+        'kiwi_hlr_export' => '1',
+        'batch_id' => 'kiwi_hlr_async_export_multi',
+    ];
+
+    $plugin = new Kiwi_Test_Plugin(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->hlr_async_export_rows = [
+        [
+            'request_id' => 'lookup-req-1',
+            'action' => 'operator-lookup',
+            'action_status' => 0,
+            'action_status_text' => 'success',
+            'action_code' => '200',
+            'detail' => 'Operator resolved 1',
+            'msisdn' => '436641234567',
+            'operator' => 'A1',
+        ],
+    ];
+    $plugin->hlr_async_export_rows_by_msisdn = [
+        [
+            'request_id' => 'lookup-req-1',
+            'action' => 'operator-lookup',
+            'action_status' => 0,
+            'action_status_text' => 'success',
+            'action_code' => '200',
+            'detail' => 'Operator resolved 1',
+            'msisdn' => '436641234567',
+            'operator' => 'A1',
+        ],
+        [
+            'request_id' => 'lookup-req-2',
+            'action' => 'operator-lookup',
+            'action_status' => 0,
+            'action_status_text' => 'success',
+            'action_code' => '200',
+            'detail' => 'Operator resolved 2',
+            'msisdn' => '436761234567',
+            'operator' => 'Magenta',
+        ],
+    ];
+    $plugin->maybe_export_hlr_results();
+
+    kiwi_assert_same(
+        [['lookup-req-1', 'lookup-req-2']],
+        $plugin->hlr_async_export_request_ids,
+        'Expected multi-MSISDN HLR export to query callback rows using all stored request_ids.'
+    );
+    kiwi_assert_same(
+        [['436641234567', '436761234567']],
+        $plugin->hlr_async_export_msisdns,
+        'Expected multi-MSISDN HLR export to fall back to the submitted MSISDNs when request-id results are incomplete.'
+    );
+    kiwi_assert_same(
+        [
+            [
+                'msisdn' => '436641234567',
+                'provider' => 'dimoco',
+                'feature' => 'operator-lookup',
+                'success' => true,
+                'status_code' => '200',
+                'api_status' => 'success',
+                'hlr_status' => '',
+                'operator' => 'A1',
+                'messages' => ['Operator resolved 1'],
+            ],
+            [
+                'msisdn' => '436761234567',
+                'provider' => 'dimoco',
+                'feature' => 'operator-lookup',
+                'success' => true,
+                'status_code' => '200',
+                'api_status' => 'success',
+                'hlr_status' => '',
+                'operator' => 'Magenta',
+                'messages' => ['Operator resolved 2'],
+            ],
+        ],
+        $plugin->exported_rows,
+        'Expected multi-MSISDN async HLR export to resolve one callback row per submitted DIMOCO sync row.'
     );
 
     $_GET = [];
@@ -1566,6 +1695,130 @@ kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode renders stored asynchronous callback ro
     kiwi_assert_true(strpos($output, 'Austria Service') !== false, 'Expected the HLR shortcode to render the stored callback service label.');
     kiwi_assert_true(strpos($output, 'A1') !== false, 'Expected the HLR shortcode to render the operator from the asynchronous callback.');
     kiwi_assert_true(strpos($output, 'Operator resolved | Callback persisted') !== false, 'Expected the HLR shortcode to render the callback detail messages.');
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode renders all asynchronous callback rows for multi-MSISDN DIMOCO lookups', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $_GET = [];
+
+    $callback_repository = new Kiwi_Test_Hlr_Callback_Repository(
+        [
+            [
+                'created_at' => '2026-03-31 10:00:00',
+                'request_id' => 'lookup-req-1',
+                'action' => 'operator-lookup',
+                'action_status' => 0,
+                'action_status_text' => 'success',
+                'action_code' => '200',
+                'detail' => 'Operator resolved 1',
+                'msisdn' => '436641234567',
+                'operator' => 'A1',
+                'service_label' => 'Austria Service',
+            ],
+        ],
+        [
+            [
+                'created_at' => '2026-03-31 10:00:00',
+                'request_id' => 'lookup-req-1',
+                'action' => 'operator-lookup',
+                'action_status' => 0,
+                'action_status_text' => 'success',
+                'action_code' => '200',
+                'detail' => 'Operator resolved 1',
+                'msisdn' => '436641234567',
+                'operator' => 'A1',
+                'service_label' => 'Austria Service',
+            ],
+            [
+                'created_at' => '2026-03-31 10:00:05',
+                'request_id' => 'lookup-req-2',
+                'action' => 'operator-lookup',
+                'action_status' => 0,
+                'action_status_text' => 'success',
+                'action_code' => '200',
+                'detail' => 'Operator resolved 2',
+                'msisdn' => '436761234567',
+                'operator' => 'Magenta',
+                'service_label' => 'Austria Service',
+            ],
+        ]
+    );
+    $shortcode = new Kiwi_Test_Hlr_Lookup_Shortcode(
+        new Kiwi_Test_Noop_Operator_Lookup_Batch_Service(),
+        $callback_repository,
+        'kiwi_hlr_lookup_async_multi_state',
+        'kiwi_hlr_export_async_multi_batch'
+    );
+
+    $state = [
+        'submitted_input' => "436641234567\n436761234567",
+        'batch_id' => 'kiwi_hlr_export_async_multi_batch',
+        'batch_result' => [
+            'total_input' => 2,
+            'unique_input' => 2,
+            'processed' => 2,
+            'results' => [
+                [
+                    'msisdn' => '436641234567',
+                    'provider' => 'dimoco',
+                    'feature' => 'operator_lookup',
+                    'success' => false,
+                    'status_code' => 200,
+                    'api_status' => '',
+                    'hlr_status' => '',
+                    'operator' => '',
+                    'request_id' => 'lookup-req-1',
+                    'messages' => ['Pending callback'],
+                ],
+                [
+                    'msisdn' => '436761234567',
+                    'provider' => 'dimoco',
+                    'feature' => 'operator_lookup',
+                    'success' => false,
+                    'status_code' => 200,
+                    'api_status' => '',
+                    'hlr_status' => '',
+                    'operator' => '',
+                    'request_id' => 'lookup-req-2',
+                    'messages' => ['Pending callback'],
+                ],
+            ],
+        ],
+    ];
+
+    $GLOBALS['kiwi_test_transients']['kiwi_hlr_lookup_async_multi_state'] = $state;
+    $_GET = [
+        'kiwi_hlr_lookup_result' => 'kiwi_hlr_lookup_async_multi_state',
+    ];
+
+    $output = $shortcode->render();
+
+    kiwi_assert_same(
+        [
+            [
+                'request_ids' => ['lookup-req-1', 'lookup-req-2'],
+                'limit' => 100,
+            ],
+        ],
+        $callback_repository->calls,
+        'Expected multi-MSISDN HLR result pages to query callback rows using all request_ids from the sync batch.'
+    );
+    kiwi_assert_same(
+        [
+            [
+                'msisdns' => ['436641234567', '436761234567'],
+                'limit' => 100,
+            ],
+        ],
+        $callback_repository->msisdn_calls,
+        'Expected multi-MSISDN HLR result pages to fall back to msisdn-based callback lookup when request-id results are incomplete.'
+    );
+    kiwi_assert_true(substr_count($output, '<td>dimoco</td>') >= 2, 'Expected the HLR async table to render one DIMOCO async row per submitted MSISDN.');
+    kiwi_assert_true(strpos($output, 'Operator resolved 1') !== false, 'Expected the first asynchronous HLR callback row to be rendered.');
+    kiwi_assert_true(strpos($output, 'Operator resolved 2') !== false, 'Expected the second asynchronous HLR callback row to be rendered.');
+    kiwi_assert_true(strpos($output, 'Magenta') !== false, 'Expected the second operator from the async callback table to be rendered.');
 
     $_GET = [];
 });

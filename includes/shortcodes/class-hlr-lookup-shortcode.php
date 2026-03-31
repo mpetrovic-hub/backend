@@ -402,12 +402,27 @@ class Kiwi_Hlr_Lookup_Shortcode
         }
 
         $request_ids = $this->extract_request_ids_from_results($results);
+        $msisdns = $this->extract_async_candidate_msisdns_from_results($results);
+        $callback_rows_by_request_id = [];
+        $callback_rows_by_msisdn = [];
 
-        if (empty($request_ids)) {
-            return [];
+        if (!empty($request_ids)) {
+            $callback_rows_by_request_id = $this->index_callback_rows_by_request_id(
+                $this->callback_operator_lookup_repository->get_recent_by_request_ids($request_ids, 100)
+            );
         }
 
-        return $this->callback_operator_lookup_repository->get_recent_by_request_ids($request_ids, 100);
+        if (!empty($msisdns)) {
+            $callback_rows_by_msisdn = $this->index_callback_rows_by_msisdn(
+                $this->callback_operator_lookup_repository->get_recent_by_msisdns($msisdns, 100)
+            );
+        }
+
+        return $this->resolve_async_rows_for_sync_results(
+            $results,
+            $callback_rows_by_request_id,
+            $callback_rows_by_msisdn
+        );
     }
 
     private function extract_request_ids_from_results(array $rows): array
@@ -423,6 +438,106 @@ class Kiwi_Hlr_Lookup_Shortcode
         }
 
         return array_values(array_unique($request_ids));
+    }
+
+    private function extract_async_candidate_msisdns_from_results(array $rows): array
+    {
+        $msisdns = [];
+
+        foreach ($rows as $row) {
+            if (($row['provider'] ?? '') !== 'dimoco') {
+                continue;
+            }
+
+            $msisdn = trim((string) ($row['msisdn'] ?? ''));
+
+            if ($msisdn !== '') {
+                $msisdns[] = $msisdn;
+            }
+        }
+
+        return array_values(array_unique($msisdns));
+    }
+
+    private function index_callback_rows_by_request_id(array $rows): array
+    {
+        $indexed_rows = [];
+
+        foreach ($rows as $row) {
+            $request_id = trim((string) ($row['request_id'] ?? ''));
+
+            if ($request_id === '' || isset($indexed_rows[$request_id])) {
+                continue;
+            }
+
+            $indexed_rows[$request_id] = $row;
+        }
+
+        return $indexed_rows;
+    }
+
+    private function index_callback_rows_by_msisdn(array $rows): array
+    {
+        $indexed_rows = [];
+
+        foreach ($rows as $row) {
+            $msisdn = trim((string) ($row['msisdn'] ?? ''));
+
+            if ($msisdn === '' || isset($indexed_rows[$msisdn])) {
+                continue;
+            }
+
+            $indexed_rows[$msisdn] = $row;
+        }
+
+        return $indexed_rows;
+    }
+
+    private function resolve_async_rows_for_sync_results(
+        array $sync_rows,
+        array $callback_rows_by_request_id,
+        array $callback_rows_by_msisdn
+    ): array {
+        $resolved_rows = [];
+        $seen_keys = [];
+
+        foreach ($sync_rows as $sync_row) {
+            if (($sync_row['provider'] ?? '') !== 'dimoco') {
+                continue;
+            }
+
+            $request_id = trim((string) ($sync_row['request_id'] ?? ''));
+            $msisdn = trim((string) ($sync_row['msisdn'] ?? ''));
+            $resolved_row = null;
+
+            if ($request_id !== '' && isset($callback_rows_by_request_id[$request_id])) {
+                $resolved_row = $callback_rows_by_request_id[$request_id];
+            } elseif ($msisdn !== '' && isset($callback_rows_by_msisdn[$msisdn])) {
+                $resolved_row = $callback_rows_by_msisdn[$msisdn];
+            }
+
+            if (!is_array($resolved_row)) {
+                continue;
+            }
+
+            $resolved_key = trim((string) ($resolved_row['request_id'] ?? ''));
+
+            if ($resolved_key === '') {
+                $resolved_key = trim((string) ($resolved_row['msisdn'] ?? ''));
+            }
+
+            if ($resolved_key !== '' && isset($seen_keys[$resolved_key])) {
+                continue;
+            }
+
+            if ($resolved_key !== '') {
+                $seen_keys[$resolved_key] = true;
+            }
+
+            $resolved_rows[] = $resolved_row;
+        }
+
+        return $resolved_rows;
     }
 
     private function build_async_messages(array $row): array

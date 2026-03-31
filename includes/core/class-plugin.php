@@ -292,18 +292,44 @@ TEXT;
         $request_ids = $export_state['request_ids'] ?? [];
         $request_ids = array_values(array_unique(array_filter(array_map('strval', is_array($request_ids) ? $request_ids : []))));
 
-        if (!empty($request_ids)) {
-            $async_rows = $this->load_hlr_async_export_rows($request_ids);
-            $normalized_async_rows = $this->normalize_hlr_async_export_rows($async_rows);
+        $sync_rows = $export_state['sync_rows'] ?? [];
+        $sync_rows = is_array($sync_rows) ? $sync_rows : [];
 
-            if (!empty($normalized_async_rows)) {
-                return $normalized_async_rows;
-            }
+        $msisdns = $this->extract_hlr_async_candidate_msisdns($sync_rows);
+        $callback_rows_by_request_id = [];
+        $callback_rows_by_msisdn = [];
+
+        if (!empty($request_ids)) {
+            $callback_rows_by_request_id = $this->index_hlr_callback_rows_by_request_id(
+                $this->load_hlr_async_export_rows($request_ids)
+            );
         }
 
-        $sync_rows = $export_state['sync_rows'] ?? [];
+        if (!empty($msisdns)) {
+            $callback_rows_by_msisdn = $this->index_hlr_callback_rows_by_msisdn(
+                $this->load_hlr_async_export_rows_by_msisdns($msisdns)
+            );
+        }
+
+        $resolved_async_rows = $this->resolve_hlr_async_rows_for_sync_results(
+            $sync_rows,
+            $callback_rows_by_request_id,
+            $callback_rows_by_msisdn
+        );
+        $normalized_async_rows = $this->normalize_hlr_async_export_rows($resolved_async_rows);
+
+        if (!empty($normalized_async_rows)) {
+            return $normalized_async_rows;
+        }
 
         return is_array($sync_rows) ? $sync_rows : [];
+    }
+
+    protected function load_hlr_async_export_rows_by_msisdns(array $msisdns): array
+    {
+        $repository = new Kiwi_Dimoco_Callback_Operator_Lookup_Repository();
+
+        return $repository->get_recent_by_msisdns($msisdns, 100);
     }
 
     private function normalize_hlr_async_export_rows(array $async_rows): array
@@ -339,6 +365,106 @@ TEXT;
         }
 
         return $normalized_rows;
+    }
+
+    private function extract_hlr_async_candidate_msisdns(array $sync_rows): array
+    {
+        $msisdns = [];
+
+        foreach ($sync_rows as $sync_row) {
+            if (($sync_row['provider'] ?? '') !== 'dimoco') {
+                continue;
+            }
+
+            $msisdn = trim((string) ($sync_row['msisdn'] ?? ''));
+
+            if ($msisdn !== '') {
+                $msisdns[] = $msisdn;
+            }
+        }
+
+        return array_values(array_unique($msisdns));
+    }
+
+    private function index_hlr_callback_rows_by_request_id(array $rows): array
+    {
+        $indexed_rows = [];
+
+        foreach ($rows as $row) {
+            $request_id = trim((string) ($row['request_id'] ?? ''));
+
+            if ($request_id === '' || isset($indexed_rows[$request_id])) {
+                continue;
+            }
+
+            $indexed_rows[$request_id] = $row;
+        }
+
+        return $indexed_rows;
+    }
+
+    private function index_hlr_callback_rows_by_msisdn(array $rows): array
+    {
+        $indexed_rows = [];
+
+        foreach ($rows as $row) {
+            $msisdn = trim((string) ($row['msisdn'] ?? ''));
+
+            if ($msisdn === '' || isset($indexed_rows[$msisdn])) {
+                continue;
+            }
+
+            $indexed_rows[$msisdn] = $row;
+        }
+
+        return $indexed_rows;
+    }
+
+    private function resolve_hlr_async_rows_for_sync_results(
+        array $sync_rows,
+        array $callback_rows_by_request_id,
+        array $callback_rows_by_msisdn
+    ): array {
+        $resolved_rows = [];
+        $seen_keys = [];
+
+        foreach ($sync_rows as $sync_row) {
+            if (($sync_row['provider'] ?? '') !== 'dimoco') {
+                continue;
+            }
+
+            $request_id = trim((string) ($sync_row['request_id'] ?? ''));
+            $msisdn = trim((string) ($sync_row['msisdn'] ?? ''));
+            $resolved_row = null;
+
+            if ($request_id !== '' && isset($callback_rows_by_request_id[$request_id])) {
+                $resolved_row = $callback_rows_by_request_id[$request_id];
+            } elseif ($msisdn !== '' && isset($callback_rows_by_msisdn[$msisdn])) {
+                $resolved_row = $callback_rows_by_msisdn[$msisdn];
+            }
+
+            if (!is_array($resolved_row)) {
+                continue;
+            }
+
+            $resolved_key = trim((string) ($resolved_row['request_id'] ?? ''));
+
+            if ($resolved_key === '') {
+                $resolved_key = trim((string) ($resolved_row['msisdn'] ?? ''));
+            }
+
+            if ($resolved_key !== '' && isset($seen_keys[$resolved_key])) {
+                continue;
+            }
+
+            if ($resolved_key !== '') {
+                $seen_keys[$resolved_key] = true;
+            }
+
+            $resolved_rows[] = $resolved_row;
+        }
+
+        return $resolved_rows;
     }
 
     private function enqueue_style_asset(
