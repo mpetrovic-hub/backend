@@ -17,7 +17,7 @@ p {
     color: var(--kiwi-surface-color) !important;
     background: var(--kiwi-surface-bg);
     border-radius: var(--kiwi-surface-radius);
-    margin: 0 0 12px 0 !important;
+    margin: 18px 0 10px 0 !important;
     padding: 6px 10px !important;
 }
 
@@ -34,8 +34,31 @@ p {
     padding: 12px 16px;
 }
 
+.kiwi-results-meta .kiwi-section-title {
+    margin: 0 0 10px 0 !important;
+}
+
+.kiwi-results-meta p,
+.kiwi-notice p {
+    margin: 0 !important;
+}
+
 .kiwi-results-meta p + p {
     margin-top: 8px !important;
+}
+
+.kiwi-table-wrap {
+    margin-top: 12px !important;
+}
+
+.kiwi-notice {
+    margin: 18px 0 0 0 !important;
+}
+
+.kiwi-results-meta + .kiwi-section-title,
+.kiwi-notice + .kiwi-section-title,
+.kiwi-table-wrap + .kiwi-section-title {
+    margin-top: 18px !important;
 }
 
 /* .kiwi-field label {

@@ -61,17 +61,33 @@
 }
 
 .kiwi-field {
-    margin-bottom: 16px;
+    margin: 0 0 18px 0 !important;
+    margin-block-start: 0 !important;
+    margin-block-end: 18px !important;
 }
 
 .kiwi-field label {
     display: block;
-    margin-bottom: 6px;
+    margin: 0 !important;
+}
+
+.kiwi-field .kiwi-section-title {
+    margin: 0 0 4px 0 !important;
+}
+
+.kiwi-field .kiwi-section-title + br {
+    display: none;
+}
+
+.kiwi-actions {
+    margin: 20px 0 0 0 !important;
+    margin-block-start: 20px !important;
+    margin-block-end: 0 !important;
 }
 
 .kiwi-section-title {
     display: inline-block;
-    margin-bottom: 6px;
+    margin: 0 0 12px 0 !important;
     font-size: 14px;
     font-weight: 600;
     color: var(--kiwi-surface-color);
