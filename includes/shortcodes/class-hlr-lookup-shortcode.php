@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Hlr_Lookup_Shortcode
 {
+    private const RESULT_STATE_QUERY_ARG = 'kiwi_hlr_lookup_result';
+
     /**
      * Batch service for processing multiple MSISDN lookups
      */
@@ -43,6 +45,18 @@ class Kiwi_Hlr_Lookup_Shortcode
         $batch_result = null;
         $batch_id = '';
 
+        $restored_state = $this->load_result_state_from_request();
+
+        if (is_array($restored_state)) {
+            $submitted_input = (string) ($restored_state['submitted_input'] ?? '');
+            $batch_id = (string) ($restored_state['batch_id'] ?? '');
+
+            $restored_batch_result = $restored_state['batch_result'] ?? null;
+            if (is_array($restored_batch_result)) {
+                $batch_result = $restored_batch_result;
+            }
+        }
+
         /**
          * Handle form submission
          *
@@ -69,8 +83,16 @@ class Kiwi_Hlr_Lookup_Shortcode
                 !empty($batch_result['results']) &&
                 is_array($batch_result['results'])
             ) {
-                $batch_id = 'kiwi_hlr_' . wp_generate_password(16, false, false);
-                set_transient($batch_id, $batch_result['results'], 15 * MINUTE_IN_SECONDS);
+                $batch_id = $this->generate_export_batch_id();
+                $this->store_export_rows($batch_id, $batch_result['results']);
+            }
+
+            if ($this->maybe_store_and_redirect_result_state([
+                'submitted_input' => $submitted_input,
+                'batch_result' => $batch_result,
+                'batch_id' => $batch_id,
+            ])) {
+                return '';
             }
         }
 
@@ -210,5 +232,89 @@ class Kiwi_Hlr_Lookup_Shortcode
         }
 
         return $output;
+    }
+
+    protected function maybe_store_and_redirect_result_state(array $state): bool
+    {
+        if (!$this->can_redirect_after_submission()) {
+            return false;
+        }
+
+        $result_state_id = $this->store_result_state($state);
+        $this->redirect_to_result_state($result_state_id);
+
+        return true;
+    }
+
+    protected function load_result_state_from_request(): ?array
+    {
+        if (!isset($_GET[self::RESULT_STATE_QUERY_ARG])) {
+            return null;
+        }
+
+        $result_state_id = sanitize_text_field(wp_unslash($_GET[self::RESULT_STATE_QUERY_ARG]));
+
+        if ($result_state_id === '') {
+            return null;
+        }
+
+        $state = get_transient($result_state_id);
+
+        return is_array($state) ? $state : null;
+    }
+
+    protected function can_redirect_after_submission(): bool
+    {
+        return !headers_sent();
+    }
+
+    protected function store_result_state(array $state): string
+    {
+        $result_state_id = $this->generate_result_state_id();
+
+        set_transient(
+            $result_state_id,
+            $state,
+            $this->get_result_state_ttl_seconds()
+        );
+
+        return $result_state_id;
+    }
+
+    protected function generate_result_state_id(): string
+    {
+        return 'kiwi_hlr_lookup_' . wp_generate_password(16, false, false);
+    }
+
+    protected function get_result_state_ttl_seconds(): int
+    {
+        return 15 * 60;
+    }
+
+    protected function generate_export_batch_id(): string
+    {
+        return 'kiwi_hlr_' . wp_generate_password(16, false, false);
+    }
+
+    protected function store_export_rows(string $batch_id, array $rows): void
+    {
+        set_transient($batch_id, $rows, $this->get_export_result_ttl_seconds());
+    }
+
+    protected function get_export_result_ttl_seconds(): int
+    {
+        return 15 * MINUTE_IN_SECONDS;
+    }
+
+    protected function redirect_to_result_state(string $result_state_id): void
+    {
+        $redirect_url = add_query_arg(
+            self::RESULT_STATE_QUERY_ARG,
+            $result_state_id,
+            remove_query_arg(self::RESULT_STATE_QUERY_ARG)
+        );
+
+        wp_safe_redirect($redirect_url);
+        exit;
     }
 }

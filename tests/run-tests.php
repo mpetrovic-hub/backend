@@ -2,6 +2,10 @@
 
 define('ABSPATH', __DIR__ . '/../');
 
+if (!defined('MINUTE_IN_SECONDS')) {
+    define('MINUTE_IN_SECONDS', 60);
+}
+
 $GLOBALS['kiwi_test_hooks'] = [];
 $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
@@ -115,6 +119,7 @@ require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-operator
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-refund-repository.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-refunder-shortcode.php';
+require_once __DIR__ . '/../includes/shortcodes/class-hlr-lookup-shortcode.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
 {
@@ -326,6 +331,24 @@ class Kiwi_Test_Dimoco_Refund_Batch_Service extends Kiwi_Dimoco_Refund_Batch_Ser
     }
 }
 
+class Kiwi_Test_Operator_Lookup_Batch_Service extends Kiwi_Operator_Lookup_Batch_Service
+{
+    public $calls = [];
+    private $result;
+
+    public function __construct(array $result)
+    {
+        $this->result = $result;
+    }
+
+    public function process(string $input): array
+    {
+        $this->calls[] = $input;
+
+        return $this->result;
+    }
+}
+
 class Kiwi_Test_Operator_Lookup_Repository extends Kiwi_Dimoco_Callback_Operator_Lookup_Repository
 {
     public $calls = [];
@@ -465,6 +488,13 @@ class Kiwi_Test_Noop_Refund_Batch_Service extends Kiwi_Dimoco_Refund_Batch_Servi
     }
 }
 
+class Kiwi_Test_Noop_Operator_Lookup_Batch_Service extends Kiwi_Operator_Lookup_Batch_Service
+{
+    public function __construct()
+    {
+    }
+}
+
 class Kiwi_Test_Dimoco_Blacklister_Shortcode extends Kiwi_Dimoco_Blacklister_Shortcode
 {
     private $async_timeout_seconds;
@@ -572,6 +602,59 @@ class Kiwi_Test_Dimoco_Refunder_Shortcode extends Kiwi_Dimoco_Refunder_Shortcode
     protected function generate_result_state_id(): string
     {
         return $this->generated_result_state_id;
+    }
+
+    protected function redirect_to_result_state(string $result_state_id): void
+    {
+        $this->redirect_result_state_id = $result_state_id;
+    }
+}
+
+class Kiwi_Test_Hlr_Lookup_Shortcode extends Kiwi_Hlr_Lookup_Shortcode
+{
+    public $redirect_result_state_id;
+    private $generated_result_state_id;
+    private $generated_export_batch_id;
+
+    public function __construct(
+        Kiwi_Operator_Lookup_Batch_Service $batch_service,
+        string $generated_result_state_id = 'kiwi_hlr_lookup_test_state',
+        string $generated_export_batch_id = 'kiwi_hlr_export_test_batch'
+    ) {
+        parent::__construct($batch_service);
+
+        $this->generated_result_state_id = $generated_result_state_id;
+        $this->generated_export_batch_id = $generated_export_batch_id;
+    }
+
+    public function store_result_state_for_test(array $state): string
+    {
+        return $this->store_result_state($state);
+    }
+
+    public function load_result_state_from_request_for_test(): ?array
+    {
+        return $this->load_result_state_from_request();
+    }
+
+    public function maybe_store_and_redirect_result_state_for_test(array $state): bool
+    {
+        return $this->maybe_store_and_redirect_result_state($state);
+    }
+
+    protected function can_redirect_after_submission(): bool
+    {
+        return true;
+    }
+
+    protected function generate_result_state_id(): string
+    {
+        return $this->generated_result_state_id;
+    }
+
+    protected function generate_export_batch_id(): string
+    {
+        return $this->generated_export_batch_id;
     }
 
     protected function redirect_to_result_state(string $result_state_id): void
@@ -1199,6 +1282,112 @@ kiwi_run_test('Kiwi_Dimoco_Refunder_Shortcode redirects after refund submission 
     kiwi_assert_same(1, count($batch_service->calls), 'Expected reloading the GET result page not to rerun the refund batch service.');
     kiwi_assert_same(1, count($callback_repository->calls), 'Expected reloading the GET result page not to query refund callbacks again.');
     kiwi_assert_true(strpos($reload_output, 'tx-1') !== false, 'Expected the restored GET result page to keep rendering the saved refund data.');
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode stores and reloads result state for PRG', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $_GET = [];
+
+    $shortcode = new Kiwi_Test_Hlr_Lookup_Shortcode(
+        new Kiwi_Test_Noop_Operator_Lookup_Batch_Service(),
+        'kiwi_hlr_lookup_saved_state',
+        'kiwi_hlr_export_saved_batch'
+    );
+
+    $state = [
+        'submitted_input' => "306912345678\n436641234567",
+        'batch_id' => 'kiwi_hlr_export_saved_batch',
+        'batch_result' => ['processed' => 2],
+    ];
+
+    $stored_id = $shortcode->store_result_state_for_test($state);
+
+    kiwi_assert_same('kiwi_hlr_lookup_saved_state', $stored_id, 'Expected the HLR result-state token to be generated deterministically in the test.');
+    kiwi_assert_same($state, $GLOBALS['kiwi_test_transients'][$stored_id], 'Expected the HLR result state to be persisted in the transient store.');
+
+    $_GET = [
+        'kiwi_hlr_lookup_result' => $stored_id,
+    ];
+
+    kiwi_assert_same(
+        $state,
+        $shortcode->load_result_state_from_request_for_test(),
+        'Expected the HLR shortcode to restore the stored state from the GET token.'
+    );
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode redirects after lookup submission and reload does not reprocess', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $_POST = [
+        'kiwi_hlr_form_action' => 'lookup',
+        'kiwi_hlr_lookup_nonce' => 'kiwi_hlr_lookup_action',
+        'kiwi_hlr_input' => "306912345678\n306912345678",
+    ];
+    $_GET = [];
+
+    $batch_service = new Kiwi_Test_Operator_Lookup_Batch_Service([
+        'total_input' => 2,
+        'unique_input' => 1,
+        'processed' => 1,
+        'batch_limit' => 100,
+        'has_more' => false,
+        'results' => [
+            [
+                'msisdn' => '306912345678',
+                'provider' => 'lily',
+                'feature' => 'hlr',
+                'success' => true,
+                'status_code' => 200,
+                'api_status' => 'OK',
+                'hlr_status' => 'DELIVERED',
+                'operator' => 'Cosmote',
+                'messages' => ['Delivered'],
+            ],
+        ],
+    ]);
+    $shortcode = new Kiwi_Test_Hlr_Lookup_Shortcode(
+        $batch_service,
+        'kiwi_hlr_lookup_redirect_state',
+        'kiwi_hlr_export_redirect_batch'
+    );
+
+    $render_result = $shortcode->render();
+
+    kiwi_assert_same('', $render_result, 'Expected a successful HLR submission to stop rendering after storing state for redirect.');
+    kiwi_assert_same(1, count($batch_service->calls), 'Expected the HLR batch service to run once during the POST request.');
+    kiwi_assert_same('kiwi_hlr_lookup_redirect_state', $shortcode->redirect_result_state_id, 'Expected redirect to target the generated HLR result-state token.');
+    kiwi_assert_same(
+        [
+            [
+                'msisdn' => '306912345678',
+                'provider' => 'lily',
+                'feature' => 'hlr',
+                'success' => true,
+                'status_code' => 200,
+                'api_status' => 'OK',
+                'hlr_status' => 'DELIVERED',
+                'operator' => 'Cosmote',
+                'messages' => ['Delivered'],
+            ],
+        ],
+        $GLOBALS['kiwi_test_transients']['kiwi_hlr_export_redirect_batch'],
+        'Expected HLR export rows to be saved under the generated batch_id before redirecting.'
+    );
+
+    $_POST = [];
+    $_GET = [
+        'kiwi_hlr_lookup_result' => 'kiwi_hlr_lookup_redirect_state',
+    ];
+
+    $reload_output = $shortcode->render();
+
+    kiwi_assert_same(1, count($batch_service->calls), 'Expected reloading the GET result page not to rerun the HLR batch service.');
+    kiwi_assert_true(strpos($reload_output, 'Export CSV') !== false, 'Expected the restored GET result page to keep rendering the export button.');
+    kiwi_assert_true(strpos($reload_output, 'kiwi_hlr_export_redirect_batch') !== false, 'Expected the restored GET result page to keep the saved export batch_id.');
 
     $_GET = [];
 });
