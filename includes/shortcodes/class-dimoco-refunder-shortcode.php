@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Dimoco_Refunder_Shortcode
 {
+    private const RESULT_STATE_QUERY_ARG = 'kiwi_dimoco_refunder_result';
+
     /**
      * Batch service for processing multiple refund transaction IDs
      */
@@ -59,6 +61,24 @@ class Kiwi_Dimoco_Refunder_Shortcode
         // Batch result from the synchronous refund run
         $batch_result = null;
 
+        $restored_state = $this->load_result_state_from_request();
+
+        if (is_array($restored_state)) {
+            $service_key = (string) ($restored_state['service_key'] ?? '');
+            $msisdn = (string) ($restored_state['msisdn'] ?? '');
+            $transactions_input = (string) ($restored_state['transactions_input'] ?? '');
+
+            $restored_batch_result = $restored_state['batch_result'] ?? null;
+            if (is_array($restored_batch_result)) {
+                $batch_result = $restored_batch_result;
+            }
+
+            $restored_async_results = $restored_state['async_results'] ?? [];
+            if (is_array($restored_async_results)) {
+                $async_results = $restored_async_results;
+            }
+        }
+
         /**
          * Handle form submission
          *
@@ -107,6 +127,16 @@ class Kiwi_Dimoco_Refunder_Shortcode
                 if (!empty($transaction_ids)) {
                     $async_results = $this->callback_refund_repository->get_recent_by_transaction_ids($transaction_ids, 100);
                 }
+            }
+
+            if ($this->maybe_store_and_redirect_result_state([
+                'service_key' => $service_key,
+                'msisdn' => $msisdn,
+                'transactions_input' => $transactions_input,
+                'batch_result' => $batch_result,
+                'async_results' => $async_results,
+            ])) {
+                return '';
             }
         }
 
@@ -362,5 +392,74 @@ class Kiwi_Dimoco_Refunder_Shortcode
         }
 
         return $output;
+    }
+
+    protected function maybe_store_and_redirect_result_state(array $state): bool
+    {
+        if (!$this->can_redirect_after_submission()) {
+            return false;
+        }
+
+        $result_state_id = $this->store_result_state($state);
+        $this->redirect_to_result_state($result_state_id);
+
+        return true;
+    }
+
+    protected function load_result_state_from_request(): ?array
+    {
+        if (!isset($_GET[self::RESULT_STATE_QUERY_ARG])) {
+            return null;
+        }
+
+        $result_state_id = sanitize_text_field(wp_unslash($_GET[self::RESULT_STATE_QUERY_ARG]));
+
+        if ($result_state_id === '') {
+            return null;
+        }
+
+        $state = get_transient($result_state_id);
+
+        return is_array($state) ? $state : null;
+    }
+
+    protected function can_redirect_after_submission(): bool
+    {
+        return !headers_sent();
+    }
+
+    protected function store_result_state(array $state): string
+    {
+        $result_state_id = $this->generate_result_state_id();
+
+        set_transient(
+            $result_state_id,
+            $state,
+            $this->get_result_state_ttl_seconds()
+        );
+
+        return $result_state_id;
+    }
+
+    protected function generate_result_state_id(): string
+    {
+        return 'kiwi_dimoco_refunder_' . wp_generate_password(16, false, false);
+    }
+
+    protected function get_result_state_ttl_seconds(): int
+    {
+        return 15 * 60;
+    }
+
+    protected function redirect_to_result_state(string $result_state_id): void
+    {
+        $redirect_url = add_query_arg(
+            self::RESULT_STATE_QUERY_ARG,
+            $result_state_id,
+            remove_query_arg(self::RESULT_STATE_QUERY_ARG)
+        );
+
+        wp_safe_redirect($redirect_url);
+        exit;
     }
 }

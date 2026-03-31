@@ -6,10 +6,16 @@ $GLOBALS['kiwi_test_hooks'] = [];
 $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
 $GLOBALS['kiwi_test_transients'] = [];
+$GLOBALS['kiwi_test_shortcodes'] = [];
 
 function add_action($hook, $callback): void
 {
     $GLOBALS['kiwi_test_hooks'][$hook][] = $callback;
+}
+
+function add_shortcode($tag, $callback): void
+{
+    $GLOBALS['kiwi_test_shortcodes'][$tag] = $callback;
 }
 
 function wp_enqueue_style($handle, $src, $deps = [], $version = false): void
@@ -60,12 +66,43 @@ function wp_json_encode($value)
     return json_encode($value);
 }
 
+function wp_nonce_field($action, $name, $referer = true, $display = true)
+{
+    return '';
+}
+
+function wp_verify_nonce($nonce, $action)
+{
+    return (string) $nonce === (string) $action;
+}
+
+function selected($selected, $current, $display = true)
+{
+    return (string) $selected === (string) $current ? ' selected="selected"' : '';
+}
+
+function esc_attr($text)
+{
+    return (string) $text;
+}
+
+function esc_html($text)
+{
+    return (string) $text;
+}
+
+function esc_textarea($text)
+{
+    return (string) $text;
+}
+
 require_once __DIR__ . '/../includes/core/class-config.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
 require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-client.php';
 require_once __DIR__ . '/../includes/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/../includes/services/class-dimoco-blacklist-batch-service.php';
+require_once __DIR__ . '/../includes/services/class-dimoco-refund-batch-service.php';
 require_once __DIR__ . '/../includes/services/class-operator-lookup-service.php';
 require_once __DIR__ . '/../includes/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/../includes/providers/lily/class-lily-operator-lookup-provider.php';
@@ -75,7 +112,9 @@ require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-response-pars
 require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-callback-verifier.php';
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-blacklist-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-operator-lookup-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-refund-repository.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
+require_once __DIR__ . '/../includes/shortcodes/class-dimoco-refunder-shortcode.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
 {
@@ -265,6 +304,28 @@ class Kiwi_Test_Dimoco_Client extends Kiwi_Dimoco_Client
     }
 }
 
+class Kiwi_Test_Dimoco_Refund_Batch_Service extends Kiwi_Dimoco_Refund_Batch_Service
+{
+    public $calls = [];
+    private $result;
+
+    public function __construct(array $result)
+    {
+        $this->result = $result;
+    }
+
+    public function process(string $service_key, string $msisdn, string $input): array
+    {
+        $this->calls[] = [
+            'service_key' => $service_key,
+            'msisdn' => $msisdn,
+            'input' => $input,
+        ];
+
+        return $this->result;
+    }
+}
+
 class Kiwi_Test_Operator_Lookup_Repository extends Kiwi_Dimoco_Callback_Operator_Lookup_Repository
 {
     public $calls = [];
@@ -330,6 +391,27 @@ class Kiwi_Test_Blacklist_Callback_Repository extends Kiwi_Dimoco_Callback_Black
     }
 }
 
+class Kiwi_Test_Refund_Callback_Repository extends Kiwi_Dimoco_Callback_Refund_Repository
+{
+    public $calls = [];
+    private $response;
+
+    public function __construct(array $response)
+    {
+        $this->response = $response;
+    }
+
+    public function get_recent_by_transaction_ids(array $transaction_ids, int $limit = 100): array
+    {
+        $this->calls[] = [
+            'transaction_ids' => $transaction_ids,
+            'limit' => $limit,
+        ];
+
+        return $this->response;
+    }
+}
+
 class Kiwi_Test_Dimoco_Blacklist_Batch_Service extends Kiwi_Dimoco_Blacklist_Batch_Service
 {
     private $lookup_timeout_seconds;
@@ -370,6 +452,13 @@ class Kiwi_Test_Dimoco_Blacklist_Batch_Service extends Kiwi_Dimoco_Blacklist_Bat
 }
 
 class Kiwi_Test_Noop_Blacklist_Batch_Service extends Kiwi_Dimoco_Blacklist_Batch_Service
+{
+    public function __construct()
+    {
+    }
+}
+
+class Kiwi_Test_Noop_Refund_Batch_Service extends Kiwi_Dimoco_Refund_Batch_Service
 {
     public function __construct()
     {
@@ -426,6 +515,53 @@ class Kiwi_Test_Dimoco_Blacklister_Shortcode extends Kiwi_Dimoco_Blacklister_Sho
     protected function get_async_poll_interval_microseconds(): int
     {
         return $this->async_poll_interval_microseconds;
+    }
+
+    protected function can_redirect_after_submission(): bool
+    {
+        return true;
+    }
+
+    protected function generate_result_state_id(): string
+    {
+        return $this->generated_result_state_id;
+    }
+
+    protected function redirect_to_result_state(string $result_state_id): void
+    {
+        $this->redirect_result_state_id = $result_state_id;
+    }
+}
+
+class Kiwi_Test_Dimoco_Refunder_Shortcode extends Kiwi_Dimoco_Refunder_Shortcode
+{
+    public $redirect_result_state_id;
+    private $generated_result_state_id;
+
+    public function __construct(
+        Kiwi_Dimoco_Refund_Batch_Service $batch_service,
+        Kiwi_Config $config,
+        Kiwi_Dimoco_Callback_Refund_Repository $callback_refund_repository,
+        string $generated_result_state_id = 'kiwi_dimoco_refunder_test_state'
+    ) {
+        parent::__construct($batch_service, $config, $callback_refund_repository);
+
+        $this->generated_result_state_id = $generated_result_state_id;
+    }
+
+    public function store_result_state_for_test(array $state): string
+    {
+        return $this->store_result_state($state);
+    }
+
+    public function load_result_state_from_request_for_test(): ?array
+    {
+        return $this->load_result_state_from_request();
+    }
+
+    public function maybe_store_and_redirect_result_state_for_test(array $state): bool
+    {
+        return $this->maybe_store_and_redirect_result_state($state);
     }
 
     protected function can_redirect_after_submission(): bool
@@ -949,4 +1085,120 @@ kiwi_run_test('Kiwi_Dimoco_Blacklister_Shortcode redirects after storing result 
         $GLOBALS['kiwi_test_transients']['kiwi_dimoco_blacklister_redirect_state'],
         'Expected the redirect target state to be saved before redirecting.'
     );
+});
+
+kiwi_run_test('Kiwi_Dimoco_Refunder_Shortcode stores and reloads result state for PRG', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $_GET = [];
+
+    $shortcode = new Kiwi_Test_Dimoco_Refunder_Shortcode(
+        new Kiwi_Test_Noop_Refund_Batch_Service(),
+        new Kiwi_Test_Config(),
+        new Kiwi_Test_Refund_Callback_Repository([]),
+        'kiwi_dimoco_refunder_saved_state'
+    );
+
+    $state = [
+        'service_key' => 'svc',
+        'msisdn' => '436641234567',
+        'transactions_input' => 'tx-1',
+        'batch_result' => ['processed' => 1],
+        'async_results' => [['transaction_id' => 'tx-1']],
+    ];
+
+    $stored_id = $shortcode->store_result_state_for_test($state);
+
+    kiwi_assert_same('kiwi_dimoco_refunder_saved_state', $stored_id, 'Expected the refund result-state token to be generated deterministically in the test.');
+    kiwi_assert_same($state, $GLOBALS['kiwi_test_transients'][$stored_id], 'Expected the refund result state to be persisted in the transient store.');
+
+    $_GET = [
+        'kiwi_dimoco_refunder_result' => $stored_id,
+    ];
+
+    kiwi_assert_same(
+        $state,
+        $shortcode->load_result_state_from_request_for_test(),
+        'Expected the refund shortcode to restore the stored state from the GET token.'
+    );
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Dimoco_Refunder_Shortcode redirects after refund submission and reload does not reprocess', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $_POST = [
+        'kiwi_dimoco_refunder_action' => 'refund',
+        'kiwi_dimoco_refunder_nonce' => 'kiwi_dimoco_refunder_action',
+        'kiwi_dimoco_service' => 'svc',
+        'kiwi_dimoco_msisdn' => '436641234567',
+        'kiwi_dimoco_transactions' => "tx-1\ntx-1",
+    ];
+    $_GET = [];
+
+    $batch_service = new Kiwi_Test_Dimoco_Refund_Batch_Service([
+        'success' => true,
+        'service_key' => 'svc',
+        'service_label' => 'Service Label',
+        'msisdn' => '436641234567',
+        'total_input' => 2,
+        'unique_input' => 1,
+        'processed' => 1,
+        'messages' => [],
+        'results' => [
+            [
+                'transaction_id' => 'tx-1',
+                'input_transaction_id' => 'tx-1',
+                'service_label' => 'Service Label',
+                'msisdn' => '436641234567',
+                'reference' => 'ref-1',
+                'status_code' => 200,
+                'action_status_text' => 'pending',
+                'detail' => 'Accepted',
+            ],
+        ],
+    ]);
+    $callback_repository = new Kiwi_Test_Refund_Callback_Repository([
+        [
+            'transaction_id' => 'tx-1',
+            'service_label' => 'Service Label',
+            'action_status_text' => 'success',
+            'detail' => 'Completed',
+        ],
+    ]);
+    $shortcode = new Kiwi_Test_Dimoco_Refunder_Shortcode(
+        $batch_service,
+        new Kiwi_Test_Config(
+            100,
+            0,
+            0,
+            [],
+            [
+                'svc' => [
+                    'label' => 'Service Label',
+                ],
+            ]
+        ),
+        $callback_repository,
+        'kiwi_dimoco_refunder_redirect_state'
+    );
+
+    $render_result = $shortcode->render();
+
+    kiwi_assert_same('', $render_result, 'Expected a successful refund submission to stop rendering after storing state for redirect.');
+    kiwi_assert_same(1, count($batch_service->calls), 'Expected the refund batch service to run once during the POST request.');
+    kiwi_assert_same(1, count($callback_repository->calls), 'Expected refund callback rows to be looked up once during the POST request.');
+    kiwi_assert_same('kiwi_dimoco_refunder_redirect_state', $shortcode->redirect_result_state_id, 'Expected redirect to target the generated refund result-state token.');
+
+    $_POST = [];
+    $_GET = [
+        'kiwi_dimoco_refunder_result' => 'kiwi_dimoco_refunder_redirect_state',
+    ];
+
+    $reload_output = $shortcode->render();
+
+    kiwi_assert_same(1, count($batch_service->calls), 'Expected reloading the GET result page not to rerun the refund batch service.');
+    kiwi_assert_same(1, count($callback_repository->calls), 'Expected reloading the GET result page not to query refund callbacks again.');
+    kiwi_assert_true(strpos($reload_output, 'tx-1') !== false, 'Expected the restored GET result page to keep rendering the saved refund data.');
+
+    $_GET = [];
 });
