@@ -7,28 +7,26 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
-    color: #555555;
-    background: #f3f3f3;
-    /* border-color: #37aa32; */
-    border-width: 7px;    
+    color: var(--kiwi-surface-color);
+    background: var(--kiwi-surface-bg);
+    border-width: 7px;
     border: 3px solid #37aa32 !important;
-    border-radius: 6px;
-    /* overflow: hidden; */
+    border-radius: var(--kiwi-surface-radius);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 /* Header */
 .kiwi-table thead {
-    background: #f4f6f8;
+    background: var(--kiwi-surface-bg);
 }
 
 .kiwi-table th {
     text-align: left;
     padding: 12px 14px;
     font-weight: 600;
-    /* color: #333; */
+    color: var(--kiwi-surface-color);
+    background: var(--kiwi-surface-bg);
     border-bottom: 1px solid #e5e7eb;
-    border-radius: 6px;
     white-space: nowrap;
 }
 
@@ -36,17 +34,18 @@
 .kiwi-table td {
     padding: 12px 14px;
     border-bottom: 1px solid #f1f3f5;
-    /* color: rgb(238, 238, 238); */
+    color: var(--kiwi-surface-color);
+    background: var(--kiwi-surface-bg);
 }
 
 /* Zebra rows */
 .kiwi-table tbody tr:nth-child(even) {
-    background: #fafbfc;
+    background: var(--kiwi-surface-bg);
 }
 
 /* Hover */
 .kiwi-table tbody tr:hover {
-    background: #f1f5f9;
+    background: var(--kiwi-surface-bg);
 }
 
 /* Status coloring (optional nice touch) */

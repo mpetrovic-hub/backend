@@ -127,7 +127,7 @@ class Kiwi_Hlr_Lookup_Shortcode
          * One number per line
          */
         $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_hlr_input"><strong>MSISDNs</strong></label><br>';
+        $output .= '<label for="kiwi_hlr_input" class="kiwi-section-title">MSISDNs</label><br>';
         $output .= '<textarea id="kiwi_hlr_input" name="kiwi_hlr_input" rows="10" cols="50" class="kiwi-textarea" style="width:100%; max-width:700px;" placeholder="+30 69...&#10;3069...&#10;69...">' . esc_textarea($submitted_input) . '</textarea>';
         $output .= '</p>';
 
@@ -159,6 +159,7 @@ class Kiwi_Hlr_Lookup_Shortcode
              * total lines, unique numbers, processed count
              */
             $output .= '<div class="kiwi-results-meta">';
+            $output .= '<h4 class="kiwi-section-title">HLR Batch Result</h4>';
             $output .= '<p><strong>Total input:</strong> ' . esc_html((string) ($batch_result['total_input'] ?? 0)) . '</p>';
             $output .= '<p><strong>Unique input:</strong> ' . esc_html((string) ($batch_result['unique_input'] ?? 0)) . '</p>';
             $output .= '<p><strong>Processed:</strong> ' . esc_html((string) ($batch_result['processed'] ?? 0)) . '</p>';
@@ -170,6 +171,7 @@ class Kiwi_Hlr_Lookup_Shortcode
              * Result table
              */
             if (!empty($batch_result['results']) && is_array($batch_result['results'])) {
+                $output .= '<h4 class="kiwi-section-title">Synchronous Responses</h4>';
                 $output .= '<div class="kiwi-table-wrap">';
                 $output .= '<table class="kiwi-table">';
                 $output .= '<thead>';
@@ -229,6 +231,7 @@ class Kiwi_Hlr_Lookup_Shortcode
             }
 
             if (!empty($async_results)) {
+                $output .= '<h4 class="kiwi-section-title">Asynchronous Callback Responses</h4>';
                 $output .= '<div class="kiwi-notice kiwi-notice--info">';
                 $output .= '<p><strong>Asynchronous callback responses:</strong> The table below shows stored DIMOCO operator lookup callback results for the submitted request IDs.</p>';
                 $output .= '</div>';

@@ -165,7 +165,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
          * The user chooses which configured DIMOCO service/order setup to use
          */
         $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_dimoco_service"><strong>Service</strong></label><br>';
+        $output .= '<label for="kiwi_dimoco_service" class="kiwi-section-title">Service</label><br>';
         $output .= '<select id="kiwi_dimoco_service" name="kiwi_dimoco_service" class="kiwi-select" style="min-width:320px;">';
         $output .= '<option value="">Select a service</option>';
 
@@ -182,7 +182,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
          * This is mainly contextual for the operator / support user
          */
         $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_dimoco_msisdn"><strong>MSISDN</strong></label><br>';
+        $output .= '<label for="kiwi_dimoco_msisdn" class="kiwi-section-title">MSISDN</label><br>';
         $output .= '<input type="text" id="kiwi_dimoco_msisdn" name="kiwi_dimoco_msisdn" value="' . esc_attr($msisdn) . '" class="kiwi-input" style="width:100%; max-width:420px;" placeholder="43664...">';
         $output .= '</p>';
 
@@ -191,7 +191,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
          * One RD-* transaction/debit ID per line
          */
         $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_dimoco_transactions"><strong>Transaction IDs</strong></label><br>';
+        $output .= '<label for="kiwi_dimoco_transactions" class="kiwi-section-title">Transaction IDs</label><br>';
         $output .= '<textarea id="kiwi_dimoco_transactions" name="kiwi_dimoco_transactions" rows="10" cols="50" class="kiwi-textarea" style="width:100%; max-width:700px;" placeholder="RD-p-123...&#10;RD-p-456...&#10;RD-p-789...">' . esc_textarea($transactions_input) . '</textarea>';
         $output .= '</p>';
 
@@ -244,6 +244,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
              * selected service, MSISDN, total/unique/processed count
              */
             $output .= '<div class="kiwi-results-meta">';
+            $output .= '<h4 class="kiwi-section-title">Refund Batch Result</h4>';
             $output .= '<p><strong>Service:</strong> ' . esc_html((string) ($batch_result['service_label'] ?? '')) . '</p>';
             $output .= '<p><strong>MSISDN:</strong> ' . esc_html((string) ($batch_result['msisdn'] ?? '')) . '</p>';
             $output .= '<p><strong>Total input:</strong> ' . esc_html((string) ($batch_result['total_input'] ?? 0)) . '</p>';
@@ -255,6 +256,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
              * Table with the synchronous refund response rows
              */
             if (!empty($batch_result['results']) && is_array($batch_result['results'])) {
+                $output .= '<h4 class="kiwi-section-title">Synchronous Responses</h4>';
                 $output .= '<div class="kiwi-table-wrap">';
                 $output .= '<table class="kiwi-table">';
                 $output .= '<thead>';
@@ -334,6 +336,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
              * This is the more important/final refund status layer.
              */
             if (!empty($async_results) && is_array($async_results)) {
+                $output .= '<h4 class="kiwi-section-title">Asynchronous Callback Responses</h4>';
                 $output .= '<div class="kiwi-notice kiwi-notice--info">';
                 $output .= '<p><strong>Asynchronous callback responses:</strong> The table below shows stored DIMOCO callback results for the submitted transaction IDs.</p>';
                 $output .= '</div>';

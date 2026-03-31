@@ -8,10 +8,10 @@
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.4;
-    /* color: #333; */
-    background: #f3f3f3;
+    color: var(--kiwi-surface-color);
+    background: var(--kiwi-surface-bg);
     border: 3px solid #37aa32;
-    border-radius: 6px;
+    border-radius: var(--kiwi-surface-radius);
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
     box-sizing: border-box;
 }
@@ -39,7 +39,8 @@
 .kiwi-input:disabled,
 .kiwi-select:disabled,
 .kiwi-textarea:disabled {
-    background: #f5f7f9;
+    background: var(--kiwi-surface-bg);
+    color: var(--kiwi-surface-color);
     cursor: not-allowed;
     opacity: 0.7;
 }
@@ -64,9 +65,17 @@
 }
 
 .kiwi-field label {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.kiwi-section-title {
     display: inline-block;
     margin-bottom: 6px;
     font-size: 14px;
-    /* color: #555; */
-    color: rgb(238, 238, 238);
+    font-weight: 600;
+    color: var(--kiwi-surface-color);
+    background: var(--kiwi-surface-bg);
+    border-radius: var(--kiwi-surface-radius);
+    padding: 6px 10px;
 }
