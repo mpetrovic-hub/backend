@@ -6,6 +6,9 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Dimoco_Blacklist_Batch_Service
 {
+    private const LOOKUP_TIMEOUT_SECONDS = 30;
+    private const LOOKUP_POLL_INTERVAL_MICROSECONDS = 1000000;
+
     private $operator_lookup_service;
     private $operator_lookup_repository;
     private $client;
@@ -99,9 +102,6 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
         $unique_msisdns = array_keys($normalized_map);
         $results = [];
 
-        $lookup_timeout_seconds = 30;
-        $lookup_poll_interval_microseconds = 1000000; // 1 second
-
         foreach ($unique_msisdns as $msisdn) {
             $lookup_result = $this->operator_lookup_service->lookup($msisdn);
 
@@ -159,27 +159,12 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
             }
 
             $operator = '';
-            $lookup_callback_row = null;            
+            $lookup_callback_row = null;
 
-            $timeout_seconds = $lookup_timeout_seconds;
-            $poll_interval_microseconds = $lookup_poll_interval_microseconds;
-            $started_at = time();
-
-            do {
-                $lookup_callback_row = $this->operator_lookup_repository->get_success_by_request_id($lookup_request_id);
-
-                if (is_array($lookup_callback_row)) {
-                    $operator = trim((string) ($lookup_callback_row['operator'] ?? ''));
-
-                    if ($operator !== '') {
-                        break;
-                    }
-                }
-
-                error_log('KIWI BLACKLIST BATCH: polling callback for request_id: ' . $lookup_request_id);
-
-                usleep($poll_interval_microseconds);
-            } while ((time() - $started_at) < $timeout_seconds);
+            $lookup_wait_result = $this->wait_for_lookup_callback($lookup_request_id);
+            $operator = $lookup_wait_result['operator'];
+            $lookup_callback_row = $lookup_wait_result['callback_row'];
+            $timeout_seconds = $lookup_wait_result['timeout_seconds'];
 
 
             if ($operator === '') {
@@ -251,5 +236,48 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
             'results'         => $results,
             'messages'        => [],
         ];
+    }
+
+    protected function wait_for_lookup_callback(string $lookup_request_id): array
+    {
+        $operator = '';
+        $lookup_callback_row = null;
+        $timeout_seconds = $this->get_lookup_timeout_seconds();
+        $poll_interval_microseconds = $this->get_lookup_poll_interval_microseconds();
+        $started_at = time();
+
+        do {
+            $lookup_callback_row = $this->operator_lookup_repository->get_success_by_request_id($lookup_request_id);
+
+            if (is_array($lookup_callback_row)) {
+                $operator = trim((string) ($lookup_callback_row['operator'] ?? ''));
+
+                if ($operator !== '') {
+                    break;
+                }
+            }
+
+            error_log('KIWI BLACKLIST BATCH: polling callback for request_id: ' . $lookup_request_id);
+
+            if ($poll_interval_microseconds > 0) {
+                usleep($poll_interval_microseconds);
+            }
+        } while ((time() - $started_at) < $timeout_seconds);
+
+        return [
+            'operator' => $operator,
+            'callback_row' => $lookup_callback_row,
+            'timeout_seconds' => $timeout_seconds,
+        ];
+    }
+
+    protected function get_lookup_timeout_seconds(): int
+    {
+        return self::LOOKUP_TIMEOUT_SECONDS;
+    }
+
+    protected function get_lookup_poll_interval_microseconds(): int
+    {
+        return self::LOOKUP_POLL_INTERVAL_MICROSECONDS;
     }
 }

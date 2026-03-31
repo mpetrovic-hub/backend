@@ -48,10 +48,17 @@ function sanitize_text_field($value)
     return trim((string) $value);
 }
 
+function wp_json_encode($value)
+{
+    return json_encode($value);
+}
+
 require_once __DIR__ . '/../includes/core/class-config.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
+require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-client.php';
 require_once __DIR__ . '/../includes/services/class-msisdn-normalizer.php';
+require_once __DIR__ . '/../includes/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/../includes/services/class-operator-lookup-service.php';
 require_once __DIR__ . '/../includes/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/../includes/providers/lily/class-lily-operator-lookup-provider.php';
@@ -59,6 +66,9 @@ require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-operator-look
 require_once __DIR__ . '/../includes/providers/class-routed-operator-lookup-provider.php';
 require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-response-parser.php';
 require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-callback-verifier.php';
+require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-blacklist-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-operator-lookup-repository.php';
+require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
 {
@@ -90,17 +100,20 @@ class Kiwi_Test_Config extends Kiwi_Config
     private $hlr_request_delay_ms;
     private $hlr_retry_delay_seconds;
     private $operator_lookup_routes;
+    private $dimoco_services;
 
     public function __construct(
         int $hlr_batch_limit = 100,
         int $hlr_request_delay_ms = 0,
         int $hlr_retry_delay_seconds = 0,
-        array $operator_lookup_routes = []
+        array $operator_lookup_routes = [],
+        array $dimoco_services = []
     ) {
         $this->hlr_batch_limit = $hlr_batch_limit;
         $this->hlr_request_delay_ms = $hlr_request_delay_ms;
         $this->hlr_retry_delay_seconds = $hlr_retry_delay_seconds;
         $this->operator_lookup_routes = $operator_lookup_routes;
+        $this->dimoco_services = $dimoco_services;
     }
 
     public function get_hlr_batch_limit(): int
@@ -121,6 +134,22 @@ class Kiwi_Test_Config extends Kiwi_Config
     public function get_operator_lookup_routes(): array
     {
         return $this->operator_lookup_routes;
+    }
+
+    public function get_dimoco_service(string $key): ?array
+    {
+        return $this->dimoco_services[$key] ?? null;
+    }
+
+    public function get_dimoco_service_options(): array
+    {
+        $options = [];
+
+        foreach ($this->dimoco_services as $key => $service) {
+            $options[$key] = $service['label'] ?? $key;
+        }
+
+        return $options;
     }
 }
 
@@ -199,6 +228,178 @@ class Kiwi_Test_Plugin extends Kiwi_Plugin
     protected function export_hlr_rows(array $rows): void
     {
         $this->exported_rows = $rows;
+    }
+}
+
+class Kiwi_Test_Dimoco_Client extends Kiwi_Dimoco_Client
+{
+    public $add_blocklist_calls = [];
+    private $add_blocklist_response;
+
+    public function __construct(array $add_blocklist_response = [])
+    {
+        $this->add_blocklist_response = $add_blocklist_response;
+    }
+
+    public function add_blocklist(
+        string $service_key,
+        string $msisdn,
+        string $operator,
+        string $blocklist_scope = 'merchant'
+    ): array {
+        $this->add_blocklist_calls[] = [
+            'service_key' => $service_key,
+            'msisdn' => $msisdn,
+            'operator' => $operator,
+            'blocklist_scope' => $blocklist_scope,
+        ];
+
+        return $this->add_blocklist_response;
+    }
+}
+
+class Kiwi_Test_Operator_Lookup_Repository extends Kiwi_Dimoco_Callback_Operator_Lookup_Repository
+{
+    public $calls = [];
+    private $responses_by_request_id;
+
+    public function __construct(array $responses_by_request_id)
+    {
+        $this->responses_by_request_id = $responses_by_request_id;
+    }
+
+    public function get_success_by_request_id(string $request_id): ?array
+    {
+        $this->calls[] = $request_id;
+
+        if (!array_key_exists($request_id, $this->responses_by_request_id)) {
+            return null;
+        }
+
+        $responses = &$this->responses_by_request_id[$request_id];
+
+        if (!is_array($responses)) {
+            return $responses;
+        }
+
+        $response = array_shift($responses);
+
+        if (empty($responses)) {
+            $responses[] = $response;
+        }
+
+        return $response;
+    }
+}
+
+class Kiwi_Test_Blacklist_Callback_Repository extends Kiwi_Dimoco_Callback_Blacklist_Repository
+{
+    public $calls = [];
+    private $response_sequence;
+
+    public function __construct(array $response_sequence)
+    {
+        $this->response_sequence = $response_sequence;
+    }
+
+    public function get_recent_by_request_ids(array $request_ids, int $limit = 100): array
+    {
+        $this->calls[] = [
+            'request_ids' => $request_ids,
+            'limit' => $limit,
+        ];
+
+        if (empty($this->response_sequence)) {
+            return [];
+        }
+
+        $response = array_shift($this->response_sequence);
+
+        if (empty($this->response_sequence)) {
+            $this->response_sequence[] = $response;
+        }
+
+        return $response;
+    }
+}
+
+class Kiwi_Test_Dimoco_Blacklist_Batch_Service extends Kiwi_Dimoco_Blacklist_Batch_Service
+{
+    private $lookup_timeout_seconds;
+    private $lookup_poll_interval_microseconds;
+
+    public function __construct(
+        Kiwi_Operator_Lookup_Service $operator_lookup_service,
+        Kiwi_Dimoco_Callback_Operator_Lookup_Repository $operator_lookup_repository,
+        Kiwi_Dimoco_Client $client,
+        Kiwi_Dimoco_Response_Parser $parser,
+        Kiwi_Config $config,
+        Kiwi_Msisdn_Normalizer $normalizer,
+        int $lookup_timeout_seconds = 0,
+        int $lookup_poll_interval_microseconds = 0
+    ) {
+        parent::__construct(
+            $operator_lookup_service,
+            $operator_lookup_repository,
+            $client,
+            $parser,
+            $config,
+            $normalizer
+        );
+
+        $this->lookup_timeout_seconds = $lookup_timeout_seconds;
+        $this->lookup_poll_interval_microseconds = $lookup_poll_interval_microseconds;
+    }
+
+    protected function get_lookup_timeout_seconds(): int
+    {
+        return $this->lookup_timeout_seconds;
+    }
+
+    protected function get_lookup_poll_interval_microseconds(): int
+    {
+        return $this->lookup_poll_interval_microseconds;
+    }
+}
+
+class Kiwi_Test_Noop_Blacklist_Batch_Service extends Kiwi_Dimoco_Blacklist_Batch_Service
+{
+    public function __construct()
+    {
+    }
+}
+
+class Kiwi_Test_Dimoco_Blacklister_Shortcode extends Kiwi_Dimoco_Blacklister_Shortcode
+{
+    private $async_timeout_seconds;
+    private $async_poll_interval_microseconds;
+
+    public function __construct(
+        Kiwi_Dimoco_Blacklist_Batch_Service $batch_service,
+        Kiwi_Config $config,
+        Kiwi_Dimoco_Callback_Blacklist_Repository $callback_blacklist_repository,
+        int $async_timeout_seconds = 1,
+        int $async_poll_interval_microseconds = 0
+    ) {
+        parent::__construct($batch_service, $config, $callback_blacklist_repository);
+
+        $this->async_timeout_seconds = $async_timeout_seconds;
+        $this->async_poll_interval_microseconds = $async_poll_interval_microseconds;
+    }
+
+    public function collect_async_results(array $request_ids): array
+    {
+        return $this->wait_for_async_blacklist_callbacks($request_ids);
+    }
+
+    protected function get_async_timeout_seconds(): int
+    {
+        return $this->async_timeout_seconds;
+    }
+
+    protected function get_async_poll_interval_microseconds(): int
+    {
+        return $this->async_poll_interval_microseconds;
     }
 }
 
@@ -423,4 +624,223 @@ kiwi_run_test('Kiwi_Dimoco_Callback_Verifier preserves HMAC digest validation', 
 
     kiwi_assert_true($verifier->verify($xml, $digest, $secret), 'Expected valid digests to verify successfully.');
     kiwi_assert_true(!$verifier->verify($xml, 'invalid', $secret), 'Expected invalid digests to keep failing validation.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service keeps the no-request-id failure branch', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'svc' => [
+                'label' => 'Service Label',
+            ],
+        ]
+    );
+    $provider = new Kiwi_Test_Lookup_Provider(
+        [
+            '436641234567' => [
+                [
+                    'success' => false,
+                    'status_code' => 503,
+                    'reference' => 'lookup-ref',
+                    'messages' => ['Lookup missing request id'],
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Msisdn_Normalizer();
+    $service = new Kiwi_Operator_Lookup_Service($provider, $normalizer);
+    $repository = new Kiwi_Test_Operator_Lookup_Repository([]);
+    $client = new Kiwi_Test_Dimoco_Client();
+    $batch_service = new Kiwi_Test_Dimoco_Blacklist_Batch_Service(
+        $service,
+        $repository,
+        $client,
+        new Kiwi_Dimoco_Response_Parser(),
+        $config,
+        $normalizer
+    );
+
+    $result = $batch_service->process('svc', 'merchant', '436641234567');
+
+    kiwi_assert_same('operator_lookup_failed', $result['results'][0]['action_status_text'], 'Expected missing request IDs to keep producing operator_lookup_failed.');
+    kiwi_assert_same([], $client->add_blocklist_calls, 'Expected add-blocklist not to run when operator lookup cannot be started.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service keeps the callback-success branch', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'svc' => [
+                'label' => 'Service Label',
+            ],
+        ]
+    );
+    $provider = new Kiwi_Test_Lookup_Provider(
+        [
+            '436641234567' => [
+                [
+                    'success' => true,
+                    'request_id' => 'lookup-req-1',
+                    'status_code' => 200,
+                    'reference' => 'lookup-ref',
+                    'messages' => [],
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Msisdn_Normalizer();
+    $service = new Kiwi_Operator_Lookup_Service($provider, $normalizer);
+    $repository = new Kiwi_Test_Operator_Lookup_Repository(
+        [
+            'lookup-req-1' => [
+                [
+                    'operator' => 'A1',
+                ],
+            ],
+        ]
+    );
+    $client = new Kiwi_Test_Dimoco_Client(
+        [
+            'success' => true,
+            'status_code' => 200,
+            'request' => [
+                'action' => 'add-blocklist',
+                'request_id' => 'blacklist-req-1',
+                'order' => 'order-1',
+                'msisdn' => '436641234567',
+                'operator' => 'A1',
+            ],
+            'xml' => <<<XML
+<response>
+    <action>add-blocklist</action>
+    <action_result>
+        <status>0</status>
+        <code>200</code>
+        <detail>Accepted</detail>
+    </action_result>
+    <request_id>blacklist-req-1</request_id>
+    <reference>blacklist-ref</reference>
+    <payment_parameters>
+        <order>order-1</order>
+    </payment_parameters>
+    <customer>
+        <msisdn>436641234567</msisdn>
+        <operator>A1</operator>
+    </customer>
+</response>
+XML,
+        ]
+    );
+    $batch_service = new Kiwi_Test_Dimoco_Blacklist_Batch_Service(
+        $service,
+        $repository,
+        $client,
+        new Kiwi_Dimoco_Response_Parser(),
+        $config,
+        $normalizer
+    );
+
+    $result = $batch_service->process('svc', 'merchant', '436641234567');
+
+    kiwi_assert_same(
+        [
+            [
+                'service_key' => 'svc',
+                'msisdn' => '436641234567',
+                'operator' => 'A1',
+                'blocklist_scope' => 'merchant',
+            ],
+        ],
+        $client->add_blocklist_calls,
+        'Expected add-blocklist to receive the operator resolved from the callback repository.'
+    );
+    kiwi_assert_same('success', $result['results'][0]['action_status_text'], 'Expected successful callback resolution to keep producing a parsed success result.');
+    kiwi_assert_same('Service Label', $result['results'][0]['service_label'], 'Expected service metadata to stay attached to the parsed result.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service keeps the callback-timeout branch', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'svc' => [
+                'label' => 'Service Label',
+            ],
+        ]
+    );
+    $provider = new Kiwi_Test_Lookup_Provider(
+        [
+            '436641234567' => [
+                [
+                    'success' => true,
+                    'request_id' => 'lookup-req-2',
+                    'status_code' => 200,
+                    'reference' => 'lookup-ref',
+                    'messages' => ['Lookup queued'],
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Msisdn_Normalizer();
+    $service = new Kiwi_Operator_Lookup_Service($provider, $normalizer);
+    $repository = new Kiwi_Test_Operator_Lookup_Repository(
+        [
+            'lookup-req-2' => [null],
+        ]
+    );
+    $client = new Kiwi_Test_Dimoco_Client();
+    $batch_service = new Kiwi_Test_Dimoco_Blacklist_Batch_Service(
+        $service,
+        $repository,
+        $client,
+        new Kiwi_Dimoco_Response_Parser(),
+        $config,
+        $normalizer
+    );
+
+    $result = $batch_service->process('svc', 'merchant', '436641234567');
+
+    kiwi_assert_same('operator_lookup_timeout', $result['results'][0]['action_status_text'], 'Expected missing callback rows to keep producing operator_lookup_timeout.');
+    kiwi_assert_same([], $client->add_blocklist_calls, 'Expected add-blocklist not to run when the operator lookup callback times out.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklister_Shortcode keeps polling until all async request IDs are present', function (): void {
+    $repository = new Kiwi_Test_Blacklist_Callback_Repository(
+        [
+            [
+                ['request_id' => 'req-1'],
+            ],
+            [
+                ['request_id' => 'req-1'],
+                ['request_id' => 'req-2'],
+            ],
+        ]
+    );
+    $shortcode = new Kiwi_Test_Dimoco_Blacklister_Shortcode(
+        new Kiwi_Test_Noop_Blacklist_Batch_Service(),
+        new Kiwi_Test_Config(),
+        $repository,
+        1,
+        0
+    );
+
+    $async_results = $shortcode->collect_async_results(['req-1', 'req-2']);
+
+    kiwi_assert_same(2, count($repository->calls), 'Expected async callback polling to continue until all request IDs have been observed.');
+    kiwi_assert_same(
+        [
+            ['request_id' => 'req-1'],
+            ['request_id' => 'req-2'],
+        ],
+        $async_results,
+        'Expected the final async callback result set to be returned once all request IDs are present.'
+    );
 });

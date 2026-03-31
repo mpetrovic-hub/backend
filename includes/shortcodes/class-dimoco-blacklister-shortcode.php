@@ -6,6 +6,9 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Dimoco_Blacklister_Shortcode
 {
+    private const ASYNC_TIMEOUT_SECONDS = 5;
+    private const ASYNC_POLL_INTERVAL_MICROSECONDS = 500000;
+
     /**
      * Batch service for processing multiple DIMOCO add-blocklist requests
      */
@@ -109,29 +112,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
                 $request_ids = array_values(array_unique($request_ids));
 
                 if (!empty($request_ids)) {
-                    $async_timeout_seconds = 5;
-                     $async_poll_interval_microseconds = 500000; // 0.5 seconds
-                     $async_started_at = time();
- 
-                    do {
-                        $async_results = $this->callback_blacklist_repository->get_recent_by_request_ids($request_ids, 100);
- 
-                        $found_request_ids = [];
-
-                        foreach ($async_results as $async_row) {
-                            $async_request_id = (string) ($async_row['request_id'] ?? '');
-
-                            if ($async_request_id !== '') {
-                                $found_request_ids[$async_request_id] = true;
-                            }
-                        }
-
-                        if (count($found_request_ids) >= count($request_ids)) {
-                            break;
-                        }
- 
-                         usleep($async_poll_interval_microseconds);
-                    } while ((time() - $async_started_at) < $async_timeout_seconds);
+                    $async_results = $this->wait_for_async_blacklist_callbacks($request_ids);
                 }
             }
         }
@@ -331,5 +312,52 @@ class Kiwi_Dimoco_Blacklister_Shortcode
         }
 
         return $output;
+    }
+
+    protected function wait_for_async_blacklist_callbacks(array $request_ids): array
+    {
+        $async_results = [];
+        $timeout_seconds = $this->get_async_timeout_seconds();
+        $poll_interval_microseconds = $this->get_async_poll_interval_microseconds();
+        $started_at = time();
+
+        do {
+            $async_results = $this->callback_blacklist_repository->get_recent_by_request_ids($request_ids, 100);
+
+            if ($this->has_async_results_for_all_request_ids($request_ids, $async_results)) {
+                break;
+            }
+
+            if ($poll_interval_microseconds > 0) {
+                usleep($poll_interval_microseconds);
+            }
+        } while ((time() - $started_at) < $timeout_seconds);
+
+        return $async_results;
+    }
+
+    protected function get_async_timeout_seconds(): int
+    {
+        return self::ASYNC_TIMEOUT_SECONDS;
+    }
+
+    protected function get_async_poll_interval_microseconds(): int
+    {
+        return self::ASYNC_POLL_INTERVAL_MICROSECONDS;
+    }
+
+    private function has_async_results_for_all_request_ids(array $request_ids, array $async_results): bool
+    {
+        $found_request_ids = [];
+
+        foreach ($async_results as $async_row) {
+            $async_request_id = (string) ($async_row['request_id'] ?? '');
+
+            if ($async_request_id !== '') {
+                $found_request_ids[$async_request_id] = true;
+            }
+        }
+
+        return count($found_request_ids) >= count($request_ids);
     }
 }
