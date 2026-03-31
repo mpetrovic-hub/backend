@@ -275,10 +275,19 @@ class Kiwi_Test_Dimoco_Provider extends Kiwi_Dimoco_Operator_Lookup_Provider
 class Kiwi_Test_Plugin extends Kiwi_Plugin
 {
     public $exported_rows;
+    public $hlr_async_export_rows = [];
+    public $hlr_async_export_request_ids = [];
 
     protected function export_hlr_rows(array $rows): void
     {
         $this->exported_rows = $rows;
+    }
+
+    protected function load_hlr_async_export_rows(array $request_ids): array
+    {
+        $this->hlr_async_export_request_ids[] = $request_ids;
+
+        return $this->hlr_async_export_rows;
     }
 }
 
@@ -428,6 +437,27 @@ class Kiwi_Test_Refund_Callback_Repository extends Kiwi_Dimoco_Callback_Refund_R
     {
         $this->calls[] = [
             'transaction_ids' => $transaction_ids,
+            'limit' => $limit,
+        ];
+
+        return $this->response;
+    }
+}
+
+class Kiwi_Test_Hlr_Callback_Repository extends Kiwi_Dimoco_Callback_Operator_Lookup_Repository
+{
+    public $calls = [];
+    private $response;
+
+    public function __construct(array $response)
+    {
+        $this->response = $response;
+    }
+
+    public function get_recent_by_request_ids(array $request_ids, int $limit = 100): array
+    {
+        $this->calls[] = [
+            'request_ids' => $request_ids,
             'limit' => $limit,
         ];
 
@@ -618,10 +648,11 @@ class Kiwi_Test_Hlr_Lookup_Shortcode extends Kiwi_Hlr_Lookup_Shortcode
 
     public function __construct(
         Kiwi_Operator_Lookup_Batch_Service $batch_service,
+        Kiwi_Dimoco_Callback_Operator_Lookup_Repository $callback_operator_lookup_repository,
         string $generated_result_state_id = 'kiwi_hlr_lookup_test_state',
         string $generated_export_batch_id = 'kiwi_hlr_export_test_batch'
     ) {
-        parent::__construct($batch_service);
+        parent::__construct($batch_service, $callback_operator_lookup_repository);
 
         $this->generated_result_state_id = $generated_result_state_id;
         $this->generated_export_batch_id = $generated_export_batch_id;
@@ -749,6 +780,72 @@ kiwi_run_test('Kiwi_Plugin exports HLR rows from the transient identified by bat
         $GLOBALS['kiwi_test_transients']['kiwi_hlr_abc123'],
         $plugin->exported_rows,
         'Expected the export handler to stream the rows stored under the submitted batch_id.'
+    );
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Plugin exports stored asynchronous HLR callback rows when request_ids are available', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [
+        'kiwi_hlr_async_export' => [
+            'sync_rows' => [
+                [
+                    'msisdn' => '436641234567',
+                    'provider' => 'dimoco',
+                    'feature' => 'operator_lookup',
+                    'success' => false,
+                    'status_code' => 200,
+                    'api_status' => '',
+                    'hlr_status' => '',
+                    'operator' => '',
+                    'messages' => ['Pending callback'],
+                ],
+            ],
+            'request_ids' => ['lookup-req-1'],
+        ],
+    ];
+    $_GET = [
+        'kiwi_hlr_export' => '1',
+        'batch_id' => 'kiwi_hlr_async_export',
+    ];
+
+    $plugin = new Kiwi_Test_Plugin(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->hlr_async_export_rows = [
+        [
+            'request_id' => 'lookup-req-1',
+            'action' => 'operator-lookup',
+            'action_status' => 0,
+            'action_status_text' => 'success',
+            'action_code' => '200',
+            'detail' => 'Operator resolved',
+            'detail_psp' => 'Callback persisted',
+            'msisdn' => '436641234567',
+            'operator' => 'A1',
+        ],
+    ];
+    $plugin->maybe_export_hlr_results();
+
+    kiwi_assert_same(
+        [['lookup-req-1']],
+        $plugin->hlr_async_export_request_ids,
+        'Expected async HLR export to query callback rows using the stored request_ids.'
+    );
+    kiwi_assert_same(
+        [
+            [
+                'msisdn' => '436641234567',
+                'provider' => 'dimoco',
+                'feature' => 'operator-lookup',
+                'success' => true,
+                'status_code' => '200',
+                'api_status' => 'success',
+                'hlr_status' => '',
+                'operator' => 'A1',
+                'messages' => ['Operator resolved', 'Callback persisted'],
+            ],
+        ],
+        $plugin->exported_rows,
+        'Expected async HLR export rows to take precedence over the original sync rows.'
     );
 
     $_GET = [];
@@ -1292,6 +1389,7 @@ kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode stores and reloads result state for PRG
 
     $shortcode = new Kiwi_Test_Hlr_Lookup_Shortcode(
         new Kiwi_Test_Noop_Operator_Lookup_Batch_Service(),
+        new Kiwi_Test_Hlr_Callback_Repository([]),
         'kiwi_hlr_lookup_saved_state',
         'kiwi_hlr_export_saved_batch'
     );
@@ -1349,8 +1447,10 @@ kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode redirects after lookup submission and r
             ],
         ],
     ]);
+    $callback_repository = new Kiwi_Test_Hlr_Callback_Repository([]);
     $shortcode = new Kiwi_Test_Hlr_Lookup_Shortcode(
         $batch_service,
+        $callback_repository,
         'kiwi_hlr_lookup_redirect_state',
         'kiwi_hlr_export_redirect_batch'
     );
@@ -1362,20 +1462,23 @@ kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode redirects after lookup submission and r
     kiwi_assert_same('kiwi_hlr_lookup_redirect_state', $shortcode->redirect_result_state_id, 'Expected redirect to target the generated HLR result-state token.');
     kiwi_assert_same(
         [
-            [
-                'msisdn' => '306912345678',
-                'provider' => 'lily',
-                'feature' => 'hlr',
-                'success' => true,
-                'status_code' => 200,
-                'api_status' => 'OK',
-                'hlr_status' => 'DELIVERED',
-                'operator' => 'Cosmote',
-                'messages' => ['Delivered'],
+            'sync_rows' => [
+                [
+                    'msisdn' => '306912345678',
+                    'provider' => 'lily',
+                    'feature' => 'hlr',
+                    'success' => true,
+                    'status_code' => 200,
+                    'api_status' => 'OK',
+                    'hlr_status' => 'DELIVERED',
+                    'operator' => 'Cosmote',
+                    'messages' => ['Delivered'],
+                ],
             ],
+            'request_ids' => [],
         ],
         $GLOBALS['kiwi_test_transients']['kiwi_hlr_export_redirect_batch'],
-        'Expected HLR export rows to be saved under the generated batch_id before redirecting.'
+        'Expected HLR export state to keep the sync rows and request_ids under the generated batch_id before redirecting.'
     );
 
     $_POST = [];
@@ -1388,6 +1491,81 @@ kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode redirects after lookup submission and r
     kiwi_assert_same(1, count($batch_service->calls), 'Expected reloading the GET result page not to rerun the HLR batch service.');
     kiwi_assert_true(strpos($reload_output, 'Export CSV') !== false, 'Expected the restored GET result page to keep rendering the export button.');
     kiwi_assert_true(strpos($reload_output, 'kiwi_hlr_export_redirect_batch') !== false, 'Expected the restored GET result page to keep the saved export batch_id.');
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode renders stored asynchronous callback rows for DIMOCO lookups', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $_GET = [];
+
+    $callback_repository = new Kiwi_Test_Hlr_Callback_Repository([
+        [
+            'created_at' => '2026-03-31 10:00:00',
+            'request_id' => 'lookup-req-1',
+            'action' => 'operator-lookup',
+            'action_status' => 0,
+            'action_status_text' => 'success',
+            'action_code' => '200',
+            'detail' => 'Operator resolved',
+            'detail_psp' => 'Callback persisted',
+            'msisdn' => '436641234567',
+            'operator' => 'A1',
+            'service_label' => 'Austria Service',
+        ],
+    ]);
+    $shortcode = new Kiwi_Test_Hlr_Lookup_Shortcode(
+        new Kiwi_Test_Noop_Operator_Lookup_Batch_Service(),
+        $callback_repository,
+        'kiwi_hlr_lookup_async_state',
+        'kiwi_hlr_export_async_batch'
+    );
+
+    $state = [
+        'submitted_input' => '436641234567',
+        'batch_id' => 'kiwi_hlr_export_async_batch',
+        'batch_result' => [
+            'total_input' => 1,
+            'unique_input' => 1,
+            'processed' => 1,
+            'results' => [
+                [
+                    'msisdn' => '436641234567',
+                    'provider' => 'dimoco',
+                    'feature' => 'operator_lookup',
+                    'success' => false,
+                    'status_code' => 200,
+                    'api_status' => '',
+                    'hlr_status' => '',
+                    'operator' => '',
+                    'request_id' => 'lookup-req-1',
+                    'messages' => ['Pending callback'],
+                ],
+            ],
+        ],
+    ];
+
+    $GLOBALS['kiwi_test_transients']['kiwi_hlr_lookup_async_state'] = $state;
+    $_GET = [
+        'kiwi_hlr_lookup_result' => 'kiwi_hlr_lookup_async_state',
+    ];
+
+    $output = $shortcode->render();
+
+    kiwi_assert_same(
+        [
+            [
+                'request_ids' => ['lookup-req-1'],
+                'limit' => 100,
+            ],
+        ],
+        $callback_repository->calls,
+        'Expected restored HLR result pages to query stored DIMOCO callback rows by request_id.'
+    );
+    kiwi_assert_true(strpos($output, 'Asynchronous callback responses') !== false, 'Expected the HLR shortcode to render an async callback section when callback rows exist.');
+    kiwi_assert_true(strpos($output, 'Austria Service') !== false, 'Expected the HLR shortcode to render the stored callback service label.');
+    kiwi_assert_true(strpos($output, 'A1') !== false, 'Expected the HLR shortcode to render the operator from the asynchronous callback.');
+    kiwi_assert_true(strpos($output, 'Operator resolved | Callback persisted') !== false, 'Expected the HLR shortcode to render the callback detail messages.');
 
     $_GET = [];
 });

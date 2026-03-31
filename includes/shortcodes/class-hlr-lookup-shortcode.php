@@ -13,10 +13,18 @@ class Kiwi_Hlr_Lookup_Shortcode
      */
     private $batch_service;
 
-    /* public function __construct(Kiwi_Batch_Service $batch_service) */
-    public function __construct(Kiwi_Operator_Lookup_Batch_Service $batch_service)
+    /**
+     * Repository for stored asynchronous DIMOCO operator lookup callbacks
+     */
+    private $callback_operator_lookup_repository;
+
+    public function __construct(
+        Kiwi_Operator_Lookup_Batch_Service $batch_service,
+        Kiwi_Dimoco_Callback_Operator_Lookup_Repository $callback_operator_lookup_repository
+    )
     {
         $this->batch_service = $batch_service;
+        $this->callback_operator_lookup_repository = $callback_operator_lookup_repository;
     }
 
     /**
@@ -44,6 +52,7 @@ class Kiwi_Hlr_Lookup_Shortcode
         // Result state
         $batch_result = null;
         $batch_id = '';
+        $async_results = [];
 
         $restored_state = $this->load_result_state_from_request();
 
@@ -84,7 +93,7 @@ class Kiwi_Hlr_Lookup_Shortcode
                 is_array($batch_result['results'])
             ) {
                 $batch_id = $this->generate_export_batch_id();
-                $this->store_export_rows($batch_id, $batch_result['results']);
+                $this->store_export_data($batch_id, $batch_result);
             }
 
             if ($this->maybe_store_and_redirect_result_state([
@@ -94,6 +103,10 @@ class Kiwi_Hlr_Lookup_Shortcode
             ])) {
                 return '';
             }
+        }
+
+        if (is_array($batch_result)) {
+            $async_results = $this->load_async_results_for_batch_result($batch_result);
         }
 
         /**
@@ -215,6 +228,55 @@ class Kiwi_Hlr_Lookup_Shortcode
                 $output .= '<p>No results found.</p>';
             }
 
+            if (!empty($async_results)) {
+                $output .= '<div class="kiwi-notice kiwi-notice--info">';
+                $output .= '<p><strong>Asynchronous callback responses:</strong> The table below shows stored DIMOCO operator lookup callback results for the submitted request IDs.</p>';
+                $output .= '</div>';
+
+                $output .= '<div class="kiwi-table-wrap">';
+                $output .= '<table class="kiwi-table">';
+                $output .= '<thead>';
+                $output .= '<tr>';
+                $output .= '<th>Created</th>';
+                $output .= '<th>MSISDN</th>';
+                $output .= '<th>Provider</th>';
+                $output .= '<th>Service</th>';
+                $output .= '<th>Feature</th>';
+                $output .= '<th>Request ID</th>';
+                $output .= '<th>Status</th>';
+                $output .= '<th>Action Code</th>';
+                $output .= '<th>Operator</th>';
+                $output .= '<th>Messages</th>';
+                $output .= '</tr>';
+                $output .= '</thead>';
+                $output .= '<tbody>';
+
+                foreach ($async_results as $row) {
+                    $messages = implode(' | ', $this->build_async_messages($row));
+                    $status_text = (string) ($row['action_status_text'] ?? '');
+                    $success_class = $this->is_async_successful($row)
+                        ? 'kiwi-status--success'
+                        : 'kiwi-status--failure';
+
+                    $output .= '<tr>';
+                    $output .= '<td>' . esc_html((string) ($row['created_at'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['msisdn'] ?? '')) . '</td>';
+                    $output .= '<td>dimoco</td>';
+                    $output .= '<td>' . esc_html((string) ($row['service_label'] ?? $row['service_key'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['action'] ?? 'operator-lookup')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['request_id'] ?? '')) . '</td>';
+                    $output .= '<td class="' . esc_attr($success_class) . '">' . esc_html($status_text) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['action_code'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html((string) ($row['operator'] ?? '')) . '</td>';
+                    $output .= '<td>' . esc_html($messages) . '</td>';
+                    $output .= '</tr>';
+                }
+
+                $output .= '</tbody>';
+                $output .= '</table>';
+                $output .= '</div>';
+            }
+
             /**
              * Export button
              *
@@ -296,9 +358,22 @@ class Kiwi_Hlr_Lookup_Shortcode
         return 'kiwi_hlr_' . wp_generate_password(16, false, false);
     }
 
-    protected function store_export_rows(string $batch_id, array $rows): void
+    protected function store_export_data(string $batch_id, array $batch_result): void
     {
-        set_transient($batch_id, $rows, $this->get_export_result_ttl_seconds());
+        $sync_rows = [];
+
+        if (!empty($batch_result['results']) && is_array($batch_result['results'])) {
+            $sync_rows = $batch_result['results'];
+        }
+
+        set_transient(
+            $batch_id,
+            [
+                'sync_rows' => $sync_rows,
+                'request_ids' => $this->extract_request_ids_from_results($sync_rows),
+            ],
+            $this->get_export_result_ttl_seconds()
+        );
     }
 
     protected function get_export_result_ttl_seconds(): int
@@ -316,5 +391,63 @@ class Kiwi_Hlr_Lookup_Shortcode
 
         wp_safe_redirect($redirect_url);
         exit;
+    }
+
+    protected function load_async_results_for_batch_result(array $batch_result): array
+    {
+        $results = $batch_result['results'] ?? [];
+
+        if (!is_array($results) || empty($results)) {
+            return [];
+        }
+
+        $request_ids = $this->extract_request_ids_from_results($results);
+
+        if (empty($request_ids)) {
+            return [];
+        }
+
+        return $this->callback_operator_lookup_repository->get_recent_by_request_ids($request_ids, 100);
+    }
+
+    private function extract_request_ids_from_results(array $rows): array
+    {
+        $request_ids = [];
+
+        foreach ($rows as $row) {
+            $request_id = (string) ($row['request_id'] ?? '');
+
+            if ($request_id !== '') {
+                $request_ids[] = $request_id;
+            }
+        }
+
+        return array_values(array_unique($request_ids));
+    }
+
+    private function build_async_messages(array $row): array
+    {
+        $messages = [];
+
+        $detail = (string) ($row['detail'] ?? '');
+        if ($detail !== '') {
+            $messages[] = $detail;
+        }
+
+        $detail_psp = (string) ($row['detail_psp'] ?? '');
+        if ($detail_psp !== '') {
+            $messages[] = $detail_psp;
+        }
+
+        return $messages;
+    }
+
+    private function is_async_successful(array $row): bool
+    {
+        if (isset($row['action_status'])) {
+            return (int) $row['action_status'] === 0;
+        }
+
+        return (string) ($row['action_status_text'] ?? '') === 'success';
     }
 }

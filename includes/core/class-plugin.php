@@ -75,7 +75,8 @@ class Kiwi_Plugin
         $runtime = $this->build_shortcode_runtime();
 
         $hlr_shortcode = new Kiwi_Hlr_Lookup_Shortcode(
-            $runtime['operator_lookup_batch_service']
+            $runtime['operator_lookup_batch_service'],
+            $runtime['dimoco_callback_operator_lookup_repository']
         );
         $hlr_shortcode->register();
 
@@ -148,7 +149,7 @@ class Kiwi_Plugin
             return;
         }
 
-        $rows = get_transient($batch_id);
+        $rows = $this->resolve_hlr_export_rows(get_transient($batch_id));
 
         if (!is_array($rows) || empty($rows)) {
             return;
@@ -257,6 +258,7 @@ TEXT;
         return [
             'config' => $config,
             'dimoco_callback_blacklist_repository' => $dimoco_callback_blacklist_repository,
+            'dimoco_callback_operator_lookup_repository' => $dimoco_callback_operator_lookup_repository,
             'dimoco_callback_refund_repository' => $dimoco_callback_refund_repository,
             'dimoco_refund_batch_service' => $dimoco_refund_batch_service,
             'dimoco_blacklist_batch_service' => $dimoco_blacklist_batch_service,
@@ -268,6 +270,75 @@ TEXT;
     {
         $exporter = new Kiwi_Csv_Exporter();
         $exporter->export($rows);
+    }
+
+    protected function load_hlr_async_export_rows(array $request_ids): array
+    {
+        $repository = new Kiwi_Dimoco_Callback_Operator_Lookup_Repository();
+
+        return $repository->get_recent_by_request_ids($request_ids, 100);
+    }
+
+    private function resolve_hlr_export_rows($export_state): array
+    {
+        if (!is_array($export_state)) {
+            return [];
+        }
+
+        if (!array_key_exists('sync_rows', $export_state) && !array_key_exists('request_ids', $export_state)) {
+            return $export_state;
+        }
+
+        $request_ids = $export_state['request_ids'] ?? [];
+        $request_ids = array_values(array_unique(array_filter(array_map('strval', is_array($request_ids) ? $request_ids : []))));
+
+        if (!empty($request_ids)) {
+            $async_rows = $this->load_hlr_async_export_rows($request_ids);
+            $normalized_async_rows = $this->normalize_hlr_async_export_rows($async_rows);
+
+            if (!empty($normalized_async_rows)) {
+                return $normalized_async_rows;
+            }
+        }
+
+        $sync_rows = $export_state['sync_rows'] ?? [];
+
+        return is_array($sync_rows) ? $sync_rows : [];
+    }
+
+    private function normalize_hlr_async_export_rows(array $async_rows): array
+    {
+        $normalized_rows = [];
+
+        foreach ($async_rows as $row) {
+            $messages = [];
+
+            $detail = (string) ($row['detail'] ?? '');
+            if ($detail !== '') {
+                $messages[] = $detail;
+            }
+
+            $detail_psp = (string) ($row['detail_psp'] ?? '');
+            if ($detail_psp !== '') {
+                $messages[] = $detail_psp;
+            }
+
+            $normalized_rows[] = [
+                'msisdn' => (string) ($row['msisdn'] ?? ''),
+                'provider' => 'dimoco',
+                'feature' => (string) ($row['action'] ?? 'operator-lookup'),
+                'success' => isset($row['action_status'])
+                    ? (int) $row['action_status'] === 0
+                    : (string) ($row['action_status_text'] ?? '') === 'success',
+                'status_code' => (string) ($row['action_code'] ?? ''),
+                'api_status' => (string) ($row['action_status_text'] ?? ''),
+                'hlr_status' => '',
+                'operator' => (string) ($row['operator'] ?? ''),
+                'messages' => $messages,
+            ];
+        }
+
+        return $normalized_rows;
     }
 
     private function enqueue_style_asset(
