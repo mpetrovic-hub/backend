@@ -38,6 +38,13 @@ function get_transient($key)
     return $GLOBALS['kiwi_test_transients'][$key] ?? false;
 }
 
+function set_transient($key, $value, $expiration = 0): bool
+{
+    $GLOBALS['kiwi_test_transients'][$key] = $value;
+
+    return true;
+}
+
 function wp_unslash($value)
 {
     return $value;
@@ -373,23 +380,42 @@ class Kiwi_Test_Dimoco_Blacklister_Shortcode extends Kiwi_Dimoco_Blacklister_Sho
 {
     private $async_timeout_seconds;
     private $async_poll_interval_microseconds;
+    public $redirect_result_state_id;
+    private $generated_result_state_id;
 
     public function __construct(
         Kiwi_Dimoco_Blacklist_Batch_Service $batch_service,
         Kiwi_Config $config,
         Kiwi_Dimoco_Callback_Blacklist_Repository $callback_blacklist_repository,
         int $async_timeout_seconds = 1,
-        int $async_poll_interval_microseconds = 0
+        int $async_poll_interval_microseconds = 0,
+        string $generated_result_state_id = 'kiwi_dimoco_blacklister_test_state'
     ) {
         parent::__construct($batch_service, $config, $callback_blacklist_repository);
 
         $this->async_timeout_seconds = $async_timeout_seconds;
         $this->async_poll_interval_microseconds = $async_poll_interval_microseconds;
+        $this->generated_result_state_id = $generated_result_state_id;
     }
 
     public function collect_async_results(array $request_ids): array
     {
         return $this->wait_for_async_blacklist_callbacks($request_ids);
+    }
+
+    public function store_result_state_for_test(array $state): string
+    {
+        return $this->store_result_state($state);
+    }
+
+    public function load_result_state_from_request_for_test(): ?array
+    {
+        return $this->load_result_state_from_request();
+    }
+
+    public function maybe_store_and_redirect_result_state_for_test(array $state): bool
+    {
+        return $this->maybe_store_and_redirect_result_state($state);
     }
 
     protected function get_async_timeout_seconds(): int
@@ -400,6 +426,21 @@ class Kiwi_Test_Dimoco_Blacklister_Shortcode extends Kiwi_Dimoco_Blacklister_Sho
     protected function get_async_poll_interval_microseconds(): int
     {
         return $this->async_poll_interval_microseconds;
+    }
+
+    protected function can_redirect_after_submission(): bool
+    {
+        return true;
+    }
+
+    protected function generate_result_state_id(): string
+    {
+        return $this->generated_result_state_id;
+    }
+
+    protected function redirect_to_result_state(string $result_state_id): void
+    {
+        $this->redirect_result_state_id = $result_state_id;
     }
 }
 
@@ -842,5 +883,70 @@ kiwi_run_test('Kiwi_Dimoco_Blacklister_Shortcode keeps polling until all async r
         ],
         $async_results,
         'Expected the final async callback result set to be returned once all request IDs are present.'
+    );
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklister_Shortcode stores and reloads result state for PRG', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $_GET = [];
+
+    $shortcode = new Kiwi_Test_Dimoco_Blacklister_Shortcode(
+        new Kiwi_Test_Noop_Blacklist_Batch_Service(),
+        new Kiwi_Test_Config(),
+        new Kiwi_Test_Blacklist_Callback_Repository([]),
+        1,
+        0,
+        'kiwi_dimoco_blacklister_saved_state'
+    );
+
+    $state = [
+        'service_key' => 'svc',
+        'blocklist_scope' => 'merchant',
+        'msisdns_input' => '436641234567',
+        'batch_result' => ['processed' => 1],
+        'async_results' => [['request_id' => 'req-1']],
+    ];
+
+    $stored_id = $shortcode->store_result_state_for_test($state);
+
+    kiwi_assert_same('kiwi_dimoco_blacklister_saved_state', $stored_id, 'Expected the result-state token to be generated deterministically in the test.');
+    kiwi_assert_same($state, $GLOBALS['kiwi_test_transients'][$stored_id], 'Expected the result state to be persisted in the transient store.');
+
+    $_GET = [
+        'kiwi_dimoco_blacklister_result' => $stored_id,
+    ];
+
+    kiwi_assert_same(
+        $state,
+        $shortcode->load_result_state_from_request_for_test(),
+        'Expected the shortcode to restore the stored state from the GET token.'
+    );
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklister_Shortcode redirects after storing result state', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+
+    $shortcode = new Kiwi_Test_Dimoco_Blacklister_Shortcode(
+        new Kiwi_Test_Noop_Blacklist_Batch_Service(),
+        new Kiwi_Test_Config(),
+        new Kiwi_Test_Blacklist_Callback_Repository([]),
+        1,
+        0,
+        'kiwi_dimoco_blacklister_redirect_state'
+    );
+
+    $did_redirect = $shortcode->maybe_store_and_redirect_result_state_for_test([
+        'batch_result' => ['processed' => 1],
+        'async_results' => [],
+    ]);
+
+    kiwi_assert_true($did_redirect, 'Expected a completed submission to trigger result-state storage and redirect.');
+    kiwi_assert_same('kiwi_dimoco_blacklister_redirect_state', $shortcode->redirect_result_state_id, 'Expected redirect to target the generated result-state token.');
+    kiwi_assert_same(
+        ['batch_result' => ['processed' => 1], 'async_results' => []],
+        $GLOBALS['kiwi_test_transients']['kiwi_dimoco_blacklister_redirect_state'],
+        'Expected the redirect target state to be saved before redirecting.'
     );
 });
