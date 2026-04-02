@@ -44,8 +44,14 @@ Do **not** store real credentials or secrets in this repository.
 - `architecture/capability-matrix.md`  
   Overview of which capabilities exist for which aggregator, country, or flow.
 
+- `architecture/landing-page-system.md`  
+  Source-of-truth architecture for filesystem-based landing-page discovery and routing.
+
 - `operations/credentials-and-environments.md`  
   Documentation of credential names, ownership, environments, and secret locations without storing actual secret values.
+
+- `operations/landing-page-migration.md`  
+  Migration and rollout steps for moving landing pages from legacy config into `landing-pages/`.
 
 ## How integration docs are organized
 

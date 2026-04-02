@@ -10,6 +10,13 @@ Aggregator-specific details belong in the corresponding integration docs.
 Aggregator credentials and related integration settings are currently stored in:
 - `wp-config.php`
 
+Landing-page definitions are no longer stored in `wp-config.php`.
+
+Landing-page source of truth is now:
+- `landing-pages/<landing-key>/integration.php`
+- `landing-pages/<landing-key>/index.html`
+- `landing-pages/<landing-key>/styles.css`
+
 Configuration access inside the codebase is currently handled through:
 - `class-config.php`
 
@@ -36,6 +43,8 @@ Do not use this file for:
 ## Current aggregator note
 
 At the moment, aggregator-related configuration is managed centrally via `wp-config.php`, with access through `class-config.php`.
+
+Landing-page loading is filesystem-driven and managed by the landing-page registry in application code.
 
 Examples of configuration types that may exist there:
 - usernames
@@ -71,6 +80,8 @@ For country- or flow-specific configuration usage, see the relevant files under:
 
 When a new aggregator, country setup, or flow is added, the agent may propose how the required configuration should be structured in `wp-config.php`.
 
+When a new landing page is added, it must be created under `landing-pages/` and must not be added to `wp-config.php`.
+
 This may include:
 - suggested constant names
 - suggested array structure
@@ -84,6 +95,12 @@ The agent should:
 - suggest where they should be placed in `wp-config.php`
 - mention whether changes in `class-config.php` or related access code are likely required
 - wait for manual implementation of the actual config values where necessary
+
+For landing pages specifically, the agent should:
+- create a new `landing-pages/lp<version>-<country>/` folder
+- provide `integration.php`, `index.html`, and `styles.css`
+- link `documentation` to `/integrations/...`
+- avoid adding new `KIWI_LANDING_PAGES` entries
 
 The agent must not invent or insert real secret values into documentation or code.
 

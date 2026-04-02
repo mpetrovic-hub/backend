@@ -121,6 +121,7 @@ function esc_textarea($text)
     return (string) $text;
 }
 
+require_once __DIR__ . '/../includes/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/../includes/core/class-config.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
@@ -166,6 +167,119 @@ function kiwi_assert_true($condition, string $message): void
 {
     if (!$condition) {
         throw new RuntimeException($message);
+    }
+}
+
+function kiwi_assert_contains(string $needle, string $haystack, string $message): void
+{
+    if (strpos($haystack, $needle) === false) {
+        throw new RuntimeException(
+            $message
+            . "\nExpected to find: " . var_export($needle, true)
+            . "\nIn: " . var_export($haystack, true)
+        );
+    }
+}
+
+function kiwi_create_temp_directory(string $prefix): string
+{
+    $path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . $prefix . '_' . uniqid('', true);
+
+    if (!mkdir($path, 0777, true) && !is_dir($path)) {
+        throw new RuntimeException('Unable to create temp directory: ' . $path);
+    }
+
+    return $path;
+}
+
+function kiwi_write_file(string $path, string $contents): void
+{
+    $directory = dirname($path);
+
+    if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+        throw new RuntimeException('Unable to create directory: ' . $directory);
+    }
+
+    file_put_contents($path, $contents);
+}
+
+function kiwi_remove_directory(string $path): void
+{
+    if (!is_dir($path)) {
+        return;
+    }
+
+    $entries = scandir($path);
+    $entries = is_array($entries) ? $entries : [];
+
+    foreach ($entries as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+
+        $entry_path = $path . DIRECTORY_SEPARATOR . $entry;
+
+        if (is_dir($entry_path)) {
+            kiwi_remove_directory($entry_path);
+            continue;
+        }
+
+        unlink($entry_path);
+    }
+
+    rmdir($path);
+}
+
+function kiwi_write_landing_page_fixture(
+    string $project_root,
+    string $folder_name,
+    array $metadata_overrides = [],
+    bool $with_styles = true,
+    bool $create_docs_file = true
+): void {
+    $landing_root = $project_root . DIRECTORY_SEPARATOR . 'landing-pages';
+    $folder_path = $landing_root . DIRECTORY_SEPARATOR . $folder_name;
+
+    kiwi_write_file(
+        $folder_path . DIRECTORY_SEPARATOR . 'index.html',
+        "<!doctype html>\n<html><head><link rel=\"stylesheet\" href=\"./styles.css\"></head><body>LP</body></html>\n"
+    );
+
+    if ($with_styles) {
+        kiwi_write_file(
+            $folder_path . DIRECTORY_SEPARATOR . 'styles.css',
+            "body { font-family: Arial, sans-serif; }\n"
+        );
+    }
+
+    $metadata = array_merge([
+        'key' => $folder_name,
+        'country' => 'FR',
+        'flow' => 'nth-fr-one-off',
+        'provider' => 'nth',
+        'documentation' => '/integrations/nth/fr/one-off/README.md',
+        'active' => true,
+        'backend_path' => '/lp/fr/myjoyplay',
+        'dedicated_path' => '/',
+        'hostnames' => ['frlp1.joy-play.com'],
+        'service_key' => 'nth_fr_one_off_jplay',
+    ], $metadata_overrides);
+
+    kiwi_write_file(
+        $folder_path . DIRECTORY_SEPARATOR . 'integration.php',
+        "<?php\n\nreturn " . var_export($metadata, true) . ";\n"
+    );
+
+    if ($create_docs_file) {
+        $documentation = (string) ($metadata['documentation'] ?? '');
+
+        if (strpos($documentation, '/integrations/') === 0) {
+            $relative_doc_path = ltrim(substr($documentation, strlen('/integrations/')), '/');
+            kiwi_write_file(
+                $project_root . DIRECTORY_SEPARATOR . 'docs' . DIRECTORY_SEPARATOR . 'integrations' . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relative_doc_path),
+                "# fixture\n"
+            );
+        }
     }
 }
 
@@ -265,6 +379,62 @@ class Kiwi_Test_Config extends Kiwi_Config
     public function get_nth_submit_timeout(): int
     {
         return $this->nth_submit_timeout;
+    }
+}
+
+class Kiwi_Test_Runtime_Config extends Kiwi_Config
+{
+    private $landing_pages_root;
+    private $legacy_landing_pages;
+    private $filesystem_enabled;
+    private $legacy_fallback_enabled;
+    private $debug;
+    private $nth_services;
+
+    public function __construct(
+        string $landing_pages_root,
+        array $legacy_landing_pages = [],
+        bool $filesystem_enabled = true,
+        bool $legacy_fallback_enabled = true,
+        bool $debug = false,
+        array $nth_services = []
+    ) {
+        $this->landing_pages_root = $landing_pages_root;
+        $this->legacy_landing_pages = $legacy_landing_pages;
+        $this->filesystem_enabled = $filesystem_enabled;
+        $this->legacy_fallback_enabled = $legacy_fallback_enabled;
+        $this->debug = $debug;
+        $this->nth_services = $nth_services;
+    }
+
+    public function is_debug(): bool
+    {
+        return $this->debug;
+    }
+
+    public function get_nth_service(string $key): ?array
+    {
+        return $this->nth_services[$key] ?? null;
+    }
+
+    protected function get_landing_pages_root_path(): string
+    {
+        return $this->landing_pages_root;
+    }
+
+    protected function get_legacy_landing_pages(): array
+    {
+        return $this->legacy_landing_pages;
+    }
+
+    protected function is_landing_pages_filesystem_enabled(): bool
+    {
+        return $this->filesystem_enabled;
+    }
+
+    protected function is_landing_pages_legacy_fallback_enabled(): bool
+    {
+        return $this->legacy_fallback_enabled;
     }
 }
 
@@ -976,6 +1146,199 @@ kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', 
     kiwi_assert_same('FR', $config->get_nth_service('nth_fr_one_off_jplay')['country'], 'Expected NTH service config to be returned by key.');
     kiwi_assert_same('/lp/fr/myjoyplay', $config->get_landing_page('fr_myjoyplay_approval')['backend_path'], 'Expected landing page config to be returned by key.');
     kiwi_assert_same(240, $config->get_nth_submit_timeout(), 'Expected the configured NTH timeout to be returned.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Registry discovers folder landing pages and parses metadata', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_registry');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr');
+
+        $registry = new Kiwi_Landing_Page_Registry(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            $project_root
+        );
+        $landing_pages = $registry->get_registry();
+        $errors = $registry->get_errors();
+
+        kiwi_assert_same([], $errors, 'Expected valid landing page folders to load without validation errors.');
+        kiwi_assert_true(isset($landing_pages['lp2-fr']), 'Expected lp2-fr to be discovered from the filesystem.');
+        kiwi_assert_same('nth-fr-one-off', $landing_pages['lp2-fr']['flow'] ?? '', 'Expected landing page flow metadata to be parsed from integration.php.');
+        kiwi_assert_same('/integrations/nth/fr/one-off/README.md', $landing_pages['lp2-fr']['documentation'] ?? '', 'Expected documentation path to normalize to /integrations/.');
+        kiwi_assert_true(is_file((string) ($landing_pages['lp2-fr']['documentation_resolved_path'] ?? '')), 'Expected documentation link to resolve to an existing docs file.');
+        kiwi_assert_same('filesystem', $landing_pages['lp2-fr']['render_mode'] ?? '', 'Expected discovered entries to be marked as filesystem-rendered.');
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Registry enforces required files and reports actionable errors', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_missing');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [], false);
+
+        $registry = new Kiwi_Landing_Page_Registry(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            $project_root
+        );
+        $errors = $registry->get_errors();
+
+        kiwi_assert_true(!empty($errors), 'Expected invalid landing page folders to produce validation errors.');
+        kiwi_assert_contains(
+            'Landing page "lp2-fr" is missing styles.css.',
+            implode("\n", array_map('strval', $errors)),
+            'Expected validation errors to clearly name the missing required file.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Config fails loudly in debug mode when filesystem landing pages are invalid', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_debug');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [], false);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [],
+            true,
+            false,
+            true
+        );
+
+        $caught_message = '';
+
+        try {
+            $config->get_landing_pages();
+        } catch (RuntimeException $exception) {
+            $caught_message = $exception->getMessage();
+        }
+
+        kiwi_assert_contains(
+            'Landing page "lp2-fr" is missing styles.css.',
+            $caught_message,
+            'Expected debug-mode loading to throw a clear validation error for invalid landing pages.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Registry validates documentation linkage safety and existence', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_docs');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'documentation' => '/integrations/../../secrets.md',
+        ], true, false);
+        kiwi_write_landing_page_fixture($project_root, 'lp3-fr', [
+            'documentation' => '/integrations/nth/fr/one-off/missing.md',
+        ], true, false);
+
+        $registry = new Kiwi_Landing_Page_Registry(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            $project_root
+        );
+        $errors = implode("\n", array_map('strval', $registry->get_errors()));
+
+        kiwi_assert_contains(
+            'relative traversal is not allowed',
+            strtolower($errors),
+            'Expected documentation path validation to block traversal attempts.'
+        );
+        kiwi_assert_contains(
+            'documentation file was not found',
+            strtolower($errors),
+            'Expected documentation path validation to fail when linked docs are missing.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and legacy fallback for unmigrated keys only', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_fallback');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'flow' => 'filesystem-flow',
+        ]);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [
+                'lp2-fr' => [
+                    'flow' => 'legacy-flow',
+                    'backend_path' => '/legacy/lp2-fr',
+                ],
+                'legacy-only-fr' => [
+                    'flow' => 'legacy-only-flow',
+                    'backend_path' => '/legacy/only',
+                ],
+            ],
+            true,
+            true,
+            false
+        );
+
+        $landing_pages = $config->get_landing_pages();
+
+        kiwi_assert_same(
+            'filesystem-flow',
+            $landing_pages['lp2-fr']['flow'] ?? '',
+            'Expected filesystem landing pages to override same-key legacy entries.'
+        );
+        kiwi_assert_same(
+            'legacy-only-flow',
+            $landing_pages['legacy-only-fr']['flow'] ?? '',
+            'Expected legacy fallback to remain available for unmigrated landing pages.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router resolves filesystem landing pages to the configured flow', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_router');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'flow' => 'nth-fr-one-off',
+            'backend_path' => '/lp/fr/myjoyplay',
+            'hostnames' => ['frlp1.joy-play.com'],
+        ]);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [],
+            true,
+            false,
+            false,
+            [
+                'nth_fr_one_off_jplay' => [
+                    'shortcode' => '84072',
+                    'keyword' => 'JPLAY',
+                    'landing_price_label' => '4,50 EUR / SMS',
+                ],
+            ]
+        );
+
+        $router = new Kiwi_Landing_Page_Router(
+            $config,
+            new Kiwi_Landing_Page_Session_Repository(),
+            'https://example.test/plugin/'
+        );
+
+        $match = $router->resolve_request('backend.kiwimobile.de', '/lp/fr/myjoyplay');
+
+        kiwi_assert_same('lp2-fr', $match['landing_key'] ?? '', 'Expected routing to resolve the discovered filesystem landing page key.');
+        kiwi_assert_same('nth-fr-one-off', $match['landing_page']['flow'] ?? '', 'Expected routing to carry the flow linked in integration.php.');
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host routes', function (): void {

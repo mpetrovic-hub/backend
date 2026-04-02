@@ -63,10 +63,6 @@ class Kiwi_Landing_Page_Router
 
         $template = $this->resolve_template_path((string) ($landing_page['template'] ?? ''));
 
-        if ($template === null) {
-            return false;
-        }
-
         if (function_exists('status_header')) {
             status_header(200);
         }
@@ -78,6 +74,14 @@ class Kiwi_Landing_Page_Router
         $landing_key = $match['landing_key'];
         $asset_base_url = $this->plugin_base_url;
 
+        if ($this->is_filesystem_landing_page($landing_page)) {
+            return $this->render_filesystem_landing_page($landing_page, $landing_key);
+        }
+
+        if ($template === null) {
+            return false;
+        }
+
         include $template;
         exit;
     }
@@ -88,6 +92,10 @@ class Kiwi_Landing_Page_Router
 
         foreach ($this->config->get_landing_pages() as $landing_key => $landing_page) {
             if (!is_array($landing_page)) {
+                continue;
+            }
+
+            if (array_key_exists('active', $landing_page) && $landing_page['active'] === false) {
                 continue;
             }
 
@@ -129,6 +137,79 @@ class Kiwi_Landing_Page_Router
         $path = dirname(__DIR__, 2) . '/templates/landing-pages/' . $template . '.php';
 
         return file_exists($path) ? $path : null;
+    }
+
+    private function is_filesystem_landing_page(array $landing_page): bool
+    {
+        if ((string) ($landing_page['render_mode'] ?? '') !== 'filesystem') {
+            return false;
+        }
+
+        $index_path = (string) ($landing_page['index_path'] ?? '');
+
+        return $index_path !== '' && is_file($index_path);
+    }
+
+    private function render_filesystem_landing_page(array $landing_page, string $landing_key): bool
+    {
+        $index_path = (string) ($landing_page['index_path'] ?? '');
+        $styles_path = (string) ($landing_page['styles_path'] ?? '');
+
+        if (!is_file($index_path) || !is_readable($index_path)) {
+            return false;
+        }
+
+        $html = file_get_contents($index_path);
+
+        if (!is_string($html) || $html === '') {
+            return false;
+        }
+
+        $css_url = $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/styles.css';
+        $html = $this->replace_stylesheet_href($html, $css_url);
+
+        if (is_file($styles_path) && is_readable($styles_path)) {
+            $css_content = file_get_contents($styles_path);
+
+            if (is_string($css_content) && trim($css_content) !== '') {
+                $html = $this->inject_inline_styles($html, $css_content);
+            }
+        }
+
+        echo $html;
+        exit;
+    }
+
+    private function replace_stylesheet_href(string $html, string $css_url): string
+    {
+        $escaped_css_url = htmlspecialchars($css_url, ENT_QUOTES, 'UTF-8');
+        $pattern = '/(<link\b[^>]*href=["\'])(\.\/)?styles\.css(["\'][^>]*>)/i';
+        $count = 0;
+        $html = preg_replace($pattern, '$1' . $escaped_css_url . '$3', $html, 1, $count);
+        $html = is_string($html) ? $html : '';
+
+        if ($count > 0) {
+            return $html;
+        }
+
+        $stylesheet_link = '<link rel="stylesheet" href="' . $escaped_css_url . '">';
+
+        if (stripos($html, '</head>') !== false) {
+            return preg_replace('/<\/head>/i', $stylesheet_link . "\n</head>", $html, 1) ?? $html;
+        }
+
+        return $stylesheet_link . "\n" . $html;
+    }
+
+    private function inject_inline_styles(string $html, string $css_content): string
+    {
+        $style_block = "<style>\n" . $css_content . "\n</style>";
+
+        if (stripos($html, '</head>') !== false) {
+            return preg_replace('/<\/head>/i', $style_block . "\n</head>", $html, 1) ?? $html;
+        }
+
+        return $style_block . "\n" . $html;
     }
 
     private function build_render_landing_page(array $landing_page, array $service): array

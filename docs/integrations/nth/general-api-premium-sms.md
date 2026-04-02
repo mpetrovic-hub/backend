@@ -6,15 +6,16 @@ It is intentionally not country-specific and not flow-specific.
 Use this file for everything that is generally true for NTH Premium SMS integrations across markets and services. Country-, operator-, shortcode-, and service-program-specific behavior belongs in dedicated files such as:
 - `fr/<flow>/README.md`
 - `at/<flow>/README.md`
-- `gr/<flow>/README.md` :contentReference[oaicite:0]{index=0}
+- `gr/<flow>/README.md`
 
 ## Source
 
-Primary source:
-- NTH Developers: Premium SMS  
-- Market/service-specific “Service Program” documents provided by NTH during setup
+Primary sources:
+- NTH Premium SMS developer documentation
+- NTH setup / service-program documents provided during onboarding
+- Additional clarifications received from NTH regarding webhook payloads and callback usage
 
-This summary is based on the public NTH Premium SMS developer documentation. NTH explicitly recommends implementing against the generic API together with the relevant Service Program documents for the specific market/service. :contentReference[oaicite:1]{index=1}
+This summary is based on the generic NTH Premium SMS HTTP API together with extra callback and request/response examples collected separately. NTH recommends implementing the generic API together with the relevant Service Program document for the specific market and service.
 
 ## Scope
 
@@ -25,18 +26,19 @@ This file covers:
 - generic communication model
 - available Premium SMS operations
 - generic callback/report behavior
+- sample payload shapes confirmed by NTH
 - PIN and session concepts
 
 This file does not cover:
 - country-specific service rules
 - shortcode/operator mappings per market
 - concrete prices
-- specific retry windows or legal/regulatory wording
-- service-program-specific flow rules :contentReference[oaicite:2]{index=2}
+- specific retry windows or legal/regulatory wording unless explicitly stated by NTH
+- service-program-specific flow rules
 
 ## Product overview
 
-NTH Premium SMS HTTP API allows authorized customers (service providers) to exchange messages with the NTH SMS Gateway, send and receive SMS-related traffic, and use additional flow functions such as delivery reports, event notifications, PIN validation, and session control. The API is intended for third-party integrations with NTH. :contentReference[oaicite:3]{index=3}
+NTH Premium SMS HTTP API allows authorized customers (service providers) to exchange messages with the NTH SMS Gateway, send and receive SMS-related traffic, and use additional flow functions such as delivery reports, event notifications, PIN validation, and session control. The API is intended for third-party integrations with NTH.
 
 ## Terminology
 
@@ -73,20 +75,20 @@ Important generic terms used by NTH:
   Services where the opt-in starts on a web page.
 
 - **Number Lookup service**  
-  Supporting service normally required and enabled by default for web-initiated services, used by SMS Gateway to resolve the operator for an MSISDN. :contentReference[oaicite:4]{index=4}
+  Supporting service normally required and enabled by default for web-initiated services, used by SMS Gateway to resolve the operator for an MSISDN.
 
 ## Prerequisites
 
-According to NTH, a customer needs the following to use Premium SMS HTTP API:
+According to NTH, a customer needs the following to use the Premium SMS HTTP API:
 
-- Customer Account credentials (username and password)
+- Customer Account credentials (`username` and `password`)
 - Service data such as short codes, operator codes, and prices
 - SMS Gateway endpoint URL
 - Service Program document(s)
-- Internet-connected application capable of sending/receiving HTTP requests
-- IP whitelist information for servers that will call NTH :contentReference[oaicite:5]{index=5}
+- Internet-connected application capable of sending and receiving HTTP requests
+- IP whitelist information for servers that will call NTH
 
-## Request format
+## Transport and payload format
 
 Premium SMS HTTP API is implemented as a standard HTTP service.
 
@@ -94,16 +96,17 @@ Generic request characteristics:
 - operations are sent as HTTP `POST`
 - parameters are sent in the request body
 - content type should be `application/x-www-form-urlencoded`
-- parameter query should be URL-encoded
-- default text encoding is UTF-8, though other encodings may be configurable per customer :contentReference[oaicite:6]{index=6}
+- the parameter string should be URL-encoded
+- default text encoding is UTF-8, though other encodings may be configurable per customer
 
-## Response format
-
-Customer applications send HTTP POST requests and receive XML responses from NTH.
+Generic response characteristics:
+- synchronous responses from NTH are XML
+- customer applications send HTTP POST requests and receive XML responses from NTH
+- callbacks from NTH to the customer are also HTTP `POST` with `application/x-www-form-urlencoded`
 
 For callbacks from NTH to the customer:
-- the customer should respond only with HTTP status `200`
-- no response body payload is expected for callback acknowledgements :contentReference[oaicite:7]{index=7}
+- the customer should acknowledge successfully with HTTP status `200`
+- no response body payload is expected for callback acknowledgements
 
 ## Communication model
 
@@ -113,7 +116,7 @@ At a high level:
 1. Customer sends an operation request to SMS Gateway.
 2. SMS Gateway processes the command.
 3. NTH returns an XML response for the request.
-4. Depending on the operation and service flow, NTH may later send callbacks such as delivery reports or event notifications to the customer endpoint. :contentReference[oaicite:8]{index=8}
+4. Depending on the operation and service flow, NTH may later send callbacks such as delivery reports or event notifications to the customer endpoint.
 
 ## Functional overview
 
@@ -125,7 +128,7 @@ The public NTH Premium SMS API documentation lists these supported functions and
 - Event notifications → `deliverEvent`
 - PIN validation → `validatePin`
 - Session initiation → `initSession`
-- Session termination → `closeSession` :contentReference[oaicite:9]{index=9}
+- Session termination → `closeSession`
 
 ---
 
@@ -140,7 +143,29 @@ Generic behavior:
 - end user sends an MO SMS to a business number
 - mobile operator delivers the MO to SMS Gateway
 - SMS Gateway stores and forwards it to the customer application via `deliverMessage`
-- the forwarding endpoint is configured during account/service setup :contentReference[oaicite:10]{index=10}
+- the forwarding endpoint is configured during account or service setup
+
+Confirmed webhook transport:
+- HTTP method: `POST`
+- content type: `application/x-www-form-urlencoded`
+
+Confirmed sample callback body:
+```text
+command=deliverMessage&messageId=12345&msisdn=00414411112222&businessNumber=9292&keyword=START&content=START+sms+service&operatorCode=22801&sessionId=9292CHA1571000000000&time=2021-01-01+12%3A00%3A00
+```
+
+Observed generic parameters in the MO delivery callback:
+- `command=deliverMessage`
+- `messageId`
+- `msisdn`
+- `businessNumber`
+- `keyword`
+- `content`
+- `operatorCode`
+- `sessionId`
+- `time`
+
+NTH clarified that the same parameter set is typically sent, while the values vary by market and service.
 
 Use this operation for:
 - keyword-based inbound flows
@@ -158,7 +183,37 @@ Generic behavior:
 - NTH handles the billing of the message according to the price specified in the request
 - NTH recommends a TCP/IP socket/read timeout of at least 180 seconds for this request
 - if SMS Gateway does not respond within timeout, customer should resend the HTTP request
-- HTTP `200` with XML response means the request was received and processed at protocol level; other HTTP response codes indicate NTH-side processing error and allow retry on the customer side :contentReference[oaicite:11]{index=11}
+- HTTP `200` with XML response means the request was received and processed at protocol level; other HTTP response codes indicate NTH-side processing error and allow retry on the customer side
+
+Confirmed request characteristics:
+- HTTP method: `POST`
+- content type: `application/x-www-form-urlencoded`
+- by default, NTH assumes the submitted MT is a text message
+
+Sample request body:
+```text
+command=submitMessage&username=user1&password=pass1&msisdn=00414411112222&businessNumber=9292&content=MT+message+text&price=100&sessionId=9292CHA1571000000000
+```
+
+Sample XML response:
+```xml
+<res>
+    <resultCode>100</resultCode>
+    <resultText>OK</resultText>
+    <messageId>12345</messageId>
+    <messageRef>CUST_REF_12345</messageRef>
+    <sessionId>9292CHA1571000000000</sessionId>
+    <operatorCode>22801</operatorCode>
+</res>
+```
+
+Observed response fields for successful MT submission:
+- `resultCode`
+- `resultText`
+- `messageId`
+- `messageRef`
+- `sessionId`
+- `operatorCode`
 
 Use this operation for:
 - MT charging
@@ -178,7 +233,29 @@ Generic behavior:
   - delivered
   - delivery failed
   - intermediate
-- default delivery-report configuration may be overridden in MT submission request parameters :contentReference[oaicite:12]{index=12}
+- default delivery-report configuration may be overridden in MT submission request parameters
+
+Confirmed webhook transport:
+- HTTP method: `POST`
+- content type: `application/x-www-form-urlencoded`
+
+Confirmed sample callback body:
+```text
+command=deliverReport&messageId=12345&messageRef=CUST_REF_12345&msisdn=00414411112222&businessNumber=9292&messageStatus=2&messageStatusText=Delivery+successful&time=2021-01-01+12%3A00%3A00&sessionId=9292CHA1571000000000
+```
+
+Observed generic parameters in the delivery report callback:
+- `command=deliverReport`
+- `messageId`
+- `messageRef`
+- `msisdn`
+- `businessNumber`
+- `messageStatus`
+- `messageStatusText`
+- `time`
+- `sessionId`
+
+NTH explicitly described the Notification URL as the endpoint used to receive delivery reports for outbound MT messages whenever the MT status changes.
 
 Use this operation for:
 - delivery monitoring
@@ -196,12 +273,30 @@ Examples listed by NTH include:
 - session is activated
 - session is closed
 
-NTH states that these notifications are usually informational, and customer action is typically not required except for special cases documented elsewhere. :contentReference[oaicite:13]{index=13}
+NTH states that these notifications are usually informational, and customer action is typically not required except for special cases documented elsewhere.
+
+Confirmed sample callback body:
+```text
+command=deliverEvent&event=optin_msg_sent&msisdn=00414411112222&businessNumber=9292&operatorCode=22801&keyword=GAME&sessionId=9292CHA1571000000000&time=2021-01-01+12%3A00%3A00&price=0&content=Reply+with+YES+to+confirm+purchase&messageId=12345
+```
+
+Observed generic parameters in the event callback sample:
+- `command=deliverEvent`
+- `event`
+- `msisdn`
+- `businessNumber`
+- `operatorCode`
+- `keyword`
+- `sessionId`
+- `time`
+- `price`
+- `content`
+- `messageId`
 
 Use this operation for:
 - audit visibility
 - session lifecycle observation
-- tracking hidden operator/NTH-side flow transitions
+- tracking hidden operator or NTH-side flow transitions
 
 ## validatePin
 
@@ -209,17 +304,41 @@ Purpose:
 - validate a PIN entered by the end user on a web page
 
 Generic behavior:
-- in some markets/operators, services can be initiated on web by entering MSISDN
+- in some markets and operators, services can be initiated on web by entering MSISDN
 - NTH or the MNO sends a randomly generated PIN to the user by SMS
 - the user enters the PIN on the portal
 - customer validates the PIN by sending `validatePin` to SMS Gateway
 
-NTH notes that this can be used for one-time and session-based flows such as subscriptions or chat. :contentReference[oaicite:14]{index=14}
+NTH notes that this can be used for one-time and session-based flows such as subscriptions or chat.
+
+Sample request body:
+```text
+command=validatePin&username=user1&password=pass1&sessionId=9292CHA1571000000000&pin=1234
+```
+
+Sample XML response:
+```xml
+<res>
+    <resultCode>100</resultCode>
+    <resultText>OK</resultText>
+    <sessionId>9292CHA1571000000000</sessionId>
+</res>
+```
+
+Another documented XML response example includes `sessionState`:
+```xml
+<res>
+    <resultCode>100</resultCode>
+    <resultText>OK</resultText>
+    <sessionId>9292CHA1571000000000</sessionId>
+    <sessionState>OPENING</sessionState>
+</res>
+```
 
 Use this operation for:
 - web opt-in flows
 - double opt-in confirmation
-- PIN/TAN-based service authorization
+- PIN or TAN based service authorization
 
 ## initSession
 
@@ -229,10 +348,25 @@ Purpose:
 NTH states:
 - the standard method for web-initiated payment flow is to submit an initial MT SMS
 - `initSession` is an alternative used in some markets
-- usage is described in the relevant Service Program documents and communicated during service setup :contentReference[oaicite:15]{index=15}
+- usage is described in the relevant Service Program documents and communicated during service setup
+
+Sample request body:
+```text
+command=initSession&username=user1&password=pass1&msisdn=00414411112222&businessNumber=9292&keyword=GAME
+```
+
+Sample XML response:
+```xml
+<res>
+    <resultCode>100</resultCode>
+    <resultText>OK</resultText>
+    <sessionId>9292CHA1571000000000</sessionId>
+    <sessionState>OPENING</sessionState>
+</res>
+```
 
 Use this operation for:
-- market-specific web session activation flows where NTH instructs to use session initialization instead of initial MT
+- market-specific web session activation flows where NTH instructs to use session initialization instead of an initial MT
 
 ## closeSession
 
@@ -242,10 +376,25 @@ Purpose:
 Generic behavior:
 - NTH maintains records for each session-based activation
 - if the session is discontinued on the customer side, the customer should notify NTH with `closeSession`
-- closing the session in SMS Gateway may allow future activation for the same user when an old session record would otherwise block it :contentReference[oaicite:16]{index=16}
+- closing the session in SMS Gateway may allow future activation for the same user when an old session record would otherwise block it
+
+Sample request body:
+```text
+command=closeSession&username=user1&password=pass1&sessionId=9292CHA1571000000000
+```
+
+Sample XML response:
+```xml
+<res>
+    <resultCode>100</resultCode>
+    <resultText>OK</resultText>
+    <sessionId>9292CHA1571000000000</sessionId>
+    <sessionState>CLOSING</sessionState>
+</res>
+```
 
 Use this operation for:
-- subscription/session cleanup
+- subscription or session cleanup
 - consistency between customer-side access state and NTH-side session state
 
 ---
@@ -257,15 +406,15 @@ Use this operation for:
 A standard Premium SMS usage pattern is:
 1. user sends MO SMS to business number
 2. operator delivers MO to SMS Gateway
-3. SMS Gateway forwards the MO to customer via `deliverMessage` :contentReference[oaicite:17]{index=17}
+3. SMS Gateway forwards the MO to customer via `deliverMessage`
 
 ## MT-based service usage
 
-A standard outbound/billing pattern is:
+A standard outbound and billing pattern is:
 1. customer sends `submitMessage`
 2. SMS Gateway forwards MT to the operator
 3. NTH handles billing
-4. NTH reports delivery/billing state via `deliverReport` :contentReference[oaicite:18]{index=18}
+4. NTH reports delivery or billing state via `deliverReport`
 
 ## Web-initiated services
 
@@ -274,30 +423,51 @@ For web-initiated services:
 - the gateway resolves the operator for the submitted MSISDN
 - some markets use PIN validation
 - some markets may use `initSession` instead of initial MT submission
-- the exact details depend on the relevant Service Program document :contentReference[oaicite:19]{index=19}
+- the exact details depend on the relevant Service Program document
 
 ## Session-based services
 
-For subscription/chat/session flows:
+For subscription, chat, or session flows:
 - NTH maintains session records
-- events such as activation/closure may be reported via `deliverEvent`
-- explicit customer-side session closure should be communicated via `closeSession` when applicable :contentReference[oaicite:20]{index=20}
+- events such as activation or closure may be reported via `deliverEvent`
+- explicit customer-side session closure should be communicated via `closeSession` when applicable
 
 ---
 
-# Delivery reports and events
+# Callback payload summary
 
-## Delivery reports
+## MO delivery callback (`deliverMessage`)
 
-Delivery reports communicate MT message state back to the customer. The report destination and reporting level are configured during setup, and some behavior may be overridden per request. :contentReference[oaicite:21]{index=21}
+```text
+command=deliverMessage&messageId=12345&msisdn=00414411112222&businessNumber=9292&keyword=START&content=START+sms+service&operatorCode=22801&sessionId=9292CHA1571000000000&time=2021-01-01+12%3A00%3A00
+```
 
-## Event notifications
+## MT delivery report callback (`deliverReport`)
 
-Event notifications expose flow events that happen within NTH/operator processing but are not directly visible from the original request path. These are useful for monitoring and state reconciliation. :contentReference[oaicite:22]{index=22}
+```text
+command=deliverReport&messageId=12345&messageRef=CUST_REF_12345&msisdn=00414411112222&businessNumber=9292&messageStatus=2&messageStatusText=Delivery+successful&time=2021-01-01+12%3A00%3A00&sessionId=9292CHA1571000000000
+```
+
+## Event callback (`deliverEvent`)
+
+```text
+command=deliverEvent&event=optin_msg_sent&msisdn=00414411112222&businessNumber=9292&operatorCode=22801&keyword=GAME&sessionId=9292CHA1571000000000&time=2021-01-01+12%3A00%3A00&price=0&content=Reply+with+YES+to+confirm+purchase&messageId=12345
+```
 
 ## Callback acknowledgement rule
 
-For callbacks such as reports/events forwarded to the customer application, the customer should acknowledge successfully with HTTP `200` only, without response payload. :contentReference[oaicite:23]{index=23}
+For callbacks such as reports and events forwarded to the customer application, the customer should acknowledge successfully with HTTP `200` only, without a response payload.
+
+---
+
+# Service-specific clarification from NTH
+
+For one specific one-time service setup described in the supplemental notes:
+- only `deliverMessage` is expected for MO messages
+- only `deliverReport` is expected for MT messages
+- no other callbacks are expected for that setup
+
+Treat this as service-specific guidance, not as a universal rule for all NTH Premium SMS integrations. Other services or markets may still use `deliverEvent`, PIN validation, or session operations.
 
 ---
 
@@ -305,15 +475,15 @@ For callbacks such as reports/events forwarded to the customer application, the 
 
 ## Timeouts and retries
 
-For `submitMessage`, NTH recommends a request timeout of at least 180 seconds. If the SMS Gateway does not respond within that timeout, the customer should resend the request. Also, any non-200 HTTP status from NTH indicates a processing error on the NTH side and allows retry by the customer. :contentReference[oaicite:24]{index=24}
+For `submitMessage`, NTH recommends a request timeout of at least 180 seconds. If the SMS Gateway does not respond within that timeout, the customer should resend the request. Also, any non-200 HTTP status from NTH indicates a processing error on the NTH side and allows retry by the customer.
 
 ## Encoding
 
-Default text encoding is UTF-8. Other encodings may be configurable for the customer, but UTF-8 should be treated as the default integration assumption unless setup docs specify otherwise. :contentReference[oaicite:25]{index=25}
+Default text encoding is UTF-8. Other encodings may be configurable for the customer, but UTF-8 should be treated as the default integration assumption unless setup documents specify otherwise.
 
 ## IP whitelisting
 
-NTH requires the customer to provide the IP addresses of servers that will send HTTP requests so access restrictions can be configured. :contentReference[oaicite:26]{index=26}
+NTH requires the customer to provide the IP addresses of servers that will send HTTP requests so access restrictions can be configured.
 
 ---
 
@@ -326,13 +496,13 @@ Put the following into files such as `at/<flow>/README.md`, `fr/<flow>/README.md
 - pricing
 - keywords
 - legal message wording
-- exact opt-in / double opt-in rules
-- PIN/TAN usage rules for that market
-- whether flow is MO-based, web-based, session-based, or hybrid
+- exact opt-in or double opt-in rules
+- PIN or TAN usage rules for that market
+- whether the flow is MO-based, web-based, session-based, or hybrid
 - whether Number Lookup is required
 - whether `initSession` is used
-- callback/event combinations actually expected in that market
-- retry and scheduling rules communicated in the Service Program document :contentReference[oaicite:27]{index=27}
+- callback and event combinations actually expected in that market
+- retry and scheduling rules communicated in the Service Program document
 
 # Configuration notes for this repository
 
@@ -341,20 +511,20 @@ This file documents the generic NTH Premium SMS API only.
 Repository-specific configuration such as credentials, endpoints, usernames, passwords, and environment wiring should be documented without secret values in:
 - `docs/operations/credentials-and-environments.md`
 
-Country-/service-specific credential usage should be referenced from:
+Country- and service-specific credential usage should be referenced from:
 - `docs/integrations/nth/<country>/<flow>/README.md`
 
 ## Integration guidance for this repository
 
 When implementing or reviewing NTH Premium SMS integrations in this repository:
 
-- keep NTH request/response structures inside the NTH integration layer
-- keep generic Premium SMS concepts separate from country/service specifics
+- keep NTH request and response structures inside the NTH integration layer
+- keep generic Premium SMS concepts separate from country or service specifics
 - do not assume one market’s Service Program rules apply to another
 - treat Service Program documents as required companions to this generic API summary
-- document per-market flow decisions in country/flow files, not here :contentReference[oaicite:28]{index=28}
+- document per-market flow decisions in country or flow files, not here
 
 ## Current repository relevance
 
 This file is the generic base for NTH Premium SMS integrations.  
-Specific implementations such as subscriptions, MO keyword flows, PIN validation flows, or message-report handling should be documented further in country/flow-specific files once the relevant NTH market/service documents are available. :contentReference[oaicite:29]{index=29}
+Specific implementations such as subscriptions, MO keyword flows, PIN validation flows, or message-report handling should be documented further in country- and flow-specific files once the relevant NTH market and service documents are available.
