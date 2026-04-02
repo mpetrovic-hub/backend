@@ -43,3 +43,9 @@ p {
   font-size: 14px;
   font-weight: 700;
 }
+
+.disclaimer {
+  font-size: 14px;
+  color: rgb(226, 226, 226);
+  margin: 50px 0 0 0;
+}
