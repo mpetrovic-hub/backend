@@ -107,7 +107,7 @@ class Kiwi_Plugin
         $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
         $dimoco_callback_operator_lookup_repository = new Kiwi_Dimoco_Callback_Operator_Lookup_Repository();
 
-        $rest_routes = new Kiwi_Rest_Routes(
+        $dimoco_rest_routes = new Kiwi_Dimoco_Rest_Routes(
             $config,
             $dimoco_callback_verifier,
             $dimoco_response_parser,
@@ -115,10 +115,11 @@ class Kiwi_Plugin
             $dimoco_callback_blacklist_repository,
             $dimoco_callback_operator_lookup_repository
         );
-        $rest_routes->register();
+        $dimoco_rest_routes->register();
 
         $nth_runtime = $this->build_nth_runtime($config);
         $nth_rest_routes = new Kiwi_Nth_Rest_Routes(
+            $config,
             $nth_runtime['nth_fr_one_off_service']
         );
         $nth_rest_routes->register();

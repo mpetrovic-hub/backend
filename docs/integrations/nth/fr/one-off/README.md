@@ -98,12 +98,14 @@ The source spreadsheet includes these callback-related fields:
 - `MO Delivery URL`
 - `Notification URL`
 
-Both values are currently blank in the spreadsheet source.
+Both values are blank in the spreadsheet source, but this repository now has an implemented NTH callback endpoint:
 
-Therefore:
+- `POST /wp-json/kiwi-backend/v1/nth-callback`
 
-- do not invent endpoint values
-- treat both endpoint URLs as unresolved until confirmed in code or operational configuration
+Both callback commands for this FR one-off flow are expected on that endpoint:
+
+- `deliverMessage` (MO callback)
+- `deliverReport` (MT delivery report callback)
 
 ---
 
@@ -320,73 +322,41 @@ Rules:
 
 ## Callback Contract for This Flow
 
-The spreadsheet source leaves the actual callback URLs blank, but NTH clarified the callback purpose and payload shape for this setup.
+This repository handles both callback commands for this FR setup on one endpoint:
 
-### MO Delivery URL
+- `POST /wp-json/kiwi-backend/v1/nth-callback`
+
+### MO callback (`deliverMessage`)
 
 Purpose:
+- NTH forwards inbound **MO** traffic to our system.
 
-- endpoint where NTH forwards incoming **MO** messages to our system
-
-For this FR one-off setup:
-
-- callback command: `deliverMessage`
+Transport:
 - HTTP method: `POST`
 - content type: `application/x-www-form-urlencoded`
-- payload is sent as form fields in the request body
-- parameters follow the standard NTH MO delivery shape
 
 Sample payload shape:
-
 ```x-www-form-urlencoded
 command=deliverMessage&messageId=12345&msisdn=00414411112222&businessNumber=9292&keyword=START&content=START+sms+service&operatorCode=22801&sessionId=9292CHA1571000000000&time=2021-01-01+12%3A00%3A00
 ```
 
 FR-specific note:
-
 - for France, `msisdn` must be interpreted according to FR service rules
 - the forwarded user identifier is an **encrypted MSISDN**, not the real MSISDN
 
-Relevant callback fields for this flow:
-
-- `messageId`
-- `msisdn`
-- `businessNumber`
-- `keyword`
-- `content`
-- `operatorCode`
-- `sessionId`
-- `time`
-
-### Notification URL
+### Notification callback (`deliverReport`)
 
 Purpose:
+- NTH forwards MT delivery reports to our system.
 
-- endpoint where NTH sends MT delivery reports to our system
-
-For this FR one-off setup:
-
-- callback command: `deliverReport`
+Transport:
 - HTTP method: `POST`
 - content type: `application/x-www-form-urlencoded`
-- payload is sent as form fields in the request body
 
 Sample payload shape:
-
 ```x-www-form-urlencoded
 command=deliverReport&messageId=12345&messageRef=CUST_REF_12345&msisdn=00414411112222&businessNumber=9292&messageStatus=2&messageStatusText=Delivery+successful&time=2021-01-01+12%3A00%3A00&sessionId=9292CHA1571000000000
 ```
-
-Relevant callback fields for this flow:
-
-- `messageId`
-- `messageRef`
-- `msisdn`
-- `businessNumber`
-- `messageStatus`
-- `messageStatusText`
-- `time`
-- `sessionId`
 
 ### Callback scope
 
@@ -403,12 +373,9 @@ Therefore:
 
 ### Repository rule for unresolved callback URLs
 
-Because the actual callback URLs are not documented in the source spreadsheet:
+The source spreadsheet callback URL fields are blank, but the repository callback endpoint is now known and implemented:
 
-- do not invent endpoint values
-- verify in code or operational configuration which endpoints currently receive:
-  - FR MO callbacks for shortcode `84072`
-  - FR MT delivery reports for shortcode `84072`
+- `POST /wp-json/kiwi-backend/v1/nth-callback`
 
 ---
 
@@ -450,7 +417,11 @@ In France, the forwarded user identifier is an **encrypted MSISDN**, not the rea
 
 ### 3. MO callback to our system
 
-NTH forwards the inbound MO to our system through the **MO Delivery URL** using the `deliverMessage` callback.
+NTH forwards the inbound MO to our system through:
+
+- `POST /wp-json/kiwi-backend/v1/nth-callback`
+
+using the `deliverMessage` callback command.
 
 Implementation focus points:
 
@@ -460,7 +431,7 @@ Implementation focus points:
 - operator data handling
 - session tracking within the 24-hour validity window
 
-The exact endpoint URL remains unresolved in the source documents.
+The callback endpoint is shared with delivery reports and dispatches by callback command.
 
 ### 4. Internal processing
 
@@ -495,7 +466,11 @@ The FR service program requires that the MT content message includes:
 
 ### 7. Delivery report callback
 
-NTH forwards the MT delivery report to our system through the **Notification URL** using the `deliverReport` callback.
+NTH forwards the MT delivery report to our system through:
+
+- `POST /wp-json/kiwi-backend/v1/nth-callback`
+
+using the `deliverReport` callback command.
 
 This callback should be used to:
 
@@ -503,7 +478,7 @@ This callback should be used to:
 - persist final or intermediate delivery state
 - link report data to the original one-off message or purchase attempt
 
-The exact endpoint URL remains unresolved in the source documents.
+The endpoint is shared with MO callbacks and dispatches by callback command.
 
 ### 8. Callback acknowledgement
 
@@ -564,10 +539,7 @@ Use this section for unresolved setup details.
 
 Currently open based on the source material:
 
-- Is `MO Delivery URL` intentionally handled outside the SDF, or still missing?
-- Is `Notification URL` intentionally handled outside the SDF, or still missing?
-- Which endpoint in the current codebase receives NTH delivery reports for shortcode `84072`?
-- Which endpoint in the current codebase receives MO callbacks for shortcode `84072`?
+- Confirm NTH has configured both callback commands (`deliverMessage`, `deliverReport`) to the repository endpoint: `/wp-json/kiwi-backend/v1/nth-callback`.
 - Is there any additional operator-specific handling beyond the documented Orange reservation rule?
 
 ---

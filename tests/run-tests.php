@@ -15,6 +15,7 @@ $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
 $GLOBALS['kiwi_test_transients'] = [];
 $GLOBALS['kiwi_test_shortcodes'] = [];
+$GLOBALS['kiwi_test_rest_routes'] = [];
 
 function add_action($hook, $callback): void
 {
@@ -24,6 +25,15 @@ function add_action($hook, $callback): void
 function add_shortcode($tag, $callback): void
 {
     $GLOBALS['kiwi_test_shortcodes'][$tag] = $callback;
+}
+
+function register_rest_route($namespace, $route, $args): void
+{
+    $GLOBALS['kiwi_test_rest_routes'][] = [
+        'namespace' => (string) $namespace,
+        'route' => (string) $route,
+        'args' => $args,
+    ];
 }
 
 function wp_enqueue_style($handle, $src, $deps = [], $version = false): void
@@ -121,6 +131,55 @@ function esc_textarea($text)
     return (string) $text;
 }
 
+if (!class_exists('WP_REST_Server')) {
+    class WP_REST_Server
+    {
+        public const CREATABLE = 'CREATABLE';
+    }
+}
+
+if (!class_exists('WP_REST_Request')) {
+    class WP_REST_Request
+    {
+        private $params;
+
+        public function __construct(array $params = [])
+        {
+            $this->params = $params;
+        }
+
+        public function get_param($key)
+        {
+            return $this->params[$key] ?? null;
+        }
+
+        public function get_params(): array
+        {
+            return $this->params;
+        }
+    }
+}
+
+if (!class_exists('WP_REST_Response')) {
+    class WP_REST_Response
+    {
+        public $data;
+        public $status;
+        public $headers = [];
+
+        public function __construct($data = null, int $status = 200)
+        {
+            $this->data = $data;
+            $this->status = $status;
+        }
+
+        public function header(string $name, string $value): void
+        {
+            $this->headers[$name] = $value;
+        }
+    }
+}
+
 require_once __DIR__ . '/../includes/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/../includes/core/class-config.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
@@ -151,6 +210,7 @@ require_once __DIR__ . '/../includes/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
+require_once __DIR__ . '/../includes/http/class-nth-rest-routes.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
 {
@@ -435,6 +495,42 @@ class Kiwi_Test_Runtime_Config extends Kiwi_Config
     protected function is_landing_pages_legacy_fallback_enabled(): bool
     {
         return $this->legacy_fallback_enabled;
+    }
+}
+
+class Kiwi_Test_Nth_Service extends Kiwi_Nth_Fr_One_Off_Service
+{
+    public $mo_calls = [];
+    public $notification_calls = [];
+
+    public function __construct()
+    {
+    }
+
+    public function handle_inbound_mo(string $service_key, array $payload): array
+    {
+        $this->mo_calls[] = [
+            'service_key' => $service_key,
+            'payload' => $payload,
+        ];
+
+        return [
+            'success' => true,
+            'message' => 'mo',
+        ];
+    }
+
+    public function handle_notification(string $service_key, array $payload): array
+    {
+        $this->notification_calls[] = [
+            'service_key' => $service_key,
+            'payload' => $payload,
+        ];
+
+        return [
+            'success' => true,
+            'message' => 'notification',
+        ];
     }
 }
 
@@ -1372,6 +1468,69 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     kiwi_assert_same('fr_myjoyplay_approval', $path_match['landing_key'], 'Expected backend path matching to resolve the configured landing page.');
     kiwi_assert_same('fr_myjoyplay_approval', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
+});
+
+kiwi_run_test('Kiwi_Nth_Rest_Routes registers a single generic NTH callback endpoint', function (): void {
+    $GLOBALS['kiwi_test_rest_routes'] = [];
+
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+            ],
+        ]
+    );
+    $routes = new Kiwi_Nth_Rest_Routes($config, new Kiwi_Test_Nth_Service());
+    $routes->register_routes();
+
+    kiwi_assert_same(1, count($GLOBALS['kiwi_test_rest_routes']), 'Expected a single NTH callback route to be registered.');
+    kiwi_assert_same('/nth-callback', $GLOBALS['kiwi_test_rest_routes'][0]['route'], 'Expected NTH callbacks to use the generic /nth-callback route.');
+});
+
+kiwi_run_test('Kiwi_Nth_Rest_Routes dispatches generic callbacks by payload command and resolved service key', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+            ],
+        ]
+    );
+    $service = new Kiwi_Test_Nth_Service();
+    $routes = new Kiwi_Nth_Rest_Routes($config, $service);
+
+    $mo_response = $routes->handle_callback(new WP_REST_Request([
+        'command' => 'deliverMessage',
+        'businessNumber' => '84072',
+        'keyword' => 'JPLAY',
+    ]));
+    $notification_response = $routes->handle_callback(new WP_REST_Request([
+        'service_key' => 'nth_fr_one_off_jplay',
+        'command' => 'deliverReport',
+        'messageStatus' => 'delivered',
+    ]));
+    $rejected_response = $routes->handle_callback(new WP_REST_Request([
+        'command' => 'deliverMessage',
+        'businessNumber' => '99999',
+    ]));
+
+    kiwi_assert_same(1, count($service->mo_calls), 'Expected deliverMessage callbacks to route to handle_inbound_mo.');
+    kiwi_assert_same('nth_fr_one_off_jplay', $service->mo_calls[0]['service_key'] ?? '', 'Expected MO callbacks to resolve the configured NTH service key.');
+    kiwi_assert_same(1, count($service->notification_calls), 'Expected deliverReport callbacks to route to handle_notification.');
+    kiwi_assert_same('accepted', $mo_response->headers['X-Kiwi-Status'] ?? '', 'Expected successful callbacks to be acknowledged as accepted.');
+    kiwi_assert_same('accepted', $notification_response->headers['X-Kiwi-Status'] ?? '', 'Expected notification callbacks to be acknowledged as accepted.');
+    kiwi_assert_same('rejected', $rejected_response->headers['X-Kiwi-Status'] ?? '', 'Expected unresolved callbacks to be acknowledged as rejected.');
 });
 
 kiwi_run_test('Generic landing page template renders shared assets and config-driven CTA content', function (): void {

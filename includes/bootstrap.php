@@ -81,7 +81,7 @@ require_once __DIR__ . '/shortcodes/class-dimoco-blacklister-shortcode.php';
 /**
  * HTTP / REST
  */
-require_once __DIR__ . '/http/class-rest-routes.php';
+require_once __DIR__ . '/http/class-dimoco-rest-routes.php';
 require_once __DIR__ . '/http/class-nth-rest-routes.php';
 require_once __DIR__ . '/http/class-landing-page-router.php';
 

@@ -511,6 +511,22 @@ This file documents the generic NTH Premium SMS API only.
 Repository-specific configuration such as credentials, endpoints, usernames, passwords, and environment wiring should be documented without secret values in:
 - `docs/operations/credentials-and-environments.md`
 
+### Current callback endpoint model in this repository
+
+NTH callbacks are handled through a single aggregator endpoint:
+
+- `POST /wp-json/kiwi-backend/v1/nth-callback`
+
+Dispatch behavior:
+- payloads with `command=deliverMessage` are treated as MO callbacks
+- payloads with `command=deliverReport` are treated as notification callbacks
+
+Service resolution behavior:
+- `service_key` request parameter is accepted when provided
+- otherwise, service resolution is attempted from callback payload data (shortcode/business number plus keyword) against configured `KIWI_NTH_SERVICES`
+
+Legacy per-service callback routes are no longer used for NTH.
+
 Country- and service-specific credential usage should be referenced from:
 - `docs/integrations/nth/<country>/<flow>/README.md`
 
