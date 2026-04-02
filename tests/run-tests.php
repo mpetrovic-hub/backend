@@ -6,6 +6,10 @@ if (!defined('MINUTE_IN_SECONDS')) {
     define('MINUTE_IN_SECONDS', 60);
 }
 
+if (!defined('DAY_IN_SECONDS')) {
+    define('DAY_IN_SECONDS', 86400);
+}
+
 $GLOBALS['kiwi_test_hooks'] = [];
 $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
@@ -70,6 +74,23 @@ function wp_json_encode($value)
     return json_encode($value);
 }
 
+function current_time($type)
+{
+    if ($type === 'mysql') {
+        return '2026-04-01 12:00:00';
+    }
+
+    return time();
+}
+
+function wp_generate_uuid4()
+{
+    static $counter = 0;
+    $counter++;
+
+    return sprintf('00000000-0000-4000-8000-%012d', $counter);
+}
+
 function wp_nonce_field($action, $name, $referer = true, $display = true)
 {
     return '';
@@ -117,9 +138,18 @@ require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-callback-veri
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-blacklist-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-operator-lookup-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-refund-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-landing-page-session-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-nth-event-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
+require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
+require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-refunder-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-hlr-lookup-shortcode.php';
+require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
+require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
+require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
 {
@@ -152,19 +182,28 @@ class Kiwi_Test_Config extends Kiwi_Config
     private $hlr_retry_delay_seconds;
     private $operator_lookup_routes;
     private $dimoco_services;
+    private $nth_services;
+    private $landing_pages;
+    private $nth_submit_timeout;
 
     public function __construct(
         int $hlr_batch_limit = 100,
         int $hlr_request_delay_ms = 0,
         int $hlr_retry_delay_seconds = 0,
         array $operator_lookup_routes = [],
-        array $dimoco_services = []
+        array $dimoco_services = [],
+        array $nth_services = [],
+        array $landing_pages = [],
+        int $nth_submit_timeout = 180
     ) {
         $this->hlr_batch_limit = $hlr_batch_limit;
         $this->hlr_request_delay_ms = $hlr_request_delay_ms;
         $this->hlr_retry_delay_seconds = $hlr_retry_delay_seconds;
         $this->operator_lookup_routes = $operator_lookup_routes;
         $this->dimoco_services = $dimoco_services;
+        $this->nth_services = $nth_services;
+        $this->landing_pages = $landing_pages;
+        $this->nth_submit_timeout = $nth_submit_timeout;
     }
 
     public function get_hlr_batch_limit(): int
@@ -201,6 +240,31 @@ class Kiwi_Test_Config extends Kiwi_Config
         }
 
         return $options;
+    }
+
+    public function get_nth_services(): array
+    {
+        return $this->nth_services;
+    }
+
+    public function get_nth_service(string $key): ?array
+    {
+        return $this->nth_services[$key] ?? null;
+    }
+
+    public function get_landing_pages(): array
+    {
+        return $this->landing_pages;
+    }
+
+    public function get_landing_page(string $key): ?array
+    {
+        return $this->landing_pages[$key] ?? null;
+    }
+
+    public function get_nth_submit_timeout(): int
+    {
+        return $this->nth_submit_timeout;
     }
 }
 
@@ -716,6 +780,506 @@ class Kiwi_Test_Hlr_Lookup_Shortcode extends Kiwi_Hlr_Lookup_Shortcode
     }
 }
 
+class Kiwi_Test_Nth_Client extends Kiwi_Nth_Client
+{
+    public $calls = [];
+    private $responses;
+
+    public function __construct(array $responses)
+    {
+        $this->responses = $responses;
+    }
+
+    public function submit_message(string $service_key, array $transaction): array
+    {
+        $this->calls[] = [
+            'service_key' => $service_key,
+            'transaction' => $transaction,
+        ];
+
+        $response = array_shift($this->responses);
+
+        if ($response === null) {
+            return [
+                'success' => false,
+                'status_code' => 500,
+                'error' => 'No fake response configured.',
+                'request' => [],
+                'body' => '',
+            ];
+        }
+
+        return $response;
+    }
+}
+
+class Kiwi_Test_Nth_Event_Repository extends Kiwi_Nth_Event_Repository
+{
+    public $rows = [];
+    private $next_id = 1;
+
+    public function insert_if_new(array $event): array
+    {
+        foreach ($this->rows as $row) {
+            if (($row['dedupe_key'] ?? '') === ($event['dedupe_key'] ?? '')) {
+                return [
+                    'inserted' => false,
+                    'row' => $row,
+                ];
+            }
+        }
+
+        $row = array_merge($event, ['id' => $this->next_id++]);
+        $this->rows[] = $row;
+
+        return [
+            'inserted' => true,
+            'row' => $row,
+        ];
+    }
+}
+
+class Kiwi_Test_Nth_Flow_Transaction_Repository extends Kiwi_Nth_Flow_Transaction_Repository
+{
+    public $rows = [];
+    private $next_id = 1;
+
+    public function create(array $data): int
+    {
+        $id = $this->next_id++;
+        $this->rows[$id] = array_merge($data, ['id' => $id]);
+
+        return $id;
+    }
+
+    public function update(int $id, array $data): bool
+    {
+        if (!isset($this->rows[$id])) {
+            return false;
+        }
+
+        $this->rows[$id] = array_merge($this->rows[$id], $data);
+
+        return true;
+    }
+
+    public function get_by_id(int $id): ?array
+    {
+        return $this->rows[$id] ?? null;
+    }
+
+    public function find_active_by_subscriber_context(
+        string $service_key,
+        string $subscriber_reference,
+        string $shortcode,
+        string $keyword,
+        int $hours
+    ): ?array {
+        $rows = array_reverse($this->rows, true);
+
+        foreach ($rows as $row) {
+            if (($row['service_key'] ?? '') !== $service_key) {
+                continue;
+            }
+
+            if (($row['subscriber_reference'] ?? '') !== $subscriber_reference) {
+                continue;
+            }
+
+            if (($row['shortcode'] ?? '') !== $shortcode) {
+                continue;
+            }
+
+            if (($row['keyword'] ?? '') !== $keyword) {
+                continue;
+            }
+
+            return $row;
+        }
+
+        return null;
+    }
+
+    public function find_recent_by_external_references(string $service_key, array $references): ?array
+    {
+        $references = array_values($references);
+        $rows = array_reverse($this->rows, true);
+
+        foreach ($rows as $row) {
+            if (($row['service_key'] ?? '') !== $service_key) {
+                continue;
+            }
+
+            if (in_array($row['external_message_id'] ?? '', $references, true)) {
+                return $row;
+            }
+
+            if (in_array($row['external_request_id'] ?? '', $references, true)) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+}
+
+class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
+{
+    public $calls = [];
+    private $next_id = 1;
+
+    public function __construct()
+    {
+    }
+
+    public function record_successful_one_off_sale(array $transaction, array $report_event): array
+    {
+        $sale = [
+            'id' => $this->next_id++,
+            'sale_reference' => $transaction['sale_reference'] ?? $transaction['flow_reference'] ?? '',
+            'provider_key' => 'nth',
+            'status' => 'completed',
+        ];
+
+        $this->calls[] = [
+            'transaction' => $transaction,
+            'report_event' => $report_event,
+            'sale' => $sale,
+        ];
+
+        return $sale;
+    }
+}
+
+kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+            ],
+        ],
+        [
+            'fr_myjoyplay_approval' => [
+                'backend_path' => '/lp/fr/myjoyplay',
+            ],
+        ],
+        240
+    );
+
+    kiwi_assert_same('FR', $config->get_nth_service('nth_fr_one_off_jplay')['country'], 'Expected NTH service config to be returned by key.');
+    kiwi_assert_same('/lp/fr/myjoyplay', $config->get_landing_page('fr_myjoyplay_approval')['backend_path'], 'Expected landing page config to be returned by key.');
+    kiwi_assert_same(240, $config->get_nth_submit_timeout(), 'Expected the configured NTH timeout to be returned.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host routes', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'fr_myjoyplay_approval' => [
+                'backend_path' => '/lp/fr/myjoyplay',
+                'dedicated_path' => '/',
+                'hostnames' => ['frlp1.joy-play.com'],
+                'service_key' => 'nth_fr_one_off_jplay',
+                'template' => 'fr-myjoyplay-approval',
+            ],
+        ]
+    );
+    $router = new Kiwi_Landing_Page_Router(
+        $config,
+        new Kiwi_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+
+    $path_match = $router->resolve_request('backend.kiwimobile.de', '/lp/fr/myjoyplay');
+    $host_match = $router->resolve_request('frlp1.joy-play.com', '/');
+    $no_match = $router->resolve_request('backend.kiwimobile.de', '/other');
+
+    kiwi_assert_same('fr_myjoyplay_approval', $path_match['landing_key'], 'Expected backend path matching to resolve the configured landing page.');
+    kiwi_assert_same('fr_myjoyplay_approval', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
+    kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
+});
+
+kiwi_run_test('Generic landing page template renders shared assets and config-driven CTA content', function (): void {
+    $landing_page = [
+        'page_title' => 'Joyplay',
+        'asset_base_url' => 'https://assets.example.test/joyplay',
+        'background_image_path' => 'background.png',
+        'hero_image_path' => 'hero.png',
+        'cta_href' => 'sms:84072?body=JPLAY',
+        'cta_label' => 'CONTINUER ET PAYER',
+        'terms_url' => 'https://example.test/terms',
+        'terms_label' => 'TERMES ET CONDITIONS',
+        'short_description' => 'Short copy',
+        'long_description' => 'Long copy',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
+        'disclaimer_html' => 'Disclaimer',
+    ];
+    $click_to_sms_uri = '#';
+
+    ob_start();
+    include __DIR__ . '/../templates/landing-pages/generic-offer.php';
+    $output = (string) ob_get_clean();
+
+    kiwi_assert_true(strpos($output, 'https://assets.example.test/joyplay/background.png') !== false, 'Expected the generic landing template to expand the shared background asset URL.');
+    kiwi_assert_true(strpos($output, 'https://assets.example.test/joyplay/hero.png') !== false, 'Expected the generic landing template to expand the shared hero asset URL.');
+    kiwi_assert_true(strpos($output, 'sms:84072?body=JPLAY') !== false, 'Expected the generic landing template to render the configured CTA href.');
+    kiwi_assert_true(strpos($output, 'Activer en envoyant JPLAY au 84072') !== false, 'Expected the generic landing template to derive FR click-to-SMS price text from config.');
+});
+
+kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer normalizes alias-heavy MO payloads', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+
+    $normalized = $normalizer->normalize_callback('nth_fr_one_off_jplay', 'mo', [
+        'Encrypted_MSISDN' => 'enc-123',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+    ]);
+
+    kiwi_assert_same('enc-123', $normalized['subscriber_reference'], 'Expected encrypted MSISDN aliases to normalize into subscriber_reference.');
+    kiwi_assert_same('84072', $normalized['shortcode'], 'Expected business number aliases to normalize into shortcode.');
+    kiwi_assert_same('JPLAY', $normalized['keyword'], 'Expected MO keyword to be normalized to uppercase without wildcard suffix.');
+    kiwi_assert_same('received', $normalized['status'], 'Expected MO callbacks to normalize to received status.');
+});
+
+kiwi_run_test('Kiwi_Nth_Client rejects submit requests with missing required routing data before transport', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'mt_submission_url' => 'https://premium.mobile-gw.com:9443',
+                'username' => 'user',
+                'password' => 'pass',
+                'shortcode' => '84072',
+                'price' => 450,
+            ],
+        ]
+    );
+    $client = new Kiwi_Nth_Client($config);
+
+    $response = $client->submit_message('nth_fr_one_off_jplay', [
+        'flow_reference' => 'flow-1',
+        'subscriber_reference' => 'enc-123',
+        'shortcode' => '84072',
+        'message_text' => 'Merci pour votre achat.',
+        'price' => 450,
+        'nwc' => '',
+    ]);
+
+    kiwi_assert_true(!$response['success'], 'Expected missing required NTH routing data to fail before any HTTP request is made.');
+    kiwi_assert_true(strpos($response['error'], 'nwc') !== false, 'Expected the client validation error to call out the missing NWC field.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for duplicate MO callbacks', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+                'landing_price_label' => '4,50 EUR par SMS + prix d\'un SMS',
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder
+    );
+
+    $payload = [
+        'Encrypted_MSISDN' => 'enc-123',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+    ];
+
+    $first = $service->handle_inbound_mo('nth_fr_one_off_jplay', $payload);
+    $second = $service->handle_inbound_mo('nth_fr_one_off_jplay', $payload);
+
+    kiwi_assert_true($first['success'], 'Expected the first MO callback to trigger one MT submission.');
+    kiwi_assert_same(1, count($client->calls), 'Expected duplicate MO callbacks to avoid a second MT submission.');
+    kiwi_assert_same('Duplicate MO callback ignored.', $second['message'], 'Expected the second identical MO callback to be treated as a duplicate event.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when FR routing data is missing', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [],
+                'landing_price_label' => '4,50 EUR par SMS + prix d\'un SMS',
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-456',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'Operator' => 'Unknown',
+    ]);
+
+    kiwi_assert_true(!$result['success'], 'Expected FR MO processing to stop when no NWC can be resolved.');
+    kiwi_assert_same('routing_data_missing', $result['message'], 'Expected the blocked MO result to expose the missing-routing status.');
+    kiwi_assert_same(0, count($client->calls), 'Expected missing routing data to prevent any MT submission attempt.');
+    kiwi_assert_same(2, count($event_repository->rows), 'Expected both the inbound MO and the internal blocked event to be persisted.');
+    kiwi_assert_same('mt_submission_blocked', $result['submit_event']['event_type'], 'Expected the internal blocked event to be classified separately from provider callbacks.');
+    kiwi_assert_same('routing_data_missing', $result['transaction']['current_status'], 'Expected the flow transaction to keep the blocked-routing status.');
+    kiwi_assert_same(1, $result['transaction']['is_terminal'], 'Expected the blocked-routing transaction to be marked terminal.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on successful terminal notification', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-123',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+    ]);
+
+    $notification = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-1',
+        'status' => 'delivered',
+        'encrypted_msisdn' => 'enc-123',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+
+    kiwi_assert_true($notification['success'], 'Expected a delivered notification to be treated as successful.');
+    kiwi_assert_same(1, count($sales_recorder->calls), 'Expected exactly one shared sale to be recorded on successful terminal delivery.');
+    kiwi_assert_same(1, $notification['transaction']['sale_id'], 'Expected the flow transaction to reference the recorded shared sale.');
+});
+
 kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles', function (): void {
     $GLOBALS['kiwi_test_hooks'] = [];
     $GLOBALS['kiwi_test_styles'] = [];
@@ -734,6 +1298,8 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'ensure_operator_lookup_callback_table',
             'ensure_refund_callback_table',
             'ensure_blacklist_callback_table',
+            'ensure_nth_operational_tables',
+            'ensure_sales_table',
             'maybe_export_hlr_results',
             'maybe_run_dimoco_test',
             'maybe_run_refund_batch_test',
@@ -743,6 +1309,9 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
         }, $init_callbacks),
         'Expected init callbacks to stay registered in the current order.'
     );
+
+    kiwi_assert_same(1, count($GLOBALS['kiwi_test_hooks']['template_redirect'] ?? []), 'Expected one landing-page routing hook.');
+    kiwi_assert_same('maybe_render_landing_page', $GLOBALS['kiwi_test_hooks']['template_redirect'][0][1] ?? null, 'Expected the landing-page router hook to remain explicit.');
 
     $enqueue_callback = $GLOBALS['kiwi_test_hooks']['wp_enqueue_scripts'][0];
     $enqueue_callback();

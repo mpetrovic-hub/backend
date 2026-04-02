@@ -28,9 +28,12 @@ class Kiwi_Plugin
         add_action('init', [$this, 'ensure_operator_lookup_callback_table']);
         add_action('init', [$this, 'ensure_refund_callback_table']);
         add_action('init', [$this, 'ensure_blacklist_callback_table']);
+        add_action('init', [$this, 'ensure_nth_operational_tables']);
+        add_action('init', [$this, 'ensure_sales_table']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
         add_action('init', [$this, 'maybe_run_refund_batch_test']);
+        add_action('template_redirect', [$this, 'maybe_render_landing_page']);
     }
 
     public function enqueue_assets(): void
@@ -113,6 +116,12 @@ class Kiwi_Plugin
             $dimoco_callback_operator_lookup_repository
         );
         $rest_routes->register();
+
+        $nth_runtime = $this->build_nth_runtime($config);
+        $nth_rest_routes = new Kiwi_Nth_Rest_Routes(
+            $nth_runtime['nth_fr_one_off_service']
+        );
+        $nth_rest_routes->register();
     }
 
     public function ensure_operator_lookup_callback_table(): void
@@ -131,6 +140,36 @@ class Kiwi_Plugin
     {
         $repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
         $repository->create_table();
+    }
+
+    public function ensure_nth_operational_tables(): void
+    {
+        $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
+        $nth_event_repository = new Kiwi_Nth_Event_Repository();
+        $nth_flow_transaction_repository = new Kiwi_Nth_Flow_Transaction_Repository();
+
+        $landing_page_session_repository->create_table();
+        $nth_event_repository->create_table();
+        $nth_flow_transaction_repository->create_table();
+    }
+
+    public function ensure_sales_table(): void
+    {
+        $sales_repository = new Kiwi_Sales_Repository();
+        $sales_repository->create_table();
+    }
+
+    public function maybe_render_landing_page(): void
+    {
+        $config = new Kiwi_Config();
+        $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
+        $router = new Kiwi_Landing_Page_Router(
+            $config,
+            $landing_page_session_repository,
+            $this->plugin_base_url
+        );
+
+        $router->maybe_render_current_request();
     }
 
     public function maybe_export_hlr_results(): void
@@ -263,6 +302,36 @@ TEXT;
             'dimoco_refund_batch_service' => $dimoco_refund_batch_service,
             'dimoco_blacklist_batch_service' => $dimoco_blacklist_batch_service,
             'operator_lookup_batch_service' => $operator_lookup_batch_service,
+        ];
+    }
+
+    private function build_nth_runtime(?Kiwi_Config $config = null): array
+    {
+        $config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
+        $nth_client = new Kiwi_Nth_Client($config);
+        $nth_normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+        $nth_event_repository = new Kiwi_Nth_Event_Repository();
+        $nth_flow_transaction_repository = new Kiwi_Nth_Flow_Transaction_Repository();
+        $sales_repository = new Kiwi_Sales_Repository();
+        $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
+        $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
+            $config,
+            $nth_normalizer,
+            $nth_client,
+            $nth_event_repository,
+            $nth_flow_transaction_repository,
+            $sales_recorder
+        );
+
+        return [
+            'config' => $config,
+            'nth_client' => $nth_client,
+            'nth_normalizer' => $nth_normalizer,
+            'nth_event_repository' => $nth_event_repository,
+            'nth_flow_transaction_repository' => $nth_flow_transaction_repository,
+            'sales_recorder' => $sales_recorder,
+            'sales_repository' => $sales_repository,
+            'nth_fr_one_off_service' => $nth_fr_one_off_service,
         ];
     }
 

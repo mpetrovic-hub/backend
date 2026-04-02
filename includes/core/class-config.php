@@ -169,6 +169,59 @@ class Kiwi_Config
         return defined('KIWI_DIMOCO_DEBUG') && KIWI_DIMOCO_DEBUG === true;
     }
 
+    // N T H  S E R V I C E S
+
+    /**
+     * All configured NTH services
+     */
+    public function get_nth_services(): array
+    {
+        return defined('KIWI_NTH_SERVICES') && is_array(KIWI_NTH_SERVICES)
+            ? KIWI_NTH_SERVICES
+            : [];
+    }
+
+    /**
+     * Single NTH service configuration by key
+     */
+    public function get_nth_service(string $key): ?array
+    {
+        $services = $this->get_nth_services();
+
+        return $services[$key] ?? null;
+    }
+
+    /**
+     * Dedicated landing page configuration
+     */
+    public function get_landing_pages(): array
+    {
+        return defined('KIWI_LANDING_PAGES') && is_array(KIWI_LANDING_PAGES)
+            ? KIWI_LANDING_PAGES
+            : [];
+    }
+
+    /**
+     * Single landing page configuration by key
+     */
+    public function get_landing_page(string $key): ?array
+    {
+        $landing_pages = $this->get_landing_pages();
+
+        return $landing_pages[$key] ?? null;
+    }
+
+    /**
+     * NTH submitMessage timeout
+     * NTH recommends at least 180 seconds for submitMessage.
+     */
+    public function get_nth_submit_timeout(): int
+    {
+        return defined('KIWI_NTH_SUBMIT_TIMEOUT')
+            ? (int) KIWI_NTH_SUBMIT_TIMEOUT
+            : 180;
+    }
+
     /**
      * Operator lookup routes configuration
      * Returns a mapping of MSISDN prefixes to provider and country, used for routing operator lookup requests to the correct provider based on the phone number's prefix. Configured in wp-config.php as KIWI_OPERATOR_LOOKUP_ROUTES.
