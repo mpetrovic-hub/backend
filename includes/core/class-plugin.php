@@ -29,7 +29,9 @@ class Kiwi_Plugin
         add_action('init', [$this, 'ensure_refund_callback_table']);
         add_action('init', [$this, 'ensure_blacklist_callback_table']);
         add_action('init', [$this, 'ensure_nth_operational_tables']);
+        add_action('init', [$this, 'ensure_click_attribution_table']);
         add_action('init', [$this, 'ensure_sales_table']);
+        add_action('init', [$this, 'cleanup_expired_click_attributions']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
         add_action('init', [$this, 'maybe_run_refund_batch_test']);
@@ -160,14 +162,33 @@ class Kiwi_Plugin
         $sales_repository->create_table();
     }
 
+    public function ensure_click_attribution_table(): void
+    {
+        $repository = new Kiwi_Click_Attribution_Repository();
+        $repository->create_table();
+    }
+
+    public function cleanup_expired_click_attributions(): void
+    {
+        $config = new Kiwi_Config();
+        $repository = new Kiwi_Click_Attribution_Repository();
+        $repository->cleanup_expired($config->get_click_attribution_cleanup_limit());
+    }
+
     public function maybe_render_landing_page(): void
     {
         $config = new Kiwi_Config();
         $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
+        $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
+        $tracking_capture_service = new Kiwi_Tracking_Capture_Service(
+            $config,
+            $click_attribution_repository
+        );
         $router = new Kiwi_Landing_Page_Router(
             $config,
             $landing_page_session_repository,
-            $this->plugin_base_url
+            $this->plugin_base_url,
+            $tracking_capture_service
         );
 
         $router->maybe_render_current_request();
@@ -315,13 +336,20 @@ TEXT;
         $nth_flow_transaction_repository = new Kiwi_Nth_Flow_Transaction_Repository();
         $sales_repository = new Kiwi_Sales_Repository();
         $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
+        $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
+        $affiliate_postback_dispatcher = new Kiwi_Affiliate_Postback_Dispatcher($config);
+        $conversion_attribution_resolver = new Kiwi_Conversion_Attribution_Resolver(
+            $click_attribution_repository,
+            $affiliate_postback_dispatcher
+        );
         $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
             $config,
             $nth_normalizer,
             $nth_client,
             $nth_event_repository,
             $nth_flow_transaction_repository,
-            $sales_recorder
+            $sales_recorder,
+            $conversion_attribution_resolver
         );
 
         return [
@@ -332,6 +360,9 @@ TEXT;
             'nth_flow_transaction_repository' => $nth_flow_transaction_repository,
             'sales_recorder' => $sales_recorder,
             'sales_repository' => $sales_repository,
+            'click_attribution_repository' => $click_attribution_repository,
+            'affiliate_postback_dispatcher' => $affiliate_postback_dispatcher,
+            'conversion_attribution_resolver' => $conversion_attribution_resolver,
             'nth_fr_one_off_service' => $nth_fr_one_off_service,
         ];
     }

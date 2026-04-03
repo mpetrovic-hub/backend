@@ -12,6 +12,7 @@ class Kiwi_Nth_Fr_One_Off_Service
     private $event_repository;
     private $flow_transaction_repository;
     private $sales_recorder;
+    private $conversion_attribution_resolver;
 
     public function __construct(
         Kiwi_Config $config,
@@ -19,7 +20,8 @@ class Kiwi_Nth_Fr_One_Off_Service
         Kiwi_Nth_Client $client,
         Kiwi_Nth_Event_Repository $event_repository,
         Kiwi_Nth_Flow_Transaction_Repository $flow_transaction_repository,
-        Kiwi_Shared_Sales_Recorder $sales_recorder
+        Kiwi_Shared_Sales_Recorder $sales_recorder,
+        ?Kiwi_Conversion_Attribution_Resolver $conversion_attribution_resolver = null
     ) {
         $this->config = $config;
         $this->normalizer = $normalizer;
@@ -27,6 +29,7 @@ class Kiwi_Nth_Fr_One_Off_Service
         $this->event_repository = $event_repository;
         $this->flow_transaction_repository = $flow_transaction_repository;
         $this->sales_recorder = $sales_recorder;
+        $this->conversion_attribution_resolver = $conversion_attribution_resolver;
     }
 
     public function handle_inbound_mo(string $service_key, array $payload): array
@@ -187,12 +190,21 @@ class Kiwi_Nth_Fr_One_Off_Service
             ],
         ]);
 
+        $transaction_after_submit = $this->flow_transaction_repository->get_by_id($transaction_id);
+        $transaction_after_submit = is_array($transaction_after_submit) ? $transaction_after_submit : $transaction;
+        $this->maybe_attach_click_attribution(
+            $service_key,
+            $transaction_after_submit,
+            $normalized_event,
+            $submit_event
+        );
+
         return [
             'success' => (bool) ($submit_event['is_success'] ?? false),
             'message' => (string) ($submit_event['status'] ?? ''),
             'event' => $event_record['row'],
             'submit_event' => $submit_event_record['row'],
-            'transaction' => $this->flow_transaction_repository->get_by_id($transaction_id),
+            'transaction' => $transaction_after_submit,
         ];
     }
 
@@ -202,10 +214,17 @@ class Kiwi_Nth_Fr_One_Off_Service
         $event_record = $this->event_repository->insert_if_new($normalized_event);
 
         if (!$event_record['inserted']) {
+            $transaction = $this->resolve_transaction_for_notification($service_key, $normalized_event);
+            $attribution_result = is_array($transaction)
+                ? $this->maybe_handle_conversion_attribution($service_key, $transaction, $normalized_event)
+                : null;
+
             return [
                 'success' => true,
                 'message' => 'Duplicate notification callback ignored.',
                 'event' => $event_record['row'],
+                'transaction' => $transaction,
+                'attribution' => $attribution_result,
             ];
         }
 
@@ -238,6 +257,11 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         $this->flow_transaction_repository->update((int) $transaction['id'], $update_data);
+        $attribution_result = $this->maybe_handle_conversion_attribution(
+            $service_key,
+            $transaction,
+            $normalized_event
+        );
 
         return [
             'success' => !empty($normalized_event['is_success']),
@@ -245,7 +269,62 @@ class Kiwi_Nth_Fr_One_Off_Service
             'event' => $event_record['row'],
             'transaction' => $this->flow_transaction_repository->get_by_id((int) $transaction['id']),
             'sale' => $sale,
+            'attribution' => $attribution_result,
         ];
+    }
+
+    private function maybe_attach_click_attribution(
+        string $service_key,
+        array $transaction,
+        array $normalized_event,
+        array $submit_event
+    ): void {
+        if (!$this->conversion_attribution_resolver instanceof Kiwi_Conversion_Attribution_Resolver) {
+            return;
+        }
+
+        $tracking_token = trim((string) ($transaction['landing_session_token'] ?? ''));
+        $reference_hint = trim((string) ($normalized_event['external_request_id'] ?? ''));
+
+        if ($tracking_token === '' && $reference_hint === '') {
+            return;
+        }
+
+        $this->conversion_attribution_resolver->attach_provider_references([
+            'provider_key' => 'nth',
+            'service_key' => $service_key,
+            'flow_key' => (string) ($transaction['flow_key'] ?? ''),
+            'tracking_token' => $tracking_token,
+            'reference_hint' => $reference_hint,
+            'session_ref' => $reference_hint,
+            'external_ref' => $reference_hint,
+            'transaction_ref' => (string) ($transaction['flow_reference'] ?? ''),
+            'message_ref' => (string) ($submit_event['external_message_id'] ?? ''),
+            'sale_reference' => (string) ($transaction['sale_reference'] ?? ''),
+        ]);
+    }
+
+    private function maybe_handle_conversion_attribution(
+        string $service_key,
+        array $transaction,
+        array $normalized_event
+    ): ?array {
+        if (!$this->conversion_attribution_resolver instanceof Kiwi_Conversion_Attribution_Resolver) {
+            return null;
+        }
+
+        return $this->conversion_attribution_resolver->handle_confirmed_conversion([
+            'provider_key' => 'nth',
+            'service_key' => $service_key,
+            'flow_key' => (string) ($transaction['flow_key'] ?? ''),
+            'confirmed' => !empty($normalized_event['is_terminal']) && !empty($normalized_event['is_success']),
+            'occurred_at' => (string) ($normalized_event['occurred_at'] ?? ''),
+            'transaction_ref' => (string) ($transaction['flow_reference'] ?? ''),
+            'message_ref' => (string) ($normalized_event['external_message_id'] ?? ($transaction['external_message_id'] ?? '')),
+            'external_ref' => (string) ($normalized_event['external_request_id'] ?? ''),
+            'session_ref' => (string) ($normalized_event['external_request_id'] ?? ''),
+            'sale_reference' => (string) ($transaction['sale_reference'] ?? ''),
+        ]);
     }
 
     private function resolve_transaction_for_notification(string $service_key, array $normalized_event): ?array

@@ -53,6 +53,9 @@ require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/services/class-shared-sales-recorder.php';
+require_once __DIR__ . '/services/class-affiliate-postback-dispatcher.php';
+require_once __DIR__ . '/services/class-conversion-attribution-resolver.php';
+require_once __DIR__ . '/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/services/class-nth-fr-one-off-service.php';
 
 /**
@@ -64,6 +67,7 @@ require_once __DIR__ . '/repositories/class-dimoco-callback-operator-lookup-repo
 require_once __DIR__ . '/repositories/class-landing-page-session-repository.php';
 require_once __DIR__ . '/repositories/class-nth-event-repository.php';
 require_once __DIR__ . '/repositories/class-nth-flow-transaction-repository.php';
+require_once __DIR__ . '/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/repositories/class-sales-repository.php';
 
 /**

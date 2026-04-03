@@ -314,6 +314,85 @@ class Kiwi_Config
             : 180;
     }
 
+    public function get_click_attribution_cookie_name(): string
+    {
+        return defined('KIWI_CLICK_ATTRIBUTION_COOKIE_NAME')
+            ? (string) KIWI_CLICK_ATTRIBUTION_COOKIE_NAME
+            : 'kiwi_tracking_token';
+    }
+
+    public function get_click_attribution_click_id_keys(): array
+    {
+        if (defined('KIWI_CLICK_ATTRIBUTION_CLICK_ID_KEYS') && is_array(KIWI_CLICK_ATTRIBUTION_CLICK_ID_KEYS)) {
+            return array_values(array_filter(array_map('strval', KIWI_CLICK_ATTRIBUTION_CLICK_ID_KEYS)));
+        }
+
+        return ['clickid', 'click_id'];
+    }
+
+    public function get_click_attribution_ttl_seconds(): int
+    {
+        return defined('KIWI_CLICK_ATTRIBUTION_TTL_SECONDS')
+            ? max(60, (int) KIWI_CLICK_ATTRIBUTION_TTL_SECONDS)
+            : 172800;
+    }
+
+    public function get_click_attribution_cleanup_limit(): int
+    {
+        return defined('KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT')
+            ? max(1, (int) KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT)
+            : 500;
+    }
+
+    public function get_affiliate_postback_url_template(): string
+    {
+        return defined('KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE')
+            ? (string) KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE
+            : '';
+    }
+
+    public function get_affiliate_postback_secret(): string
+    {
+        return defined('KIWI_AFFILIATE_POSTBACK_SECRET')
+            ? (string) KIWI_AFFILIATE_POSTBACK_SECRET
+            : '';
+    }
+
+    public function get_affiliate_postback_signature_parameter(): string
+    {
+        return defined('KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER')
+            ? (string) KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER
+            : 'secure';
+    }
+
+    public function get_affiliate_postback_signature_algorithm(): string
+    {
+        return defined('KIWI_AFFILIATE_POSTBACK_SIGNATURE_ALGORITHM')
+            ? (string) KIWI_AFFILIATE_POSTBACK_SIGNATURE_ALGORITHM
+            : 'sha256';
+    }
+
+    public function get_affiliate_postback_signature_base(): string
+    {
+        return defined('KIWI_AFFILIATE_POSTBACK_SIGNATURE_BASE')
+            ? (string) KIWI_AFFILIATE_POSTBACK_SIGNATURE_BASE
+            : '{clickid}:{secret}';
+    }
+
+    public function get_affiliate_postback_timeout_seconds(): int
+    {
+        return defined('KIWI_AFFILIATE_POSTBACK_TIMEOUT_SECONDS')
+            ? max(1, (int) KIWI_AFFILIATE_POSTBACK_TIMEOUT_SECONDS)
+            : $this->get_http_timeout();
+    }
+
+    public function get_affiliate_postback_response_body_limit(): int
+    {
+        return defined('KIWI_AFFILIATE_POSTBACK_RESPONSE_BODY_LIMIT')
+            ? max(100, (int) KIWI_AFFILIATE_POSTBACK_RESPONSE_BODY_LIMIT)
+            : 1000;
+    }
+
     /**
      * Operator lookup routes configuration
      * Returns a mapping of MSISDN prefixes to provider and country, used for routing operator lookup requests to the correct provider based on the phone number's prefix. Configured in wp-config.php as KIWI_OPERATOR_LOOKUP_ROUTES.

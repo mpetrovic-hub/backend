@@ -201,6 +201,7 @@ require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-refund-r
 require_once __DIR__ . '/../includes/repositories/class-landing-page-session-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-nth-event-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
@@ -208,6 +209,9 @@ require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortco
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-refunder-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
+require_once __DIR__ . '/../includes/services/class-affiliate-postback-dispatcher.php';
+require_once __DIR__ . '/../includes/services/class-conversion-attribution-resolver.php';
+require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
 require_once __DIR__ . '/../includes/http/class-nth-rest-routes.php';
@@ -495,6 +499,78 @@ class Kiwi_Test_Runtime_Config extends Kiwi_Config
     protected function is_landing_pages_legacy_fallback_enabled(): bool
     {
         return $this->legacy_fallback_enabled;
+    }
+}
+
+class Kiwi_Test_Attribution_Config extends Kiwi_Test_Config
+{
+    private $postback_template;
+    private $postback_secret;
+    private $postback_signature_base;
+    private $postback_signature_parameter;
+    private $click_id_keys;
+    private $ttl_seconds;
+
+    public function __construct(
+        string $postback_template = '',
+        string $postback_secret = '',
+        string $postback_signature_base = '{clickid}:{secret}',
+        string $postback_signature_parameter = 'secure',
+        array $click_id_keys = ['clickid', 'click_id'],
+        int $ttl_seconds = 172800
+    ) {
+        parent::__construct();
+        $this->postback_template = $postback_template;
+        $this->postback_secret = $postback_secret;
+        $this->postback_signature_base = $postback_signature_base;
+        $this->postback_signature_parameter = $postback_signature_parameter;
+        $this->click_id_keys = $click_id_keys;
+        $this->ttl_seconds = $ttl_seconds;
+    }
+
+    public function get_affiliate_postback_url_template(): string
+    {
+        return $this->postback_template;
+    }
+
+    public function get_affiliate_postback_secret(): string
+    {
+        return $this->postback_secret;
+    }
+
+    public function get_affiliate_postback_signature_base(): string
+    {
+        return $this->postback_signature_base;
+    }
+
+    public function get_affiliate_postback_signature_parameter(): string
+    {
+        return $this->postback_signature_parameter;
+    }
+
+    public function get_affiliate_postback_signature_algorithm(): string
+    {
+        return 'sha256';
+    }
+
+    public function get_affiliate_postback_timeout_seconds(): int
+    {
+        return 5;
+    }
+
+    public function get_affiliate_postback_response_body_limit(): int
+    {
+        return 1000;
+    }
+
+    public function get_click_attribution_click_id_keys(): array
+    {
+        return $this->click_id_keys;
+    }
+
+    public function get_click_attribution_ttl_seconds(): int
+    {
+        return $this->ttl_seconds;
     }
 }
 
@@ -1189,6 +1265,216 @@ class Kiwi_Test_Nth_Flow_Transaction_Repository extends Kiwi_Nth_Flow_Transactio
     }
 }
 
+class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repository
+{
+    public $rows = [];
+    public $cleanup_calls = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function upsert_capture(array $data): array
+    {
+        $tracking_token = (string) ($data['tracking_token'] ?? '');
+        foreach ($this->rows as $id => $row) {
+            if (($row['tracking_token'] ?? '') !== $tracking_token) {
+                continue;
+            }
+
+            $this->rows[$id] = array_merge($row, $data, ['id' => $id]);
+
+            return $this->rows[$id];
+        }
+
+        $id = $this->next_id++;
+        $row = array_merge(
+            [
+                'id' => $id,
+                'conversion_status' => 'captured',
+                'postback_sent_at' => '',
+                'postback_attempts' => 0,
+                'postback_response_code' => 0,
+                'postback_response_body' => '',
+                'postback_last_error' => '',
+                'conversion_confirmed_at' => '',
+            ],
+            $data
+        );
+        $this->rows[$id] = $row;
+
+        return $row;
+    }
+
+    public function find_by_tracking_token(string $tracking_token): ?array
+    {
+        foreach ($this->rows as $row) {
+            if (($row['tracking_token'] ?? '') === $tracking_token) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    public function get_by_id(int $id): ?array
+    {
+        return $this->rows[$id] ?? null;
+    }
+
+    public function find_unique_pending_by_service_reference(string $service_key, string $reference): ?array
+    {
+        $matches = [];
+
+        foreach ($this->rows as $row) {
+            if (($row['service_key'] ?? '') !== $service_key) {
+                continue;
+            }
+
+            if (($row['transaction_ref'] ?? '') !== '') {
+                continue;
+            }
+
+            if (($row['session_ref'] ?? '') !== $reference && ($row['external_ref'] ?? '') !== $reference) {
+                continue;
+            }
+
+            $matches[] = $row;
+        }
+
+        if (count($matches) !== 1) {
+            return null;
+        }
+
+        return $matches[0];
+    }
+
+    public function bind_references(int $id, array $references): bool
+    {
+        if (!isset($this->rows[$id])) {
+            return false;
+        }
+
+        $row = $this->rows[$id];
+        $this->rows[$id] = array_merge($row, $references);
+
+        if (($this->rows[$id]['conversion_status'] ?? '') === 'captured') {
+            $this->rows[$id]['conversion_status'] = 'bound';
+        }
+
+        return true;
+    }
+
+    public function find_for_conversion(array $references): ?array
+    {
+        $order = ['sale_reference', 'transaction_ref', 'message_ref', 'external_ref', 'session_ref'];
+
+        foreach ($order as $field) {
+            $value = (string) ($references[$field] ?? '');
+            if ($value === '') {
+                continue;
+            }
+
+            foreach (array_reverse($this->rows, true) as $row) {
+                if ((string) ($row[$field] ?? '') === $value) {
+                    return $row;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public function mark_conversion_confirmed(int $id, string $occurred_at): bool
+    {
+        if (!isset($this->rows[$id])) {
+            return false;
+        }
+
+        $this->rows[$id]['conversion_status'] = 'confirmed';
+        $this->rows[$id]['conversion_confirmed_at'] = $occurred_at !== '' ? $occurred_at : '2026-04-01 12:00:00';
+
+        return true;
+    }
+
+    public function record_postback_attempt(int $id, array $result): bool
+    {
+        if (!isset($this->rows[$id])) {
+            return false;
+        }
+
+        $this->rows[$id]['postback_attempts'] = (int) ($this->rows[$id]['postback_attempts'] ?? 0) + 1;
+        $this->rows[$id]['postback_response_code'] = (int) ($result['response_code'] ?? 0);
+        $this->rows[$id]['postback_response_body'] = (string) ($result['response_body'] ?? '');
+        $this->rows[$id]['postback_last_error'] = (string) ($result['error'] ?? '');
+
+        if (!empty($result['success']) && (string) ($this->rows[$id]['postback_sent_at'] ?? '') === '') {
+            $this->rows[$id]['postback_sent_at'] = '2026-04-01 12:00:00';
+            $this->rows[$id]['conversion_status'] = 'postback_sent';
+        } elseif (empty($result['success'])) {
+            $this->rows[$id]['conversion_status'] = 'postback_failed';
+        }
+
+        return true;
+    }
+
+    public function cleanup_expired(int $limit = 500): int
+    {
+        $this->cleanup_calls[] = $limit;
+
+        $expired = [];
+        $limit = max(1, $limit);
+
+        foreach ($this->rows as $id => $row) {
+            if (count($expired) >= $limit) {
+                break;
+            }
+
+            if (($row['expires_at'] ?? '') <= '2026-04-01 12:00:00') {
+                $expired[] = $id;
+            }
+        }
+
+        foreach ($expired as $id) {
+            unset($this->rows[$id]);
+        }
+
+        return count($expired);
+    }
+}
+
+class Kiwi_Test_Tracking_Capture_Service extends Kiwi_Tracking_Capture_Service
+{
+    public $cookies = [];
+
+    protected function set_tracking_cookie(string $tracking_token): void
+    {
+        $this->cookies[] = $tracking_token;
+    }
+}
+
+class Kiwi_Test_Affiliate_Postback_Dispatcher extends Kiwi_Affiliate_Postback_Dispatcher
+{
+    public $calls = [];
+    public $responses = [];
+
+    protected function send_request(string $url): array
+    {
+        $this->calls[] = $url;
+
+        if (!empty($this->responses)) {
+            return array_shift($this->responses);
+        }
+
+        return [
+            'status_code' => 200,
+            'body' => 'OK',
+            'error' => '',
+        ];
+    }
+}
+
 class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
 {
     public $calls = [];
@@ -1468,6 +1754,147 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     kiwi_assert_same('fr_myjoyplay_approval', $path_match['landing_key'], 'Expected backend path matching to resolve the configured landing page.');
     kiwi_assert_same('fr_myjoyplay_approval', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
+});
+
+kiwi_run_test('Kiwi_Tracking_Capture_Service captures clickid and persists server-side attribution state', function (): void {
+    $_COOKIE = [];
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $config = new Kiwi_Test_Attribution_Config();
+    $service = new Kiwi_Test_Tracking_Capture_Service($config, $repository);
+
+    $record = $service->capture_from_request(
+        [
+            'key' => 'lp2-fr',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        'landing-session-1',
+        [
+            'clickid' => 'abc:123',
+        ]
+    );
+
+    kiwi_assert_true(is_array($record), 'Expected click attribution capture to create a persisted record.');
+    kiwi_assert_same('abc:123', $record['click_id'] ?? '', 'Expected captured clickid to be persisted in server-side storage.');
+    kiwi_assert_same(1, count($repository->rows), 'Expected one server-side attribution record after first capture.');
+    kiwi_assert_true(!empty($service->cookies[0] ?? ''), 'Expected capture to set an opaque tracking-token cookie.');
+    kiwi_assert_true(($service->cookies[0] ?? '') !== 'abc:123', 'Expected the cookie value to be opaque and not the raw clickid.');
+
+    $_COOKIE['kiwi_tracking_token'] = (string) ($service->cookies[0] ?? '');
+    $service->capture_from_request(
+        [
+            'key' => 'lp2-fr',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        'landing-session-1',
+        [
+            'clickid' => 'xyz:789',
+        ]
+    );
+
+    kiwi_assert_same(1, count($repository->rows), 'Expected repeated capture in same browser context to reuse the same server-side attribution row.');
+    $saved = array_values($repository->rows)[0];
+    kiwi_assert_same('xyz:789', $saved['click_id'] ?? '', 'Expected repeated capture to refresh stored clickid value for the active tracking token.');
+});
+
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver matches confirmed conversions and dispatches one idempotent postback', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $config = new Kiwi_Test_Attribution_Config(
+        'https://offers.example.test/postback?clickid={clickid}&secure={hash}',
+        'super-secret'
+    );
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
+    $resolver = new Kiwi_Conversion_Attribution_Resolver($repository, $dispatcher);
+
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890123',
+        'click_id' => 'aff:click:001',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'flow_key' => 'one-off',
+        'session_ref' => 'session-1',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+
+    $resolver->attach_provider_references([
+        'tracking_token' => (string) ($capture['tracking_token'] ?? ''),
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'flow_key' => 'one-off',
+        'transaction_ref' => 'flow-1',
+        'message_ref' => 'msg-1',
+        'sale_reference' => 'sale-1',
+        'session_ref' => 'session-1',
+    ]);
+
+    $result = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'flow_key' => 'one-off',
+        'confirmed' => true,
+        'occurred_at' => '2026-04-01 12:00:00',
+        'transaction_ref' => 'flow-1',
+        'message_ref' => 'msg-1',
+        'sale_reference' => 'sale-1',
+    ]);
+
+    kiwi_assert_true($result['matched'] ?? false, 'Expected confirmed conversion handling to match the persisted click attribution row.');
+    kiwi_assert_true($result['dispatched'] ?? false, 'Expected confirmed conversion handling to dispatch an affiliate postback.');
+    kiwi_assert_same(1, count($dispatcher->calls), 'Expected exactly one outbound postback call for the first confirmed conversion.');
+    kiwi_assert_true(
+        strpos($dispatcher->calls[0], 'clickid=aff%3Aclick%3A001') !== false,
+        'Expected postback URL building to URL-encode clickid values.'
+    );
+    $expected_hash = hash('sha256', 'aff:click:001:super-secret');
+    kiwi_assert_true(
+        strpos($dispatcher->calls[0], 'secure=' . $expected_hash) !== false,
+        'Expected configured postback secret/signature generation to be applied.'
+    );
+
+    $duplicate = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_ref' => 'flow-1',
+    ]);
+    kiwi_assert_same('postback_already_sent', $duplicate['reason'] ?? '', 'Expected duplicate confirmed callbacks to skip duplicate postback dispatch.');
+    kiwi_assert_same(1, count($dispatcher->calls), 'Expected duplicate callbacks not to emit a second postback.');
+
+    $not_confirmed = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => false,
+        'transaction_ref' => 'flow-1',
+    ]);
+    kiwi_assert_same('not_confirmed', $not_confirmed['reason'] ?? '', 'Expected non-confirmed conversions to avoid outbound postbacks.');
+    kiwi_assert_same(1, count($dispatcher->calls), 'Expected non-confirmed conversion handling not to trigger postback dispatch.');
+});
+
+kiwi_run_test('Kiwi_Click_Attribution_Repository cleanup removes only expired rows up to the configured limit', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890AAA',
+        'click_id' => 'one',
+        'expires_at' => '2026-03-01 00:00:00',
+    ]);
+    $repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890BBB',
+        'click_id' => 'two',
+        'expires_at' => '2026-03-02 00:00:00',
+    ]);
+    $repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890CCC',
+        'click_id' => 'three',
+        'expires_at' => '2026-04-10 00:00:00',
+    ]);
+
+    $deleted = $repository->cleanup_expired(1);
+
+    kiwi_assert_same(1, $deleted, 'Expected cleanup to honor the delete batch limit.');
+    kiwi_assert_same(2, count($repository->rows), 'Expected cleanup to remove only one expired row in this batch.');
 });
 
 kiwi_run_test('Kiwi_Nth_Rest_Routes registers a single generic NTH callback endpoint', function (): void {
@@ -1772,13 +2199,34 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on success
     $event_repository = new Kiwi_Test_Nth_Event_Repository();
     $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
     $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $click_attribution_repository = new Kiwi_Test_Click_Attribution_Repository();
+    $click_attribution_repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890DDD',
+        'click_id' => 'aff:flow:msg1',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'session_ref' => 'session-42',
+        'external_ref' => 'session-42',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+    $postback_dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(
+        new Kiwi_Test_Attribution_Config(
+            'https://offers.example.test/postback?clickid={clickid}&secure={hash}',
+            'secret-1'
+        )
+    );
+    $conversion_resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $click_attribution_repository,
+        $postback_dispatcher
+    );
     $service = new Kiwi_Nth_Fr_One_Off_Service(
         $config,
         $normalizer,
         $client,
         $event_repository,
         $transaction_repository,
-        $sales_recorder
+        $sales_recorder,
+        $conversion_resolver
     );
 
     $service->handle_inbound_mo('nth_fr_one_off_jplay', [
@@ -1787,6 +2235,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on success
         'Message' => 'JPLAY',
         'NWC' => '20801',
         'Operator' => 'Orange',
+        'session_id' => 'session-42',
     ]);
 
     $notification = $service->handle_notification('nth_fr_one_off_jplay', [
@@ -1800,6 +2249,136 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on success
     kiwi_assert_true($notification['success'], 'Expected a delivered notification to be treated as successful.');
     kiwi_assert_same(1, count($sales_recorder->calls), 'Expected exactly one shared sale to be recorded on successful terminal delivery.');
     kiwi_assert_same(1, $notification['transaction']['sale_id'], 'Expected the flow transaction to reference the recorded shared sale.');
+    kiwi_assert_same(1, count($postback_dispatcher->calls), 'Expected a confirmed conversion to trigger one outbound postback dispatch.');
+    kiwi_assert_true(($notification['attribution']['dispatched'] ?? false), 'Expected successful notifications to produce a dispatched attribution postback result.');
+
+    $duplicate = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-1',
+        'status' => 'delivered',
+        'encrypted_msisdn' => 'enc-123',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+    kiwi_assert_same('Duplicate notification callback ignored.', $duplicate['message'] ?? '', 'Expected duplicate notifications to keep being deduplicated.');
+    kiwi_assert_same(1, count($postback_dispatcher->calls), 'Expected duplicate callbacks not to emit duplicate postbacks.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service retries attribution postback on duplicate notification when first postback failed', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-2</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $click_attribution_repository = new Kiwi_Test_Click_Attribution_Repository();
+    $click_attribution_repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890EEE',
+        'click_id' => 'aff:flow:msg2',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'session_ref' => 'session-99',
+        'external_ref' => 'session-99',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+    $postback_dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(
+        new Kiwi_Test_Attribution_Config(
+            'https://offers.example.test/postback?clickid={clickid}&secure={hash}',
+            'secret-2'
+        )
+    );
+    $postback_dispatcher->responses = [
+        [
+            'status_code' => 500,
+            'body' => 'ERR',
+            'error' => '',
+        ],
+        [
+            'status_code' => 200,
+            'body' => 'OK',
+            'error' => '',
+        ],
+    ];
+    $conversion_resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $click_attribution_repository,
+        $postback_dispatcher
+    );
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder,
+        $conversion_resolver
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-999',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-99',
+    ]);
+
+    $first = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-2',
+        'status' => 'delivered',
+        'encrypted_msisdn' => 'enc-999',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+    kiwi_assert_true($first['success'], 'Expected successful delivery notifications to remain accepted even when affiliate postback fails.');
+    kiwi_assert_true(!($first['attribution']['dispatched'] ?? true), 'Expected first attribution postback attempt to be marked failed.');
+    kiwi_assert_same(1, count($postback_dispatcher->calls), 'Expected first notification to trigger one postback attempt.');
+
+    $duplicate = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-2',
+        'status' => 'delivered',
+        'encrypted_msisdn' => 'enc-999',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+    kiwi_assert_same('Duplicate notification callback ignored.', $duplicate['message'] ?? '', 'Expected duplicate callback event dedupe to remain unchanged.');
+    kiwi_assert_true(($duplicate['attribution']['dispatched'] ?? false), 'Expected duplicate callback path to retry attribution when postback_sent_at is still empty.');
+    kiwi_assert_same(2, count($postback_dispatcher->calls), 'Expected exactly one retry attempt from duplicate callback path.');
+
+    $duplicate_after_success = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-2',
+        'status' => 'delivered',
+        'encrypted_msisdn' => 'enc-999',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+    kiwi_assert_same('postback_already_sent', $duplicate_after_success['attribution']['reason'] ?? '', 'Expected duplicate callback path to stop dispatching after postback_sent_at is populated.');
+    kiwi_assert_same(2, count($postback_dispatcher->calls), 'Expected no additional postback dispatch after successful retry.');
 });
 
 kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles', function (): void {
@@ -1821,7 +2400,9 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'ensure_refund_callback_table',
             'ensure_blacklist_callback_table',
             'ensure_nth_operational_tables',
+            'ensure_click_attribution_table',
             'ensure_sales_table',
+            'cleanup_expired_click_attributions',
             'maybe_export_hlr_results',
             'maybe_run_dimoco_test',
             'maybe_run_refund_batch_test',

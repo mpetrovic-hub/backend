@@ -47,6 +47,9 @@ Do **not** store real credentials or secrets in this repository.
 - `architecture/landing-page-system.md`  
   Source-of-truth architecture for filesystem-based landing-page discovery and routing.
 
+- `architecture/click-attribution-and-postbacks.md`
+  Reusable server-side click attribution, conversion correlation, and outbound affiliate postback architecture.
+
 - `operations/credentials-and-environments.md`  
   Documentation of credential names, ownership, environments, and secret locations without storing actual secret values.
 

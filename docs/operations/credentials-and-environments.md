@@ -51,10 +51,38 @@ Examples of configuration types that may exist there:
 - passwords / shared secrets
 - base URLs
 - callback URLs
+- affiliate postback URL templates
+- affiliate postback signing secrets
 - debug flags
 - merchant identifiers
 - order / service identifiers
 - service-specific configuration arrays
+
+## Affiliate postback and attribution configuration
+
+The click attribution and affiliate postback capability uses configuration from `wp-config.php` through `Kiwi_Config`.
+
+Expected keys:
+
+- `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
+  - outbound affiliate postback URL template
+  - supports placeholders such as `{clickid}` and optional `{hash}` / `{secure}`
+
+- `KIWI_AFFILIATE_POSTBACK_SECRET`
+  - shared secret for outgoing affiliate postback signing/checksum generation
+  - this is **not** used for incoming aggregator callbacks
+
+- `KIWI_AFFILIATE_POSTBACK_SIGNATURE_ALGORITHM`
+- `KIWI_AFFILIATE_POSTBACK_SIGNATURE_BASE`
+- `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`
+- `KIWI_AFFILIATE_POSTBACK_TIMEOUT_SECONDS`
+
+- `KIWI_CLICK_ATTRIBUTION_COOKIE_NAME`
+- `KIWI_CLICK_ATTRIBUTION_CLICK_ID_KEYS`
+- `KIWI_CLICK_ATTRIBUTION_TTL_SECONDS`
+- `KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT`
+
+Do not store real values for these secrets in repository docs.
 
 ## Environment note
 

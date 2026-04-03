@@ -9,15 +9,18 @@ class Kiwi_Landing_Page_Router
     private $config;
     private $landing_page_session_repository;
     private $plugin_base_url;
+    private $tracking_capture_service;
 
     public function __construct(
         Kiwi_Config $config,
         Kiwi_Landing_Page_Session_Repository $landing_page_session_repository,
-        string $plugin_base_url
+        string $plugin_base_url,
+        ?Kiwi_Tracking_Capture_Service $tracking_capture_service = null
     ) {
         $this->config = $config;
         $this->landing_page_session_repository = $landing_page_session_repository;
         $this->plugin_base_url = rtrim($plugin_base_url, '/\\') . '/';
+        $this->tracking_capture_service = $tracking_capture_service;
     }
 
     public function maybe_render_current_request(): bool
@@ -42,6 +45,14 @@ class Kiwi_Landing_Page_Router
         $click_to_sms_uri = (string) ($landing_page['cta_href'] ?? '#');
 
         $session_token = $this->resolve_session_token();
+
+        if ($this->tracking_capture_service instanceof Kiwi_Tracking_Capture_Service) {
+            $this->tracking_capture_service->capture_from_request(
+                $match['landing_page'],
+                $session_token,
+                is_array($_GET) ? $_GET : []
+            );
+        }
 
         $this->landing_page_session_repository->insert([
             'landing_key' => $match['landing_key'],

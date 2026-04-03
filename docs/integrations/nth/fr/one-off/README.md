@@ -371,6 +371,22 @@ Therefore:
 - do not implement `deliverEvent` handling for this FR one-off flow unless later setup documentation explicitly requires it
 - do not assume PIN/session callback flows for this service
 
+### Attribution and affiliate postback boundary
+
+For this setup, callback payload parsing and callback-type resolution stay in the NTH integration layer.
+
+Outbound affiliate postbacks are handled by shared attribution capability after conversion normalization:
+
+- callbacks are normalized to internal conversion semantics first
+- only confirmed successful terminal conversions are eligible for postback dispatch
+- resolver correlation uses normalized stable references (`flow_reference`, message/reference IDs, session/external refs)
+- duplicate callback deliveries must not emit duplicate postbacks once a postback is marked sent
+
+Important:
+
+- NTH callbacks are not assumed to include a generic affiliate shared secret
+- postback signing secrets apply to outgoing affiliate postbacks only
+
 ### Repository rule for unresolved callback URLs
 
 The source spreadsheet callback URL fields are blank, but the repository callback endpoint is now known and implemented:
