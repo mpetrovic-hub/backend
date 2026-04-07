@@ -379,6 +379,8 @@ Outbound affiliate postbacks are handled by shared attribution capability after 
 
 - callbacks are normalized to internal conversion semantics first
 - only confirmed successful terminal conversions are eligible for postback dispatch
+- attribution rows carry an internal server-generated `transaction_id` captured at landing entry
+- NTH outbound `reference` values are derived from that `transaction_id` (with a uniqueness suffix) when a pending attribution row is found
 - resolver correlation uses normalized stable references (`flow_reference`, message/reference IDs, session/external refs)
 - duplicate callback deliveries must not emit duplicate postbacks once a postback is marked sent
 

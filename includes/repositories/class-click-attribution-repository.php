@@ -26,6 +26,7 @@ class Kiwi_Click_Attribution_Repository
             updated_at DATETIME NOT NULL,
             expires_at DATETIME NOT NULL,
             tracking_token VARCHAR(100) NOT NULL DEFAULT '',
+            transaction_id VARCHAR(120) NOT NULL DEFAULT '',
             click_id VARCHAR(191) NOT NULL DEFAULT '',
             provider_key VARCHAR(50) NOT NULL DEFAULT '',
             landing_page_key VARCHAR(100) NOT NULL DEFAULT '',
@@ -47,6 +48,7 @@ class Kiwi_Click_Attribution_Repository
             raw_context LONGTEXT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY tracking_token (tracking_token),
+            KEY transaction_id (transaction_id),
             KEY click_id (click_id),
             KEY provider_key (provider_key),
             KEY service_key (service_key),
@@ -72,11 +74,16 @@ class Kiwi_Click_Attribution_Repository
 
         $existing = $this->find_by_tracking_token($tracking_token);
         $expires_at = (string) ($data['expires_at'] ?? $this->current_time_mysql());
+        $transaction_id = $this->resolve_transaction_id(
+            (string) ($data['transaction_id'] ?? ''),
+            is_array($existing) ? (string) ($existing['transaction_id'] ?? '') : ''
+        );
 
         if (is_array($existing)) {
             $this->update_by_id((int) $existing['id'], [
                 'updated_at' => $this->current_time_mysql(),
                 'expires_at' => $expires_at,
+                'transaction_id' => $transaction_id,
                 'click_id' => (string) ($data['click_id'] ?? ($existing['click_id'] ?? '')),
                 'provider_key' => (string) ($data['provider_key'] ?? ($existing['provider_key'] ?? '')),
                 'landing_page_key' => (string) ($data['landing_page_key'] ?? ($existing['landing_page_key'] ?? '')),
@@ -100,6 +107,7 @@ class Kiwi_Click_Attribution_Repository
                 'updated_at' => $now,
                 'expires_at' => $expires_at,
                 'tracking_token' => $tracking_token,
+                'transaction_id' => $transaction_id,
                 'click_id' => (string) ($data['click_id'] ?? ''),
                 'provider_key' => (string) ($data['provider_key'] ?? ''),
                 'landing_page_key' => (string) ($data['landing_page_key'] ?? ''),
@@ -114,6 +122,7 @@ class Kiwi_Click_Attribution_Repository
                 'raw_context' => isset($data['raw_context']) ? wp_json_encode($data['raw_context']) : '',
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -150,6 +159,27 @@ class Kiwi_Click_Attribution_Repository
             $wpdb->prepare(
                 "SELECT * FROM {$this->get_table_name()} WHERE tracking_token = %s LIMIT 1",
                 $tracking_token
+            ),
+            ARRAY_A
+        );
+
+        return is_array($row) ? $row : null;
+    }
+
+    public function find_by_transaction_id(string $transaction_id): ?array
+    {
+        global $wpdb;
+
+        $transaction_id = $this->sanitize_transaction_id($transaction_id);
+
+        if ($transaction_id === '') {
+            return null;
+        }
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$this->get_table_name()} WHERE transaction_id = %s ORDER BY id DESC LIMIT 1",
+                $transaction_id
             ),
             ARRAY_A
         );
@@ -212,6 +242,7 @@ class Kiwi_Click_Attribution_Repository
         $service_key = trim((string) ($references['service_key'] ?? ''));
 
         $ordered_fields = [
+            'transaction_id',
             'sale_reference',
             'transaction_ref',
             'message_ref',
@@ -253,8 +284,14 @@ class Kiwi_Click_Attribution_Repository
             $conversion_status = 'bound';
         }
 
+        $transaction_id = $this->resolve_transaction_id(
+            (string) ($references['transaction_id'] ?? ''),
+            (string) ($existing['transaction_id'] ?? '')
+        );
+
         return $this->update_by_id($id, [
             'updated_at' => $this->current_time_mysql(),
+            'transaction_id' => $transaction_id,
             'provider_key' => (string) ($references['provider_key'] ?? ($existing['provider_key'] ?? '')),
             'flow_key' => (string) ($references['flow_key'] ?? ($existing['flow_key'] ?? '')),
             'service_key' => (string) ($references['service_key'] ?? ($existing['service_key'] ?? '')),
@@ -373,6 +410,7 @@ class Kiwi_Click_Attribution_Repository
         $allowed = [
             'updated_at' => '%s',
             'expires_at' => '%s',
+            'transaction_id' => '%s',
             'click_id' => '%s',
             'provider_key' => '%s',
             'landing_page_key' => '%s',
@@ -427,7 +465,7 @@ class Kiwi_Click_Attribution_Repository
     {
         global $wpdb;
 
-        $allowed_fields = ['sale_reference', 'transaction_ref', 'message_ref', 'external_ref', 'session_ref'];
+        $allowed_fields = ['transaction_id', 'sale_reference', 'transaction_ref', 'message_ref', 'external_ref', 'session_ref'];
         if (!in_array($field, $allowed_fields, true)) {
             return null;
         }
@@ -462,5 +500,55 @@ class Kiwi_Click_Attribution_Repository
         }
 
         return gmdate('Y-m-d H:i:s');
+    }
+
+    private function resolve_transaction_id(string $incoming_value, string $fallback_value = ''): string
+    {
+        $incoming = $this->sanitize_transaction_id($incoming_value);
+
+        if ($incoming !== '') {
+            return $incoming;
+        }
+
+        $fallback = $this->sanitize_transaction_id($fallback_value);
+
+        if ($fallback !== '') {
+            return $fallback;
+        }
+
+        return $this->generate_transaction_id();
+    }
+
+    private function sanitize_transaction_id(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = substr($value, 0, 120);
+
+        if (!preg_match('/^[A-Za-z0-9_-]{12,120}$/', $value)) {
+            return '';
+        }
+
+        return $value;
+    }
+
+    private function generate_transaction_id(): string
+    {
+        if (function_exists('wp_generate_uuid4')) {
+            return 'txn_' . str_replace('-', '', wp_generate_uuid4());
+        }
+
+        if (function_exists('random_bytes')) {
+            try {
+                return 'txn_' . bin2hex(random_bytes(16));
+            } catch (Throwable $throwable) {
+            }
+        }
+
+        return 'txn_' . md5(uniqid('', true));
     }
 }

@@ -38,7 +38,7 @@ For aggregator-specific details, see:
 | NTH | deliverEvent | generic | event callback | documented | Generic NTH Premium SMS callback / operation |
 | NTH | deliverMessage | generic | MO delivery | documented | Generic NTH Premium SMS callback / operation |
 | NTH | delivery-report handling | FR | one-off | documented | FR setup documents MT delivery report callback |
-| NTH | click attribution + affiliate postback | FR | one-off | implemented | Shared attribution capability is wired for NTH FR one-off confirmed conversions; duplicate callbacks can retry failed postbacks until sent |
+| NTH | click attribution + affiliate postback | FR | one-off | implemented | Shared attribution capability is wired for NTH FR one-off confirmed conversions; each capture stores an internal `transaction_id`; duplicate callbacks can retry failed postbacks until sent |
 | NTH | init-session | generic | web-initiated services | documented | Generic NTH Premium SMS function; use depends on service program |
 | NTH | MO handling | FR | one-off | documented | FR setup expects MO keyword flow with encrypted MSISDN |
 | NTH | MT billing | FR | one-off | documented | FR setup uses premium MT submission with `price=450` |

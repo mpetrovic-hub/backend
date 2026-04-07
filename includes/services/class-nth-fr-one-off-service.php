@@ -88,7 +88,9 @@ class Kiwi_Nth_Fr_One_Off_Service
             ];
         }
 
-        $flow_reference = $this->generate_reference('nth');
+        $reference_hint = trim((string) ($normalized_event['external_request_id'] ?? ''));
+        $attribution_transaction_id = $this->resolve_attribution_transaction_id($service_key, $reference_hint);
+        $flow_reference = $this->build_provider_flow_reference($attribution_transaction_id);
         $sale_reference = $flow_reference;
         $message_text = $this->build_mt_message_text($service, $normalized_event);
         $nwc = $this->resolve_nwc($service, $normalized_event);
@@ -121,6 +123,7 @@ class Kiwi_Nth_Fr_One_Off_Service
             'currency' => (string) ($service['currency'] ?? 'EUR'),
             'meta_json' => [
                 'initial_event' => $normalized_event,
+                'attribution_transaction_id' => $attribution_transaction_id,
             ],
         ];
 
@@ -285,8 +288,13 @@ class Kiwi_Nth_Fr_One_Off_Service
 
         $tracking_token = trim((string) ($transaction['landing_session_token'] ?? ''));
         $reference_hint = trim((string) ($normalized_event['external_request_id'] ?? ''));
+        $transaction_id = $this->resolve_attribution_transaction_id($service_key, $reference_hint);
 
-        if ($tracking_token === '' && $reference_hint === '') {
+        if ($transaction_id === '') {
+            $transaction_id = $this->extract_transaction_id_from_flow_reference((string) ($transaction['flow_reference'] ?? ''));
+        }
+
+        if ($tracking_token === '' && $reference_hint === '' && $transaction_id === '') {
             return;
         }
 
@@ -298,6 +306,7 @@ class Kiwi_Nth_Fr_One_Off_Service
             'reference_hint' => $reference_hint,
             'session_ref' => $reference_hint,
             'external_ref' => $reference_hint,
+            'transaction_id' => $transaction_id,
             'transaction_ref' => (string) ($transaction['flow_reference'] ?? ''),
             'message_ref' => (string) ($submit_event['external_message_id'] ?? ''),
             'sale_reference' => (string) ($transaction['sale_reference'] ?? ''),
@@ -313,13 +322,16 @@ class Kiwi_Nth_Fr_One_Off_Service
             return null;
         }
 
+        $flow_reference = (string) ($transaction['flow_reference'] ?? '');
+
         return $this->conversion_attribution_resolver->handle_confirmed_conversion([
             'provider_key' => 'nth',
             'service_key' => $service_key,
             'flow_key' => (string) ($transaction['flow_key'] ?? ''),
             'confirmed' => !empty($normalized_event['is_terminal']) && !empty($normalized_event['is_success']),
             'occurred_at' => (string) ($normalized_event['occurred_at'] ?? ''),
-            'transaction_ref' => (string) ($transaction['flow_reference'] ?? ''),
+            'transaction_id' => $this->extract_transaction_id_from_flow_reference($flow_reference),
+            'transaction_ref' => $flow_reference,
             'message_ref' => (string) ($normalized_event['external_message_id'] ?? ($transaction['external_message_id'] ?? '')),
             'external_ref' => (string) ($normalized_event['external_request_id'] ?? ''),
             'session_ref' => (string) ($normalized_event['external_request_id'] ?? ''),
@@ -498,6 +510,46 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         return $prefix . '_' . md5(uniqid('', true));
+    }
+
+    private function resolve_attribution_transaction_id(string $service_key, string $reference_hint): string
+    {
+        if (!$this->conversion_attribution_resolver instanceof Kiwi_Conversion_Attribution_Resolver) {
+            return '';
+        }
+
+        return $this->conversion_attribution_resolver->resolve_pending_transaction_id(
+            $service_key,
+            $reference_hint
+        );
+    }
+
+    private function build_provider_flow_reference(string $transaction_id): string
+    {
+        $transaction_id = trim($transaction_id);
+
+        if ($transaction_id === '') {
+            return $this->generate_reference('nth');
+        }
+
+        $suffix = substr(md5(uniqid('', true)), 0, 12);
+
+        return substr($transaction_id . '-' . $suffix, 0, 100);
+    }
+
+    private function extract_transaction_id_from_flow_reference(string $flow_reference): string
+    {
+        $flow_reference = trim($flow_reference);
+
+        if ($flow_reference === '') {
+            return '';
+        }
+
+        if (preg_match('/^(txn_[A-Za-z0-9]{12,120})(?:-[A-Za-z0-9]{1,64})?$/', $flow_reference, $matches)) {
+            return (string) ($matches[1] ?? '');
+        }
+
+        return '';
     }
 
     private function current_time_mysql(): string

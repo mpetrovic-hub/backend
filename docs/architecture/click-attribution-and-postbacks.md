@@ -46,6 +46,7 @@ Provider adapters should forward only normalized fields into attribution resolve
 
 - `provider_key`
 - `service_key`
+- `transaction_id` (internal attribution transaction identifier)
 - conversion confirmation signal (`confirmed`)
 - timestamp (`occurred_at`)
 - stable references (`transaction_ref`, `message_ref`, `sale_reference`, `external_ref`, `session_ref`)
@@ -56,7 +57,7 @@ No provider-specific callback shape should leak into shared attribution code.
 
 `wp_kiwi_click_attributions` stores:
 
-- capture data (`tracking_token`, `click_id`, landing/provider/service context)
+- capture data (`tracking_token`, `transaction_id`, `click_id`, landing/provider/service context)
 - correlation references (`session_ref`, `transaction_ref`, `message_ref`, `external_ref`, `sale_reference`)
 - conversion status (`captured`, `bound`, `confirmed`, postback states)
 - outbound postback audit (`postback_sent_at`, response code/body, attempts, errors)
@@ -76,11 +77,13 @@ No provider-specific callback shape should leak into shared attribution code.
 - duplicate callbacks must not emit duplicate postbacks once `postback_sent_at` is set
 - failed postbacks are retained in audit fields for retry visibility
 - expired temporary rows are cleaned in bounded batches
+- each attribution row gets an internal `transaction_id` so provider callbacks can be correlated through stable server-side references
 
 ## Current Wiring Example (NTH FR one-off)
 
 - landing entry capture runs in `Kiwi_Landing_Page_Router`
 - NTH callback normalization and confirmation logic remain in NTH service/normalizer
+- NTH resolves pending attribution rows by service/reference and reuses the shared `transaction_id` as the provider reference root
 - NTH service passes normalized conversion signals into `Kiwi_Conversion_Attribution_Resolver`
 
 This is an integration example, not an NTH-only architecture. Additional providers should reuse the same shared resolver/dispatcher capability.

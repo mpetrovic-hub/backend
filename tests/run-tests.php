@@ -1270,6 +1270,7 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
     public $rows = [];
     public $cleanup_calls = [];
     private $next_id = 1;
+    private $next_transaction_sequence = 1;
 
     public function create_table(): void
     {
@@ -1283,15 +1284,24 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
                 continue;
             }
 
-            $this->rows[$id] = array_merge($row, $data, ['id' => $id]);
+            $transaction_id = $this->resolve_transaction_id(
+                (string) ($data['transaction_id'] ?? ''),
+                (string) ($row['transaction_id'] ?? '')
+            );
+            $this->rows[$id] = array_merge($row, $data, [
+                'id' => $id,
+                'transaction_id' => $transaction_id,
+            ]);
 
             return $this->rows[$id];
         }
 
         $id = $this->next_id++;
+        $transaction_id = $this->resolve_transaction_id((string) ($data['transaction_id'] ?? ''));
         $row = array_merge(
             [
                 'id' => $id,
+                'transaction_id' => $transaction_id,
                 'conversion_status' => 'captured',
                 'postback_sent_at' => '',
                 'postback_attempts' => 0,
@@ -1311,6 +1321,17 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
     {
         foreach ($this->rows as $row) {
             if (($row['tracking_token'] ?? '') === $tracking_token) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    public function find_by_transaction_id(string $transaction_id): ?array
+    {
+        foreach ($this->rows as $row) {
+            if (($row['transaction_id'] ?? '') === $transaction_id) {
                 return $row;
             }
         }
@@ -1357,7 +1378,12 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
         }
 
         $row = $this->rows[$id];
+        $transaction_id = $this->resolve_transaction_id(
+            (string) ($references['transaction_id'] ?? ''),
+            (string) ($row['transaction_id'] ?? '')
+        );
         $this->rows[$id] = array_merge($row, $references);
+        $this->rows[$id]['transaction_id'] = $transaction_id;
 
         if (($this->rows[$id]['conversion_status'] ?? '') === 'captured') {
             $this->rows[$id]['conversion_status'] = 'bound';
@@ -1368,7 +1394,7 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
 
     public function find_for_conversion(array $references): ?array
     {
-        $order = ['sale_reference', 'transaction_ref', 'message_ref', 'external_ref', 'session_ref'];
+        $order = ['transaction_id', 'sale_reference', 'transaction_ref', 'message_ref', 'external_ref', 'session_ref'];
 
         foreach ($order as $field) {
             $value = (string) ($references[$field] ?? '');
@@ -1441,6 +1467,25 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
         }
 
         return count($expired);
+    }
+
+    private function resolve_transaction_id(string $incoming, string $fallback = ''): string
+    {
+        $incoming = trim($incoming);
+
+        if ($incoming !== '') {
+            return $incoming;
+        }
+
+        $fallback = trim($fallback);
+
+        if ($fallback !== '') {
+            return $fallback;
+        }
+
+        $next = str_pad((string) $this->next_transaction_sequence++, 6, '0', STR_PAD_LEFT);
+
+        return 'txn_test_' . $next;
     }
 }
 
@@ -1777,9 +1822,11 @@ kiwi_run_test('Kiwi_Tracking_Capture_Service captures clickid and persists serve
 
     kiwi_assert_true(is_array($record), 'Expected click attribution capture to create a persisted record.');
     kiwi_assert_same('abc:123', $record['click_id'] ?? '', 'Expected captured clickid to be persisted in server-side storage.');
+    kiwi_assert_true(trim((string) ($record['transaction_id'] ?? '')) !== '', 'Expected capture to assign a server-side transaction_id.');
     kiwi_assert_same(1, count($repository->rows), 'Expected one server-side attribution record after first capture.');
     kiwi_assert_true(!empty($service->cookies[0] ?? ''), 'Expected capture to set an opaque tracking-token cookie.');
     kiwi_assert_true(($service->cookies[0] ?? '') !== 'abc:123', 'Expected the cookie value to be opaque and not the raw clickid.');
+    $initial_transaction_id = (string) ($record['transaction_id'] ?? '');
 
     $_COOKIE['kiwi_tracking_token'] = (string) ($service->cookies[0] ?? '');
     $service->capture_from_request(
@@ -1798,6 +1845,7 @@ kiwi_run_test('Kiwi_Tracking_Capture_Service captures clickid and persists serve
     kiwi_assert_same(1, count($repository->rows), 'Expected repeated capture in same browser context to reuse the same server-side attribution row.');
     $saved = array_values($repository->rows)[0];
     kiwi_assert_same('xyz:789', $saved['click_id'] ?? '', 'Expected repeated capture to refresh stored clickid value for the active tracking token.');
+    kiwi_assert_same($initial_transaction_id, $saved['transaction_id'] ?? '', 'Expected repeated capture for one tracking token to keep the same transaction_id.');
 });
 
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver matches confirmed conversions and dispatches one idempotent postback', function (): void {
@@ -1871,6 +1919,36 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver matches confirmed conversion
     ]);
     kiwi_assert_same('not_confirmed', $not_confirmed['reason'] ?? '', 'Expected non-confirmed conversions to avoid outbound postbacks.');
     kiwi_assert_same(1, count($dispatcher->calls), 'Expected non-confirmed conversion handling not to trigger postback dispatch.');
+});
+
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver can resolve confirmed conversions by transaction_id', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $config = new Kiwi_Test_Attribution_Config(
+        'https://offers.example.test/postback?clickid={clickid}&secure={hash}',
+        'super-secret'
+    );
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
+    $resolver = new Kiwi_Conversion_Attribution_Resolver($repository, $dispatcher);
+
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKTXNID12345678',
+        'transaction_id' => 'txn_test_conversion_0001',
+        'click_id' => 'aff:click:txn',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+
+    $result = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+    ]);
+
+    kiwi_assert_true($result['matched'] ?? false, 'Expected transaction_id-based resolution to match a persisted attribution row.');
+    kiwi_assert_true($result['dispatched'] ?? false, 'Expected transaction_id-based resolution to dispatch one postback.');
+    kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback for transaction_id-based confirmed conversion handling.');
 });
 
 kiwi_run_test('Kiwi_Click_Attribution_Repository cleanup removes only expired rows up to the configured limit', function (): void {
@@ -2200,7 +2278,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on success
     $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
     $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
     $click_attribution_repository = new Kiwi_Test_Click_Attribution_Repository();
-    $click_attribution_repository->upsert_capture([
+    $capture = $click_attribution_repository->upsert_capture([
         'tracking_token' => 'TOK1234567890DDD',
         'click_id' => 'aff:flow:msg1',
         'provider_key' => 'nth',
@@ -2237,6 +2315,12 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on success
         'Operator' => 'Orange',
         'session_id' => 'session-42',
     ]);
+    $submitted_flow_reference = (string) ($client->calls[0]['transaction']['flow_reference'] ?? '');
+    $expected_transaction_id = (string) ($capture['transaction_id'] ?? '');
+    kiwi_assert_true(
+        $expected_transaction_id !== '' && strpos($submitted_flow_reference, $expected_transaction_id . '-') === 0,
+        'Expected NTH outbound flow reference to carry the shared attribution transaction_id prefix when attribution is resolved.'
+    );
 
     $notification = $service->handle_notification('nth_fr_one_off_jplay', [
         'message_id' => 'msg-1',
