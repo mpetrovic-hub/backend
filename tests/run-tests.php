@@ -1520,6 +1520,26 @@ class Kiwi_Test_Affiliate_Postback_Dispatcher extends Kiwi_Affiliate_Postback_Di
     }
 }
 
+class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
+{
+    public $upsert_calls = [];
+    public $rows = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function upsert(array $data): array
+    {
+        $this->upsert_calls[] = $data;
+        $row = array_merge(['id' => $this->next_id++], $data);
+        $this->rows[] = $row;
+
+        return $row;
+    }
+}
+
 class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
 {
     public $calls = [];
@@ -1949,6 +1969,63 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver can resolve confirmed conver
     kiwi_assert_true($result['matched'] ?? false, 'Expected transaction_id-based resolution to match a persisted attribution row.');
     kiwi_assert_true($result['dispatched'] ?? false, 'Expected transaction_id-based resolution to dispatch one postback.');
     kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback for transaction_id-based confirmed conversion handling.');
+});
+
+kiwi_run_test('Kiwi_Shared_Sales_Recorder writes transaction_id to sales records when provided', function (): void {
+    $repository = new Kiwi_Test_Sales_Repository();
+    $recorder = new Kiwi_Shared_Sales_Recorder($repository);
+
+    $recorder->record_successful_one_off_sale([
+        'sale_reference' => 'sale-explicit-1',
+        'flow_reference' => 'txn_1234567890abcdef1234567890abcd-a1b2c3d4e5f6',
+        'transaction_id' => 'txn_explicit_123456789012',
+        'country' => 'FR',
+        'flow_key' => 'one-off',
+        'price' => 450,
+        'currency' => 'EUR',
+        'subscriber_reference' => 'enc-1',
+        'operator_code' => '20801',
+        'operator_name' => 'Orange',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ], [
+        'external_message_id' => 'msg-explicit-1',
+        'occurred_at' => '2026-04-01 12:00:00',
+    ]);
+
+    kiwi_assert_same(
+        'txn_explicit_123456789012',
+        $repository->upsert_calls[0]['transaction_id'] ?? '',
+        'Expected shared sales recorder to persist explicit transaction_id into wp_kiwi_sales writes.'
+    );
+});
+
+kiwi_run_test('Kiwi_Shared_Sales_Recorder derives transaction_id from flow_reference when explicit value is absent', function (): void {
+    $repository = new Kiwi_Test_Sales_Repository();
+    $recorder = new Kiwi_Shared_Sales_Recorder($repository);
+
+    $recorder->record_successful_one_off_sale([
+        'sale_reference' => 'sale-derived-1',
+        'flow_reference' => 'txn_1234567890abcdef1234567890abce-a1b2c3d4e5f6',
+        'country' => 'FR',
+        'flow_key' => 'one-off',
+        'price' => 450,
+        'currency' => 'EUR',
+        'subscriber_reference' => 'enc-2',
+        'operator_code' => '20801',
+        'operator_name' => 'Orange',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ], [
+        'external_message_id' => 'msg-derived-1',
+        'occurred_at' => '2026-04-01 12:00:00',
+    ]);
+
+    kiwi_assert_same(
+        'txn_1234567890abcdef1234567890abce',
+        $repository->upsert_calls[0]['transaction_id'] ?? '',
+        'Expected shared sales recorder to derive transaction_id from provider flow_reference when needed.'
+    );
 });
 
 kiwi_run_test('Kiwi_Click_Attribution_Repository cleanup removes only expired rows up to the configured limit', function (): void {

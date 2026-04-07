@@ -381,6 +381,7 @@ Outbound affiliate postbacks are handled by shared attribution capability after 
 - only confirmed successful terminal conversions are eligible for postback dispatch
 - attribution rows carry an internal server-generated `transaction_id` captured at landing entry
 - NTH outbound `reference` values are derived from that `transaction_id` (with a uniqueness suffix) when a pending attribution row is found
+- successful one-off sales persist this correlation root into `wp_kiwi_sales.transaction_id`
 - resolver correlation uses normalized stable references (`flow_reference`, message/reference IDs, session/external refs)
 - duplicate callback deliveries must not emit duplicate postbacks once a postback is marked sent
 

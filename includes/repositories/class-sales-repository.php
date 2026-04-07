@@ -25,6 +25,7 @@ class Kiwi_Sales_Repository
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             sale_reference VARCHAR(100) NOT NULL DEFAULT '',
+            transaction_id VARCHAR(120) NOT NULL DEFAULT '',
             provider_key VARCHAR(50) NOT NULL DEFAULT '',
             country VARCHAR(10) NOT NULL DEFAULT '',
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
@@ -46,6 +47,7 @@ class Kiwi_Sales_Repository
             KEY provider_key (provider_key),
             KEY country (country),
             KEY flow_key (flow_key),
+            KEY transaction_id (transaction_id),
             KEY external_sale_id (external_sale_id),
             KEY created_at (created_at)
         ) {$charset_collate};";
@@ -102,6 +104,7 @@ class Kiwi_Sales_Repository
                 'created_at' => $now,
                 'updated_at' => $now,
                 'sale_reference' => $data['sale_reference'] ?? '',
+                'transaction_id' => $data['transaction_id'] ?? '',
                 'provider_key' => $data['provider_key'] ?? '',
                 'country' => $data['country'] ?? '',
                 'flow_key' => $data['flow_key'] ?? '',
@@ -120,6 +123,8 @@ class Kiwi_Sales_Repository
                 'context_json' => isset($data['context_json']) ? wp_json_encode($data['context_json']) : '',
             ],
             [
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -152,6 +157,7 @@ class Kiwi_Sales_Repository
             $this->get_table_name(),
             [
                 'updated_at' => $this->current_time_mysql(),
+                'transaction_id' => $data['transaction_id'] ?? '',
                 'provider_key' => $data['provider_key'] ?? '',
                 'country' => $data['country'] ?? '',
                 'flow_key' => $data['flow_key'] ?? '',
@@ -171,6 +177,8 @@ class Kiwi_Sales_Repository
             ],
             ['id' => $id],
             [
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
