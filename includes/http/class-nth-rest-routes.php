@@ -185,7 +185,18 @@ class Kiwi_Nth_Rest_Routes
 
     private function normalize_keyword(string $keyword): string
     {
-        $keyword = strtoupper(trim($keyword));
+        $keyword = trim($keyword);
+
+        if ($keyword === '') {
+            return '';
+        }
+
+        $parts = preg_split('/\s+/', $keyword);
+        $keyword = is_array($parts) && !empty($parts)
+            ? (string) $parts[0]
+            : $keyword;
+
+        $keyword = strtoupper($keyword);
         $keyword = rtrim($keyword, '*');
 
         return preg_replace('/[^A-Z0-9]/', '', $keyword) ?? '';

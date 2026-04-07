@@ -340,6 +340,14 @@ Sample payload shape:
 command=deliverMessage&messageId=12345&msisdn=00414411112222&businessNumber=9292&keyword=START&content=START+sms+service&operatorCode=22801&sessionId=9292CHA1571000000000&time=2021-01-01+12%3A00%3A00
 ```
 
+For this flow, NTH accepts keyword suffixes (configured as `Jplay*`), for example:
+
+```text
+JPLAY txn_abcd1234
+```
+
+The full MO content is forwarded to backend callback handling and can be used to recover internal correlation identifiers.
+
 FR-specific note:
 - for France, `msisdn` must be interpreted according to FR service rules
 - the forwarded user identifier is an **encrypted MSISDN**, not the real MSISDN

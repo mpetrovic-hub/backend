@@ -66,7 +66,8 @@ Expected keys:
 
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
   - outbound affiliate postback URL template
-  - supports placeholders such as `{clickid}` and optional `{hash}` / `{secure}`
+  - supports placeholders such as `{clickid}` / `{{clickid}}` and optional `{hash}` / `{secure}` (`{{hash}}` / `{{secure}}` also supported)
+  - example: `https://offers-kiwimobile.affise.com/postback?clickid={{clickid}}&secure=7e09e7feb5d6f029ae4bb755955b6727&goal=sale`
 
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
   - shared secret for outgoing affiliate postback signing/checksum generation

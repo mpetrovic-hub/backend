@@ -486,10 +486,14 @@ return [
   <main class="lp-container">
     <h1>Sample landing page</h1>
     <p>Media assets may be referenced externally.</p>
+    <a class="cta" href="{{KIWI_PRIMARY_CTA_HREF}}">CONTINUER ET PAYER</a>
   </main>
 </body>
 </html>
 ```
+
+`{{KIWI_PRIMARY_CTA_HREF}}` is a render-time placeholder resolved by centralized backend flow logic.
+Landing-page folders should not encode provider-specific CTA payload assembly directly in HTML.
 
 ---
 

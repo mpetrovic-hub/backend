@@ -6,21 +6,26 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Landing_Page_Router
 {
+    private const PRIMARY_CTA_PLACEHOLDER = '{{KIWI_PRIMARY_CTA_HREF}}';
+
     private $config;
     private $landing_page_session_repository;
     private $plugin_base_url;
     private $tracking_capture_service;
+    private $primary_cta_resolver;
 
     public function __construct(
         Kiwi_Config $config,
         Kiwi_Landing_Page_Session_Repository $landing_page_session_repository,
         string $plugin_base_url,
-        ?Kiwi_Tracking_Capture_Service $tracking_capture_service = null
+        ?Kiwi_Tracking_Capture_Service $tracking_capture_service = null,
+        ?Kiwi_Landing_Primary_Cta_Resolver $primary_cta_resolver = null
     ) {
         $this->config = $config;
         $this->landing_page_session_repository = $landing_page_session_repository;
         $this->plugin_base_url = rtrim($plugin_base_url, '/\\') . '/';
         $this->tracking_capture_service = $tracking_capture_service;
+        $this->primary_cta_resolver = $primary_cta_resolver;
     }
 
     public function maybe_render_current_request(): bool
@@ -38,21 +43,30 @@ class Kiwi_Landing_Page_Router
         $service = $service_key !== ''
             ? $this->config->get_nth_service($service_key)
             : null;
-        $landing_page = $this->build_render_landing_page(
-            $match['landing_page'],
-            is_array($service) ? $service : []
-        );
-        $click_to_sms_uri = (string) ($landing_page['cta_href'] ?? '#');
+        $service = is_array($service) ? $service : [];
 
         $session_token = $this->resolve_session_token();
+        $attribution = null;
 
         if ($this->tracking_capture_service instanceof Kiwi_Tracking_Capture_Service) {
-            $this->tracking_capture_service->capture_from_request(
+            $attribution = $this->tracking_capture_service->capture_from_request(
                 $match['landing_page'],
                 $session_token,
                 is_array($_GET) ? $_GET : []
             );
         }
+
+        $primary_cta_href = $this->resolve_primary_cta_href(
+            $match['landing_page'],
+            $service,
+            is_array($attribution) ? $attribution : null
+        );
+        $landing_page = $this->build_render_landing_page(
+            $match['landing_page'],
+            $service,
+            $primary_cta_href
+        );
+        $click_to_sms_uri = (string) ($landing_page['cta_href'] ?? '#');
 
         $this->landing_page_session_repository->insert([
             'landing_key' => $match['landing_key'],
@@ -176,6 +190,11 @@ class Kiwi_Landing_Page_Router
             return false;
         }
 
+        $html = $this->replace_primary_cta_placeholder(
+            $html,
+            (string) ($landing_page['cta_href'] ?? '#')
+        );
+
         $css_url = $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/styles.css';
         $html = $this->replace_stylesheet_href($html, $css_url);
 
@@ -223,12 +242,29 @@ class Kiwi_Landing_Page_Router
         return $style_block . "\n" . $html;
     }
 
-    private function build_render_landing_page(array $landing_page, array $service): array
+    private function replace_primary_cta_placeholder(string $html, string $cta_href): string
+    {
+        if (strpos($html, self::PRIMARY_CTA_PLACEHOLDER) === false) {
+            return $html;
+        }
+
+        return str_replace(
+            self::PRIMARY_CTA_PLACEHOLDER,
+            htmlspecialchars($cta_href, ENT_QUOTES, 'UTF-8'),
+            $html
+        );
+    }
+
+    private function build_render_landing_page(array $landing_page, array $service, string $primary_cta_href = ''): array
     {
         $shortcode = trim((string) ($landing_page['shortcode'] ?? ($service['shortcode'] ?? '')));
         $keyword = trim((string) ($landing_page['keyword'] ?? ($service['keyword'] ?? '')));
         $price_label = trim((string) ($landing_page['price_label'] ?? ($service['landing_price_label'] ?? '')));
-        $cta_href = trim((string) ($landing_page['cta_href'] ?? ''));
+        $cta_href = trim($primary_cta_href);
+
+        if ($cta_href === '') {
+            $cta_href = trim((string) ($landing_page['cta_href'] ?? ''));
+        }
 
         if ($cta_href === '') {
             $cta_href = $this->build_click_to_sms_uri($shortcode, $keyword);
@@ -248,6 +284,15 @@ class Kiwi_Landing_Page_Router
         $landing_page['cta_href'] = $cta_href;
 
         return $landing_page;
+    }
+
+    private function resolve_primary_cta_href(array $landing_page, array $service, ?array $attribution): string
+    {
+        if ($this->primary_cta_resolver instanceof Kiwi_Landing_Primary_Cta_Resolver) {
+            return $this->primary_cta_resolver->resolve($landing_page, $service, $attribution);
+        }
+
+        return trim((string) ($landing_page['cta_href'] ?? ''));
     }
 
     private function build_click_to_sms_uri(string $shortcode, string $keyword): string

@@ -539,16 +539,18 @@ class Kiwi_Click_Attribution_Repository
     private function generate_transaction_id(): string
     {
         if (function_exists('wp_generate_uuid4')) {
-            return 'txn_' . str_replace('-', '', wp_generate_uuid4());
+            $uuid = str_replace('-', '', wp_generate_uuid4());
+
+            return 'txn_' . substr($uuid, 0, 16);
         }
 
         if (function_exists('random_bytes')) {
             try {
-                return 'txn_' . bin2hex(random_bytes(16));
+                return 'txn_' . bin2hex(random_bytes(8));
             } catch (Throwable $throwable) {
             }
         }
 
-        return 'txn_' . md5(uniqid('', true));
+        return 'txn_' . substr(md5(uniqid('', true)), 0, 16);
     }
 }

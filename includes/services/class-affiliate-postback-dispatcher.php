@@ -70,11 +70,18 @@ class Kiwi_Affiliate_Postback_Dispatcher
         $url = strtr($template, [
             '{clickid}' => rawurlencode($click_id),
             '{click_id}' => rawurlencode($click_id),
+            '{{clickid}}' => rawurlencode($click_id),
+            '{{click_id}}' => rawurlencode($click_id),
             '{sale_reference}' => rawurlencode($sale_reference),
+            '{{sale_reference}}' => rawurlencode($sale_reference),
             '{service_key}' => rawurlencode($service_key),
+            '{{service_key}}' => rawurlencode($service_key),
             '{provider_key}' => rawurlencode($provider_key),
+            '{{provider_key}}' => rawurlencode($provider_key),
             '{secure}' => rawurlencode($signature),
             '{hash}' => rawurlencode($signature),
+            '{{secure}}' => rawurlencode($signature),
+            '{{hash}}' => rawurlencode($signature),
         ]);
 
         if ($signature !== '' && strpos($template, '{secure}') === false && strpos($template, '{hash}') === false) {
@@ -134,10 +141,16 @@ class Kiwi_Affiliate_Postback_Dispatcher
         $base = strtr($base_template, [
             '{clickid}' => $click_id,
             '{click_id}' => $click_id,
+            '{{clickid}}' => $click_id,
+            '{{click_id}}' => $click_id,
             '{sale_reference}' => $sale_reference,
+            '{{sale_reference}}' => $sale_reference,
             '{service_key}' => $service_key,
+            '{{service_key}}' => $service_key,
             '{provider_key}' => $provider_key,
+            '{{provider_key}}' => $provider_key,
             '{secret}' => $secret,
+            '{{secret}}' => $secret,
         ]);
 
         return hash($algorithm, $base);

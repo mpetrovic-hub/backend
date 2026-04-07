@@ -212,6 +212,9 @@ require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
 require_once __DIR__ . '/../includes/services/class-affiliate-postback-dispatcher.php';
 require_once __DIR__ . '/../includes/services/class-conversion-attribution-resolver.php';
 require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
+require_once __DIR__ . '/../includes/services/class-landing-primary-cta-adapter-interface.php';
+require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver.php';
+require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
 require_once __DIR__ . '/../includes/http/class-nth-rest-routes.php';
@@ -2028,6 +2031,25 @@ kiwi_run_test('Kiwi_Shared_Sales_Recorder derives transaction_id from flow_refer
     );
 });
 
+kiwi_run_test('Kiwi_Affiliate_Postback_Dispatcher supports double-brace clickid placeholders', function (): void {
+    $config = new Kiwi_Test_Attribution_Config(
+        'https://offers-kiwimobile.affise.com/postback?clickid={{clickid}}&secure=7e09e7feb5d6f029ae4bb755955b6727&goal=sale',
+        ''
+    );
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
+
+    $url = $dispatcher->build_postback_url('aff:double:brace');
+
+    kiwi_assert_true(
+        strpos($url, 'clickid=aff%3Adouble%3Abrace') !== false,
+        'Expected dispatcher to replace double-brace clickid placeholders.'
+    );
+    kiwi_assert_true(
+        strpos($url, 'goal=sale') !== false,
+        'Expected non-placeholder query parameters to remain unchanged.'
+    );
+});
+
 kiwi_run_test('Kiwi_Click_Attribution_Repository cleanup removes only expired rows up to the configured limit', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $repository->upsert_capture([
@@ -2095,7 +2117,7 @@ kiwi_run_test('Kiwi_Nth_Rest_Routes dispatches generic callbacks by payload comm
     $mo_response = $routes->handle_callback(new WP_REST_Request([
         'command' => 'deliverMessage',
         'businessNumber' => '84072',
-        'keyword' => 'JPLAY',
+        'content' => 'JPLAY txn_demo_12345678',
     ]));
     $notification_response = $routes->handle_callback(new WP_REST_Request([
         'service_key' => 'nth_fr_one_off_jplay',
@@ -2113,6 +2135,31 @@ kiwi_run_test('Kiwi_Nth_Rest_Routes dispatches generic callbacks by payload comm
     kiwi_assert_same('accepted', $mo_response->headers['X-Kiwi-Status'] ?? '', 'Expected successful callbacks to be acknowledged as accepted.');
     kiwi_assert_same('accepted', $notification_response->headers['X-Kiwi-Status'] ?? '', 'Expected notification callbacks to be acknowledged as accepted.');
     kiwi_assert_same('rejected', $rejected_response->headers['X-Kiwi-Status'] ?? '', 'Expected unresolved callbacks to be acknowledged as rejected.');
+});
+
+kiwi_run_test('Kiwi_Landing_Primary_Cta_Resolver builds NTH sms CTA with transaction_id suffix', function (): void {
+    $resolver = new Kiwi_Landing_Primary_Cta_Resolver([
+        new Kiwi_Nth_Primary_Cta_Adapter(),
+    ]);
+
+    $href = $resolver->resolve(
+        [
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'shortcode' => '84072',
+            'keyword' => 'JPLAY*',
+        ],
+        [],
+        [
+            'transaction_id' => 'txn_demo_12345678',
+        ]
+    );
+
+    kiwi_assert_same(
+        'sms:84072?body=JPLAY%20txn_demo_12345678',
+        $href,
+        'Expected NTH CTA resolution to append transaction_id to the MO body.'
+    );
 });
 
 kiwi_run_test('Generic landing page template renders shared assets and config-driven CTA content', function (): void {
@@ -2318,6 +2365,99 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when FR routing 
     kiwi_assert_same('mt_submission_blocked', $result['submit_event']['event_type'], 'Expected the internal blocked event to be classified separately from provider callbacks.');
     kiwi_assert_same('routing_data_missing', $result['transaction']['current_status'], 'Expected the flow transaction to keep the blocked-routing status.');
     kiwi_assert_same(1, $result['transaction']['is_terminal'], 'Expected the blocked-routing transaction to be marked terminal.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id to attribution and confirmed postback flow', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY*',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-mo-bind</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $click_attribution_repository = new Kiwi_Test_Click_Attribution_Repository();
+    $click_attribution_repository->upsert_capture([
+        'tracking_token' => 'TOKMOCTRANSID001',
+        'transaction_id' => 'txn_mocorr_12345678',
+        'click_id' => 'aff:mo:txid:1',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+    $postback_dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(
+        new Kiwi_Test_Attribution_Config(
+            'https://offers.example.test/postback?clickid={clickid}&secure={hash}',
+            'secret-mo-corr'
+        )
+    );
+    $conversion_resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $click_attribution_repository,
+        $postback_dispatcher
+    );
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder,
+        $conversion_resolver
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-mo-bind-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY txn_mocorr_12345678',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+    ]);
+
+    kiwi_assert_same(1, count($client->calls), 'Expected MO with suffixed transaction_id to continue MT submission flow.');
+    kiwi_assert_true(
+        strpos((string) ($client->calls[0]['transaction']['flow_reference'] ?? ''), 'txn_mocorr_12345678-') === 0,
+        'Expected provider flow_reference to be rooted in MO-supplied transaction_id.'
+    );
+
+    $notification = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-mo-bind',
+        'status' => 'delivered',
+        'encrypted_msisdn' => 'enc-mo-bind-1',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+
+    kiwi_assert_true($notification['success'], 'Expected delivery report to be accepted as confirmed success.');
+    kiwi_assert_same(1, count($postback_dispatcher->calls), 'Expected confirmed notification to trigger one affiliate postback.');
+    kiwi_assert_true(
+        strpos($postback_dispatcher->calls[0], 'clickid=aff%3Amo%3Atxid%3A1') !== false,
+        'Expected MO-correlated attribution to resolve original clickid for postback dispatch.'
+    );
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on successful terminal notification', function (): void {

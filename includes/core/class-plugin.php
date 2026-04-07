@@ -184,11 +184,15 @@ class Kiwi_Plugin
             $config,
             $click_attribution_repository
         );
+        $primary_cta_resolver = new Kiwi_Landing_Primary_Cta_Resolver([
+            new Kiwi_Nth_Primary_Cta_Adapter(),
+        ]);
         $router = new Kiwi_Landing_Page_Router(
             $config,
             $landing_page_session_repository,
             $this->plugin_base_url,
-            $tracking_capture_service
+            $tracking_capture_service,
+            $primary_cta_resolver
         );
 
         $router->maybe_render_current_request();

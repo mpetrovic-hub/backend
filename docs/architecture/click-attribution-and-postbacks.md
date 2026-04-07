@@ -82,8 +82,10 @@ No provider-specific callback shape should leak into shared attribution code.
 ## Current Wiring Example (NTH FR one-off)
 
 - landing entry capture runs in `Kiwi_Landing_Page_Router`
+- filesystem landings can use `{{KIWI_PRIMARY_CTA_HREF}}` so CTA assembly stays in centralized flow logic
 - NTH callback normalization and confirmation logic remain in NTH service/normalizer
 - NTH resolves pending attribution rows by service/reference and reuses the shared `transaction_id` as the provider reference root
+- NTH MO adapter may extract `transaction_id` from keyword-suffixed MO content (for example `JPLAY txn_xxx`) at the provider boundary
 - NTH service passes normalized conversion signals into `Kiwi_Conversion_Attribution_Resolver`
 
 This is an integration example, not an NTH-only architecture. Additional providers should reuse the same shared resolver/dispatcher capability.

@@ -89,7 +89,15 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         $reference_hint = trim((string) ($normalized_event['external_request_id'] ?? ''));
-        $attribution_transaction_id = $this->resolve_attribution_transaction_id($service_key, $reference_hint);
+        $attribution_transaction_id = $this->extract_transaction_id_from_mo_content(
+            $normalized_event,
+            (string) ($service['keyword'] ?? '')
+        );
+
+        if ($attribution_transaction_id === '') {
+            $attribution_transaction_id = $this->resolve_attribution_transaction_id($service_key, $reference_hint);
+        }
+
         $flow_reference = $this->build_provider_flow_reference($attribution_transaction_id);
         $sale_reference = $flow_reference;
         $message_text = $this->build_mt_message_text($service, $normalized_event);
@@ -512,6 +520,52 @@ class Kiwi_Nth_Fr_One_Off_Service
         return $prefix . '_' . md5(uniqid('', true));
     }
 
+    private function extract_transaction_id_from_mo_content(array $normalized_event, string $service_keyword): string
+    {
+        $message_text = trim((string) ($normalized_event['message_text'] ?? ''));
+
+        if ($message_text === '') {
+            return '';
+        }
+
+        $parts = preg_split('/\s+/', $message_text);
+
+        if (!is_array($parts) || count($parts) < 2) {
+            return '';
+        }
+
+        $first_token = (string) ($parts[0] ?? '');
+        $expected_keyword = $this->normalize_keyword_seed($service_keyword);
+
+        if ($expected_keyword !== '' && $this->normalize_keyword_seed($first_token) !== $expected_keyword) {
+            return '';
+        }
+
+        if (preg_match('/(txn_[A-Za-z0-9_-]{8,120})/', $message_text, $matches)) {
+            return (string) ($matches[1] ?? '');
+        }
+
+        return '';
+    }
+
+    private function normalize_keyword_seed(string $keyword): string
+    {
+        $keyword = trim($keyword);
+
+        if ($keyword === '') {
+            return '';
+        }
+
+        $parts = preg_split('/\s+/', $keyword);
+        $keyword = is_array($parts) && !empty($parts)
+            ? (string) $parts[0]
+            : $keyword;
+        $keyword = rtrim($keyword, '*');
+        $keyword = strtoupper($keyword);
+
+        return preg_replace('/[^A-Z0-9]/', '', $keyword) ?? '';
+    }
+
     private function resolve_attribution_transaction_id(string $service_key, string $reference_hint): string
     {
         if (!$this->conversion_attribution_resolver instanceof Kiwi_Conversion_Attribution_Resolver) {
@@ -545,7 +599,13 @@ class Kiwi_Nth_Fr_One_Off_Service
             return '';
         }
 
-        if (preg_match('/^(txn_[A-Za-z0-9]{12,120})(?:-[A-Za-z0-9]{1,64})?$/', $flow_reference, $matches)) {
+        $candidate = $flow_reference;
+
+        if (preg_match('/^(.+)-([A-Za-z0-9]{12})$/', $flow_reference, $matches)) {
+            $candidate = (string) ($matches[1] ?? '');
+        }
+
+        if (preg_match('/^(txn_[A-Za-z0-9_-]{8,120})$/', $candidate, $matches)) {
             return (string) ($matches[1] ?? '');
         }
 

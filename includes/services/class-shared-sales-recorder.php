@@ -68,11 +68,16 @@ class Kiwi_Shared_Sales_Recorder
 
         $flow_reference = trim((string) ($transaction['flow_reference'] ?? ''));
 
-        if (
-            $flow_reference !== ''
-            && preg_match('/^(txn_[A-Za-z0-9]{12,120})(?:-[A-Za-z0-9]{1,64})?$/', $flow_reference, $matches)
-        ) {
-            return (string) ($matches[1] ?? '');
+        if ($flow_reference !== '') {
+            $candidate = $flow_reference;
+
+            if (preg_match('/^(.+)-([A-Za-z0-9]{12})$/', $flow_reference, $matches)) {
+                $candidate = (string) ($matches[1] ?? '');
+            }
+
+            if (preg_match('/^(txn_[A-Za-z0-9_-]{12,120})$/', $candidate, $matches)) {
+                return (string) ($matches[1] ?? '');
+            }
         }
 
         return '';
