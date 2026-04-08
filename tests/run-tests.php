@@ -14,6 +14,7 @@ $GLOBALS['kiwi_test_hooks'] = [];
 $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
 $GLOBALS['kiwi_test_transients'] = [];
+$GLOBALS['kiwi_test_options'] = [];
 $GLOBALS['kiwi_test_shortcodes'] = [];
 $GLOBALS['kiwi_test_rest_routes'] = [];
 
@@ -65,6 +66,22 @@ function get_transient($key)
 function set_transient($key, $value, $expiration = 0): bool
 {
     $GLOBALS['kiwi_test_transients'][$key] = $value;
+
+    return true;
+}
+
+function get_option($option, $default = false)
+{
+    if (!array_key_exists((string) $option, $GLOBALS['kiwi_test_options'])) {
+        return $default;
+    }
+
+    return $GLOBALS['kiwi_test_options'][(string) $option];
+}
+
+function update_option($option, $value, $autoload = null): bool
+{
+    $GLOBALS['kiwi_test_options'][(string) $option] = $value;
 
     return true;
 }
@@ -706,6 +723,28 @@ class Kiwi_Test_Plugin extends Kiwi_Plugin
         $this->hlr_async_export_msisdns[] = $msisdns;
 
         return $this->hlr_async_export_rows_by_msisdn;
+    }
+}
+
+class Kiwi_Test_Plugin_Performance_Gates extends Kiwi_Plugin
+{
+    public $schema_migration_runs = 0;
+    public $cleanup_limits = [];
+    public $cleanup_limit = 777;
+
+    protected function run_schema_migrations(): void
+    {
+        $this->schema_migration_runs++;
+    }
+
+    protected function get_click_attribution_cleanup_limit(): int
+    {
+        return $this->cleanup_limit;
+    }
+
+    protected function cleanup_click_attribution_records(int $limit): void
+    {
+        $this->cleanup_limits[] = $limit;
     }
 }
 
@@ -2751,6 +2790,59 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
         is_int($GLOBALS['kiwi_test_styles'][0]['version']) && $GLOBALS['kiwi_test_styles'][0]['version'] > 0,
         'Expected stylesheet versioning to keep using filemtime().'
     );
+});
+
+kiwi_run_test('Kiwi_Plugin runs schema migrations once and persists schema version on first ensure call', function (): void {
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
+    $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
+
+    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->ensure_operator_lookup_callback_table();
+    $plugin->ensure_refund_callback_table();
+    $plugin->ensure_click_attribution_table();
+
+    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected schema migrations to run once per runtime when schema is outdated.');
+    kiwi_assert_same(
+        $schema_version,
+        $GLOBALS['kiwi_test_options'][$schema_option] ?? '',
+        'Expected schema migrations to persist the installed schema version.'
+    );
+});
+
+kiwi_run_test('Kiwi_Plugin skips schema migrations when installed version already matches', function (): void {
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
+    $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
+
+    $GLOBALS['kiwi_test_options'] = [
+        $schema_option => $schema_version,
+    ];
+
+    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->ensure_sales_table();
+    $plugin->ensure_nth_operational_tables();
+
+    kiwi_assert_same(0, $plugin->schema_migration_runs, 'Expected schema migrations to be skipped when the stored schema version matches.');
+});
+
+kiwi_run_test('Kiwi_Plugin throttles click attribution cleanup with transient lock', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $cleanup_lock_key = (string) $reflection->getConstant('CLICK_ATTR_CLEANUP_LOCK_KEY');
+
+    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->cleanup_limit = 321;
+
+    $plugin->cleanup_expired_click_attributions();
+    $plugin->cleanup_expired_click_attributions();
+
+    kiwi_assert_same([321], $plugin->cleanup_limits, 'Expected cleanup execution to be throttled while lock is active.');
+    kiwi_assert_same('1', $GLOBALS['kiwi_test_transients'][$cleanup_lock_key] ?? '', 'Expected cleanup throttle lock to be stored after first cleanup run.');
 });
 
 kiwi_run_test('Kiwi_Plugin exports HLR rows from the transient identified by batch_id', function (): void {
