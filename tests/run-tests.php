@@ -1586,7 +1586,7 @@ kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', 
             ],
         ],
         [
-            'fr_myjoyplay_approval' => [
+            'lp2-fr' => [
                 'backend_path' => '/lp/fr/myjoyplay',
             ],
         ],
@@ -1594,7 +1594,7 @@ kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', 
     );
 
     kiwi_assert_same('FR', $config->get_nth_service('nth_fr_one_off_jplay')['country'], 'Expected NTH service config to be returned by key.');
-    kiwi_assert_same('/lp/fr/myjoyplay', $config->get_landing_page('fr_myjoyplay_approval')['backend_path'], 'Expected landing page config to be returned by key.');
+    kiwi_assert_same('/lp/fr/myjoyplay', $config->get_landing_page('lp2-fr')['backend_path'], 'Expected landing page config to be returned by key.');
     kiwi_assert_same(240, $config->get_nth_submit_timeout(), 'Expected the configured NTH timeout to be returned.');
 });
 
@@ -1800,12 +1800,11 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
         [],
         [],
         [
-            'fr_myjoyplay_approval' => [
+            'lp2-fr' => [
                 'backend_path' => '/lp/fr/myjoyplay',
                 'dedicated_path' => '/',
-                'hostnames' => ['frlp1.joy-play.com'],
+                'hostnames' => ['frlp2.joy-play.com'],
                 'service_key' => 'nth_fr_one_off_jplay',
-                'template' => 'fr-myjoyplay-approval',
             ],
         ]
     );
@@ -1816,11 +1815,11 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     );
 
     $path_match = $router->resolve_request('backend.kiwimobile.de', '/lp/fr/myjoyplay');
-    $host_match = $router->resolve_request('frlp1.joy-play.com', '/');
+    $host_match = $router->resolve_request('frlp2.joy-play.com', '/');
     $no_match = $router->resolve_request('backend.kiwimobile.de', '/other');
 
-    kiwi_assert_same('fr_myjoyplay_approval', $path_match['landing_key'], 'Expected backend path matching to resolve the configured landing page.');
-    kiwi_assert_same('fr_myjoyplay_approval', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
+    kiwi_assert_same('lp2-fr', $path_match['landing_key'], 'Expected backend path matching to resolve the configured landing page.');
+    kiwi_assert_same('lp2-fr', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
 });
 
