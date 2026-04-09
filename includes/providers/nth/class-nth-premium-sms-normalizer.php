@@ -303,6 +303,14 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             ];
         }
 
+        if (preg_match('/^-?\d+$/', $value)) {
+            $numeric_status = $this->normalize_numeric_notification_status((int) $value);
+
+            if (is_array($numeric_status)) {
+                return $numeric_status;
+            }
+        }
+
         $success_values = ['0', '2', 'success', 'ok', 'delivered', 'delivery_success', 'deliverysuccess', 'paid', 'billed', 'charged'];
         $failure_values = ['1', 'failed', 'failure', 'error', 'delivery_failed', 'deliveryfailed', 'undelivered', 'rejected'];
         $pending_values = ['intermediate', 'pending', 'submitted', 'accepted', 'queued', 'processing', 'in_progress'];
@@ -336,6 +344,67 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'is_terminal' => false,
             'is_success' => false,
         ];
+    }
+
+    private function normalize_numeric_notification_status(int $code): ?array
+    {
+        if (in_array($code, [1, 3, 23], true)) {
+            return [
+                'status' => 'intermediate',
+                'is_terminal' => false,
+                'is_success' => false,
+            ];
+        }
+
+        if ($code === 2) {
+            return [
+                'status' => 'delivered',
+                'is_terminal' => true,
+                'is_success' => true,
+            ];
+        }
+
+        if ($code === 14) {
+            return [
+                'status' => 'presumably_delivered',
+                'is_terminal' => true,
+                'is_success' => true,
+            ];
+        }
+
+        if ($code === 24) {
+            return [
+                'status' => 'charged_not_delivered',
+                'is_terminal' => true,
+                'is_success' => true,
+            ];
+        }
+
+        if ($code === 25) {
+            return [
+                'status' => 'delivered_payment_risk',
+                'is_terminal' => true,
+                'is_success' => true,
+            ];
+        }
+
+        if ($code === 26) {
+            return [
+                'status' => 'provider_generated',
+                'is_terminal' => true,
+                'is_success' => false,
+            ];
+        }
+
+        if (in_array($code, [-3, -4, -5, -6, -9, -11, -12, -14, -20, -21, -28, -29, -31, -33, -34, -35, -36, -37, -38], true)) {
+            return [
+                'status' => 'failed',
+                'is_terminal' => true,
+                'is_success' => false,
+            ];
+        }
+
+        return null;
     }
 
     private function normalize_submit_status(string $raw_status, int $http_status): array
@@ -430,7 +499,7 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             return '';
         }
 
-        $parts = preg_split('/\s+/', $message_text);
+        $parts = preg_split('/[\s+]+/', $message_text);
 
         if (!is_array($parts) || empty($parts)) {
             return '';

@@ -262,6 +262,41 @@ Use this operation for:
 - billing outcome tracking
 - customer-side MT status synchronization
 
+
+### Common `messageStatus` values for `deliverReport`
+
+The following delivery-report status codes are used by NTH to communicate intermediate and final MT states.
+
+| Code | Text | Type | Description |
+|---|---|---|---|
+| `1` | Submitted | Intermediate | MT message submitted to provider (provider's system returns positive response to gateway's request). |
+| `2` | Delivered | Final | MT message delivered to mobile phone. |
+| `3` | In process | Intermediate | MT message submitted to provider, additional processing taking place on MNO side. |
+| `14` | Presumably delivered | Final | MT message is presumably delivered to mobile user. This status is set when failed notification is not received from provider in validity period and in case provider doesn't support successful delivery notifications. |
+| `23` | Submitted charged | Intermediate | MT message is successfully charged and submitted for delivery, but final delivery result is not yet known. |
+| `24` | Charged but not delivered | Final | MT message is successfully charged but message delivery to mobile device failed. Depending on the message content, customer still may deliver content to end user by other means, for example web. |
+| `25` | Delivered with payment risk | Final | MT message is successfully charged and delivered, but it will be paid out to NTH only if the end user does not complain to the operator within a defined period, for example 6 months. |
+| `26` | Provider generated message | Final | MT message generated and stored internally by NTH, representing a real message sent by other parties (aggregators, MNOs). Usually this is an `OptIn`, `Welcome`, or `Goodbye` message. Used for revenue/cost settlement and customer care. |
+| `-3` | Error | Final | Generic error. MT message is not successfully submitted to provider and will not be retried. |
+| `-4` | Provider error | Final | MT message cannot be submitted to the provider due to failure on the provider side. |
+| `-5` | Expired | Final | MT message validity period expired in the external system (provider). |
+| `-6` | Internally expired | Final | MT message validity period expired in the gateway. |
+| `-9` | Delivery failed | Final | MT message is not successfully delivered to the mobile user. |
+| `-11` | No response | Final | Message could not be delivered because the operator's SMSC is not responding. |
+| `-12` | Deleted | Final | MT message is deleted from SMSC and is not delivered to the mobile user. |
+| `-14` | Filter stopped | Final | MT message is permanently blocked by customer or provider filter on the gateway. |
+| `-20` | Invalid number | Final | MT message rejected by the provider because of incorrect message origin or mobile number. |
+| `-21` | Charging failed | Final | MT message charging failed. |
+| `-28` | Presumably expired | Final | This status is set when final notification is not received from provider in validity period for providers that do support delivery notifications. |
+| `-29` | Rejected | Final | Message rejected by SMSC. |
+| `-31` | Spam stopped | Final | MT message is permanently stopped as spam. |
+| `-33` | Message too long | Final | MT message text is too long. This status is set on the provider interface before the message is sent to the provider. |
+| `-34` | Insufficient amount | Final | MT message not charged because the external billing platform responded that the user has insufficient amount on the account. |
+| `-35` | Charging unknown MSISDN | Final | MT message not charged because the external billing platform responded that the MSISDN is not a user of the MNO in question. |
+| `-36` | Charging limit exceeded | Final | MT message not charged because the external billing platform responded that the billing limit was exceeded. |
+| `-37` | MSISDN blacklisted | Final | MT message not charged nor delivered because the MSISDN is blacklisted in the provider system. |
+| `-38` | MSISDN is ported | Final | MT message not charged nor delivered because the MSISDN is ported to another provider. |
+
 ## deliverEvent
 
 Purpose:

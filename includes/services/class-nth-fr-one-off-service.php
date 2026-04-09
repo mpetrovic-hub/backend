@@ -169,10 +169,10 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'last_event_id' => (int) ($blocked_event_record['row']['id'] ?? 0),
                 'current_status' => (string) $blocked_event['status'],
                 'is_terminal' => 1,
-                'meta_json' => [
+                'meta_json' => $this->merge_transaction_meta($transaction, [
                     'initial_event' => $normalized_event,
                     'blocked_event' => $blocked_event,
-                ],
+                ]),
             ]);
 
             return [
@@ -195,10 +195,10 @@ class Kiwi_Nth_Fr_One_Off_Service
             'external_message_id' => (string) ($submit_event['external_message_id'] ?? ''),
             'current_status' => (string) ($submit_event['status'] ?? 'mt_submit_failed'),
             'is_terminal' => !empty($submit_event['is_terminal']) ? 1 : 0,
-            'meta_json' => [
+            'meta_json' => $this->merge_transaction_meta($transaction, [
                 'initial_event' => $normalized_event,
                 'submit_event' => $submit_event,
-            ],
+            ]),
         ]);
 
         $transaction_after_submit = $this->flow_transaction_repository->get_by_id($transaction_id);
@@ -528,7 +528,7 @@ class Kiwi_Nth_Fr_One_Off_Service
             return '';
         }
 
-        $parts = preg_split('/\s+/', $message_text);
+        $parts = preg_split('/[\s+]+/', $message_text);
 
         if (!is_array($parts) || count($parts) < 2) {
             return '';
@@ -583,12 +583,38 @@ class Kiwi_Nth_Fr_One_Off_Service
         $transaction_id = trim($transaction_id);
 
         if ($transaction_id === '') {
-            return $this->generate_reference('nth');
+            $transaction_id = $this->generate_reference('txn');
         }
 
         $suffix = substr(md5(uniqid('', true)), 0, 12);
 
         return substr($transaction_id . '-' . $suffix, 0, 100);
+    }
+
+    private function merge_transaction_meta(array $transaction, array $new_fields): array
+    {
+        $existing_meta = $this->decode_meta_json($transaction['meta_json'] ?? null);
+
+        if (!is_array($existing_meta)) {
+            $existing_meta = [];
+        }
+
+        return array_merge($existing_meta, $new_fields);
+    }
+
+    private function decode_meta_json($value): ?array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        $decoded = json_decode($value, true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 
     private function extract_transaction_id_from_flow_reference(string $flow_reference): string

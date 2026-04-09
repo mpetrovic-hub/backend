@@ -2250,7 +2250,7 @@ kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer normalizes alias-heavy MO payload
     $normalized = $normalizer->normalize_callback('nth_fr_one_off_jplay', 'mo', [
         'Encrypted_MSISDN' => 'enc-123',
         'Business_Number' => '84072',
-        'Message' => 'JPLAY',
+        'Message' => 'JPLAY+txn_alias_12345678',
         'NWC' => '20801',
         'Operator' => 'Orange',
     ]);
@@ -2284,6 +2284,7 @@ kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer maps messageRef and numeric messa
         'businessNumber' => '84072',
         'messageStatus' => '2',
         'messageRef' => 'txn_51592fc6c87f44ec910f06a25859806a-42a4f301a24e',
+        'sessionId' => '9292CHA1571000000000',
         'messageId' => 'msg-200',
     ]);
 
@@ -2295,6 +2296,45 @@ kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer maps messageRef and numeric messa
     kiwi_assert_same('delivered', $normalized['status'] ?? '', 'Expected messageStatus=2 to normalize as delivered.');
     kiwi_assert_true(!empty($normalized['is_terminal']), 'Expected messageStatus=2 notification to be terminal.');
     kiwi_assert_true(!empty($normalized['is_success']), 'Expected messageStatus=2 notification to be successful.');
+});
+
+kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer maps intermediate and failure numeric messageStatus values', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+
+    $intermediate = $normalizer->normalize_callback('nth_fr_one_off_jplay', 'notification', [
+        'command' => 'deliverReport',
+        'businessNumber' => '84072',
+        'messageStatus' => '1',
+        'messageRef' => 'txn_intermediate_1',
+    ]);
+    kiwi_assert_same('intermediate', $intermediate['status'] ?? '', 'Expected messageStatus=1 to remain intermediate.');
+    kiwi_assert_true(empty($intermediate['is_terminal']), 'Expected messageStatus=1 not to be terminal.');
+    kiwi_assert_true(empty($intermediate['is_success']), 'Expected messageStatus=1 not to be successful.');
+
+    $failed = $normalizer->normalize_callback('nth_fr_one_off_jplay', 'notification', [
+        'command' => 'deliverReport',
+        'businessNumber' => '84072',
+        'messageStatus' => '-21',
+        'messageRef' => 'txn_failed_1',
+    ]);
+    kiwi_assert_same('failed', $failed['status'] ?? '', 'Expected messageStatus=-21 to map to failed.');
+    kiwi_assert_true(!empty($failed['is_terminal']), 'Expected messageStatus=-21 to be terminal.');
+    kiwi_assert_true(empty($failed['is_success']), 'Expected messageStatus=-21 to be unsuccessful.');
 });
 
 kiwi_run_test('Kiwi_Nth_Client rejects submit requests with missing required routing data before transport', function (): void {
@@ -2507,7 +2547,8 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
     $service->handle_inbound_mo('nth_fr_one_off_jplay', [
         'Encrypted_MSISDN' => 'enc-mo-bind-1',
         'Business_Number' => '84072',
-        'Message' => 'JPLAY txn_mocorr_12345678',
+        'Message' => 'JPLAY+txn_mocorr_12345678',
+        'keyword' => 'JPLAY',
         'NWC' => '20801',
         'Operator' => 'Orange',
     ]);
@@ -2516,6 +2557,13 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
     kiwi_assert_true(
         strpos((string) ($client->calls[0]['transaction']['flow_reference'] ?? ''), 'txn_mocorr_12345678-') === 0,
         'Expected provider flow_reference to be rooted in MO-supplied transaction_id.'
+    );
+    $stored_meta = $transaction_repository->rows[1]['meta_json'] ?? null;
+    $stored_meta = is_array($stored_meta) ? $stored_meta : [];
+    kiwi_assert_same(
+        'txn_mocorr_12345678',
+        (string) ($stored_meta['attribution_transaction_id'] ?? ''),
+        'Expected attribution_transaction_id to persist in transaction meta after submit updates.'
     );
 
     $notification = $service->handle_notification('nth_fr_one_off_jplay', [
@@ -2531,6 +2579,66 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
     kiwi_assert_true(
         strpos($postback_dispatcher->calls[0], 'clickid=aff%3Amo%3Atxid%3A1') !== false,
         'Expected MO-correlated attribution to resolve original clickid for postback dispatch.'
+    );
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service uses txn-rooted flow references when MO transaction_id is missing', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-fallback-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-fallback-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+    ]);
+
+    kiwi_assert_true($result['success'], 'Expected fallback MO path to continue through MT submit.');
+    kiwi_assert_same(1, count($client->calls), 'Expected one MT submit attempt in fallback flow-reference mode.');
+    $flow_reference = (string) ($client->calls[0]['transaction']['flow_reference'] ?? '');
+    kiwi_assert_true(
+        strpos($flow_reference, 'txn_') === 0,
+        'Expected fallback flow_reference to use txn_ prefix to stay compatible with shared transaction_id correlation.'
     );
 });
 

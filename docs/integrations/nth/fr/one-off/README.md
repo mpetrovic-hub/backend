@@ -346,6 +346,8 @@ For this flow, NTH accepts keyword suffixes (configured as `Jplay*`), for exampl
 JPLAY txn_abcd1234
 ```
 
+The callback parser accepts both whitespace and `+` separators in MO content when extracting internal transaction identifiers (for example `JPLAY+txn_abcd1234`).
+
 The full MO content is forwarded to backend callback handling and can be used to recover internal correlation identifiers.
 
 FR-specific note:
@@ -389,6 +391,7 @@ Outbound affiliate postbacks are handled by shared attribution capability after 
 - only confirmed successful terminal conversions are eligible for postback dispatch
 - attribution rows carry an internal server-generated `transaction_id` captured at landing entry
 - NTH outbound `reference` values are derived from that `transaction_id` (with a uniqueness suffix) when a pending attribution row is found
+- if no transaction id can be resolved from attribution or MO content, the fallback NTH flow reference still uses a generated `txn_...` root (instead of provider-only prefixes) to keep shared sales correlation consistent
 - successful one-off sales persist this correlation root into `wp_kiwi_sales.transaction_id`
 - resolver correlation uses normalized stable references (`flow_reference`, message/reference IDs, session/external refs)
 - duplicate callback deliveries must not emit duplicate postbacks once a postback is marked sent
