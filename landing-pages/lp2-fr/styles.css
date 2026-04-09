@@ -31,10 +31,11 @@ p {
 
 .cta {
   display: inline-block;
+  margin: 20px 0;
   width: 85%;
   height: 50px;
   line-height: 50px;
-  padding: 14px 8px;
+  /* padding: 14px 8px; */
   background: #9effae;
   color: #1f1f1f;
   font-size: 22px;
@@ -45,8 +46,8 @@ p {
 
 .price {
   margin-top: 16px;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: bold;
 }
 
 .disclaimer {
