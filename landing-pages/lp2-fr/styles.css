@@ -8,7 +8,7 @@ body {
 .lp-container {
   max-width: 440px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 4%;
   background: url('https://kiwimobile.de/wp-content/uploads/2025/05/Joyplay_background_fullscreen_vertical.png') no-repeat center -25px;
   text-align: center;
 }
@@ -20,23 +20,27 @@ body {
 }
 
 h1 {
-  font-size: 20px;
+  font-size: 18px;
   margin: 8px 0 8px;
 }
 
 p {
+  font-size: 14px;
   margin: 0 0 16px;
 }
 
 .cta {
   display: inline-block;
-  width: 90%;
+  width: 85%;
+  height: 50px;
+  line-height: 50px;
   padding: 14px 8px;
   background: #9effae;
   color: #1f1f1f;
-  font-weight: 700;
+  font-size: 22px;
+  /* font-weight: 700; */
   text-decoration: none;
-  border-radius: 10px;
+  border-radius: 14px;
 }
 
 .price {
