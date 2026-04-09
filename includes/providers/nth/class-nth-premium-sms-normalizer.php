@@ -108,6 +108,8 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'request_id',
             'requestid',
             'reference',
+            'message_ref',
+            'messageref',
             'ref',
             'session_id',
             'sessionid',
@@ -134,6 +136,8 @@ class Kiwi_Nth_Premium_Sms_Normalizer
         ]);
 
         $raw_status = $this->first_non_empty($payload, [
+            'message_status',
+            'messagestatus',
             'status',
             'delivery_status',
             'deliverystatus',
@@ -299,7 +303,7 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             ];
         }
 
-        $success_values = ['0', 'success', 'ok', 'delivered', 'delivery_success', 'deliverysuccess', 'paid', 'billed', 'charged'];
+        $success_values = ['0', '2', 'success', 'ok', 'delivered', 'delivery_success', 'deliverysuccess', 'paid', 'billed', 'charged'];
         $failure_values = ['1', 'failed', 'failure', 'error', 'delivery_failed', 'deliveryfailed', 'undelivered', 'rejected'];
         $pending_values = ['intermediate', 'pending', 'submitted', 'accepted', 'queued', 'processing', 'in_progress'];
 

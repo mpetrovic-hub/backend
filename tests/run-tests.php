@@ -2261,6 +2261,42 @@ kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer normalizes alias-heavy MO payload
     kiwi_assert_same('received', $normalized['status'], 'Expected MO callbacks to normalize to received status.');
 });
 
+kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer maps messageRef and numeric messageStatus=2 as confirmed delivery', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+
+    $normalized = $normalizer->normalize_callback('nth_fr_one_off_jplay', 'notification', [
+        'command' => 'deliverReport',
+        'businessNumber' => '84072',
+        'messageStatus' => '2',
+        'messageRef' => 'txn_51592fc6c87f44ec910f06a25859806a-42a4f301a24e',
+        'messageId' => 'msg-200',
+    ]);
+
+    kiwi_assert_same(
+        'txn_51592fc6c87f44ec910f06a25859806a-42a4f301a24e',
+        $normalized['external_request_id'] ?? '',
+        'Expected deliverReport messageRef to normalize as external_request_id for transaction correlation.'
+    );
+    kiwi_assert_same('delivered', $normalized['status'] ?? '', 'Expected messageStatus=2 to normalize as delivered.');
+    kiwi_assert_true(!empty($normalized['is_terminal']), 'Expected messageStatus=2 notification to be terminal.');
+    kiwi_assert_true(!empty($normalized['is_success']), 'Expected messageStatus=2 notification to be successful.');
+});
+
 kiwi_run_test('Kiwi_Nth_Client rejects submit requests with missing required routing data before transport', function (): void {
     $config = new Kiwi_Test_Config(
         100,

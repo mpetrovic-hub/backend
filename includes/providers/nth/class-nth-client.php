@@ -81,6 +81,7 @@ class Kiwi_Nth_Client
         }
 
         $body = $this->resolve_template($body_template, $placeholder_values);
+        $body = $this->normalize_submit_message_body($body);
 
         if (empty($body)) {
             return [
@@ -134,7 +135,7 @@ class Kiwi_Nth_Client
             'price' => '{price}',
             'nwc' => '{nwc}',
             'encoding' => '{encoding}',
-            'reference' => '{flow_reference}',
+            'messageRef' => '{flow_reference}',
         ];
     }
 
@@ -156,6 +157,26 @@ class Kiwi_Nth_Client
         }
 
         return $resolved;
+    }
+
+    private function normalize_submit_message_body(array $body): array
+    {
+        if (array_key_exists('message_ref', $body) && !array_key_exists('messageRef', $body)) {
+            $body['messageRef'] = (string) $body['message_ref'];
+            unset($body['message_ref']);
+        }
+
+        if (array_key_exists('messageref', $body) && !array_key_exists('messageRef', $body)) {
+            $body['messageRef'] = (string) $body['messageref'];
+            unset($body['messageref']);
+        }
+
+        if (array_key_exists('reference', $body) && !array_key_exists('messageRef', $body)) {
+            $body['messageRef'] = (string) $body['reference'];
+            unset($body['reference']);
+        }
+
+        return $body;
     }
 
     private function validate_required_placeholder_values(array $placeholder_values): array
