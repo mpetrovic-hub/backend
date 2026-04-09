@@ -57,6 +57,7 @@ Examples of configuration types that may exist there:
 - merchant identifiers
 - order / service identifiers
 - service-specific configuration arrays
+- callback debug logging toggles
 
 ## Affiliate postback and attribution configuration
 
@@ -84,6 +85,23 @@ Expected keys:
 - `KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT`
 
 Do not store real values for these secrets in repository docs.
+
+## NTH callback logging toggles
+
+To debug callback delivery to:
+- `POST /wp-json/kiwi-backend/v1/nth-callback`
+
+you can enable:
+
+- `KIWI_NTH_CALLBACK_LOGGING_ENABLED`
+  - enables route-level callback logs (request hit, resolution, handling result)
+- `KIWI_NTH_CALLBACK_PAYLOAD_LOGGING_ENABLED`
+  - includes sanitized callback payload values in logs
+  - sensitive keys (for example `password`, `secret`, `token`, `digest`, `signature`, `auth`) are redacted
+
+If these constants are not defined:
+- callback logging defaults to `KIWI_DEBUG`
+- payload logging defaults to callback-logging setting
 
 ## Environment note
 

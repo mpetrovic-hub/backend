@@ -314,6 +314,24 @@ class Kiwi_Config
             : 180;
     }
 
+    public function is_nth_callback_logging_enabled(): bool
+    {
+        if (defined('KIWI_NTH_CALLBACK_LOGGING_ENABLED')) {
+            return (bool) KIWI_NTH_CALLBACK_LOGGING_ENABLED;
+        }
+
+        return $this->is_debug();
+    }
+
+    public function is_nth_callback_payload_logging_enabled(): bool
+    {
+        if (defined('KIWI_NTH_CALLBACK_PAYLOAD_LOGGING_ENABLED')) {
+            return (bool) KIWI_NTH_CALLBACK_PAYLOAD_LOGGING_ENABLED;
+        }
+
+        return $this->is_nth_callback_logging_enabled();
+    }
+
     public function get_click_attribution_cookie_name(): string
     {
         return defined('KIWI_CLICK_ATTRIBUTION_COOKIE_NAME')

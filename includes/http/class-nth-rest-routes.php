@@ -31,20 +31,46 @@ class Kiwi_Nth_Rest_Routes
 
     public function handle_callback(WP_REST_Request $request): WP_REST_Response
     {
+        $trace_id = $this->build_trace_id();
         $params = $this->normalize_request_params($request);
+        $callback_type = $this->resolve_callback_type($params);
         $service_key = $this->resolve_service_key($params);
 
+        $this->log_callback('incoming', [
+            'trace_id' => $trace_id,
+            'callback_type' => $callback_type,
+            'service_key' => $service_key,
+            'remote_ip' => $this->server_value('REMOTE_ADDR'),
+            'request_uri' => $this->server_value('REQUEST_URI'),
+            'payload' => $this->config->is_nth_callback_payload_logging_enabled()
+                ? $this->sanitize_for_log($params)
+                : [],
+            'payload_keys' => array_values(array_map('strval', array_keys($params))),
+        ]);
+
         if ($service_key === '') {
+            $this->log_callback('rejected', [
+                'trace_id' => $trace_id,
+                'reason' => 'service_key_unresolved',
+            ]);
+
             return $this->acknowledge([
                 'success' => false,
                 'message' => 'Unable to resolve NTH service key.',
             ], '');
         }
 
-        $callback_type = $this->resolve_callback_type($params);
         $result = $callback_type === 'notification'
             ? $this->service->handle_notification($service_key, $params)
             : $this->service->handle_inbound_mo($service_key, $params);
+
+        $this->log_callback('handled', [
+            'trace_id' => $trace_id,
+            'service_key' => $service_key,
+            'callback_type' => $callback_type,
+            'success' => !empty($result['success']),
+            'message' => substr(trim((string) ($result['message'] ?? '')), 0, 200),
+        ]);
 
         return $this->acknowledge($result, $service_key);
     }
@@ -210,5 +236,71 @@ class Kiwi_Nth_Rest_Routes
         $response->header('X-Kiwi-Service-Key', $service_key);
 
         return $response;
+    }
+
+    private function build_trace_id(): string
+    {
+        if (function_exists('wp_generate_uuid4')) {
+            return str_replace('-', '', (string) wp_generate_uuid4());
+        }
+
+        return substr(sha1(uniqid('', true)), 0, 32);
+    }
+
+    private function log_callback(string $stage, array $context = []): void
+    {
+        if (!$this->config->is_nth_callback_logging_enabled()) {
+            return;
+        }
+
+        $encoded = function_exists('wp_json_encode')
+            ? wp_json_encode($this->sanitize_for_log($context))
+            : json_encode($this->sanitize_for_log($context));
+        $encoded = is_string($encoded) ? $encoded : '{}';
+
+        error_log('[kiwi-nth-callback] ' . $stage . ' ' . $encoded);
+    }
+
+    private function sanitize_for_log($value)
+    {
+        if (is_array($value)) {
+            $sanitized = [];
+
+            foreach ($value as $key => $child) {
+                $normalized_key = strtolower((string) $key);
+
+                if (preg_match('/(password|secret|token|digest|signature|auth)/', $normalized_key)) {
+                    $sanitized[$key] = '[redacted]';
+                    continue;
+                }
+
+                $sanitized[$key] = $this->sanitize_for_log($child);
+            }
+
+            return $sanitized;
+        }
+
+        if (is_object($value)) {
+            return '[object]';
+        }
+
+        if (is_bool($value) || is_int($value) || is_float($value) || $value === null) {
+            return $value;
+        }
+
+        $text = trim((string) $value);
+
+        if ($text === '') {
+            return '';
+        }
+
+        return strlen($text) > 500
+            ? substr($text, 0, 500) . '...[truncated]'
+            : $text;
+    }
+
+    private function server_value(string $key): string
+    {
+        return isset($_SERVER[$key]) ? trim((string) $_SERVER[$key]) : '';
     }
 }
