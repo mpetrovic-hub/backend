@@ -93,6 +93,17 @@ class Kiwi_Nth_Client
             ];
         }
 
+        $this->log_submit('outgoing', [
+            'service_key' => $service_key,
+            'endpoint' => $endpoint,
+            'timeout_seconds' => $this->config->get_nth_submit_timeout(),
+            'flow_reference' => (string) ($placeholder_values['flow_reference'] ?? ''),
+            'request_keys' => array_values(array_map('strval', array_keys($body))),
+            'request_body' => $this->config->is_nth_callback_payload_logging_enabled()
+                ? $body
+                : [],
+        ]);
+
         $response = wp_remote_post($endpoint, [
             'timeout' => $this->config->get_nth_submit_timeout(),
             'headers' => [
@@ -102,6 +113,15 @@ class Kiwi_Nth_Client
         ]);
 
         if (is_wp_error($response)) {
+            $this->log_submit('response_error', [
+                'service_key' => $service_key,
+                'endpoint' => $endpoint,
+                'flow_reference' => (string) ($placeholder_values['flow_reference'] ?? ''),
+                'status_code' => 0,
+                'success' => false,
+                'error' => $response->get_error_message(),
+            ]);
+
             return [
                 'success' => false,
                 'status_code' => 0,
@@ -113,9 +133,21 @@ class Kiwi_Nth_Client
 
         $status_code = (int) wp_remote_retrieve_response_code($response);
         $response_body = (string) wp_remote_retrieve_body($response);
+        $success = $status_code >= 200 && $status_code < 300;
+
+        $this->log_submit('response', [
+            'service_key' => $service_key,
+            'endpoint' => $endpoint,
+            'flow_reference' => (string) ($placeholder_values['flow_reference'] ?? ''),
+            'status_code' => $status_code,
+            'success' => $success,
+            'response_body' => $this->config->is_nth_callback_payload_logging_enabled()
+                ? $response_body
+                : '',
+        ]);
 
         return [
-            'success' => $status_code >= 200 && $status_code < 300,
+            'success' => $success,
             'status_code' => $status_code,
             'error' => '',
             'request' => $body,
@@ -202,5 +234,79 @@ class Kiwi_Nth_Client
         }
 
         return $missing_fields;
+    }
+
+    private function log_submit(string $stage, array $context = []): void
+    {
+        if (!$this->config->is_nth_callback_logging_enabled()) {
+            return;
+        }
+
+        $encoded = function_exists('wp_json_encode')
+            ? wp_json_encode($this->sanitize_for_log($context))
+            : json_encode($this->sanitize_for_log($context));
+        $encoded = is_string($encoded) ? $encoded : '{}';
+
+        error_log('[kiwi-nth-submit] ' . $stage . ' ' . $encoded);
+    }
+
+    private function sanitize_for_log($value)
+    {
+        if (is_array($value)) {
+            $sanitized = [];
+
+            foreach ($value as $key => $child) {
+                $normalized_key = strtolower((string) $key);
+
+                if (preg_match('/(password|secret|token|digest|signature|auth)/', $normalized_key)) {
+                    $sanitized[$key] = '[redacted]';
+                    continue;
+                }
+
+                if (preg_match('/(msisdn|subscriber|phone|mobile)/', $normalized_key)) {
+                    $sanitized[$key] = $this->mask_identifier((string) $child);
+                    continue;
+                }
+
+                $sanitized[$key] = $this->sanitize_for_log($child);
+            }
+
+            return $sanitized;
+        }
+
+        if (is_object($value)) {
+            return '[object]';
+        }
+
+        if (is_bool($value) || is_int($value) || is_float($value) || $value === null) {
+            return $value;
+        }
+
+        $text = trim((string) $value);
+
+        if ($text === '') {
+            return '';
+        }
+
+        return strlen($text) > 500
+            ? substr($text, 0, 500) . '...[truncated]'
+            : $text;
+    }
+
+    private function mask_identifier(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $length = strlen($value);
+
+        if ($length <= 4) {
+            return str_repeat('*', $length);
+        }
+
+        return substr($value, 0, 2) . str_repeat('*', $length - 4) . substr($value, -2);
     }
 }

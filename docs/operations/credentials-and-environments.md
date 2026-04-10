@@ -91,6 +91,10 @@ Do not store real values for these secrets in repository docs.
 To debug callback delivery to:
 - `POST /wp-json/kiwi-backend/v1/nth-callback`
 
+and outgoing NTH `submitMessage` transport attempts:
+- submit request logs use prefix `[kiwi-nth-submit] outgoing`
+- submit response logs use prefix `[kiwi-nth-submit] response` (or `response_error`)
+
 you can enable:
 
 - `KIWI_NTH_CALLBACK_LOGGING_ENABLED`
