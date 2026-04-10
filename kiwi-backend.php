@@ -2,7 +2,7 @@
 /*
 Plugin Name: Kiwi Backend
 Description: Internal backend tools for Kiwi mVAS services (HLR, SMS, etc.)
-Version: 0.1
+Version: 0.1.2
 Author: Kiwi
 */
 

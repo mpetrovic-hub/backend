@@ -156,14 +156,15 @@ command=deliverMessage&messageId=12345&msisdn=00414411112222&businessNumber=9292
 
 Observed generic parameters in the MO delivery callback:
 - `command=deliverMessage`
-- `messageId`
-- `msisdn`
-- `businessNumber`
-- `keyword`
-- `content`
-- `operatorCode`
-- `sessionId`
-- `time`
+- `messageId` -> (string) Unique ID assigned to MO message in NTH system (used as reference for analytical purposes).
+- `msisdn` -> (string) Message sender's msisdn, in international format with leading zeros (for example: 00414411112222). In some countries, due to end-user privacy protection rules, msisdn may be encrypted by mobile operator and as such forwarded in this parameter.
+- `businessNumber` -> (string) Business number MO message was sent to (Shortcode)
+- `time` -> (string) Datetime of MO message reception at NTH system, in format yyyy-MM-dd HH:mm:ss, CET timezone
+- `keyword` -> (string) Service keyword matched for MO SMS content, can be used by the Customer to distinguish between services if single receiving application is handling multiple services/keywords.
+- `content` -> (string) MO SMS message text. If MO message is concatenated (due to message length or character encoding) this parameter contains text of all message parts.
+- `operatorCode` -> (string) Mobile number operator's network code (provided by NTH), used as MNO identifier, MT traffic routing and number portability between mobile operators.
+- `sessionId` -> (string) Unique ID assigned to this particular session in NTH system
+- `time` -> (string) Datetime of MO message reception at NTH system, in format yyyy-MM-dd HH:mm:ss, CET timezone.
 
 NTH clarified that the same parameter set is typically sent, while the values vary by market and service.
 
@@ -194,6 +195,11 @@ Sample request body:
 ```text
 command=submitMessage&username=user1&password=pass1&msisdn=00414411112222&businessNumber=9292&content=MT+message+text&price=100&sessionId=9292CHA1571000000000
 ```
+
+Repository adapter note:
+- outbound `submitMessage` templates are validated in strict mode.
+- legacy aliases are rejected (`operation`, `message`, `shortcode`, `reference`, `message_ref`, `messageref`).
+- use documented keys only: `command`, `content`, `businessNumber`, `messageRef`.
 
 Sample XML response:
 ```xml

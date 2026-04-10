@@ -2371,6 +2371,55 @@ kiwi_run_test('Kiwi_Nth_Client rejects submit requests with missing required rou
     kiwi_assert_true(strpos($response['error'], 'nwc') !== false, 'Expected the client validation error to call out the missing NWC field.');
 });
 
+kiwi_run_test('Kiwi_Nth_Client rejects legacy submit template keys in strict mode', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'mt_submission_url' => 'https://premium.mobile-gw.com:9443',
+                'username' => 'user',
+                'password' => 'pass',
+                'shortcode' => '84072',
+                'price' => 450,
+                'submit_message_body' => [
+                    'operation' => 'submitMessage',
+                    'username' => '{username}',
+                    'password' => '{password}',
+                    'msisdn' => '{subscriber_reference}',
+                    'shortcode' => '{shortcode}',
+                    'message' => '{message_text}',
+                    'price' => '{price}',
+                    'nwc' => '{nwc}',
+                    'encoding' => '{encoding}',
+                    'reference' => '{flow_reference}',
+                ],
+            ],
+        ]
+    );
+    $client = new Kiwi_Nth_Client($config);
+
+    $response = $client->submit_message('nth_fr_one_off_jplay', [
+        'flow_reference' => 'txn_1bdac2bce5f0459a-342be0d2db7e',
+        'subscriber_reference' => '1000000111043765',
+        'shortcode' => '84072',
+        'message_text' => 'Merci',
+        'price' => 450,
+        'nwc' => '20820',
+    ]);
+
+    kiwi_assert_true(!$response['success'], 'Expected strict submit template validation to reject legacy key aliases.');
+    kiwi_assert_true(
+        strpos((string) ($response['error'] ?? ''), 'Unsupported legacy NTH submitMessage template keys') !== false,
+        'Expected strict validation error to explain that legacy keys are no longer accepted.'
+    );
+});
+
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for duplicate MO callbacks', function (): void {
     $config = new Kiwi_Test_Config(
         100,

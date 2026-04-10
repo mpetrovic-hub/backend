@@ -93,6 +93,29 @@ class Kiwi_Nth_Client
             ];
         }
 
+        $template_contract_error = $this->validate_submit_message_body_contract($body);
+
+        if ($template_contract_error !== '') {
+            $this->log_submit('validation_error', [
+                'service_key' => $service_key,
+                'endpoint' => $endpoint,
+                'flow_reference' => (string) ($placeholder_values['flow_reference'] ?? ''),
+                'error' => $template_contract_error,
+                'request_keys' => array_values(array_map('strval', array_keys($body))),
+                'request_body' => $this->config->is_nth_callback_payload_logging_enabled()
+                    ? $body
+                    : [],
+            ]);
+
+            return [
+                'success' => false,
+                'status_code' => 0,
+                'error' => $template_contract_error,
+                'request' => $body,
+                'body' => '',
+            ];
+        }
+
         $this->log_submit('outgoing', [
             'service_key' => $service_key,
             'endpoint' => $endpoint,
@@ -158,12 +181,12 @@ class Kiwi_Nth_Client
     private function get_default_submit_message_body(): array
     {
         return [
-            'operation' => 'submitMessage',
+            'command' => 'submitMessage',
             'username' => '{username}',
             'password' => '{password}',
             'msisdn' => '{subscriber_reference}',
-            'shortcode' => '{shortcode}',
-            'message' => '{message_text}',
+            'businessNumber' => '{shortcode}',
+            'content' => '{message_text}',
             'price' => '{price}',
             'nwc' => '{nwc}',
             'encoding' => '{encoding}',
@@ -193,22 +216,53 @@ class Kiwi_Nth_Client
 
     private function normalize_submit_message_body(array $body): array
     {
-        if (array_key_exists('message_ref', $body) && !array_key_exists('messageRef', $body)) {
-            $body['messageRef'] = (string) $body['message_ref'];
-            unset($body['message_ref']);
-        }
-
-        if (array_key_exists('messageref', $body) && !array_key_exists('messageRef', $body)) {
-            $body['messageRef'] = (string) $body['messageref'];
-            unset($body['messageref']);
-        }
-
-        if (array_key_exists('reference', $body) && !array_key_exists('messageRef', $body)) {
-            $body['messageRef'] = (string) $body['reference'];
-            unset($body['reference']);
-        }
-
         return $body;
+    }
+
+    private function validate_submit_message_body_contract(array $body): string
+    {
+        $legacy_keys = [
+            'operation',
+            'message',
+            'shortcode',
+            'reference',
+            'message_ref',
+            'messageref',
+        ];
+        $present_legacy_keys = [];
+
+        foreach ($legacy_keys as $legacy_key) {
+            if (array_key_exists($legacy_key, $body)) {
+                $present_legacy_keys[] = $legacy_key;
+            }
+        }
+
+        if (!empty($present_legacy_keys)) {
+            return 'Unsupported legacy NTH submitMessage template keys: '
+                . implode(', ', $present_legacy_keys)
+                . '. Use command/content/businessNumber/messageRef.';
+        }
+
+        $required_keys = ['command', 'content', 'businessNumber', 'messageRef'];
+        $missing_keys = [];
+
+        foreach ($required_keys as $required_key) {
+            if (!array_key_exists($required_key, $body) || trim((string) $body[$required_key]) === '') {
+                $missing_keys[] = $required_key;
+            }
+        }
+
+        if (!empty($missing_keys)) {
+            return 'NTH submitMessage body missing required keys: ' . implode(', ', $missing_keys) . '.';
+        }
+
+        $command = strtolower(trim((string) ($body['command'] ?? '')));
+
+        if ($command !== 'submitmessage') {
+            return 'NTH submitMessage body has invalid command value. Expected submitMessage.';
+        }
+
+        return '';
     }
 
     private function validate_required_placeholder_values(array $placeholder_values): array
@@ -219,7 +273,6 @@ class Kiwi_Nth_Client
             'nwc',
             'password',
             'price',
-            'shortcode',
             'subscriber_reference',
             'username',
         ];
