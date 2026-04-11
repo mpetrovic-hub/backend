@@ -1,0 +1,135 @@
+# Landing Page Logic (Operations)
+
+This runbook describes how landing pages work in runtime, which configuration controls them, and how to operate them safely in production.
+
+This file is intentionally broader than migration only. Migration steps remain as a short appendix.
+
+## Runtime model
+
+Landing pages are discovered from `landing-pages/` and resolved by request path and host metadata.
+
+Each page folder must follow the filesystem contract:
+
+- folder format: `lp<version>-<country>`
+- required files:
+  - `index.html`
+  - `styles.css`
+  - `integration.php`
+- `integration.php` links page routing to service/flow/provider docs
+
+Business logic is centralized in plugin services. Landing-page folders are presentation plus metadata only.
+
+## Request resolution and rendering
+
+At runtime, the router:
+
+1. Resolves landing page by `backend_path` or dedicated `hostnames` + `dedicated_path`.
+2. Creates/reads a landing session token (`kiwi_landing_session` cookie).
+3. Captures click attribution when `clickid` is present, stores it server-side, and sets an opaque tracking token cookie (`kiwi_tracking_token`).
+4. Builds primary CTA centrally (provider adapter), then injects `{{KIWI_PRIMARY_CTA_HREF}}` in HTML.
+5. Renders filesystem HTML and wires `styles.css`.
+
+For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic.
+
+## Conversion and attribution behavior
+
+High-level flow:
+
+1. Landing captures attribution context server-side.
+2. Provider callbacks are normalized at provider boundary.
+3. Confirmed conversions are resolved against attribution state using stable references (transaction/message/session/external refs).
+4. Successful one-off sales are persisted in `wp_kiwi_sales`.
+5. Affiliate postback dispatch is triggered only for confirmed conversions and only once after `postback_sent_at` is set.
+
+Important boundary:
+
+- Incoming provider callback validation is provider-specific.
+- Outgoing affiliate secret/signature applies only to outbound postbacks.
+
+## Key tables and what they mean
+
+- `wp_kiwi_click_attributions`
+  - temporary server-side attribution state
+  - click ID, internal `transaction_id`, refs, postback audit, TTL expiry
+
+- `wp_kiwi_nth_events`
+  - normalized inbound/outbound NTH event log with dedupe
+
+- `wp_kiwi_nth_flow_transactions`
+  - FR one-off flow transaction lifecycle and external references
+
+- `wp_kiwi_sales`
+  - confirmed sale records (including `transaction_id`)
+
+## Configuration switches
+
+### Landing-page loading
+
+- `KIWI_LANDING_PAGES_ROOT`
+  - optional filesystem root override (default: `<plugin-root>/landing-pages`)
+
+- `KIWI_LANDING_PAGES_FILESYSTEM_ENABLED`
+  - enable filesystem discovery (default: `true`)
+
+- `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED`
+  - allow legacy `KIWI_LANDING_PAGES` fallback when key is missing in filesystem registry (default: `true`)
+
+### Attribution and postbacks
+
+- `KIWI_CLICK_ATTRIBUTION_COOKIE_NAME`
+- `KIWI_CLICK_ATTRIBUTION_CLICK_ID_KEYS`
+- `KIWI_CLICK_ATTRIBUTION_TTL_SECONDS`
+- `KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT`
+- `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
+- `KIWI_AFFILIATE_POSTBACK_SECRET`
+- `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`
+- `KIWI_AFFILIATE_POSTBACK_SIGNATURE_ALGORITHM`
+- `KIWI_AFFILIATE_POSTBACK_SIGNATURE_BASE`
+
+### NTH callback observability
+
+- `KIWI_NTH_CALLBACK_LOGGING_ENABLED`
+- `KIWI_NTH_CALLBACK_PAYLOAD_LOGGING_ENABLED`
+
+## Operational checks
+
+When validating a landing-page flow in production or staging, verify:
+
+1. Routing resolves expected landing key for both backend path and dedicated hostname path.
+2. CTA contains expected keyword and transaction token behavior.
+3. `clickid` capture creates/updates one row in `wp_kiwi_click_attributions` for the active tracking token.
+4. NTH callback logs show `incoming` and `handled` traces.
+5. Confirmed `deliverReport` results in sale persistence (`wp_kiwi_sales`).
+6. Affiliate postback is sent once for confirmed conversions and retried only when `postback_sent_at` is empty.
+
+## Troubleshooting quick map
+
+- Callback rejected with `service_key_unresolved`
+  - usually missing/wrong `service_key` and no unique shortcode+keyword match
+
+- No sale in `wp_kiwi_sales`
+  - confirm `deliverReport` status mapping is terminal success for your payload
+  - confirm references correlate to an existing flow transaction
+
+- Missing transaction linkage
+  - verify MO content carries expected `txn_...` token and parser delimiters
+  - verify submit flow stores and reuses provider references consistently
+
+- Duplicate callback confusion
+  - dedupe in events is expected
+  - conversion path can re-attempt postback only while `postback_sent_at` is empty
+
+## Appendix: legacy migration steps
+
+Use only if migrating remaining legacy `KIWI_LANDING_PAGES` entries.
+
+1. Create filesystem folder `landing-pages/lp<version>-<country>/`.
+2. Add `index.html`, `styles.css`, `integration.php`.
+3. Set routing metadata in `integration.php` (`backend_path`, optional `hostnames`/`dedicated_path`).
+4. Deploy with `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true`.
+5. Verify parity.
+6. Remove migrated key from `KIWI_LANDING_PAGES`.
+7. Repeat until no legacy keys remain.
+8. Disable legacy fallback when fully migrated.
+
+In debug mode (`KIWI_DEBUG=true`), invalid landing pages fail loudly. In production, invalid entries are skipped and logged.

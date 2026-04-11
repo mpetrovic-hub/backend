@@ -67,7 +67,7 @@ This architecture introduces a folder-per-landing-page model so each landing pag
   ...
 
 /operations
-  landing-page-migration.md
+  landing-page-logic.md
   ...
 
 /landing-pages
@@ -616,4 +616,4 @@ This keeps the system easier to maintain while preserving explicit technical and
 
 - `/README.md`
 - `/integrations/nth-fr-one-off.md`
-- `/operations/landing-page-migration.md`
+- `/operations/landing-page-logic.md`

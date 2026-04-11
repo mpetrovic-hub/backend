@@ -53,8 +53,8 @@ Do **not** store real credentials or secrets in this repository.
 - `operations/credentials-and-environments.md`  
   Documentation of credential names, ownership, environments, and secret locations without storing actual secret values.
 
-- `operations/landing-page-migration.md`  
-  Migration and rollout steps for moving landing pages from legacy config into `landing-pages/`.
+- `operations/landing-page-logic.md`  
+  Runtime landing-page logic and operations runbook, including a legacy migration appendix.
 
 ## How integration docs are organized
 
