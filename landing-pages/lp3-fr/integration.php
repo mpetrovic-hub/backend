@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'key' => 'lp2-fr',
+    'key' => 'lp3-fr',
     'country' => 'FR',
     'flow' => 'nth-fr-one-off',
     'provider' => 'nth',
