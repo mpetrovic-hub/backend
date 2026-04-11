@@ -145,7 +145,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $backend_path = trim((string) ($entry['backend_path'] ?? ''));
 
         $output = '<section class="kiwi-lp-card__urls">';
-        $output .= '<h4>Public URL candidates</h4>';
+        $output .= '<h4>URL</h4>';
 
         if (empty($public_urls)) {
             $output .= '<p class="kiwi-lp-card__hint">No reachable URL metadata found.</p>';
@@ -159,45 +159,56 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
             return $output;
         }
 
-        $primary_url = $entry['primary_url'] ?? null;
+        $primary_url = $this->resolve_primary_url_for_display($public_urls);
 
         if (is_array($primary_url)) {
+            $primary_display = $primary_url;
+            $primary_display['label'] = 'URL';
+            $primary_display['inferred'] = false;
+
             $output .= '<p class="kiwi-lp-card__primary-url">';
-            $output .= '<span>Primary:</span> ';
-            $output .= $this->render_single_url($primary_url);
+            $output .= $this->render_single_url($primary_display);
             $output .= '</p>';
         }
 
-        $additional_urls = [];
+        $output .= '</section>';
+
+        return $output;
+    }
+
+    private function resolve_primary_url_for_display(array $public_urls): ?array
+    {
+        foreach ($public_urls as $url_item) {
+            if (!is_array($url_item)) {
+                continue;
+            }
+
+            if (($url_item['absolute'] ?? false) && !empty($url_item['inferred'])) {
+                return $url_item;
+            }
+        }
 
         foreach ($public_urls as $url_item) {
             if (!is_array($url_item)) {
                 continue;
             }
 
-            if (is_array($primary_url) && ($url_item['url'] ?? '') === ($primary_url['url'] ?? '')) {
+            if (($url_item['absolute'] ?? false) && empty($url_item['inferred'])) {
+                return $url_item;
+            }
+        }
+
+        foreach ($public_urls as $url_item) {
+            if (!is_array($url_item)) {
                 continue;
             }
 
-            $additional_urls[] = $url_item;
-        }
-
-        if (!empty($additional_urls)) {
-            $output .= '<details class="kiwi-lp-card__extra-urls">';
-            $output .= '<summary>More URLs (' . esc_html((string) count($additional_urls)) . ')</summary>';
-            $output .= '<ul>';
-
-            foreach ($additional_urls as $url_item) {
-                $output .= '<li>' . $this->render_single_url($url_item) . '</li>';
+            if (!empty($url_item['path_only'])) {
+                return $url_item;
             }
-
-            $output .= '</ul>';
-            $output .= '</details>';
         }
 
-        $output .= '</section>';
-
-        return $output;
+        return null;
     }
 
     private function render_single_url(array $url_item): string

@@ -1956,7 +1956,15 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
         kiwi_assert_contains('lp2-fr', $output, 'Expected the shortcode to render the landing-page key.');
         kiwi_assert_contains('nth_fr_one_off_jplay', $output, 'Expected the shortcode to render service_key metadata.');
         kiwi_assert_contains('https://frlp2.joy-play.com/', $output, 'Expected dedicated hostname public URLs to be rendered.');
-        kiwi_assert_contains('(inferred)', $output, 'Expected inferred current-host URLs to be labeled explicitly.');
+        kiwi_assert_contains(
+            '<span class="kiwi-lp-card__url-label">URL:</span> <a href="https://backend.example.test/lp/fr/myjoyplay"',
+            $output,
+            'Expected primary URL display to prefer the inferred current-site URL and use label "URL".'
+        );
+        kiwi_assert_true(
+            strpos($output, 'More URLs') === false,
+            'Expected the URL block to show only one URL and not render expandable extra URLs.'
+        );
         kiwi_assert_contains('<!doctype html>', $output, 'Expected srcdoc previews to embed landing-page HTML content.');
         kiwi_assert_contains('body { font-family: Arial, sans-serif; }', $output, 'Expected local preview rendering to inline styles.css content in srcdoc.');
     } finally {
