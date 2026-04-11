@@ -156,6 +156,8 @@ command=deliverMessage&messageId=12345&msisdn=00414411112222&businessNumber=9292
 
 Observed generic parameters in the MO delivery callback:
 - `command=deliverMessage`
+- `username` -> (string) Customer account username (for authentication purposes)
+- `password` -> (string) Customer account password (for authentication purposes)
 - `messageId` -> (string) Unique ID assigned to MO message in NTH system (used as reference for analytical purposes).
 - `msisdn` -> (string) Message sender's msisdn, in international format with leading zeros (for example: 00414411112222). In some countries, due to end-user privacy protection rules, msisdn may be encrypted by mobile operator and as such forwarded in this parameter.
 - `businessNumber` -> (string) Business number MO message was sent to (Shortcode)
@@ -226,6 +228,19 @@ Use this operation for:
 - outbound premium SMS delivery
 - initiating standard SMS-based service flows
 
+Observed generic parameters in the MO delivery callback:
+- `command=submitMessage`
+- `username` -> (string) Customer account username (for authentication purposes)
+- `password` -> (string) Customer account password (for authentication purposes)
+- `msisdn` -> (string) Message sender's msisdn, in international format with leading zeros (for example: 00414411112222). In some countries, due to end-user privacy protection rules, msisdn may be encrypted by mobile operator and as such forwarded in this parameter.
+- `businessNumber` -> (string) Business number MO message was sent to (Shortcode)
+- `time` -> (string) Datetime of MO message reception at NTH system, in format yyyy-MM-dd HH:mm:ss, CET timezone
+- `keyword` -> (string) Service keyword matched for MO SMS content, can be used by the Customer to distinguish between services if single receiving application is handling multiple services/keywords.
+- `content` -> (string) MO SMS message text. If MO message is concatenated (due to message length or character encoding) this parameter contains text of all message parts.
+- `operatorCode` -> (string) Mobile number operator's network code (provided by NTH), used as MNO identifier, MT traffic routing and number portability between mobile operators.
+- `sessionId` -> (string) Unique ID assigned to this particular session in NTH system
+- `time` -> (string) Datetime of MO message reception at NTH system, in format yyyy-MM-dd HH:mm:ss, CET timezone.
+
 ## deliverReport
 
 Purpose:
@@ -252,14 +267,14 @@ command=deliverReport&messageId=12345&messageRef=CUST_REF_12345&msisdn=004144111
 
 Observed generic parameters in the delivery report callback:
 - `command=deliverReport`
-- `messageId`
-- `messageRef`
-- `msisdn`
-- `businessNumber`
-- `messageStatus`
-- `messageStatusText`
-- `time`
-- `sessionId`
+- `messageId` -> (integer) Unique ID assigned to MT message in NTH system, returned in messageId field of submitMessage operation.
+- `messageRef` -> (string) Custom message ID that was assigned to this MT message by Customer through messageRef parameter of submitMessage operation. This parameter is set only if Customer did provide it while submitting the message.
+- `msisdn` -> (string) Message recipient's msisdn, in international format with leading zeros (for example: 00414411112222). In some countries, due to end-user privacy protection rules, msisdn may be encrypted by mobile operator and as such forwarded in this parameter.
+- `businessNumber` -> (string) Business number from which MT message was sent (originator) (=shortcode )
+- `messageStatus` -> (integer) Message state code. For complete list see the table `Message states`
+- `messageStatusText` -> (string) Description of the message state (gives a more detailed textual representation of the message state)
+- `time` -> (string) Delivery report datetime, in format yyyy-MM-dd HH:mm:ss, CET timezone
+- `sessionId` -> (string) Unique ID assigned to this particular session in NTH system
 
 NTH explicitly described the Notification URL as the endpoint used to receive delivery reports for outbound MT messages whenever the MT status changes.
 
@@ -269,7 +284,7 @@ Use this operation for:
 - customer-side MT status synchronization
 
 
-### Common `messageStatus` values for `deliverReport`
+### `Message states` - Common `messageStatus` values for `deliverReport`
 
 The following delivery-report status codes are used by NTH to communicate intermediate and final MT states.
 
@@ -323,16 +338,16 @@ command=deliverEvent&event=optin_msg_sent&msisdn=00414411112222&businessNumber=9
 
 Observed generic parameters in the event callback sample:
 - `command=deliverEvent`
-- `event`
-- `msisdn`
-- `businessNumber`
-- `operatorCode`
-- `keyword`
-- `sessionId`
-- `time`
-- `price`
-- `content`
-- `messageId`
+- `event` -> (string) Enum: "optin_msg_sent" "optin_confirmed" "optin_refused" "optin_timedout" "service_info_msg_sent" "spending_info_msg_sent" "session_opened" "session_closed" "broadcast_msg_sent"
+- `msisdn` -> (string) Message recipient's msisdn, in international format with leading zeros (for example: 00414411112222). In some countries, due to end-user privacy protection rules, msisdn may be encrypted by mobile operator and as such forwarded in this parameter.
+- `businessNumber` -> (string) Business number from which MT message was sent (originator) = "shortcode"
+- `operatorCode` -> (string) Mobile number operator's network code (provided by NTH), used as MNO identifier, MT traffic routing and number portability between mobile operators
+- `keyword` -> (string) Indicates a particular service
+- `sessionId` -> (string) Unique ID assigned to this particular session in NTH system
+- `time` -> (string) Event datetime, in format yyyy-MM-dd HH:mm:ss, CET timezone
+- `price` -> (integer) Message price in money units. Applicable only if event is related to an SMS message
+- `content` -> (string) Text of the SMS message that was sent to end user. Applicable only if event is related to an SMS message
+- `messageId` -> (integer) Unique ID assigned to the message in MTH system. Relates to MO or MT message depending on the event context (check event descriptions for more details)
 
 Use this operation for:
 - audit visibility
@@ -376,6 +391,13 @@ Another documented XML response example includes `sessionState`:
 </res>
 ```
 
+Observed generic parameters in the MO delivery callback:
+- `command=validatePin`
+- `username` -> (string) Customer account username (for authentication purposes)
+- `password` -> (string) Customer account password (for authentication purposes)
+- `sessionId` -> (string) Unique ID assigned to this particular session in NTH system
+- `pin` -> (string) The PIN that user submitted on the Web page
+
 Use this operation for:
 - web opt-in flows
 - double opt-in confirmation
@@ -406,6 +428,16 @@ Sample XML response:
 </res>
 ```
 
+Observed generic parameters in the MO delivery callback:
+- `command=initSession`
+- `username` -> (string) Customer account username (for authentication purposes)
+- `password` -> (string) Customer account password (for authentication purposes)
+- `businessNumber` -> (string) Business number from which MT message will be sent for initiated session (originator) = "shortcode"
+- `msisdn` -> (string) Message recipient's msisdn, in international format with leading zeros (for example: 00414411112222). In some countries, due to end-user privacy protection rules, msisdn may be encrypted by mobile operator and as such forwarded in this parameter
+- `keyword` -> (string) Indicates a particular service
+- `operatorCode` -> (string) Mobile number operator's network code (provided by NTH), used as MNO identifier, MT traffic routing and number portability between mobile operators
+- `language` -> (string) Mobile user's language, in two-letter ISO 639-1 format. For example, en – English, de – German, etc. Used to determine the language of the opt-in confirmation request message or PIN code message in multi-language markets
+
 Use this operation for:
 - market-specific web session activation flows where NTH instructs to use session initialization instead of an initial MT
 
@@ -433,6 +465,12 @@ Sample XML response:
     <sessionState>CLOSING</sessionState>
 </res>
 ```
+
+Observed generic parameters in the MO delivery callback:
+- `command=closeSession`
+- `username` -> (string) Customer account username (for authentication purposes)
+- `password` -> (string) Customer account password (for authentication purposes)
+- `sessionId` -> (string) Unique ID assigned to this particular session in NTH system
 
 Use this operation for:
 - subscription or session cleanup
