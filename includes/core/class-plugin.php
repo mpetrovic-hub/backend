@@ -692,7 +692,7 @@ TEXT;
             $handle,
             $this->build_asset_url($relative_path),
             $dependencies,
-            '0.1',
+            filemtime($this->build_asset_path($relative_path)),
             true
         );
     }

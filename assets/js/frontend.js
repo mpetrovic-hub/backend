@@ -69,14 +69,20 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         copyTextToClipboard(copyText).then(function () {
+            if (!copyButton.dataset.originalIcon) {
+                copyButton.dataset.originalIcon = copyButton.innerHTML;
+            }
+
             copyButton.classList.add('is-copied');
             copyButton.setAttribute('title', 'Copied');
             copyButton.setAttribute('aria-label', 'Copied');
+            copyButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 16.2l-3.5-3.5L4 14.2l5 5 11-11-1.5-1.5z"/></svg>';
 
             window.setTimeout(function () {
                 copyButton.classList.remove('is-copied');
                 copyButton.setAttribute('title', 'Copy URL');
                 copyButton.setAttribute('aria-label', 'Copy URL');
+                copyButton.innerHTML = copyButton.dataset.originalIcon || copyButton.innerHTML;
             }, 1200);
         }).catch(function () {
             copyButton.setAttribute('title', 'Copy failed');

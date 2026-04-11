@@ -30,6 +30,7 @@
     margin: 0;
     font-size: clamp(1.25rem, 2.2vw, 1.7rem);
     letter-spacing: 0.01em;
+    color: var(--kiwi-lp-ink) !important;
 }
 
 .kiwi-lp-gallery__subtitle {
@@ -125,6 +126,7 @@
 .kiwi-lp-card__title {
     margin: 0;
     font-size: 1rem;
+    color: var(--kiwi-lp-ink) !important;
 }
 
 .kiwi-lp-card__badges {
@@ -223,6 +225,7 @@
 .kiwi-lp-card__copy-btn.is-copied {
     background: #d8efe2;
     border-color: #7ead8f;
+    color: #1b6b3f;
 }
 
 .kiwi-lp-card__meta {
@@ -349,6 +352,12 @@
     .kiwi-lp-card__copy-btn:focus-visible {
         background: #2f4a3b;
         border-color: #648a73;
+    }
+
+    .kiwi-lp-card__copy-btn.is-copied {
+        background: #365844;
+        border-color: #73ac8f;
+        color: #dbffe9;
     }
 
     .kiwi-lp-card__meta div {
