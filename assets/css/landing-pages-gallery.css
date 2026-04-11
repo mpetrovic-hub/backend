@@ -1,5 +1,7 @@
 .kiwi-lp-gallery {
-    --kiwi-lp-bg: linear-gradient(145deg, #f8faf8 0%, #eef4f0 55%, #e8f0ea 100%);
+    --kiwi-lp-bg: radial-gradient(circle at 16% 8%, rgba(88, 219, 157, 0.14) 0%, rgba(88, 219, 157, 0) 35%),
+        radial-gradient(circle at 88% 0%, rgba(68, 128, 255, 0.16) 0%, rgba(68, 128, 255, 0) 38%),
+        linear-gradient(145deg, #f8faf8 0%, #eef4f0 52%, #e8f0ea 100%);
     --kiwi-lp-card-bg: #ffffff;
     --kiwi-lp-card-border: #d7e2da;
     --kiwi-lp-muted: #5d6a61;
@@ -16,6 +18,29 @@
     padding: 22px;
     margin: 1.5rem auto;
     max-width: 1320px;
+    box-shadow: 0 20px 44px rgba(14, 34, 24, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    position: relative;
+    overflow: hidden;
+}
+
+.kiwi-lp-gallery::before {
+    content: "";
+    position: absolute;
+    inset: -40% auto auto -12%;
+    width: 420px;
+    height: 420px;
+    pointer-events: none;
+    background: radial-gradient(circle, rgba(73, 220, 156, 0.16) 0%, rgba(73, 220, 156, 0) 68%);
+}
+
+.kiwi-lp-gallery::after {
+    content: "";
+    position: absolute;
+    inset: auto -10% -36% auto;
+    width: 430px;
+    height: 430px;
+    pointer-events: none;
+    background: radial-gradient(circle, rgba(77, 144, 255, 0.16) 0%, rgba(77, 144, 255, 0) 68%);
 }
 
 .kiwi-lp-gallery__header {
@@ -24,6 +49,8 @@
     align-items: flex-start;
     gap: 1rem;
     margin-bottom: 1rem;
+    position: relative;
+    z-index: 1;
 }
 
 .kiwi-lp-gallery__title {
@@ -92,23 +119,39 @@
     grid-template-columns: repeat(auto-fit, minmax(260px, 360px));
     gap: 1rem;
     justify-content: start;
+    position: relative;
+    z-index: 1;
 }
 
 .kiwi-lp-card {
-    background: var(--kiwi-lp-card-bg);
+    background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 253, 249, 0.92) 100%),
+        var(--kiwi-lp-card-bg);
     border: 1px solid var(--kiwi-lp-card-border);
     border-radius: var(--kiwi-lp-radius);
-    box-shadow: var(--kiwi-lp-shadow);
+    box-shadow: var(--kiwi-lp-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.45);
     padding: 0.9rem;
     display: flex;
     flex-direction: column;
     gap: 0.8rem;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    position: relative;
+}
+
+.kiwi-lp-card::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(140deg, rgba(83, 220, 156, 0.35), rgba(63, 132, 255, 0.2), rgba(83, 220, 156, 0.08));
+    opacity: 0.15;
 }
 
 .kiwi-lp-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 12px 26px rgba(16, 36, 24, 0.15);
+    border-color: #b4d7c1;
+    box-shadow: 0 14px 30px rgba(16, 36, 24, 0.2), 0 0 0 1px rgba(73, 201, 143, 0.1);
 }
 
 .kiwi-lp-card:focus-visible {
@@ -163,7 +206,7 @@
 .kiwi-lp-card__preview iframe,
 .kiwi-lp-card__preview-placeholder {
     width: 100%;
-    height: clamp(160px, 22vw, 230px);
+    height: clamp(260px, 40vw, 420px);
     border: 0;
     display: block;
 }
@@ -231,30 +274,41 @@
 .kiwi-lp-card__meta {
     margin: 0;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem 0.8rem;
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
 }
 
 .kiwi-lp-card__meta div {
-    background: #f7faf8;
+    background: rgba(247, 250, 248, 0.88);
     border: 1px solid #dbe7df;
     border-radius: 10px;
-    padding: 0.45rem 0.55rem;
+    padding: 0.4rem 0.55rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
 }
 
 .kiwi-lp-card__meta dt {
     margin: 0;
-    font-size: 0.7rem;
+    font-size: 0.66rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--kiwi-lp-muted);
+    flex: 0 0 auto;
+}
+
+.kiwi-lp-card__meta dt::after {
+    content: ":";
 }
 
 .kiwi-lp-card__meta dd {
-    margin: 0.2rem 0 0;
-    font-size: 0.84rem;
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
     word-break: break-word;
+    text-align: right;
 }
 
 .kiwi-lp-card__url-label {
@@ -271,23 +325,21 @@
         flex-direction: column;
     }
 
-    .kiwi-lp-card__meta {
-        grid-template-columns: 1fr;
-    }
-
     .kiwi-lp-gallery__grid {
         grid-template-columns: 1fr;
     }
 
     .kiwi-lp-card__preview iframe,
     .kiwi-lp-card__preview-placeholder {
-        height: 175px;
+        height: 250px;
     }
 }
 
 @media (prefers-color-scheme: dark) {
     .kiwi-lp-gallery {
-        --kiwi-lp-bg: linear-gradient(145deg, #132017 0%, #1a2b20 55%, #1f3326 100%);
+        --kiwi-lp-bg: radial-gradient(circle at 10% 0%, rgba(79, 255, 182, 0.14) 0%, rgba(79, 255, 182, 0) 36%),
+            radial-gradient(circle at 88% 5%, rgba(85, 154, 255, 0.2) 0%, rgba(85, 154, 255, 0) 40%),
+            linear-gradient(145deg, #101a14 0%, #15241b 52%, #192c21 100%);
         --kiwi-lp-card-bg: #1d2b22;
         --kiwi-lp-card-border: #334a3c;
         --kiwi-lp-muted: #b4c6bb;
@@ -296,6 +348,15 @@
         --kiwi-lp-accent-soft: #254332;
         --kiwi-lp-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
         border-color: #2d4436;
+        box-shadow: 0 22px 50px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(142, 222, 176, 0.06);
+    }
+
+    .kiwi-lp-gallery::before {
+        background: radial-gradient(circle, rgba(83, 236, 165, 0.22) 0%, rgba(83, 236, 165, 0) 70%);
+    }
+
+    .kiwi-lp-gallery::after {
+        background: radial-gradient(circle, rgba(94, 161, 255, 0.22) 0%, rgba(94, 161, 255, 0) 70%);
     }
 
     .kiwi-lp-gallery__count {
@@ -327,6 +388,19 @@
         border-color: #496080;
         background: #28374f;
         color: #d6e4fa;
+    }
+
+    .kiwi-lp-card {
+        background:
+            linear-gradient(145deg, rgba(27, 42, 33, 0.95) 0%, rgba(25, 39, 31, 0.92) 100%),
+            var(--kiwi-lp-card-bg);
+        border-color: #3a5645;
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(80, 220, 156, 0.06);
+    }
+
+    .kiwi-lp-card::before {
+        opacity: 0.3;
+        background: linear-gradient(140deg, rgba(83, 220, 156, 0.36), rgba(79, 141, 255, 0.32), rgba(83, 220, 156, 0.08));
     }
 
     .kiwi-lp-card__preview {
@@ -361,7 +435,7 @@
     }
 
     .kiwi-lp-card__meta div {
-        background: #1f2f25;
-        border-color: #334a3c;
+        background: rgba(33, 49, 40, 0.88);
+        border-color: #3b5647;
     }
 }
