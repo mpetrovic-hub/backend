@@ -96,8 +96,6 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $output .= $this->render_meta_item('Service', $service_key);
         $output .= $this->render_meta_item('Provider', $provider);
         $output .= '</dl>';
-
-        $output .= $this->render_url_block($entry);
         $output .= '</article>';
 
         return $output;
@@ -128,50 +126,37 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
 
         $output .= ' sandbox="allow-forms allow-same-origin allow-scripts" referrerpolicy="no-referrer"></iframe>';
 
-        if ($preview_url !== '') {
-            $output .= '<a class="kiwi-lp-card__preview-link" href="' . esc_attr($preview_url) . '" target="_blank" rel="noopener noreferrer">';
-            $output .= 'Open preview URL';
-            $output .= '</a>';
+        $public_urls = is_array($entry['public_urls'] ?? null) ? $entry['public_urls'] : [];
+        $primary_url = $this->resolve_primary_url_for_display($public_urls);
+        $primary_url_value = '';
+
+        if (is_array($primary_url) && trim((string) ($primary_url['url'] ?? '')) !== '') {
+            $primary_url_value = trim((string) ($primary_url['url'] ?? ''));
+        } elseif ($preview_url !== '') {
+            $primary_url_value = $preview_url;
+        }
+
+        if ($primary_url_value !== '') {
+            $output .= '<div class="kiwi-lp-card__preview-urlbar">';
+            $output .= '<span class="kiwi-lp-card__url-label">URL:</span> ';
+
+            if (is_array($primary_url) && !empty($primary_url['path_only'])) {
+                $output .= '<code>' . esc_html($primary_url_value) . '</code>';
+            } else {
+                $output .= '<a class="kiwi-lp-card__preview-url" href="' . esc_attr($primary_url_value) . '" target="_blank" rel="noopener noreferrer">';
+                $output .= esc_html($primary_url_value);
+                $output .= '</a>';
+            }
+
+            $output .= '<button type="button" class="kiwi-lp-card__copy-btn" aria-label="Copy URL" title="Copy URL" data-copy-text="' . esc_attr($primary_url_value) . '">';
+            $output .= '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">';
+            $output .= '<path d="M16 1H6c-1.1 0-2 .9-2 2v12h2V3h10V1zm3 4H10c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h9c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H10V7h9v14z"/>';
+            $output .= '</svg>';
+            $output .= '</button>';
+            $output .= '</div>';
         }
 
         $output .= '</div>';
-
-        return $output;
-    }
-
-    private function render_url_block(array $entry): string
-    {
-        $public_urls = is_array($entry['public_urls'] ?? null) ? $entry['public_urls'] : [];
-        $backend_path = trim((string) ($entry['backend_path'] ?? ''));
-
-        $output = '<section class="kiwi-lp-card__urls">';
-        $output .= '<h4>URL</h4>';
-
-        if (empty($public_urls)) {
-            $output .= '<p class="kiwi-lp-card__hint">No reachable URL metadata found.</p>';
-
-            if ($backend_path !== '') {
-                $output .= '<p class="kiwi-lp-card__hint">Backend path strategy: <code>' . esc_html($backend_path) . '</code></p>';
-            }
-
-            $output .= '</section>';
-
-            return $output;
-        }
-
-        $primary_url = $this->resolve_primary_url_for_display($public_urls);
-
-        if (is_array($primary_url)) {
-            $primary_display = $primary_url;
-            $primary_display['label'] = 'URL';
-            $primary_display['inferred'] = false;
-
-            $output .= '<p class="kiwi-lp-card__primary-url">';
-            $output .= $this->render_single_url($primary_display);
-            $output .= '</p>';
-        }
-
-        $output .= '</section>';
 
         return $output;
     }
@@ -209,28 +194,6 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         }
 
         return null;
-    }
-
-    private function render_single_url(array $url_item): string
-    {
-        $url = trim((string) ($url_item['url'] ?? ''));
-        $label = trim((string) ($url_item['label'] ?? 'URL'));
-        $is_inferred = !empty($url_item['inferred']);
-        $is_path_only = !empty($url_item['path_only']);
-
-        if ($url === '') {
-            return '';
-        }
-
-        $label_suffix = $is_inferred ? ' (inferred)' : '';
-        $label_text = $label . $label_suffix;
-
-        if ($is_path_only) {
-            return '<span class="kiwi-lp-card__url-label">' . esc_html($label_text) . ':</span> <code>' . esc_html($url) . '</code>';
-        }
-
-        return '<span class="kiwi-lp-card__url-label">' . esc_html($label_text) . ':</span> '
-            . '<a href="' . esc_attr($url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($url) . '</a>';
     }
 
     private function render_meta_item(string $label, string $value): string

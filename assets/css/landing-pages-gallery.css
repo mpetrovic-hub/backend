@@ -173,18 +173,56 @@
     font-weight: 600;
 }
 
-.kiwi-lp-card__preview-link {
-    display: block;
-    padding: 0.55rem 0.75rem;
-    font-size: 0.83rem;
-    color: #0f5b32;
-    text-decoration: none;
+.kiwi-lp-card__preview-urlbar {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.7rem;
     border-top: 1px solid #d6e2da;
+    font-size: 0.83rem;
 }
 
-.kiwi-lp-card__preview-link:hover,
-.kiwi-lp-card__preview-link:focus-visible {
-    background: #ebf5ee;
+.kiwi-lp-card__preview-url {
+    color: #114f90;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+}
+
+.kiwi-lp-card__preview-url:hover,
+.kiwi-lp-card__preview-url:focus-visible {
+    text-decoration: underline;
+}
+
+.kiwi-lp-card__copy-btn {
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #b8cec0;
+    border-radius: 8px;
+    background: #eef7f1;
+    color: #1e5e37;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.kiwi-lp-card__copy-btn svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+}
+
+.kiwi-lp-card__copy-btn:hover,
+.kiwi-lp-card__copy-btn:focus-visible {
+    background: #e1f2e8;
+    border-color: #97b8a4;
+}
+
+.kiwi-lp-card__copy-btn.is-copied {
+    background: #d8efe2;
+    border-color: #7ead8f;
 }
 
 .kiwi-lp-card__meta {
@@ -216,50 +254,9 @@
     word-break: break-word;
 }
 
-.kiwi-lp-card__urls h4 {
-    margin: 0 0 0.45rem;
-    font-size: 0.85rem;
-}
-
-.kiwi-lp-card__primary-url {
-    margin: 0;
-    font-size: 0.82rem;
-}
-
 .kiwi-lp-card__url-label {
     color: var(--kiwi-lp-muted);
     font-weight: 600;
-}
-
-.kiwi-lp-card__urls a {
-    color: #114f90;
-    overflow-wrap: anywhere;
-}
-
-.kiwi-lp-card__urls code {
-    font-size: 0.78rem;
-}
-
-.kiwi-lp-card__extra-urls {
-    margin-top: 0.5rem;
-}
-
-.kiwi-lp-card__extra-urls summary {
-    cursor: pointer;
-    font-size: 0.8rem;
-}
-
-.kiwi-lp-card__extra-urls ul {
-    margin: 0.45rem 0 0;
-    padding-left: 1rem;
-    display: grid;
-    gap: 0.3rem;
-}
-
-.kiwi-lp-card__hint {
-    margin: 0;
-    color: var(--kiwi-lp-muted);
-    font-size: 0.82rem;
 }
 
 @media (max-width: 640px) {
@@ -334,22 +331,28 @@
         border-color: #354b3d;
     }
 
-    .kiwi-lp-card__preview-link {
-        color: #c7f0d6;
+    .kiwi-lp-card__preview-urlbar {
         border-top-color: #354b3d;
     }
 
-    .kiwi-lp-card__preview-link:hover,
-    .kiwi-lp-card__preview-link:focus-visible {
-        background: #25372d;
+    .kiwi-lp-card__preview-url {
+        color: #8dc4ff;
+    }
+
+    .kiwi-lp-card__copy-btn {
+        border-color: #4a6655;
+        background: #263a2f;
+        color: #d6f1e1;
+    }
+
+    .kiwi-lp-card__copy-btn:hover,
+    .kiwi-lp-card__copy-btn:focus-visible {
+        background: #2f4a3b;
+        border-color: #648a73;
     }
 
     .kiwi-lp-card__meta div {
         background: #1f2f25;
         border-color: #334a3c;
-    }
-
-    .kiwi-lp-card__urls a {
-        color: #8dc4ff;
     }
 }

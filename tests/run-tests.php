@@ -1955,15 +1955,28 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
         kiwi_assert_contains('srcdoc="', $output, 'Expected shortcode previews to use local srcdoc rendering when filesystem HTML is available.');
         kiwi_assert_contains('lp2-fr', $output, 'Expected the shortcode to render the landing-page key.');
         kiwi_assert_contains('nth_fr_one_off_jplay', $output, 'Expected the shortcode to render service_key metadata.');
-        kiwi_assert_contains('https://frlp2.joy-play.com/', $output, 'Expected dedicated hostname public URLs to be rendered.');
         kiwi_assert_contains(
-            '<span class="kiwi-lp-card__url-label">URL:</span> <a href="https://backend.example.test/lp/fr/myjoyplay"',
+            '<span class="kiwi-lp-card__url-label">URL:</span> <a class="kiwi-lp-card__preview-url" href="https://backend.example.test/lp/fr/myjoyplay"',
             $output,
             'Expected primary URL display to prefer the inferred current-site URL and use label "URL".'
+        );
+        kiwi_assert_contains(
+            'class="kiwi-lp-card__copy-btn"',
+            $output,
+            'Expected the preview URL row to render a copy-to-clipboard button.'
+        );
+        kiwi_assert_contains(
+            'data-copy-text="https://backend.example.test/lp/fr/myjoyplay"',
+            $output,
+            'Expected the copy button to carry the resolved primary URL as copy payload.'
         );
         kiwi_assert_true(
             strpos($output, 'More URLs') === false,
             'Expected the URL block to show only one URL and not render expandable extra URLs.'
+        );
+        kiwi_assert_true(
+            strpos($output, 'kiwi-lp-card__urls') === false,
+            'Expected the separate bottom URL section to be removed and URL to be shown inside the preview area.'
         );
         kiwi_assert_contains('<!doctype html>', $output, 'Expected srcdoc previews to embed landing-page HTML content.');
         kiwi_assert_contains('body { font-family: Arial, sans-serif; }', $output, 'Expected local preview rendering to inline styles.css content in srcdoc.');
