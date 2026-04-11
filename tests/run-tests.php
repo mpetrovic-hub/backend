@@ -1834,6 +1834,14 @@ kiwi_run_test('Kiwi_Landing_Page_Gallery_Service normalizes metadata and dedicat
             $entry['preview_url'] ?? '',
             'Expected preview URL to prefer absolute dedicated hostname URLs.'
         );
+        kiwi_assert_true(
+            is_file((string) ($entry['index_path'] ?? '')),
+            'Expected gallery entries to expose the filesystem index_path for local preview rendering.'
+        );
+        kiwi_assert_true(
+            is_file((string) ($entry['styles_path'] ?? '')),
+            'Expected gallery entries to expose the filesystem styles_path for local preview rendering.'
+        );
     } finally {
         $_SERVER = $original_server;
         kiwi_remove_directory($project_root);
@@ -1944,10 +1952,13 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
 
         kiwi_assert_contains('kiwi-lp-gallery__grid', $output, 'Expected the shortcode to render the responsive gallery grid.');
         kiwi_assert_contains('<iframe', $output, 'Expected the shortcode to render iframe-based landing-page previews.');
+        kiwi_assert_contains('srcdoc="', $output, 'Expected shortcode previews to use local srcdoc rendering when filesystem HTML is available.');
         kiwi_assert_contains('lp2-fr', $output, 'Expected the shortcode to render the landing-page key.');
         kiwi_assert_contains('nth_fr_one_off_jplay', $output, 'Expected the shortcode to render service_key metadata.');
         kiwi_assert_contains('https://frlp2.joy-play.com/', $output, 'Expected dedicated hostname public URLs to be rendered.');
         kiwi_assert_contains('(inferred)', $output, 'Expected inferred current-host URLs to be labeled explicitly.');
+        kiwi_assert_contains('<!doctype html>', $output, 'Expected srcdoc previews to embed landing-page HTML content.');
+        kiwi_assert_contains('body { font-family: Arial, sans-serif; }', $output, 'Expected local preview rendering to inline styles.css content in srcdoc.');
     } finally {
         $_SERVER = $original_server;
         kiwi_remove_directory($project_root);

@@ -14,7 +14,8 @@
     border: 1px solid #dbe7dd;
     border-radius: 20px;
     padding: 22px;
-    margin: 1.5rem 0;
+    margin: 1.5rem auto;
+    max-width: 1320px;
 }
 
 .kiwi-lp-gallery__header {
@@ -87,8 +88,9 @@
 
 .kiwi-lp-gallery__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(260px, 360px));
     gap: 1rem;
+    justify-content: start;
 }
 
 .kiwi-lp-card {
@@ -159,7 +161,7 @@
 .kiwi-lp-card__preview iframe,
 .kiwi-lp-card__preview-placeholder {
     width: 100%;
-    aspect-ratio: 16 / 10;
+    height: clamp(160px, 22vw, 230px);
     border: 0;
     display: block;
 }
@@ -271,6 +273,15 @@
 
     .kiwi-lp-card__meta {
         grid-template-columns: 1fr;
+    }
+
+    .kiwi-lp-gallery__grid {
+        grid-template-columns: 1fr;
+    }
+
+    .kiwi-lp-card__preview iframe,
+    .kiwi-lp-card__preview-placeholder {
+        height: 175px;
     }
 }
 

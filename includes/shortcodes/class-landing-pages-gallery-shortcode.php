@@ -107,21 +107,33 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
     {
         $preview_url = trim((string) ($entry['preview_url'] ?? ''));
         $key = (string) ($entry['key'] ?? 'landing-page');
+        $preview_srcdoc = $this->build_local_preview_srcdoc($entry);
 
         $output = '<div class="kiwi-lp-card__preview">';
 
-        if ($preview_url === '') {
+        if ($preview_url === '' && $preview_srcdoc === '') {
             $output .= '<div class="kiwi-lp-card__preview-placeholder">Preview unavailable</div>';
             $output .= '</div>';
 
             return $output;
         }
 
-        $output .= '<iframe loading="lazy" title="Preview of ' . esc_attr($key) . '" src="' . esc_attr($preview_url) . '"';
+        $output .= '<iframe loading="lazy" title="Preview of ' . esc_attr($key) . '"';
+
+        if ($preview_srcdoc !== '') {
+            $output .= ' srcdoc="' . esc_attr($preview_srcdoc) . '"';
+        } else {
+            $output .= ' src="' . esc_attr($preview_url) . '"';
+        }
+
         $output .= ' sandbox="allow-forms allow-same-origin allow-scripts" referrerpolicy="no-referrer"></iframe>';
-        $output .= '<a class="kiwi-lp-card__preview-link" href="' . esc_attr($preview_url) . '" target="_blank" rel="noopener noreferrer">';
-        $output .= 'Open preview URL';
-        $output .= '</a>';
+
+        if ($preview_url !== '') {
+            $output .= '<a class="kiwi-lp-card__preview-link" href="' . esc_attr($preview_url) . '" target="_blank" rel="noopener noreferrer">';
+            $output .= 'Open preview URL';
+            $output .= '</a>';
+        }
+
         $output .= '</div>';
 
         return $output;
@@ -215,5 +227,43 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $display_value = trim($value) !== '' ? $value : 'N/A';
 
         return '<div><dt>' . esc_html($label) . '</dt><dd>' . esc_html($display_value) . '</dd></div>';
+    }
+
+    private function build_local_preview_srcdoc(array $entry): string
+    {
+        $index_path = trim((string) ($entry['index_path'] ?? ''));
+        $styles_path = trim((string) ($entry['styles_path'] ?? ''));
+
+        if ($index_path === '' || !is_readable($index_path)) {
+            return '';
+        }
+
+        $html = file_get_contents($index_path);
+
+        if (!is_string($html) || trim($html) === '') {
+            return '';
+        }
+
+        $html = str_replace('{{KIWI_PRIMARY_CTA_HREF}}', '#', $html);
+
+        if ($styles_path !== '' && is_readable($styles_path)) {
+            $css = file_get_contents($styles_path);
+
+            if (is_string($css) && trim($css) !== '') {
+                $style_block = "<style>\n" . $css . "\n</style>";
+
+                if (stripos($html, '</head>') !== false) {
+                    $replaced = preg_replace('/<\/head>/i', $style_block . "\n</head>", $html, 1);
+
+                    if (is_string($replaced) && $replaced !== '') {
+                        $html = $replaced;
+                    }
+                } else {
+                    $html = $style_block . "\n" . $html;
+                }
+            }
+        }
+
+        return $html;
     }
 }
