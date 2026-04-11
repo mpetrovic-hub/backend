@@ -273,3 +273,72 @@
         grid-template-columns: 1fr;
     }
 }
+
+@media (prefers-color-scheme: dark) {
+    .kiwi-lp-gallery {
+        --kiwi-lp-bg: linear-gradient(145deg, #132017 0%, #1a2b20 55%, #1f3326 100%);
+        --kiwi-lp-card-bg: #1d2b22;
+        --kiwi-lp-card-border: #334a3c;
+        --kiwi-lp-muted: #b4c6bb;
+        --kiwi-lp-ink: #ebf2ed;
+        --kiwi-lp-accent: #70c891;
+        --kiwi-lp-accent-soft: #254332;
+        --kiwi-lp-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+        border-color: #2d4436;
+    }
+
+    .kiwi-lp-gallery__count {
+        color: #d5f7df;
+        border-color: #3d6a51;
+    }
+
+    .kiwi-lp-gallery__warnings {
+        background: #3a321f;
+        border-color: #6b5731;
+    }
+
+    .kiwi-lp-gallery__warnings ul {
+        color: #f3dfb3;
+    }
+
+    .kiwi-lp-gallery__empty {
+        background: #1a271f;
+        border-color: #446150;
+    }
+
+    .kiwi-lp-card__badge {
+        border-color: #4e7d64;
+        background: #294735;
+        color: #d6f1e1;
+    }
+
+    .kiwi-lp-card__badge--mode {
+        border-color: #496080;
+        background: #28374f;
+        color: #d6e4fa;
+    }
+
+    .kiwi-lp-card__preview {
+        background: #1a271f;
+        border-color: #354b3d;
+    }
+
+    .kiwi-lp-card__preview-link {
+        color: #c7f0d6;
+        border-top-color: #354b3d;
+    }
+
+    .kiwi-lp-card__preview-link:hover,
+    .kiwi-lp-card__preview-link:focus-visible {
+        background: #25372d;
+    }
+
+    .kiwi-lp-card__meta div {
+        background: #1f2f25;
+        border-color: #334a3c;
+    }
+
+    .kiwi-lp-card__urls a {
+        color: #8dc4ff;
+    }
+}
