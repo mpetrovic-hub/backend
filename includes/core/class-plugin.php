@@ -69,6 +69,11 @@ class Kiwi_Plugin
                 'kiwi-backend-tables',
             ]
         );
+        $this->enqueue_style_asset(
+            'kiwi-backend-landing-pages-gallery',
+            'assets/css/landing-pages-gallery.css',
+            ['kiwi-backend-components']
+        );
 
         $this->enqueue_script_asset(
             'kiwi-backend-core',
@@ -104,6 +109,11 @@ class Kiwi_Plugin
             $runtime['dimoco_callback_blacklist_repository']
         );
         $dimoco_blacklist_shortcode->register();
+
+        $landing_pages_gallery_shortcode = new Kiwi_Landing_Pages_Gallery_Shortcode(
+            new Kiwi_Landing_Page_Gallery_Service($runtime['config'])
+        );
+        $landing_pages_gallery_shortcode->register();
     }
 
     public function register_rest_routes(): void

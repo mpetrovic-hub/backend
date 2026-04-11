@@ -19,6 +19,20 @@ Each page folder must follow the filesystem contract:
 
 Business logic is centralized in plugin services. Landing-page folders are presentation plus metadata only.
 
+## Gallery shortcode
+
+The plugin exposes a landing-page diagnostics/gallery shortcode:
+
+- shortcode: `[kiwi_landing_pages_gallery]`
+- source: filesystem landing pages discovered through the shared config/registry path
+- card metadata: `country`, `key`, `flow`, `service_key`, provider, routing mode
+- URL behavior:
+  - when `hostnames` + `dedicated_path` exist, cards show absolute HTTPS URLs per hostname
+  - when only `backend_path` exists, cards show the backend path strategy and an inferred current-site URL (explicitly labeled as inferred)
+  - if multiple URL candidates exist, cards show a primary URL plus expandable additional URLs
+
+Discovery validation warnings (for broken folders) are surfaced in the shortcode output while valid entries keep rendering.
+
 ## Request resolution and rendering
 
 At runtime, the router:

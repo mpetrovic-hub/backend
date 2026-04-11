@@ -231,10 +231,12 @@ require_once __DIR__ . '/../includes/services/class-conversion-attribution-resol
 require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver.php';
+require_once __DIR__ . '/../includes/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
 require_once __DIR__ . '/../includes/http/class-nth-rest-routes.php';
+require_once __DIR__ . '/../includes/shortcodes/class-landing-pages-gallery-shortcode.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
 {
@@ -1790,6 +1792,168 @@ kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and legacy fal
     }
 });
 
+kiwi_run_test('Kiwi_Landing_Page_Gallery_Service normalizes metadata and dedicated-host URLs', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_gallery_meta');
+    $original_server = $_SERVER;
+
+    try {
+        $_SERVER['HTTP_HOST'] = 'backend.example.test';
+        $_SERVER['HTTPS'] = 'on';
+
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'hostnames' => ['FRLP2.JOY-PLAY.COM', 'frlp2.joy-play.com'],
+            'dedicated_path' => 'offer/fr',
+            'backend_path' => '/lp/fr/myjoyplay',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ]);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [],
+            true,
+            false,
+            false
+        );
+        $service = new Kiwi_Landing_Page_Gallery_Service($config);
+        $gallery_data = $service->build_gallery_data();
+        $entry = $gallery_data['entries'][0] ?? [];
+
+        kiwi_assert_same(1, $gallery_data['count'] ?? 0, 'Expected one filesystem landing page in the gallery.');
+        kiwi_assert_same('lp2-fr', $entry['key'] ?? '', 'Expected the landing key to be normalized from integration metadata.');
+        kiwi_assert_same('FR', $entry['country'] ?? '', 'Expected the country code to remain uppercase.');
+        kiwi_assert_same('nth-fr-one-off', $entry['flow'] ?? '', 'Expected flow metadata to be carried into gallery output.');
+        kiwi_assert_same('nth_fr_one_off_jplay', $entry['service_key'] ?? '', 'Expected service_key metadata to be carried into gallery output.');
+        kiwi_assert_same('hybrid', $entry['routing_mode'] ?? '', 'Expected hostnames plus backend_path to be marked as hybrid routing.');
+        kiwi_assert_same(
+            'https://frlp2.joy-play.com/offer/fr',
+            $entry['primary_url']['url'] ?? '',
+            'Expected dedicated hostnames to produce absolute public URLs.'
+        );
+        kiwi_assert_same(
+            'https://frlp2.joy-play.com/offer/fr',
+            $entry['preview_url'] ?? '',
+            'Expected preview URL to prefer absolute dedicated hostname URLs.'
+        );
+    } finally {
+        $_SERVER = $original_server;
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Gallery_Service derives inferred URL for backend-path-only pages', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_gallery_path');
+    $original_server = $_SERVER;
+
+    try {
+        $_SERVER['HTTP_HOST'] = 'backend.example.test';
+        $_SERVER['HTTPS'] = 'on';
+
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'hostnames' => [],
+            'backend_path' => 'lp/fr/path-only',
+            'dedicated_path' => '/',
+        ]);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [],
+            true,
+            false,
+            false
+        );
+        $service = new Kiwi_Landing_Page_Gallery_Service($config);
+        $gallery_data = $service->build_gallery_data();
+        $entry = $gallery_data['entries'][0] ?? [];
+        $urls = $entry['public_urls'] ?? [];
+
+        kiwi_assert_same('/lp/fr/path-only', $entry['backend_path'] ?? '', 'Expected backend_path normalization to force a leading slash.');
+        kiwi_assert_same('/lp/fr/path-only', $urls[0]['url'] ?? '', 'Expected the first URL candidate to keep the path-only routing strategy.');
+        kiwi_assert_same(
+            'https://backend.example.test/lp/fr/path-only',
+            $urls[1]['url'] ?? '',
+            'Expected the gallery to derive an inferred absolute URL from the current host for backend_path-only pages.'
+        );
+        kiwi_assert_same(true, $urls[1]['inferred'] ?? false, 'Expected inferred absolute backend URLs to be explicitly marked.');
+    } finally {
+        $_SERVER = $original_server;
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Gallery_Service keeps valid entries when discovery reports broken folders', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_gallery_errors');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr');
+        kiwi_write_landing_page_fixture($project_root, 'lp3-fr', [], false);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [],
+            true,
+            false,
+            false
+        );
+        $service = new Kiwi_Landing_Page_Gallery_Service($config);
+        $gallery_data = $service->build_gallery_data();
+
+        kiwi_assert_same(1, $gallery_data['count'] ?? 0, 'Expected invalid folders to be skipped while valid pages remain renderable.');
+        kiwi_assert_true(!empty($gallery_data['errors']), 'Expected gallery data to surface filesystem discovery warnings.');
+        kiwi_assert_contains(
+            'Landing page "lp3-fr" is missing styles.css.',
+            implode("\n", $gallery_data['errors']),
+            'Expected gallery warnings to include missing-file diagnostics from discovery.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and URL metadata', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_gallery_shortcode');
+    $original_server = $_SERVER;
+    $GLOBALS['kiwi_test_shortcodes'] = [];
+
+    try {
+        $_SERVER['HTTP_HOST'] = 'backend.example.test';
+        $_SERVER['HTTPS'] = 'on';
+
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'hostnames' => ['frlp2.joy-play.com'],
+            'backend_path' => '/lp/fr/myjoyplay',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ]);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [],
+            true,
+            false,
+            false
+        );
+        $service = new Kiwi_Landing_Page_Gallery_Service($config);
+        $shortcode = new Kiwi_Landing_Pages_Gallery_Shortcode($service);
+        $shortcode->register();
+
+        kiwi_assert_true(
+            isset($GLOBALS['kiwi_test_shortcodes']['kiwi_landing_pages_gallery']),
+            'Expected the landing pages gallery shortcode tag to be registered.'
+        );
+
+        $output = $shortcode->render();
+
+        kiwi_assert_contains('kiwi-lp-gallery__grid', $output, 'Expected the shortcode to render the responsive gallery grid.');
+        kiwi_assert_contains('<iframe', $output, 'Expected the shortcode to render iframe-based landing-page previews.');
+        kiwi_assert_contains('lp2-fr', $output, 'Expected the shortcode to render the landing-page key.');
+        kiwi_assert_contains('nth_fr_one_off_jplay', $output, 'Expected the shortcode to render service_key metadata.');
+        kiwi_assert_contains('https://frlp2.joy-play.com/', $output, 'Expected dedicated hostname public URLs to be rendered.');
+        kiwi_assert_contains('(inferred)', $output, 'Expected inferred current-host URLs to be labeled explicitly.');
+    } finally {
+        $_SERVER = $original_server;
+        kiwi_remove_directory($project_root);
+    }
+});
+
 kiwi_run_test('Kiwi_Landing_Page_Router resolves filesystem landing pages to the configured flow', function (): void {
     $project_root = kiwi_create_temp_directory('kiwi_lp_router');
 
@@ -2957,9 +3121,10 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'kiwi-backend-forms',
             'kiwi-backend-tables',
             'kiwi-backend-frontend',
+            'kiwi-backend-landing-pages-gallery',
         ],
         array_column($GLOBALS['kiwi_test_styles'], 'handle'),
-        'Expected the existing stylesheet handles to remain unchanged.'
+        'Expected stylesheet handles to include the landing-page gallery CSS.'
     );
     kiwi_assert_same(
         [

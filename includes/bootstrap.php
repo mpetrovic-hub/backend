@@ -58,6 +58,7 @@ require_once __DIR__ . '/services/class-conversion-attribution-resolver.php';
 require_once __DIR__ . '/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-resolver.php';
+require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/services/class-nth-fr-one-off-service.php';
 
@@ -84,6 +85,7 @@ require_once __DIR__ . '/exporters/class-csv-exporter.php';
 require_once __DIR__ . '/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-refunder-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-blacklister-shortcode.php';
+require_once __DIR__ . '/shortcodes/class-landing-pages-gallery-shortcode.php';
 
 /**
  * HTTP / REST
