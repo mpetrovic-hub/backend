@@ -195,8 +195,10 @@ class Kiwi_Landing_Page_Router
             (string) ($landing_page['cta_href'] ?? '#')
         );
 
-        $css_url = $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/styles.css';
+        $asset_base_url = $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/';
+        $css_url = $asset_base_url . 'styles.css';
         $html = $this->replace_stylesheet_href($html, $css_url);
+        $html = $this->replace_local_asset_paths($html, $asset_base_url);
 
         if (is_file($styles_path) && is_readable($styles_path)) {
             $css_content = file_get_contents($styles_path);
@@ -229,6 +231,39 @@ class Kiwi_Landing_Page_Router
         }
 
         return $stylesheet_link . "\n" . $html;
+    }
+
+    private function replace_local_asset_paths(string $html, string $asset_base_url): string
+    {
+        $asset_base_url = rtrim($asset_base_url, '/\\') . '/';
+
+        $pattern = '/(<(?:img|source|video|audio|script|a|link)\b[^>]*\b(?:src|href)=["\'])\.\/([^"\']+)(["\'][^>]*>)/i';
+        $rewritten_html = preg_replace_callback(
+            $pattern,
+            function (array $matches) use ($asset_base_url): string {
+                $relative_path = trim((string) ($matches[2] ?? ''));
+
+                if ($relative_path === '' || strtolower($relative_path) === 'styles.css') {
+                    return (string) ($matches[0] ?? '');
+                }
+
+                $normalized_path = str_replace('\\', '/', $relative_path);
+                $normalized_path = ltrim($normalized_path, '/');
+
+                $segments = array_values(array_filter(explode('/', $normalized_path), static function (string $segment): bool {
+                    return $segment !== '';
+                }));
+                $encoded_segments = array_map('rawurlencode', $segments);
+                $encoded_path = implode('/', $encoded_segments);
+
+                return (string) ($matches[1] ?? '')
+                    . htmlspecialchars($asset_base_url . $encoded_path, ENT_QUOTES, 'UTF-8')
+                    . (string) ($matches[3] ?? '');
+            },
+            $html
+        );
+
+        return is_string($rewritten_html) ? $rewritten_html : $html;
     }
 
     private function inject_inline_styles(string $html, string $css_content): string

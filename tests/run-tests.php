@@ -2226,6 +2226,43 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
 });
 
+kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to plugin landing-page asset URLs', function (): void {
+    $router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Config(),
+        new Kiwi_Landing_Page_Session_Repository(),
+        'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/'
+    );
+
+    $replace_stylesheet_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_stylesheet_href');
+    $replace_local_assets_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_local_asset_paths');
+
+    $html = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body><img class="hero" src="./hero-dragonfight.jpg"><script src="./core.js"></script><a href="./terms.pdf">Terms</a></body></html>';
+    $asset_base_url = 'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/';
+    $html = $replace_stylesheet_method->invoke($router, $html, $asset_base_url . 'styles.css');
+    $html = $replace_local_assets_method->invoke($router, $html, $asset_base_url);
+
+    kiwi_assert_contains(
+        'href="https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/styles.css"',
+        $html,
+        'Expected styles.css path to be rewritten to plugin asset URL.'
+    );
+    kiwi_assert_contains(
+        'src="https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/hero-dragonfight.jpg"',
+        $html,
+        'Expected local img src paths to be rewritten to plugin landing-page asset URL.'
+    );
+    kiwi_assert_contains(
+        'src="https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/core.js"',
+        $html,
+        'Expected local script src paths to be rewritten to plugin landing-page asset URL.'
+    );
+    kiwi_assert_contains(
+        'href="https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/terms.pdf"',
+        $html,
+        'Expected local anchor href paths to be rewritten to plugin landing-page asset URL.'
+    );
+});
+
 kiwi_run_test('Kiwi_Tracking_Capture_Service captures clickid and persists server-side attribution state', function (): void {
     $_COOKIE = [];
     $repository = new Kiwi_Test_Click_Attribution_Repository();
