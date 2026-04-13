@@ -14,7 +14,7 @@ return [
     'title' => 'LP3 France One-off',
     'active' => true,
 
-    'backend_path' => '/lp/fr/myjoyplay3',
+    'backend_path' => '/lp/fr/myjoyplay3', // defines the path on which the backend will be available, e.g. /lp/fr/myjoyplay3
     'dedicated_path' => '/',
     'hostnames' => ['frlp3.joy-play.com'],
     'service_key' => 'nth_fr_one_off_jplay',
