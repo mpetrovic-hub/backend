@@ -232,6 +232,7 @@ require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver.php';
 require_once __DIR__ . '/../includes/services/class-landing-page-gallery-service.php';
+require_once __DIR__ . '/../includes/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
@@ -367,6 +368,51 @@ function kiwi_write_landing_page_fixture(
             );
         }
     }
+}
+
+function kiwi_write_variant_agent_fixture(
+    string $project_root,
+    string $folder_name,
+    string $landing_title
+): void {
+    kiwi_write_file(
+        $project_root . DIRECTORY_SEPARATOR . 'README.md',
+        "# Fixture README\n\nRepository conventions.\n"
+    );
+    kiwi_write_file(
+        $project_root . DIRECTORY_SEPARATOR . 'agents.md',
+        "# Fixture AGENTS\n\nAgent operating instructions.\n"
+    );
+
+    kiwi_write_landing_page_fixture($project_root, $folder_name, [
+        'title' => $landing_title,
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
+    ]);
+
+    $folder_path = $project_root . DIRECTORY_SEPARATOR . 'landing-pages' . DIRECTORY_SEPARATOR . $folder_name;
+
+    kiwi_write_file(
+        $folder_path . DIRECTORY_SEPARATOR . 'index.html',
+        "<!doctype html>\n"
+        . "<html lang=\"fr\">\n"
+        . "<head>\n"
+        . "  <meta charset=\"utf-8\">\n"
+        . "  <title>MyJoyplay FR</title>\n"
+        . "  <link rel=\"stylesheet\" href=\"./styles.css\">\n"
+        . "</head>\n"
+        . "<body>\n"
+        . "  <main class=\"lp-container\">\n"
+        . "    <h1>Service Joyplay</h1>\n"
+        . "    <p>Catalogue de jeux mobile.</p>\n"
+        . "    <a class=\"cta\" href=\"{{KIWI_PRIMARY_CTA_HREF}}\">CONTINUER ET PAYER</a>\n"
+        . "    <p class=\"price\">Activer en envoyant JPLAY au 84072<br>4,50 EUR / SMS + prix d'un SMS</p>\n"
+        . "    <p class=\"disclaimer\">Service a frais uniques. Assistance: myjoyplay.fr@silverlines.info.</p>\n"
+        . "  </main>\n"
+        . "</body>\n"
+        . "</html>\n"
+    );
 }
 
 function kiwi_run_test(string $name, callable $test): void
@@ -1982,6 +2028,128 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
         kiwi_assert_contains('body { font-family: Arial, sans-serif; }', $output, 'Expected local preview rendering to inline styles.css content in srcdoc.');
     } finally {
         $_SERVER = $original_server;
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Variant_Agent fails loudly when README.md or agents.md is missing', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_variant_missing_rules');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'title' => 'LP Missing Rules',
+        ]);
+        kiwi_write_file(
+            $project_root . DIRECTORY_SEPARATOR . 'README.md',
+            "# Fixture README\n"
+        );
+
+        $agent = new Kiwi_Landing_Page_Variant_Agent($project_root);
+        $caught_message = '';
+
+        try {
+            $agent->create_landing_page_variants_by_title('LP Missing Rules');
+        } catch (RuntimeException $exception) {
+            $caught_message = $exception->getMessage();
+        }
+
+        kiwi_assert_contains(
+            'agents.md',
+            strtolower($caught_message),
+            'Expected variant generation to fail loudly when agents.md has not been read because it is missing.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Variant_Agent resolves page, extracts protected content, parses integration, and generates a minimal safe variant', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_variant_extract');
+
+    try {
+        kiwi_write_variant_agent_fixture($project_root, 'lp2-fr', 'XYZ');
+        kiwi_write_variant_agent_fixture($project_root, 'lp3-fr', 'Other Title');
+
+        $agent = new Kiwi_Landing_Page_Variant_Agent($project_root);
+        $result = $agent->create_landing_page_variants_by_title('XYZ', ['variant_count' => 1]);
+        $variant = $result['variants'][0] ?? [];
+        $variant_html = (string) ($variant['html'] ?? '');
+
+        kiwi_assert_same(
+            'read README.md',
+            $result['workflow']['sequence'][0] ?? '',
+            'Expected the variant workflow to begin by reading README.md.'
+        );
+        kiwi_assert_same(
+            'read agents.md',
+            $result['workflow']['sequence'][1] ?? '',
+            'Expected the variant workflow to read agents.md immediately after README.md.'
+        );
+        kiwi_assert_same(
+            'lp2-fr',
+            $result['landing_page']['key'] ?? '',
+            'Expected title lookup to resolve the landing-page folder mapped by integration.php title.'
+        );
+        kiwi_assert_contains(
+            'Activer en envoyant JPLAY au 84072',
+            (string) ($result['protected_content']['price_text'] ?? ''),
+            'Expected .price text to be extracted from source HTML.'
+        );
+        kiwi_assert_contains(
+            'Assistance: myjoyplay.fr@silverlines.info.',
+            (string) ($result['protected_content']['disclaimer_text'] ?? ''),
+            'Expected .disclaimer text to be extracted from source HTML.'
+        );
+        kiwi_assert_same(
+            'nth-fr-one-off',
+            $result['integration']['flow'] ?? '',
+            'Expected integration.php metadata to be parsed and exposed.'
+        );
+        kiwi_assert_same(
+            'nth',
+            $result['integration']['provider'] ?? '',
+            'Expected integration.php provider metadata to be preserved.'
+        );
+        kiwi_assert_same(
+            'repository_fallback',
+            $result['research']['mode'] ?? '',
+            'Expected variant generation to work in degraded mode without external web research.'
+        );
+        kiwi_assert_true(
+            count($result['variants'] ?? []) >= 1,
+            'Expected at least one generated landing-page variant.'
+        );
+        kiwi_assert_same(
+            'minimal',
+            $variant['type'] ?? '',
+            'Expected generated variants to support minimal variant output as a first-class type.'
+        );
+        kiwi_assert_contains(
+            'data-kiwi-variant=',
+            $variant_html,
+            'Expected variant output HTML to contain the injected minimal variant style block.'
+        );
+        kiwi_assert_contains(
+            '<p class="price">Activer en envoyant JPLAY au 84072<br>4,50 EUR / SMS + prix d\'un SMS</p>',
+            $variant_html,
+            'Expected generated variant HTML to preserve the protected .price block.'
+        );
+        kiwi_assert_contains(
+            '<p class="disclaimer">Service a frais uniques. Assistance: myjoyplay.fr@silverlines.info.</p>',
+            $variant_html,
+            'Expected generated variant HTML to preserve the protected .disclaimer block.'
+        );
+        kiwi_assert_same(
+            $result['integration']['flow'] ?? '',
+            $variant['integration_guardrails']['flow'] ?? '',
+            'Expected integration-derived flow constraints to be reused inside variant metadata guardrails.'
+        );
+        kiwi_assert_same(
+            $result['integration']['provider'] ?? '',
+            $variant['integration_guardrails']['provider'] ?? '',
+            'Expected integration-derived provider constraints to be reused inside variant metadata guardrails.'
+        );
+    } finally {
         kiwi_remove_directory($project_root);
     }
 });

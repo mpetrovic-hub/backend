@@ -59,6 +59,7 @@ require_once __DIR__ . '/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-resolver.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
+require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/services/class-nth-fr-one-off-service.php';
 
