@@ -60,6 +60,49 @@ Important boundary:
 - Incoming provider callback validation is provider-specific.
 - Outgoing affiliate secret/signature applies only to outbound postbacks.
 
+## Landing-page KPI tracking
+
+The landing-page system supports a generic KPI funnel for optimization analysis.
+
+### Event model
+
+- `clicks`
+  - derived from unique landing sessions in `wp_kiwi_landing_page_sessions`
+- `cta1`, `cta2`, `cta3`
+  - client-side step events stored in `wp_kiwi_landing_kpi_events`
+  - deduped per `(landing_key, session_token, step)`
+- `conv`
+  - derived from confirmed conversion states in `wp_kiwi_click_attributions`
+  - includes `confirmed`, `postback_sent`, and `postback_failed`
+
+### Per-landing selector mapping in `integration.php`
+
+Each filesystem landing page can map KPI steps to selectors:
+
+```php
+'kpi_cta_steps' => [
+    'cta1' => 'class="cta"',
+    'cta2' => '.mobile_number_input',
+    'cta3' => '#confirm-button',
+],
+```
+
+Notes:
+- step keys must follow `cta1`, `cta2`, `cta3`, ...
+- selector values can be CSS selectors
+- shorthand `class="cta"` is normalized to `.cta`
+- if no mapping is provided, router defaults to `cta1 => .cta`
+
+### REST endpoints
+
+- `POST /wp-json/kiwi-backend/v1/landing-kpi/event`
+  - ingests client-side CTA step events
+- `GET /wp-json/kiwi-backend/v1/landing-kpi/report`
+  - returns per-landing KPI rows with counts and rates
+  - supports optional filters:
+    - `days` (default 30, max 365)
+    - `landing_key`
+
 ## Key tables and what they mean
 
 - `wp_kiwi_click_attributions`

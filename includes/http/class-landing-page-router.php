@@ -100,7 +100,7 @@ class Kiwi_Landing_Page_Router
         $asset_base_url = $this->plugin_base_url;
 
         if ($this->is_filesystem_landing_page($landing_page)) {
-            return $this->render_filesystem_landing_page($landing_page, $landing_key);
+            return $this->render_filesystem_landing_page($landing_page, $landing_key, $session_token);
         }
 
         if ($template === null) {
@@ -175,7 +175,7 @@ class Kiwi_Landing_Page_Router
         return $index_path !== '' && is_file($index_path);
     }
 
-    private function render_filesystem_landing_page(array $landing_page, string $landing_key): bool
+    private function render_filesystem_landing_page(array $landing_page, string $landing_key, string $session_token): bool
     {
         $index_path = (string) ($landing_page['index_path'] ?? '');
         $styles_path = (string) ($landing_page['styles_path'] ?? '');
@@ -208,8 +208,158 @@ class Kiwi_Landing_Page_Router
             }
         }
 
+        $html = $this->inject_kpi_tracker_script(
+            $html,
+            $landing_page,
+            $landing_key,
+            $session_token
+        );
+
         echo $html;
         exit;
+    }
+
+    private function inject_kpi_tracker_script(
+        string $html,
+        array $landing_page,
+        string $landing_key,
+        string $session_token
+    ): string {
+        $session_token = trim($session_token);
+
+        if ($session_token === '') {
+            return $html;
+        }
+
+        $tracker_payload = [
+            'endpoint' => $this->resolve_kpi_event_endpoint(),
+            'landingKey' => $landing_key,
+            'sessionToken' => $session_token,
+            'steps' => $this->resolve_kpi_step_selectors($landing_page),
+        ];
+        $tracker_json = $this->json_for_script($tracker_payload);
+
+        if ($tracker_json === '') {
+            return $html;
+        }
+
+        $script = "<script>(function(){"
+            . "var cfg={$tracker_json};"
+            . "if(!cfg||!cfg.endpoint||!cfg.landingKey||!cfg.sessionToken){return;}"
+            . "var storagePrefix='kiwi_kpi_sent_'+cfg.landingKey+'_'+cfg.sessionToken+'_';"
+            . "function wasSent(step){try{return window.sessionStorage.getItem(storagePrefix+step)==='1';}catch(e){return false;}}"
+            . "function markSent(step){try{window.sessionStorage.setItem(storagePrefix+step,'1');}catch(e){}}"
+            . "function send(step,eventValue){if(!step||wasSent(step)){return;}"
+            . "var payload=JSON.stringify({landing_key:cfg.landingKey,session_token:cfg.sessionToken,step:step,event_value:eventValue||''});"
+            . "var delivered=false;"
+            . "try{if(typeof navigator!=='undefined'&&navigator.sendBeacon){delivered=navigator.sendBeacon(cfg.endpoint,new Blob([payload],{type:'application/json'}));}}catch(e){}"
+            . "if(!delivered&&typeof fetch==='function'){fetch(cfg.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',keepalive:true,body:payload}).catch(function(){});}"
+            . "markSent(step);}"
+            . "function bind(step,selector){if(!selector){return;}var nodes=[];"
+            . "try{nodes=document.querySelectorAll(selector);}catch(e){return;}"
+            . "if(!nodes||!nodes.length){return;}"
+            . "for(var i=0;i<nodes.length;i++){nodes[i].addEventListener('click',function(){send(step,selector);},{passive:true});}}"
+            . "for(var step in cfg.steps){if(Object.prototype.hasOwnProperty.call(cfg.steps,step)){bind(step,cfg.steps[step]);}}"
+            . "})();</script>";
+
+        if (stripos($html, '</body>') !== false) {
+            return preg_replace('/<\/body>/i', $script . "\n</body>", $html, 1) ?? $html;
+        }
+
+        return $html . "\n" . $script;
+    }
+
+    private function resolve_kpi_event_endpoint(): string
+    {
+        if (function_exists('rest_url')) {
+            return (string) rest_url('kiwi-backend/v1/landing-kpi/event');
+        }
+
+        return '/wp-json/kiwi-backend/v1/landing-kpi/event';
+    }
+
+    private function resolve_kpi_step_selectors(array $landing_page): array
+    {
+        $steps = [];
+        $configured_steps = $landing_page['kpi_cta_steps'] ?? null;
+
+        if (is_array($configured_steps)) {
+            foreach ($configured_steps as $step => $selector) {
+                $step_key = strtolower(trim((string) $step));
+
+                if (preg_match('/^cta[1-9][0-9]*$/', $step_key) !== 1) {
+                    continue;
+                }
+
+                $normalized_selector = $this->normalize_kpi_selector((string) $selector);
+
+                if ($normalized_selector === '') {
+                    continue;
+                }
+
+                $steps[$step_key] = $normalized_selector;
+            }
+        }
+
+        if (empty($steps)) {
+            $steps['cta1'] = '.cta';
+        }
+
+        return $steps;
+    }
+
+    private function normalize_kpi_selector(string $selector): string
+    {
+        $selector = trim($selector);
+
+        if ($selector === '') {
+            return '';
+        }
+
+        if (preg_match('/^class\s*=\s*["\']([^"\']+)["\']$/i', $selector, $matches) === 1) {
+            $classes = preg_split('/\s+/', trim((string) ($matches[1] ?? '')));
+            $classes = array_values(array_filter(array_map(static function ($value): string {
+                return trim((string) $value);
+            }, is_array($classes) ? $classes : [])));
+
+            if (empty($classes)) {
+                return '';
+            }
+
+            return '.' . implode('.', $classes);
+        }
+
+        if (preg_match('/^[A-Za-z0-9_-]+$/', $selector) === 1) {
+            return '.' . $selector;
+        }
+
+        if (preg_match('/^[A-Za-z0-9_-]+(?:\s+[A-Za-z0-9_-]+)+$/', $selector) === 1) {
+            $classes = preg_split('/\s+/', $selector);
+            $classes = array_values(array_filter(array_map(static function ($value): string {
+                return trim((string) $value);
+            }, is_array($classes) ? $classes : [])));
+
+            if (empty($classes)) {
+                return '';
+            }
+
+            return '.' . implode('.', $classes);
+        }
+
+        return $selector;
+    }
+
+    private function json_for_script(array $payload): string
+    {
+        $encoded = function_exists('wp_json_encode')
+            ? wp_json_encode($payload)
+            : json_encode($payload);
+
+        if (!is_string($encoded) || trim($encoded) === '') {
+            return '';
+        }
+
+        return str_replace('</', '<\/', $encoded);
     }
 
     private function replace_stylesheet_href(string $html, string $css_url): string

@@ -159,10 +159,12 @@ if (!class_exists('WP_REST_Request')) {
     class WP_REST_Request
     {
         private $params;
+        private $json_params;
 
-        public function __construct(array $params = [])
+        public function __construct(array $params = [], ?array $json_params = null)
         {
             $this->params = $params;
+            $this->json_params = $json_params;
         }
 
         public function get_param($key)
@@ -173,6 +175,15 @@ if (!class_exists('WP_REST_Request')) {
         public function get_params(): array
         {
             return $this->params;
+        }
+
+        public function get_json_params(): ?array
+        {
+            if (is_array($this->json_params)) {
+                return $this->json_params;
+            }
+
+            return is_array($this->params) ? $this->params : null;
         }
     }
 }
@@ -220,6 +231,7 @@ require_once __DIR__ . '/../includes/repositories/class-nth-event-repository.php
 require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-landing-kpi-event-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
@@ -231,12 +243,14 @@ require_once __DIR__ . '/../includes/services/class-conversion-attribution-resol
 require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver.php';
+require_once __DIR__ . '/../includes/services/class-landing-kpi-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
 require_once __DIR__ . '/../includes/http/class-nth-rest-routes.php';
+require_once __DIR__ . '/../includes/http/class-landing-kpi-rest-routes.php';
 require_once __DIR__ . '/../includes/shortcodes/class-landing-pages-gallery-shortcode.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
@@ -1589,6 +1603,145 @@ class Kiwi_Test_Tracking_Capture_Service extends Kiwi_Tracking_Capture_Service
     }
 }
 
+class Kiwi_Test_Landing_Kpi_Event_Repository extends Kiwi_Landing_Kpi_Event_Repository
+{
+    public $rows = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function insert_step_event(array $data): array
+    {
+        $landing_key = trim((string) ($data['landing_key'] ?? ''));
+        $session_token = trim((string) ($data['session_token'] ?? ''));
+        $event_step = strtolower(trim((string) ($data['event_step'] ?? '')));
+
+        if ($landing_key === '' || $session_token === '' || $event_step === '') {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        $dedupe_key = sha1($landing_key . '|' . $session_token . '|' . $event_step);
+
+        foreach ($this->rows as $row) {
+            if (($row['dedupe_key'] ?? '') === $dedupe_key) {
+                return [
+                    'inserted' => false,
+                    'row' => $row,
+                ];
+            }
+        }
+
+        $row = array_merge(
+            [
+                'id' => $this->next_id++,
+                'created_at' => '2026-04-01 12:00:00',
+                'service_key' => '',
+                'event_value' => '',
+                'request_host' => '',
+                'request_path' => '',
+                'remote_ip' => '',
+                'user_agent' => '',
+                'raw_context' => '',
+            ],
+            $data,
+            [
+                'landing_key' => $landing_key,
+                'session_token' => $session_token,
+                'event_step' => $event_step,
+                'dedupe_key' => $dedupe_key,
+            ]
+        );
+
+        $this->rows[] = $row;
+
+        return [
+            'inserted' => true,
+            'row' => $row,
+        ];
+    }
+
+    public function get_step_counts_by_landing(string $since_mysql, array $landing_keys = []): array
+    {
+        $since_mysql = trim($since_mysql);
+        $landing_keys = array_values(array_filter(array_map('strval', $landing_keys)));
+        $landing_filter = array_flip($landing_keys);
+        $counts = [];
+
+        foreach ($this->rows as $row) {
+            $created_at = trim((string) ($row['created_at'] ?? ''));
+            $landing_key = trim((string) ($row['landing_key'] ?? ''));
+            $event_step = strtolower(trim((string) ($row['event_step'] ?? '')));
+
+            if ($landing_key === '' || $event_step === '') {
+                continue;
+            }
+
+            if ($since_mysql !== '' && $created_at !== '' && $created_at < $since_mysql) {
+                continue;
+            }
+
+            if (!empty($landing_filter) && !isset($landing_filter[$landing_key])) {
+                continue;
+            }
+
+            if (!isset($counts[$landing_key])) {
+                $counts[$landing_key] = [];
+            }
+
+            if (!isset($counts[$landing_key][$event_step])) {
+                $counts[$landing_key][$event_step] = 0;
+            }
+
+            $counts[$landing_key][$event_step]++;
+        }
+
+        return $counts;
+    }
+}
+
+class Kiwi_Test_Landing_Kpi_Service extends Kiwi_Landing_Kpi_Service
+{
+    public $click_counts = [];
+    public $conversion_counts = [];
+
+    protected function fetch_click_counts(array $landing_keys, string $since_mysql): array
+    {
+        return $this->filter_counts($this->click_counts, $landing_keys);
+    }
+
+    protected function fetch_conversion_counts(array $landing_keys, string $since_mysql): array
+    {
+        return $this->filter_counts($this->conversion_counts, $landing_keys);
+    }
+
+    private function filter_counts(array $counts, array $landing_keys): array
+    {
+        if (empty($landing_keys)) {
+            return $counts;
+        }
+
+        $filtered = [];
+        $allowed = array_flip(array_values(array_filter(array_map('strval', $landing_keys))));
+
+        foreach ($counts as $key => $value) {
+            $landing_key = trim((string) $key);
+
+            if ($landing_key === '' || !isset($allowed[$landing_key])) {
+                continue;
+            }
+
+            $filtered[$landing_key] = (int) $value;
+        }
+
+        return $filtered;
+    }
+}
+
 class Kiwi_Test_Affiliate_Postback_Dispatcher extends Kiwi_Affiliate_Postback_Dispatcher
 {
     public $calls = [];
@@ -2574,6 +2727,184 @@ kiwi_run_test('Kiwi_Nth_Rest_Routes dispatches generic callbacks by payload comm
     kiwi_assert_same('accepted', $mo_response->headers['X-Kiwi-Status'] ?? '', 'Expected successful callbacks to be acknowledged as accepted.');
     kiwi_assert_same('accepted', $notification_response->headers['X-Kiwi-Status'] ?? '', 'Expected notification callbacks to be acknowledged as accepted.');
     kiwi_assert_same('rejected', $rejected_response->headers['X-Kiwi-Status'] ?? '', 'Expected unresolved callbacks to be acknowledged as rejected.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes registers event and report endpoints', function (): void {
+    $GLOBALS['kiwi_test_rest_routes'] = [];
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $event_repository = new Kiwi_Test_Landing_Kpi_Event_Repository();
+    $service = new Kiwi_Test_Landing_Kpi_Service($config, $event_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $event_repository, $service);
+
+    $routes->register_routes();
+
+    kiwi_assert_same(2, count($GLOBALS['kiwi_test_rest_routes']), 'Expected landing KPI routes to register event and report endpoints.');
+    kiwi_assert_same('/landing-kpi/event', $GLOBALS['kiwi_test_rest_routes'][0]['route'] ?? '', 'Expected event endpoint route to match contract.');
+    kiwi_assert_same('/landing-kpi/report', $GLOBALS['kiwi_test_rest_routes'][1]['route'] ?? '', 'Expected report endpoint route to match contract.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes ingests deduplicated CTA step events', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $event_repository = new Kiwi_Test_Landing_Kpi_Event_Repository();
+    $service = new Kiwi_Test_Landing_Kpi_Service($config, $event_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $event_repository, $service);
+
+    $first = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'session_token_001',
+        'step' => 'cta1',
+        'event_value' => '.cta',
+    ]));
+    $duplicate = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'session_token_001',
+        'step' => 'cta1',
+        'event_value' => '.cta',
+    ]));
+    $invalid = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'session_token_001',
+        'step' => 'invalid_step',
+    ]));
+
+    kiwi_assert_true(($first->data['success'] ?? false) === true, 'Expected valid KPI events to be accepted.');
+    kiwi_assert_true(($first->data['inserted'] ?? false) === true, 'Expected first KPI event to be inserted.');
+    kiwi_assert_true(($duplicate->data['inserted'] ?? true) === false, 'Expected duplicate KPI step events for same session to be deduplicated.');
+    kiwi_assert_same(1, count($event_repository->rows), 'Expected dedupe to keep one stored row for landing/session/step.');
+    kiwi_assert_same(400, $invalid->status, 'Expected invalid KPI step values to be rejected.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing KPI rows with percentage rates', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'title' => 'LP2',
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+            'lp3-fr' => [
+                'title' => 'LP3',
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $event_repository = new Kiwi_Test_Landing_Kpi_Event_Repository();
+    $service = new Kiwi_Test_Landing_Kpi_Service($config, $event_repository);
+
+    for ($i = 0; $i < 40; $i++) {
+        $event_repository->insert_step_event([
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'lp2_cta1_' . $i,
+            'event_step' => 'cta1',
+        ]);
+    }
+    for ($i = 0; $i < 25; $i++) {
+        $event_repository->insert_step_event([
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'lp2_cta2_' . $i,
+            'event_step' => 'cta2',
+        ]);
+    }
+    for ($i = 0; $i < 10; $i++) {
+        $event_repository->insert_step_event([
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'lp2_cta3_' . $i,
+            'event_step' => 'cta3',
+        ]);
+    }
+    for ($i = 0; $i < 5; $i++) {
+        $event_repository->insert_step_event([
+            'landing_key' => 'lp3-fr',
+            'session_token' => 'lp3_cta1_' . $i,
+            'event_step' => 'cta1',
+        ]);
+    }
+
+    $service->click_counts = [
+        'lp2-fr' => 100,
+        'lp3-fr' => 20,
+    ];
+    $service->conversion_counts = [
+        'lp2-fr' => 12,
+        'lp3-fr' => 2,
+    ];
+
+    $report = $service->build_report(30);
+    $rows = $report['rows'] ?? [];
+    $lp2 = null;
+
+    foreach ($rows as $row) {
+        if (($row['landing_key'] ?? '') === 'lp2-fr') {
+            $lp2 = $row;
+            break;
+        }
+    }
+
+    kiwi_assert_true(is_array($lp2), 'Expected KPI report to include lp2-fr row.');
+    kiwi_assert_same(100, $lp2['clicks'] ?? 0, 'Expected click count to come from landing sessions aggregate.');
+    kiwi_assert_same(40, $lp2['cta1'] ?? 0, 'Expected cta1 count to come from KPI events aggregate.');
+    kiwi_assert_same(25, $lp2['cta2'] ?? 0, 'Expected cta2 count to come from KPI events aggregate.');
+    kiwi_assert_same(10, $lp2['cta3'] ?? 0, 'Expected cta3 count to come from KPI events aggregate.');
+    kiwi_assert_same(12, $lp2['conv'] ?? 0, 'Expected conversion count to come from conversion aggregate.');
+    kiwi_assert_same(40.0, $lp2['cta1_rate_pct'] ?? 0.0, 'Expected cta1 rate to be calculated against clicks.');
+    kiwi_assert_same(25.0, $lp2['cta2_rate_pct'] ?? 0.0, 'Expected cta2 rate to be calculated against clicks.');
+    kiwi_assert_same(10.0, $lp2['cta3_rate_pct'] ?? 0.0, 'Expected cta3 rate to be calculated against clicks.');
+    kiwi_assert_same(12.0, $lp2['conv_rate_pct'] ?? 0.0, 'Expected conversion rate to be calculated against clicks.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router accepts integration kpi_cta_steps using class assignment shorthand', function (): void {
+    $router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Config(),
+        new Kiwi_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+    $method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_kpi_step_selectors');
+    $steps = $method->invoke($router, [
+        'kpi_cta_steps' => [
+            'cta1' => 'class="cta"',
+            'cta2' => '.mobile_number_input',
+        ],
+    ]);
+
+    kiwi_assert_same('.cta', $steps['cta1'] ?? '', 'Expected class=\"cta\" shorthand to normalize into .cta selector.');
+    kiwi_assert_same('.mobile_number_input', $steps['cta2'] ?? '', 'Expected direct CSS selectors to remain unchanged.');
 });
 
 kiwi_run_test('Kiwi_Landing_Primary_Cta_Resolver builds NTH sms CTA with transaction_id suffix', function (): void {

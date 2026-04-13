@@ -20,4 +20,7 @@ return [
     'service_key' => 'nth_fr_one_off_jplay',
     'shortcode' => '84072',
     'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
+    'kpi_cta_steps' => [
+        'cta1' => 'class="cta"',
+    ],
 ];

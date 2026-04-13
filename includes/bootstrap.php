@@ -58,6 +58,7 @@ require_once __DIR__ . '/services/class-conversion-attribution-resolver.php';
 require_once __DIR__ . '/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-resolver.php';
+require_once __DIR__ . '/services/class-landing-kpi-service.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';
@@ -74,6 +75,7 @@ require_once __DIR__ . '/repositories/class-nth-event-repository.php';
 require_once __DIR__ . '/repositories/class-nth-flow-transaction-repository.php';
 require_once __DIR__ . '/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/repositories/class-sales-repository.php';
+require_once __DIR__ . '/repositories/class-landing-kpi-event-repository.php';
 
 /**
  * Exporters
@@ -93,6 +95,7 @@ require_once __DIR__ . '/shortcodes/class-landing-pages-gallery-shortcode.php';
  */
 require_once __DIR__ . '/http/class-dimoco-rest-routes.php';
 require_once __DIR__ . '/http/class-nth-rest-routes.php';
+require_once __DIR__ . '/http/class-landing-kpi-rest-routes.php';
 require_once __DIR__ . '/http/class-landing-page-router.php';
 
 $plugin = new Kiwi_Plugin(
