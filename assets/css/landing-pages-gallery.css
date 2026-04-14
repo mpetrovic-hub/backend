@@ -275,30 +275,30 @@
     margin: 0;
     display: grid;
     grid-template-columns: 1fr;
-    gap: 0.18rem;
-    padding-top: 0.15rem;
+    gap: 0.04rem;
+    padding-top: 0.08rem;
 }
 
 .kiwi-lp-card__meta div {
     background: transparent;
     border: 0;
     border-radius: 0;
-    padding: 0.12rem 0;
+    padding: 0;
     display: grid;
-    grid-template-columns: minmax(84px, auto) 1fr;
-    align-items: start;
-    gap: 0.55rem;
+    grid-template-columns: minmax(74px, auto) 1fr;
+    align-items: baseline;
+    gap: 0.4rem;
 }
 
 .kiwi-lp-card__meta dt {
-    margin: 0;
-    font-size: 0.64rem;
+    margin: 0 !important;
+    font-size: 0.74rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.035em;
     color: var(--kiwi-lp-muted);
     flex: 0 0 auto;
-    line-height: 1.2;
+    line-height: 1.14;
     opacity: 0.92;
 }
 
@@ -307,12 +307,13 @@
 }
 
 .kiwi-lp-card__meta dd {
-    margin: 0;
-    font-size: 0.84rem;
+    margin: 0 !important;
+    font-size: 0.74rem;
     font-weight: 600;
     word-break: break-word;
     text-align: left;
-    line-height: 1.28;
+    line-height: 1.14;
+    padding: 0 !important;
 }
 
 .kiwi-lp-card__url-label {
