@@ -32,32 +32,35 @@
     justify-content: center;
     gap: 0.35rem;
     min-height: 38px;
-    padding: 0.55rem 0.95rem;
-    border: 1px solid var(--kiwi-color-accent);
-    border-radius: var(--kiwi-radius-xs);
-    background: var(--kiwi-color-accent);
-    color: #ffffff;
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(117, 140, 230, 0.42);
+    border-radius: var(--kiwi-radius-pill);
+    background: linear-gradient(140deg, rgba(29, 36, 63, 0.92) 0%, rgba(17, 22, 43, 0.94) 100%);
+    color: #e9eeff;
     font-size: 0.9rem;
     font-weight: 700;
     line-height: 1.2;
     text-decoration: none;
     cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 20px rgba(7, 11, 28, 0.45);
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
 }
 
 .kiwi-button:hover {
-    background: var(--kiwi-color-accent-strong);
-    border-color: var(--kiwi-color-accent-strong);
-    color: #ffffff;
+    background: linear-gradient(140deg, rgba(37, 46, 80, 0.94) 0%, rgba(22, 28, 54, 0.96) 100%);
+    border-color: rgba(139, 160, 239, 0.58);
+    color: #f2f5ff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.11), 0 10px 24px rgba(8, 13, 34, 0.52);
 }
 
 .kiwi-button:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 3px rgba(112, 200, 145, 0.28);
+    box-shadow: 0 0 0 3px rgba(124, 149, 244, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .kiwi-button:active {
     transform: translateY(1px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 6px 14px rgba(7, 11, 28, 0.45);
 }
 
 .kiwi-button:disabled,
@@ -68,15 +71,31 @@
 }
 
 .kiwi-button--secondary {
-    border-color: #4a6655;
-    background: #263a2f;
-    color: #d6f1e1;
+    border-color: rgba(108, 126, 214, 0.36);
+    background: rgba(16, 21, 40, 0.86);
+    color: #d9e1ff;
 }
 
 .kiwi-button--secondary:hover {
-    border-color: #648a73;
-    background: #2f4a3b;
-    color: #dbffe9;
+    border-color: rgba(132, 151, 237, 0.52);
+    background: rgba(20, 26, 48, 0.9);
+    color: #edf1ff;
+}
+
+.submit-button {
+    border-color: rgba(108, 196, 133, 0.62);
+    background: linear-gradient(150deg, #1d5133 0%, #17382a 100%);
+    color: #d9ffe7;
+}
+
+.submit-button:hover {
+    border-color: rgba(128, 219, 156, 0.78);
+    background: linear-gradient(150deg, #24623d 0%, #1b4533 100%);
+    color: #edfff4;
+}
+
+.submit-button:focus-visible {
+    box-shadow: 0 0 0 3px rgba(114, 205, 145, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .kiwi-notice {
