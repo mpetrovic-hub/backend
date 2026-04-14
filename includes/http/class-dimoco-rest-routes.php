@@ -76,34 +76,22 @@ class Kiwi_Dimoco_Rest_Routes
 
     error_log('KIWI DIMOCO CALLBACK STEP 3: before resolve_dimoco_service_by_order_from_xml');
 
-    $service = $this->resolve_dimoco_service_by_order_from_xml($xml);
+    $service_resolution = $this->resolve_and_verify_dimoco_service_for_callback($xml, $received_digest);
+    $service = $service_resolution['service'] ?? null;
 
-    error_log('KIWI DIMOCO CALLBACK STEP 4: service resolved');
+    error_log('KIWI DIMOCO CALLBACK STEP 4: service resolution strategy=' . ($service_resolution['strategy'] ?? 'unknown'));
 
     if ($service === null) {
-        error_log('KIWI DIMOCO CALLBACK: unknown order');
+        error_log('KIWI DIMOCO CALLBACK: service resolution failed: ' . ($service_resolution['message'] ?? 'Unknown DIMOCO order.'));
 
         return new WP_REST_Response([
             'success' => false,
-            'message' => 'Unknown DIMOCO order.',
-        ], 400);
+            'message' => (string) ($service_resolution['message'] ?? 'Unknown DIMOCO order.'),
+        ], (int) ($service_resolution['status'] ?? 400));
     }
 
-    $secret = $service['secret'] ?? '';
-    error_log('KIWI DIMOCO CALLBACK STEP 5: secret loaded');
-
-    $is_valid = $this->dimoco_callback_verifier->verify($xml, $received_digest, $secret);
-    error_log('KIWI DIMOCO CALLBACK STEP 6: digest checked => ' . ($is_valid ? 'valid' : 'invalid'));
-
-    if (!$is_valid) {
-        error_log('KIWI DIMOCO CALLBACK: invalid digest');
-
-        return new WP_REST_Response([
-            'success' => false,
-            'message' => 'Invalid callback digest.',
-        ], 403);
-    }
-
+    error_log('KIWI DIMOCO CALLBACK STEP 5: service_key=' . (string) ($service['service_key'] ?? ''));
+    error_log('KIWI DIMOCO CALLBACK STEP 6: callback digest already verified during service resolution');
     error_log('KIWI DIMOCO CALLBACK STEP 7: before parser');
 
     $parsed_result = $this->dimoco_response_parser->parse([
@@ -157,6 +145,90 @@ class Kiwi_Dimoco_Rest_Routes
 
     return $response;
 }
+
+    private function resolve_and_verify_dimoco_service_for_callback(string $xml, string $received_digest): array
+    {
+        $service = $this->resolve_dimoco_service_by_order_from_xml($xml);
+
+        if (is_array($service)) {
+            $secret = (string) ($service['secret'] ?? '');
+
+            if ($secret === '') {
+                return [
+                    'service' => null,
+                    'status' => 400,
+                    'message' => 'Incomplete DIMOCO service configuration.',
+                    'strategy' => 'order_missing_secret',
+                ];
+            }
+
+            $is_valid = $this->dimoco_callback_verifier->verify($xml, $received_digest, $secret);
+
+            if (!$is_valid) {
+                return [
+                    'service' => null,
+                    'status' => 403,
+                    'message' => 'Invalid callback digest.',
+                    'strategy' => 'order_digest_invalid',
+                ];
+            }
+
+            return [
+                'service' => $service,
+                'status' => 200,
+                'message' => '',
+                'strategy' => 'order',
+            ];
+        }
+
+        $matched_services = $this->resolve_dimoco_services_by_digest($xml, $received_digest);
+        $matched_count = count($matched_services);
+
+        if ($matched_count === 1) {
+            return [
+                'service' => $matched_services[0],
+                'status' => 200,
+                'message' => '',
+                'strategy' => 'digest_fallback_unique_match',
+            ];
+        }
+
+        if ($matched_count > 1) {
+            return [
+                'service' => null,
+                'status' => 400,
+                'message' => 'Ambiguous DIMOCO callback service.',
+                'strategy' => 'digest_fallback_ambiguous_match',
+            ];
+        }
+
+        return [
+            'service' => null,
+            'status' => 403,
+            'message' => 'Invalid callback digest.',
+            'strategy' => 'digest_fallback_no_match',
+        ];
+    }
+
+    private function resolve_dimoco_services_by_digest(string $xml, string $received_digest): array
+    {
+        $matched_services = [];
+
+        foreach ($this->config->get_dimoco_services() as $service_key => $service) {
+            $secret = trim((string) ($service['secret'] ?? ''));
+
+            if ($secret === '') {
+                continue;
+            }
+
+            if ($this->dimoco_callback_verifier->verify($xml, $received_digest, $secret)) {
+                $service['service_key'] = (string) $service_key;
+                $matched_services[] = $service;
+            }
+        }
+
+        return $matched_services;
+    }
 
     private function resolve_dimoco_service_by_order_from_xml(string $xml): ?array
     {

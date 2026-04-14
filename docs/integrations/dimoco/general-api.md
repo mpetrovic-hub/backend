@@ -243,6 +243,18 @@ Important verification notes:
 - be careful with trailing characters
 - XML values may be escaped inside the XML itself, which is separate from URL decoding
 
+### Callback service resolution in this backend
+
+This backend resolves the internal DIMOCO service in two steps:
+
+1. first by `payment_parameters/order` if present
+2. if `order` is missing, by digest verification against all configured DIMOCO service secrets
+
+Safety rule for step 2:
+- accept the callback only when exactly one configured service secret matches
+- reject the callback when there is no match
+- reject the callback when multiple services match (ambiguous attribution)
+
 ## Repository note
 
 Digest generation and verification are already implemented in the current codebase.  

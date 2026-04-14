@@ -251,6 +251,7 @@ require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
 require_once __DIR__ . '/../includes/http/class-nth-rest-routes.php';
 require_once __DIR__ . '/../includes/http/class-landing-kpi-rest-routes.php';
+require_once __DIR__ . '/../includes/http/class-dimoco-rest-routes.php';
 require_once __DIR__ . '/../includes/shortcodes/class-landing-pages-gallery-shortcode.php';
 
 function kiwi_assert_same($expected, $actual, string $message): void
@@ -489,6 +490,11 @@ class Kiwi_Test_Config extends Kiwi_Config
     public function get_dimoco_service(string $key): ?array
     {
         return $this->dimoco_services[$key] ?? null;
+    }
+
+    public function get_dimoco_services(): array
+    {
+        return $this->dimoco_services;
     }
 
     public function get_dimoco_service_options(): array
@@ -987,6 +993,54 @@ class Kiwi_Test_Refund_Callback_Repository extends Kiwi_Dimoco_Callback_Refund_R
         ];
 
         return $this->next_response();
+    }
+}
+
+class Kiwi_Test_Insert_Refund_Callback_Repository extends Kiwi_Dimoco_Callback_Refund_Repository
+{
+    public $rows = [];
+
+    public function __construct()
+    {
+    }
+
+    public function insert(array $data): bool
+    {
+        $this->rows[] = $data;
+
+        return true;
+    }
+}
+
+class Kiwi_Test_Insert_Blacklist_Callback_Repository extends Kiwi_Dimoco_Callback_Blacklist_Repository
+{
+    public $rows = [];
+
+    public function __construct()
+    {
+    }
+
+    public function insert(array $data): bool
+    {
+        $this->rows[] = $data;
+
+        return true;
+    }
+}
+
+class Kiwi_Test_Insert_Operator_Lookup_Callback_Repository extends Kiwi_Dimoco_Callback_Operator_Lookup_Repository
+{
+    public $rows = [];
+
+    public function __construct()
+    {
+    }
+
+    public function insert(array $data): bool
+    {
+        $this->rows[] = $data;
+
+        return true;
     }
 }
 
@@ -4185,6 +4239,124 @@ kiwi_run_test('Kiwi_Dimoco_Callback_Verifier preserves HMAC digest validation', 
 
     kiwi_assert_true($verifier->verify($xml, $digest, $secret), 'Expected valid digests to verify successfully.');
     kiwi_assert_true(!$verifier->verify($xml, 'invalid', $secret), 'Expected invalid digests to keep failing validation.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Rest_Routes resolves missing-order callbacks by unique digest match and stores refund callbacks', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'svc_match' => [
+                'label' => 'Service Match',
+                'secret' => 'secret-match',
+                'order_id' => '115511',
+            ],
+            'svc_other' => [
+                'label' => 'Service Other',
+                'secret' => 'secret-other',
+                'order_id' => '115510',
+            ],
+        ]
+    );
+
+    $refund_repository = new Kiwi_Test_Insert_Refund_Callback_Repository();
+    $blacklist_repository = new Kiwi_Test_Insert_Blacklist_Callback_Repository();
+    $operator_lookup_repository = new Kiwi_Test_Insert_Operator_Lookup_Callback_Repository();
+
+    $routes = new Kiwi_Dimoco_Rest_Routes(
+        $config,
+        new Kiwi_Dimoco_Callback_Verifier(),
+        new Kiwi_Dimoco_Response_Parser(),
+        $refund_repository,
+        $blacklist_repository,
+        $operator_lookup_repository
+    );
+
+    $xml = <<<XML
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<result version="2" sync="false" original_version="2">
+    <action>refund</action>
+    <action_result>
+        <code>301</code>
+        <detail>ERROR_ACTION_STATUS</detail>
+        <status>1</status>
+    </action_result>
+    <customer/>
+    <request_id>2eb2f1d1-fbb1-4c4e-ae36-9e8a9af1e761</request_id>
+    <reference>R-p-a4711581-327c-418b-b26a-0c1f5c7e0fe3</reference>
+</result>
+XML;
+
+    $digest = hash_hmac('sha256', $xml, 'secret-match');
+    $response = $routes->handle_dimoco_callback(new WP_REST_Request([
+        'data' => $xml,
+        'digest' => $digest,
+    ]));
+
+    kiwi_assert_same(200, $response->status, 'Expected callbacks with missing order to be accepted when digest matches exactly one configured service.');
+    kiwi_assert_same(1, count($refund_repository->rows), 'Expected refund callbacks to be persisted after digest-based service resolution.');
+    kiwi_assert_same('svc_match', $refund_repository->rows[0]['service_key'] ?? '', 'Expected digest fallback to resolve and persist the matching service key.');
+    kiwi_assert_same('Service Match', $refund_repository->rows[0]['service_label'] ?? '', 'Expected digest fallback to persist the matching service label.');
+    kiwi_assert_same(0, count($blacklist_repository->rows), 'Expected refund callbacks not to be routed into blacklist storage.');
+    kiwi_assert_same(0, count($operator_lookup_repository->rows), 'Expected refund callbacks not to be routed into operator-lookup storage.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Rest_Routes rejects missing-order callbacks when digest matches multiple services', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'svc_one' => [
+                'label' => 'Service One',
+                'secret' => 'shared-secret',
+                'order_id' => '115511',
+            ],
+            'svc_two' => [
+                'label' => 'Service Two',
+                'secret' => 'shared-secret',
+                'order_id' => '115510',
+            ],
+        ]
+    );
+
+    $refund_repository = new Kiwi_Test_Insert_Refund_Callback_Repository();
+    $routes = new Kiwi_Dimoco_Rest_Routes(
+        $config,
+        new Kiwi_Dimoco_Callback_Verifier(),
+        new Kiwi_Dimoco_Response_Parser(),
+        $refund_repository,
+        new Kiwi_Test_Insert_Blacklist_Callback_Repository(),
+        new Kiwi_Test_Insert_Operator_Lookup_Callback_Repository()
+    );
+
+    $xml = <<<XML
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<result version="2" sync="false" original_version="2">
+    <action>refund</action>
+    <action_result>
+        <code>301</code>
+        <detail>ERROR_ACTION_STATUS</detail>
+        <status>1</status>
+    </action_result>
+    <customer/>
+    <request_id>2eb2f1d1-fbb1-4c4e-ae36-9e8a9af1e761</request_id>
+    <reference>R-p-a4711581-327c-418b-b26a-0c1f5c7e0fe3</reference>
+</result>
+XML;
+
+    $digest = hash_hmac('sha256', $xml, 'shared-secret');
+    $response = $routes->handle_dimoco_callback(new WP_REST_Request([
+        'data' => $xml,
+        'digest' => $digest,
+    ]));
+
+    kiwi_assert_same(400, $response->status, 'Expected ambiguous digest-only callback resolution to be rejected.');
+    kiwi_assert_same('Ambiguous DIMOCO callback service.', $response->data['message'] ?? '', 'Expected ambiguity failures to explain why the callback was rejected.');
+    kiwi_assert_same(0, count($refund_repository->rows), 'Expected ambiguous callbacks not to be persisted.');
 });
 
 kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service keeps the no-request-id failure branch', function (): void {
