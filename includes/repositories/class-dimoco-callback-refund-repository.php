@@ -128,6 +128,37 @@ class Kiwi_Dimoco_Callback_Refund_Repository
     }
 
     /**
+     * Get recent refund callbacks by request IDs
+     */
+    public function get_recent_by_request_ids(array $request_ids, int $limit = 100): array
+    {
+        global $wpdb;
+
+        $table_name = $this->get_table_name();
+        $limit = max(1, $limit);
+
+        $request_ids = array_values(array_filter(array_map('strval', $request_ids)));
+
+        if (empty($request_ids)) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($request_ids), '%s'));
+        $sql = "SELECT *
+                FROM {$table_name}
+                WHERE request_id IN ({$placeholders})
+                ORDER BY id DESC
+                LIMIT %d";
+
+        $params = array_merge($request_ids, [$limit]);
+
+        return $wpdb->get_results(
+            $wpdb->prepare($sql, ...$params),
+            ARRAY_A
+        );
+    }
+
+    /**
      * Get recent refund callbacks by transaction IDs
      */
     public function get_recent_by_transaction_ids(array $transaction_ids, int $limit = 100): array

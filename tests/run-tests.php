@@ -946,10 +946,37 @@ class Kiwi_Test_Refund_Callback_Repository extends Kiwi_Dimoco_Callback_Refund_R
 {
     public $calls = [];
     private $response;
+    private $response_sequence;
 
-    public function __construct(array $response)
+    public function __construct(array $response, array $response_sequence = [])
     {
         $this->response = $response;
+        $this->response_sequence = $response_sequence;
+    }
+
+    private function next_response(): array
+    {
+        if (empty($this->response_sequence)) {
+            return $this->response;
+        }
+
+        $response = array_shift($this->response_sequence);
+
+        if (empty($this->response_sequence)) {
+            $this->response_sequence[] = $response;
+        }
+
+        return $response;
+    }
+
+    public function get_recent_by_request_ids(array $request_ids, int $limit = 100): array
+    {
+        $this->calls[] = [
+            'request_ids' => $request_ids,
+            'limit' => $limit,
+        ];
+
+        return $this->next_response();
     }
 
     public function get_recent_by_transaction_ids(array $transaction_ids, int $limit = 100): array
@@ -959,7 +986,7 @@ class Kiwi_Test_Refund_Callback_Repository extends Kiwi_Dimoco_Callback_Refund_R
             'limit' => $limit,
         ];
 
-        return $this->response;
+        return $this->next_response();
     }
 }
 
@@ -1127,6 +1154,8 @@ class Kiwi_Test_Dimoco_Blacklister_Shortcode extends Kiwi_Dimoco_Blacklister_Sho
 
 class Kiwi_Test_Dimoco_Refunder_Shortcode extends Kiwi_Dimoco_Refunder_Shortcode
 {
+    private $async_timeout_seconds;
+    private $async_poll_interval_microseconds;
     public $redirect_result_state_id;
     private $generated_result_state_id;
 
@@ -1134,11 +1163,20 @@ class Kiwi_Test_Dimoco_Refunder_Shortcode extends Kiwi_Dimoco_Refunder_Shortcode
         Kiwi_Dimoco_Refund_Batch_Service $batch_service,
         Kiwi_Config $config,
         Kiwi_Dimoco_Callback_Refund_Repository $callback_refund_repository,
-        string $generated_result_state_id = 'kiwi_dimoco_refunder_test_state'
+        string $generated_result_state_id = 'kiwi_dimoco_refunder_test_state',
+        int $async_timeout_seconds = 1,
+        int $async_poll_interval_microseconds = 0
     ) {
         parent::__construct($batch_service, $config, $callback_refund_repository);
 
         $this->generated_result_state_id = $generated_result_state_id;
+        $this->async_timeout_seconds = $async_timeout_seconds;
+        $this->async_poll_interval_microseconds = $async_poll_interval_microseconds;
+    }
+
+    public function collect_async_results(array $request_ids): array
+    {
+        return $this->wait_for_async_refund_callbacks($request_ids);
     }
 
     public function store_result_state_for_test(array $state): string
@@ -1159,6 +1197,16 @@ class Kiwi_Test_Dimoco_Refunder_Shortcode extends Kiwi_Dimoco_Refunder_Shortcode
     protected function can_redirect_after_submission(): bool
     {
         return true;
+    }
+
+    protected function get_async_timeout_seconds(): int
+    {
+        return $this->async_timeout_seconds;
+    }
+
+    protected function get_async_poll_interval_microseconds(): int
+    {
+        return $this->async_poll_interval_microseconds;
     }
 
     protected function generate_result_state_id(): string
@@ -4359,6 +4407,41 @@ kiwi_run_test('Kiwi_Dimoco_Blacklister_Shortcode keeps polling until all async r
     );
 });
 
+kiwi_run_test('Kiwi_Dimoco_Refunder_Shortcode keeps polling until all async request IDs are present', function (): void {
+    $repository = new Kiwi_Test_Refund_Callback_Repository(
+        [],
+        [
+            [
+                ['request_id' => 'req-1'],
+            ],
+            [
+                ['request_id' => 'req-1'],
+                ['request_id' => 'req-2'],
+            ],
+        ]
+    );
+    $shortcode = new Kiwi_Test_Dimoco_Refunder_Shortcode(
+        new Kiwi_Test_Noop_Refund_Batch_Service(),
+        new Kiwi_Test_Config(),
+        $repository,
+        'kiwi_dimoco_refunder_test_state',
+        1,
+        0
+    );
+
+    $async_results = $shortcode->collect_async_results(['req-1', 'req-2']);
+
+    kiwi_assert_same(2, count($repository->calls), 'Expected async callback polling to continue until all request IDs have been observed.');
+    kiwi_assert_same(
+        [
+            ['request_id' => 'req-1'],
+            ['request_id' => 'req-2'],
+        ],
+        $async_results,
+        'Expected the final async callback result set to be returned once all request IDs are present.'
+    );
+});
+
 kiwi_run_test('Kiwi_Dimoco_Blacklister_Shortcode stores and reloads result state for PRG', function (): void {
     $GLOBALS['kiwi_test_transients'] = [];
     $_GET = [];
@@ -4483,6 +4566,7 @@ kiwi_run_test('Kiwi_Dimoco_Refunder_Shortcode redirects after refund submission 
         'messages' => [],
         'results' => [
             [
+                'request_id' => 'req-1',
                 'transaction_id' => 'tx-1',
                 'input_transaction_id' => 'tx-1',
                 'service_label' => 'Service Label',
@@ -4496,6 +4580,7 @@ kiwi_run_test('Kiwi_Dimoco_Refunder_Shortcode redirects after refund submission 
     ]);
     $callback_repository = new Kiwi_Test_Refund_Callback_Repository([
         [
+            'request_id' => 'req-1',
             'transaction_id' => 'tx-1',
             'service_label' => 'Service Label',
             'action_status_text' => 'success',

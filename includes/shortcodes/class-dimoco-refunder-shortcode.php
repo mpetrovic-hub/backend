@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Dimoco_Refunder_Shortcode
 {
+    private const ASYNC_TIMEOUT_SECONDS = 5;
+    private const ASYNC_POLL_INTERVAL_MICROSECONDS = 500000;
     private const RESULT_STATE_QUERY_ARG = 'kiwi_dimoco_refunder_result';
 
     /**
@@ -86,6 +88,7 @@ class Kiwi_Dimoco_Refunder_Shortcode
          * - validates the nonce
          * - reads service / msisdn / transaction list from POST
          * - calls the refund batch service
+         * - waits briefly for async refund callbacks to arrive
          */
         if (
             isset($_POST['kiwi_dimoco_refunder_action']) &&
@@ -112,20 +115,20 @@ class Kiwi_Dimoco_Refunder_Shortcode
                 !empty($batch_result['results']) &&
                 is_array($batch_result['results'])
             ) {
-                $transaction_ids = [];
+                $request_ids = [];
 
                 foreach ($batch_result['results'] as $row) {
-                    $transaction_id = (string) ($row['transaction_id'] ?? $row['input_transaction_id'] ?? '');
+                    $request_id = (string) ($row['request_id'] ?? '');
 
-                    if ($transaction_id !== '') {
-                        $transaction_ids[] = $transaction_id;
+                    if ($request_id !== '') {
+                        $request_ids[] = $request_id;
                     }
                 }
 
-                $transaction_ids = array_values(array_unique($transaction_ids));
+                $request_ids = array_values(array_unique($request_ids));
 
-                if (!empty($transaction_ids)) {
-                    $async_results = $this->callback_refund_repository->get_recent_by_transaction_ids($transaction_ids, 100);
+                if (!empty($request_ids)) {
+                    $async_results = $this->wait_for_async_refund_callbacks($request_ids);
                 }
             }
 
@@ -397,6 +400,38 @@ class Kiwi_Dimoco_Refunder_Shortcode
         return $output;
     }
 
+    protected function wait_for_async_refund_callbacks(array $request_ids): array
+    {
+        $async_results = [];
+        $timeout_seconds = $this->get_async_timeout_seconds();
+        $poll_interval_microseconds = $this->get_async_poll_interval_microseconds();
+        $started_at = time();
+
+        do {
+            $async_results = $this->callback_refund_repository->get_recent_by_request_ids($request_ids, 100);
+
+            if ($this->has_async_results_for_all_request_ids($request_ids, $async_results)) {
+                break;
+            }
+
+            if ($poll_interval_microseconds > 0) {
+                usleep($poll_interval_microseconds);
+            }
+        } while ((time() - $started_at) < $timeout_seconds);
+
+        return $async_results;
+    }
+
+    protected function get_async_timeout_seconds(): int
+    {
+        return self::ASYNC_TIMEOUT_SECONDS;
+    }
+
+    protected function get_async_poll_interval_microseconds(): int
+    {
+        return self::ASYNC_POLL_INTERVAL_MICROSECONDS;
+    }
+
     protected function maybe_store_and_redirect_result_state(array $state): bool
     {
         if (!$this->can_redirect_after_submission()) {
@@ -464,5 +499,20 @@ class Kiwi_Dimoco_Refunder_Shortcode
 
         wp_safe_redirect($redirect_url);
         exit;
+    }
+
+    private function has_async_results_for_all_request_ids(array $request_ids, array $async_results): bool
+    {
+        $found_request_ids = [];
+
+        foreach ($async_results as $async_row) {
+            $async_request_id = (string) ($async_row['request_id'] ?? '');
+
+            if ($async_request_id !== '') {
+                $found_request_ids[$async_request_id] = true;
+            }
+        }
+
+        return count($found_request_ids) >= count($request_ids);
     }
 }
