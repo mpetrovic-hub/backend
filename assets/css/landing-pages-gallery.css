@@ -16,13 +16,13 @@
     background: var(--kiwi-lp-bg);
     border: 0;
     border-radius: 0;
-    padding: 22px;
-    margin: var(--kiwi-lp-frame-space-y) 0;
+    padding: calc(22px + var(--kiwi-lp-frame-space-y)) 22px;
+    margin: 0;
     width: 100vw;
     max-width: none;
     margin-left: calc(50% - 50vw);
     margin-right: calc(50% - 50vw);
-    min-height: calc(100vh - (var(--kiwi-lp-frame-space-y) * 2));
+    min-height: 100dvh;
     box-shadow: none;
     position: relative;
     overflow: hidden;
