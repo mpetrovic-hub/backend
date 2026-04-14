@@ -25,17 +25,17 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $errors = is_array($gallery_data['errors'] ?? null) ? $gallery_data['errors'] : [];
         $entry_count = (int) ($gallery_data['count'] ?? count($entries));
 
-        $output = '<section class="kiwi-lp-gallery" aria-label="Landing Pages Gallery">';
-        $output .= '<header class="kiwi-lp-gallery__header">';
-        $output .= '<div>';
-        $output .= '<h2 class="kiwi-lp-gallery__title">Landing Pages</h2>';
-        $output .= '<p class="kiwi-lp-gallery__subtitle">Filesystem-discovered previews with routing metadata.</p>';
+        $output = '<section class="kiwi-page-shell kiwi-page-shell--fullwidth" aria-label="Landing Pages Gallery">';
+        $output .= '<header class="kiwi-section-header">';
+        $output .= '<div class="kiwi-section-header-content">';
+        $output .= '<h2 class="kiwi-page-title">Landing Pages</h2>';
+        $output .= '<p class="kiwi-page-subtitle">Filesystem-discovered previews with routing metadata.</p>';
         $output .= '</div>';
-        $output .= '<p class="kiwi-lp-gallery__count" aria-live="polite">' . esc_html((string) $entry_count) . ' page(s)</p>';
+        $output .= '<p class="kiwi-count-badge" aria-live="polite">' . esc_html((string) $entry_count) . ' page(s)</p>';
         $output .= '</header>';
 
         if (!empty($errors)) {
-            $output .= '<details class="kiwi-lp-gallery__warnings">';
+            $output .= '<details class="kiwi-notice kiwi-notice--warning kiwi-warning-list">';
             $output .= '<summary>Discovery warnings (' . esc_html((string) count($errors)) . ')</summary>';
             $output .= '<ul>';
 
@@ -48,7 +48,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         }
 
         if (empty($entries)) {
-            $output .= '<div class="kiwi-lp-gallery__empty">';
+            $output .= '<div class="kiwi-empty-state">';
             $output .= '<h3>No valid landing pages found</h3>';
             $output .= '<p>Check <code>landing-pages/</code> folders and <code>integration.php</code> metadata.</p>';
             $output .= '</div>';
@@ -57,7 +57,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
             return $output;
         }
 
-        $output .= '<div class="kiwi-lp-gallery__grid">';
+        $output .= '<div class="kiwi-card-grid">';
 
         foreach ($entries as $entry) {
             $output .= $this->render_entry_card($entry);
@@ -79,18 +79,18 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $service_key = trim((string) ($entry['service_key'] ?? ''));
         $provider = trim((string) ($entry['provider'] ?? ''));
 
-        $output = '<article class="kiwi-lp-card" tabindex="0">';
-        $output .= '<header class="kiwi-lp-card__header">';
-        $output .= '<h3 class="kiwi-lp-card__title">' . esc_html($key) . '</h3>';
-        $output .= '<div class="kiwi-lp-card__badges">';
-        $output .= '<span class="kiwi-lp-card__badge">' . esc_html($country !== '' ? $country : 'N/A') . '</span>';
-        $output .= '<span class="kiwi-lp-card__badge kiwi-lp-card__badge--mode">' . esc_html($routing_mode) . '</span>';
+        $output = '<article class="kiwi-card kiwi-preview-card" tabindex="0">';
+        $output .= '<header class="kiwi-card-header">';
+        $output .= '<h3 class="kiwi-card-title">' . esc_html($key) . '</h3>';
+        $output .= '<div class="kiwi-badge-group">';
+        $output .= '<span class="kiwi-badge">' . esc_html($country !== '' ? $country : 'N/A') . '</span>';
+        $output .= '<span class="kiwi-badge kiwi-badge--muted">' . esc_html($routing_mode) . '</span>';
         $output .= '</div>';
         $output .= '</header>';
 
         $output .= $this->render_preview_block($entry);
 
-        $output .= '<dl class="kiwi-lp-card__meta">';
+        $output .= '<dl class="kiwi-meta-list">';
         $output .= $this->render_meta_item('Country', $country_display);
         $output .= $this->render_meta_item('Key', $key);
         $output .= $this->render_meta_item('Flow', $flow);
@@ -108,10 +108,10 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $key = (string) ($entry['key'] ?? 'landing-page');
         $preview_srcdoc = $this->build_local_preview_srcdoc($entry);
 
-        $output = '<div class="kiwi-lp-card__preview">';
+        $output = '<div class="kiwi-preview">';
 
         if ($preview_url === '' && $preview_srcdoc === '') {
-            $output .= '<div class="kiwi-lp-card__preview-placeholder">Preview unavailable</div>';
+            $output .= '<div class="kiwi-preview-placeholder">Preview unavailable</div>';
             $output .= '</div>';
 
             return $output;
@@ -138,18 +138,18 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         }
 
         if ($primary_url_value !== '') {
-            $output .= '<div class="kiwi-lp-card__preview-urlbar">';
-            $output .= '<span class="kiwi-lp-card__url-label">URL:</span> ';
+            $output .= '<div class="kiwi-preview-urlbar">';
+            $output .= '<span class="kiwi-url-label">URL:</span> ';
 
             if (is_array($primary_url) && !empty($primary_url['path_only'])) {
                 $output .= '<code>' . esc_html($primary_url_value) . '</code>';
             } else {
-                $output .= '<a class="kiwi-lp-card__preview-url" href="' . esc_attr($primary_url_value) . '" target="_blank" rel="noopener noreferrer">';
+                $output .= '<a class="kiwi-preview-url" href="' . esc_attr($primary_url_value) . '" target="_blank" rel="noopener noreferrer">';
                 $output .= esc_html($primary_url_value);
                 $output .= '</a>';
             }
 
-            $output .= '<button type="button" class="kiwi-lp-card__copy-btn" aria-label="Copy URL" title="Copy URL" data-copy-text="' . esc_attr($primary_url_value) . '">';
+            $output .= '<button type="button" class="kiwi-copy-button" aria-label="Copy URL" title="Copy URL" data-copy-text="' . esc_attr($primary_url_value) . '">';
             $output .= '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">';
             $output .= '<path d="M16 1H6c-1.1 0-2 .9-2 2v12h2V3h10V1zm3 4H10c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h9c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H10V7h9v14z"/>';
             $output .= '</svg>';
@@ -201,7 +201,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
     {
         $display_value = trim($value) !== '' ? $value : 'N/A';
 
-        return '<div><dt>' . esc_html($label) . '</dt><dd>' . esc_html($display_value) . '</dd></div>';
+        return '<div class="kiwi-meta-item"><dt>' . esc_html($label) . '</dt><dd>' . esc_html($display_value) . '</dd></div>';
     }
 
     private function format_country_for_display(string $country): string

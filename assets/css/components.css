@@ -1,33 +1,59 @@
 :root {
-    --kiwi-surface-bg: #f3f3f3;
-    --kiwi-surface-color: #555555;
-    --kiwi-surface-radius: 6px;
+    --kiwi-font-family: Manrope, "Avenir Next", "Segoe UI", sans-serif;
+    --kiwi-color-ink: #18231d;
+    --kiwi-color-muted: #5d6a61;
+    --kiwi-color-surface: #ffffff;
+    --kiwi-color-surface-soft: #f4f8f5;
+    --kiwi-color-border: #d7e2da;
+    --kiwi-color-border-soft: #c9d9cf;
+    --kiwi-color-accent: #257a49;
+    --kiwi-color-accent-strong: #1d673d;
+    --kiwi-color-accent-soft: #e3f4e8;
+    --kiwi-color-info-soft: #edf2ff;
+    --kiwi-color-info-border: #c9d7f4;
+    --kiwi-color-warning-soft: #fff8ea;
+    --kiwi-color-warning-border: #f0d8a6;
+    --kiwi-color-warning-text: #5d4a22;
+    --kiwi-color-error-soft: #fff1f0;
+    --kiwi-color-error-border: #f5c2c0;
+    --kiwi-color-error-text: #7a1f1a;
+    --kiwi-radius-xs: 8px;
+    --kiwi-radius-sm: 12px;
+    --kiwi-radius-md: 16px;
+    --kiwi-radius-pill: 999px;
+    --kiwi-shadow-subtle: 0 8px 24px rgba(20, 41, 29, 0.08);
+    --kiwi-shadow-card: 0 10px 24px rgba(16, 36, 24, 0.1);
+    --kiwi-shadow-card-hover: 0 14px 30px rgba(16, 36, 24, 0.2);
 }
 
 .kiwi-button {
-    display: inline-block;
-    padding: 10px 16px;
-    border: 1px solid #37aa32;
-    border-radius: 6px;
-    background: #37aa32;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    min-height: 38px;
+    padding: 0.55rem 0.95rem;
+    border: 1px solid var(--kiwi-color-accent);
+    border-radius: var(--kiwi-radius-xs);
+    background: var(--kiwi-color-accent);
     color: #ffffff;
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 0.9rem;
+    font-weight: 700;
     line-height: 1.2;
     text-decoration: none;
     cursor: pointer;
-    transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.05s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
 }
 
 .kiwi-button:hover {
-    background: #2f952b;
-    border-color: #2f952b;
+    background: var(--kiwi-color-accent-strong);
+    border-color: var(--kiwi-color-accent-strong);
     color: #ffffff;
 }
 
-.kiwi-button:focus {
+.kiwi-button:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 3px rgba(55, 170, 50, 0.2);
+    box-shadow: 0 0 0 3px rgba(37, 122, 73, 0.23);
 }
 
 .kiwi-button:active {
@@ -42,30 +68,158 @@
 }
 
 .kiwi-button--secondary {
-    background: #ffffff;
-    color: #37aa32;
+    border-color: #bfd8c7;
+    background: #eff8f1;
+    color: #1e5e37;
 }
 
 .kiwi-button--secondary:hover {
-    background: #f3fbf3;
-    color: #2f952b;
+    border-color: #97b8a4;
+    background: #e1f2e8;
+    color: #1b6b3f;
 }
 
 .kiwi-notice {
-    font-size: 14px;
-    padding: 10px 16px;
-    border-radius: 6px;
-    margin: 1em 0;
+    margin: 0;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--kiwi-color-border-soft);
+    border-radius: var(--kiwi-radius-sm);
+    background: var(--kiwi-color-surface);
+    color: var(--kiwi-color-ink);
+    font-size: 0.9rem;
+}
+
+.kiwi-notice p {
+    margin: 0;
+}
+
+.kiwi-notice p + p {
+    margin-top: 0.5rem;
 }
 
 .kiwi-notice--info {
-    background: #eef6ff;
-    border: 1px solid #cfe3ff;
-    color: #234;
+    background: var(--kiwi-color-info-soft);
+    border-color: var(--kiwi-color-info-border);
+    color: #2d466e;
+}
+
+.kiwi-notice--warning {
+    background: var(--kiwi-color-warning-soft);
+    border-color: var(--kiwi-color-warning-border);
+    color: var(--kiwi-color-warning-text);
 }
 
 .kiwi-notice--error {
-    background: #fff1f0;
-    border: 1px solid #f5c2c0;
-    color: #7a1f1a;
+    background: var(--kiwi-color-error-soft);
+    border-color: var(--kiwi-color-error-border);
+    color: var(--kiwi-color-error-text);
+}
+
+.kiwi-count-badge {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid #c6e7d2;
+    border-radius: var(--kiwi-radius-pill);
+    background: var(--kiwi-color-accent-soft);
+    color: #0f5b32;
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.kiwi-card {
+    background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 253, 249, 0.92) 100%),
+        var(--kiwi-color-surface);
+    border: 1px solid var(--kiwi-color-border);
+    border-radius: var(--kiwi-radius-md);
+    box-shadow: var(--kiwi-shadow-card), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    padding: 0.85rem;
+}
+
+.kiwi-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.kiwi-card-title {
+    margin: 0;
+    color: var(--kiwi-color-ink) !important;
+    font-size: 0.84rem;
+    line-height: 1.25;
+}
+
+.kiwi-badge-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.kiwi-badge {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #bfd8c7;
+    background: #eff8f1;
+    color: #1e5e37;
+    border-radius: var(--kiwi-radius-pill);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.55rem;
+}
+
+.kiwi-badge--muted {
+    border-color: var(--kiwi-color-info-border);
+    background: var(--kiwi-color-info-soft);
+    color: #2d466e;
+}
+
+.kiwi-empty-state {
+    text-align: center;
+    background: var(--kiwi-color-surface);
+    border: 1px dashed var(--kiwi-color-border-soft);
+    border-radius: var(--kiwi-radius-md);
+    padding: 1.4rem 1rem;
+}
+
+.kiwi-empty-state h3 {
+    margin: 0 0 0.45rem;
+}
+
+.kiwi-empty-state p {
+    margin: 0;
+    color: var(--kiwi-color-muted);
+}
+
+.kiwi-section-title {
+    margin: 0 0 0.6rem 0 !important;
+    display: inline-block;
+    font-size: 0.86rem;
+    font-weight: 700;
+    color: var(--kiwi-color-ink);
+    background: var(--kiwi-color-accent-soft);
+    border: 1px solid #c6e7d2;
+    border-radius: var(--kiwi-radius-xs);
+    padding: 0.3rem 0.55rem;
+}
+
+.kiwi-loading {
+    font-size: 0.86rem;
+    color: var(--kiwi-color-muted);
+}
+
+.kiwi-warning-list summary {
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.kiwi-warning-list ul {
+    margin: 0.65rem 0 0;
+    padding-left: 1.2rem;
 }

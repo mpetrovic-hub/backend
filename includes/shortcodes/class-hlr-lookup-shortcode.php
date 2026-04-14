@@ -118,7 +118,15 @@ class Kiwi_Hlr_Lookup_Shortcode
          * 2. Submit button + loading indicator
          */
 
-        $output .= '<form method="post" class="kiwi-form kiwi-hlr-form">';
+        $output .= '<section class="kiwi-page-shell" aria-label="HLR Lookup">';
+        $output .= '<header class="kiwi-section-header">';
+        $output .= '<div class="kiwi-section-header-content">';
+        $output .= '<h2 class="kiwi-page-title">HLR Lookup</h2>';
+        $output .= '<p class="kiwi-page-subtitle">Run batch operator lookups and review synchronous plus callback responses.</p>';
+        $output .= '</div>';
+        $output .= '</header>';
+
+        $output .= '<form method="post" class="kiwi-form kiwi-form-card">';
         $output .= wp_nonce_field('kiwi_hlr_lookup_action', 'kiwi_hlr_lookup_nonce', true, false);
         $output .= '<input type="hidden" name="kiwi_hlr_form_action" value="lookup">';
 
@@ -126,19 +134,19 @@ class Kiwi_Hlr_Lookup_Shortcode
          * Textarea for one or multiple MSISDNs
          * One number per line
          */
-        $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_hlr_input" class="kiwi-section-title">MSISDNs</label><br>';
-        $output .= '<textarea id="kiwi_hlr_input" name="kiwi_hlr_input" rows="10" cols="50" class="kiwi-textarea" style="width:100%; max-width:700px;" placeholder="+30 69...&#10;3069...&#10;69...">' . esc_textarea($submitted_input) . '</textarea>';
-        $output .= '</p>';
+        $output .= '<div class="kiwi-form-row kiwi-field">';
+        $output .= '<label for="kiwi_hlr_input" class="kiwi-field-label">MSISDNs</label>';
+        $output .= '<textarea id="kiwi_hlr_input" name="kiwi_hlr_input" rows="10" cols="50" class="kiwi-textarea kiwi-width-large" placeholder="+30 69...&#10;3069...&#10;69...">' . esc_textarea($submitted_input) . '</textarea>';
+        $output .= '</div>';
 
         /**
          * Submit button + loading indicator
          * The loading text is controlled by the generic frontend JS
          */
-        $output .= '<p class="kiwi-actions">';
-        $output .= '<button type="submit" name="kiwi_hlr_lookup_submit" value="1" class="kiwi-button kiwi-submit-button">Run HLR Lookup</button>';
-        $output .= '<span class="kiwi-loading" style="display:none; margin-left:10px;">Processing...</span>';
-        $output .= '</p>';
+        $output .= '<div class="kiwi-form-actions kiwi-actions">';
+        $output .= '<button type="submit" name="kiwi_hlr_lookup_submit" value="1" class="kiwi-button kiwi-submit-button submit-button">Run HLR Lookup</button>';
+        $output .= '<span class="kiwi-loading" style="display:none;">Processing...</span>';
+        $output .= '</div>';
 
         $output .= '</form>';
 
@@ -158,12 +166,12 @@ class Kiwi_Hlr_Lookup_Shortcode
              * Meta information block:
              * total lines, unique numbers, processed count
              */
-            $output .= '<div class="kiwi-results-meta">';
+            $output .= '<section class="kiwi-card kiwi-results-meta">';
             $output .= '<h4 class="kiwi-section-title">HLR Batch Result</h4>';
             $output .= '<p><strong>Total input:</strong> ' . esc_html((string) ($batch_result['total_input'] ?? 0)) . '</p>';
             $output .= '<p><strong>Unique input:</strong> ' . esc_html((string) ($batch_result['unique_input'] ?? 0)) . '</p>';
             $output .= '<p><strong>Processed:</strong> ' . esc_html((string) ($batch_result['processed'] ?? 0)) . '</p>';
-            $output .= '</div>';
+            $output .= '</section>';
 
             
 
@@ -171,6 +179,7 @@ class Kiwi_Hlr_Lookup_Shortcode
              * Result table
              */
             if (!empty($batch_result['results']) && is_array($batch_result['results'])) {
+                $output .= '<section class="kiwi-card kiwi-table-card">';
                 $output .= '<h4 class="kiwi-section-title">Synchronous Responses</h4>';
                 $output .= '<div class="kiwi-table-wrap">';
                 $output .= '<table class="kiwi-table">';
@@ -226,11 +235,13 @@ class Kiwi_Hlr_Lookup_Shortcode
                 $output .= '</tbody>';
                 $output .= '</table>';
                 $output .= '</div>';
+                $output .= '</section>';
             } else {
                 $output .= '<p>No results found.</p>';
             }
 
             if (!empty($async_results)) {
+                $output .= '<section class="kiwi-card kiwi-table-card">';
                 $output .= '<h4 class="kiwi-section-title">Asynchronous Callback Responses</h4>';
                 $output .= '<div class="kiwi-notice kiwi-notice--info">';
                 $output .= '<p><strong>Asynchronous callback responses:</strong> The table below shows stored DIMOCO operator lookup callback results for the submitted request IDs.</p>';
@@ -278,6 +289,7 @@ class Kiwi_Hlr_Lookup_Shortcode
                 $output .= '</tbody>';
                 $output .= '</table>';
                 $output .= '</div>';
+                $output .= '</section>';
             }
 
             /**
@@ -287,7 +299,7 @@ class Kiwi_Hlr_Lookup_Shortcode
              * The export request uses GET + batch_id to avoid POST-replay issues.
              */
             if ($batch_id !== '') {
-                $output .= '<form method="get" style="margin-top:20px;">';
+                $output .= '<form method="get" class="kiwi-form-actions kiwi-form-actions--compact">';
                 $output .= '<input type="hidden" name="kiwi_hlr_export" value="1">';
                 $output .= '<input type="hidden" name="batch_id" value="' . esc_attr($batch_id) . '">';
                 $output .= '<button type="submit" class="kiwi-button">Export CSV</button>';
@@ -295,6 +307,8 @@ class Kiwi_Hlr_Lookup_Shortcode
             }    
 
         }
+
+        $output .= '</section>';
 
         return $output;
     }

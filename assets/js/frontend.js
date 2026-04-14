@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     document.addEventListener('click', function (event) {
-        const copyButton = event.target.closest('.kiwi-lp-card__copy-btn');
+        const copyButton = event.target.closest('.kiwi-copy-button');
 
         if (!copyButton) {
             return;

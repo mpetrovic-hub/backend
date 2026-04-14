@@ -2158,18 +2158,18 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
 
         $output = $shortcode->render();
 
-        kiwi_assert_contains('kiwi-lp-gallery__grid', $output, 'Expected the shortcode to render the responsive gallery grid.');
+        kiwi_assert_contains('kiwi-card-grid', $output, 'Expected the shortcode to render the responsive gallery grid.');
         kiwi_assert_contains('<iframe', $output, 'Expected the shortcode to render iframe-based landing-page previews.');
         kiwi_assert_contains('srcdoc="', $output, 'Expected shortcode previews to use local srcdoc rendering when filesystem HTML is available.');
         kiwi_assert_contains('lp2-fr', $output, 'Expected the shortcode to render the landing-page key.');
         kiwi_assert_contains('nth_fr_one_off_jplay', $output, 'Expected the shortcode to render service_key metadata.');
         kiwi_assert_contains(
-            '<span class="kiwi-lp-card__url-label">URL:</span> <a class="kiwi-lp-card__preview-url" href="https://backend.example.test/lp/fr/myjoyplay"',
+            '<span class="kiwi-url-label">URL:</span> <a class="kiwi-preview-url" href="https://backend.example.test/lp/fr/myjoyplay"',
             $output,
             'Expected primary URL display to prefer the inferred current-site URL and use label "URL".'
         );
         kiwi_assert_contains(
-            'class="kiwi-lp-card__copy-btn"',
+            'class="kiwi-copy-button"',
             $output,
             'Expected the preview URL row to render a copy-to-clipboard button.'
         );
@@ -3775,10 +3775,9 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'kiwi-backend-forms',
             'kiwi-backend-tables',
             'kiwi-backend-frontend',
-            'kiwi-backend-landing-pages-gallery',
         ],
         array_column($GLOBALS['kiwi_test_styles'], 'handle'),
-        'Expected stylesheet handles to include the landing-page gallery CSS.'
+        'Expected stylesheet handles to include only shared reusable CSS bundles.'
     );
     kiwi_assert_same(
         [

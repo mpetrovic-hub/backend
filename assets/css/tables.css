@@ -1,69 +1,70 @@
+.kiwi-table-card {
+    padding-bottom: 0.5rem;
+}
+
 .kiwi-table-wrap {
     overflow-x: auto;
-    margin-top: 20px;
+    margin-top: 0.55rem;
+    border: 1px solid var(--kiwi-color-border);
+    border-radius: var(--kiwi-radius-sm);
+    background: #ffffff;
 }
 
 .kiwi-table {
     width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-    color: var(--kiwi-surface-color);
-    background: var(--kiwi-surface-bg);
-    border-width: 7px;
-    border: 3px solid #37aa32 !important;
-    border-radius: var(--kiwi-surface-radius);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.8rem;
+    color: var(--kiwi-color-ink);
 }
 
-/* Header */
 .kiwi-table thead {
-    background: var(--kiwi-surface-bg);
+    background: #eef4f0;
 }
 
 .kiwi-table th {
     text-align: left;
-    padding: 12px 14px;
-    font-weight: 600;
-    color: var(--kiwi-surface-color);
-    background: var(--kiwi-surface-bg);
-    border-bottom: 1px solid #e5e7eb;
+    padding: 0.62rem 0.7rem;
+    font-weight: 700;
+    color: var(--kiwi-color-ink);
+    border-bottom: 1px solid var(--kiwi-color-border);
     white-space: nowrap;
 }
 
-/* Body */
 .kiwi-table td {
-    padding: 12px 14px;
-    border-bottom: 1px solid #f1f3f5;
-    color: var(--kiwi-surface-color);
-    background: var(--kiwi-surface-bg);
+    padding: 0.6rem 0.7rem;
+    border-bottom: 1px solid #e6ede9;
+    vertical-align: top;
 }
 
-/* Zebra rows */
 .kiwi-table tbody tr:nth-child(even) {
-    background: var(--kiwi-surface-bg);
+    background: #f8fbf9;
 }
 
-/* Hover */
 .kiwi-table tbody tr:hover {
-    background: var(--kiwi-surface-bg);
+    background: #eff6f2;
 }
 
-/* Status coloring (optional nice touch) */
-.kiwi-table td:nth-child(6) {
-    font-weight: 500;
+.kiwi-table tbody tr:last-child td {
+    border-bottom: 0;
 }
 
-/* Pending */
-.kiwi-table td:nth-child(6):contains("pending") {
-    color: #b08900;
+.kiwi-status--pending {
+    color: #8d6918;
+    font-weight: 700;
 }
 
-/* Success */
-.kiwi-table td:nth-child(6):contains("success") {
-    color: #2f9e44;
+.kiwi-status--success {
+    color: #1b6b3f;
+    font-weight: 700;
 }
 
-/* Failure */
-.kiwi-table td:nth-child(6):contains("failure") {
-    color: #d00000;
+.kiwi-status--failure {
+    color: #b52a1e;
+    font-weight: 700;
+}
+
+.kiwi-status--warning {
+    color: #8d5414;
+    font-weight: 700;
 }

@@ -69,11 +69,6 @@ class Kiwi_Plugin
                 'kiwi-backend-tables',
             ]
         );
-        $this->enqueue_style_asset(
-            'kiwi-backend-landing-pages-gallery',
-            'assets/css/landing-pages-gallery.css',
-            ['kiwi-backend-components']
-        );
 
         $this->enqueue_script_asset(
             'kiwi-backend-core',

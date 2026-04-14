@@ -156,14 +156,22 @@ class Kiwi_Dimoco_Blacklister_Shortcode
          * FORM / UI BLOCK
          * ---------------------------------------------------------
          */
-        $output .= '<form method="post" class="kiwi-form kiwi-dimoco-blacklister-form">';
+        $output .= '<section class="kiwi-page-shell" aria-label="DIMOCO Blacklist">';
+        $output .= '<header class="kiwi-section-header">';
+        $output .= '<div class="kiwi-section-header-content">';
+        $output .= '<h2 class="kiwi-page-title">DIMOCO Blacklist</h2>';
+        $output .= '<p class="kiwi-page-subtitle">Add MSISDNs to DIMOCO blocklists and review synchronous plus callback responses.</p>';
+        $output .= '</div>';
+        $output .= '</header>';
+
+        $output .= '<form method="post" class="kiwi-form kiwi-form-card">';
         $output .= wp_nonce_field('kiwi_dimoco_blacklister_action', 'kiwi_dimoco_blacklister_nonce', true, false);
         $output .= '<input type="hidden" name="kiwi_dimoco_blacklister_action" value="blacklist">';
 
         // Service selection dropdown
-        $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_dimoco_service" class="kiwi-section-title">Service</label><br>';
-        $output .= '<select id="kiwi_dimoco_service" name="kiwi_dimoco_service" class="kiwi-select" style="min-width:320px;">';
+        $output .= '<div class="kiwi-form-row kiwi-field">';
+        $output .= '<label for="kiwi_dimoco_service" class="kiwi-field-label">Service</label>';
+        $output .= '<select id="kiwi_dimoco_service" name="kiwi_dimoco_service" class="kiwi-select kiwi-width-medium">';
         $output .= '<option value="">Select a service</option>';
 
         foreach ($service_options as $key => $label) {
@@ -172,28 +180,28 @@ class Kiwi_Dimoco_Blacklister_Shortcode
         }
 
         $output .= '</select>';
-        $output .= '</p>';
+        $output .= '</div>';
 
         // Blocklist scope dropdown
-        $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_dimoco_blocklist_scope" class="kiwi-section-title">Blocklist Scope</label><br>';
-        $output .= '<select id="kiwi_dimoco_blocklist_scope" name="kiwi_dimoco_blocklist_scope" class="kiwi-select" style="min-width:220px;">';
+        $output .= '<div class="kiwi-form-row kiwi-field">';
+        $output .= '<label for="kiwi_dimoco_blocklist_scope" class="kiwi-field-label">Blocklist Scope</label>';
+        $output .= '<select id="kiwi_dimoco_blocklist_scope" name="kiwi_dimoco_blocklist_scope" class="kiwi-select kiwi-width-small">';
         $output .= '<option value="merchant"' . selected($blocklist_scope, 'merchant', false) . '>merchant</option>';
         $output .= '<option value="order"' . selected($blocklist_scope, 'order', false) . '>order</option>';
         $output .= '</select>';
-        $output .= '</p>';
+        $output .= '</div>';
 
         // MSISDN textarea
-        $output .= '<p class="kiwi-field">';
-        $output .= '<label for="kiwi_dimoco_msisdns" class="kiwi-section-title">MSISDNs</label><br>';
-        $output .= '<textarea id="kiwi_dimoco_msisdns" name="kiwi_dimoco_msisdns" rows="10" cols="50" class="kiwi-textarea" style="width:100%; max-width:700px;" placeholder="43664...&#10;43676...&#10;43650...">' . esc_textarea($msisdns_input) . '</textarea>';
-        $output .= '</p>';
+        $output .= '<div class="kiwi-form-row kiwi-field">';
+        $output .= '<label for="kiwi_dimoco_msisdns" class="kiwi-field-label">MSISDNs</label>';
+        $output .= '<textarea id="kiwi_dimoco_msisdns" name="kiwi_dimoco_msisdns" rows="10" cols="50" class="kiwi-textarea kiwi-width-large" placeholder="43664...&#10;43676...&#10;43650...">' . esc_textarea($msisdns_input) . '</textarea>';
+        $output .= '</div>';
 
         // Submit button + loading indicator
-        $output .= '<p class="kiwi-actions">';
-        $output .= '<button type="submit" name="kiwi_dimoco_blacklister_submit" value="1" class="kiwi-button kiwi-submit-button">Run Blacklist</button>';
-        $output .= ' <span class="kiwi-loading-text" style="display:none;">Processing...</span>';
-        $output .= '</p>';
+        $output .= '<div class="kiwi-form-actions kiwi-actions">';
+        $output .= '<button type="submit" name="kiwi_dimoco_blacklister_submit" value="1" class="kiwi-button kiwi-submit-button submit-button">Run Blacklist</button>';
+        $output .= '<span class="kiwi-loading" style="display:none;">Processing...</span>';
+        $output .= '</div>';
 
         $output .= '</form>';
 
@@ -207,7 +215,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
                 ? $batch_result['messages']
                 : [];
 
-            $output .= '<div class="kiwi-results-meta kiwi-result-summary">';
+            $output .= '<section class="kiwi-card kiwi-results-meta kiwi-result-summary">';
             $output .= '<h4 class="kiwi-section-title">Blacklist Batch Result</h4>';
             $output .= '<p>';
             $output .= '<strong>Service:</strong> ' . esc_html((string) ($batch_result['service_label'] ?? $service_key)) . '<br>';
@@ -218,7 +226,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
             $output .= '</p>';
 
             if (!empty($messages)) {
-                $output .= '<div class="kiwi-notice kiwi-notice-warning"><ul>';
+                $output .= '<div class="kiwi-notice kiwi-notice--warning"><ul>';
 
                 foreach ($messages as $message) {
                     $output .= '<li>' . esc_html((string) $message) . '</li>';
@@ -227,7 +235,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
                 $output .= '</ul></div>';
             }
 
-            $output .= '</div>';
+            $output .= '</section>';
         }
 
         /**
@@ -240,7 +248,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
             !empty($batch_result['results']) &&
             is_array($batch_result['results'])
         ) {
-            $output .= '<div class="kiwi-results-meta kiwi-result-table">';
+            $output .= '<section class="kiwi-card kiwi-results-meta kiwi-result-table kiwi-table-card">';
             $output .= '<h4 class="kiwi-section-title">Synchronous Responses</h4>';
             $output .= '<div class="kiwi-table-wrap">';
             $output .= '<table class="kiwi-table">';
@@ -286,7 +294,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
 
             $output .= '</tbody></table>';
             $output .= '</div>';
-            $output .= '</div>';
+            $output .= '</section>';
         }
 
         /**
@@ -295,7 +303,7 @@ class Kiwi_Dimoco_Blacklister_Shortcode
          * ---------------------------------------------------------
          */
         if (!empty($async_results) && is_array($async_results)) {
-            $output .= '<div class="kiwi-results-meta kiwi-result-table">';
+            $output .= '<section class="kiwi-card kiwi-results-meta kiwi-result-table kiwi-table-card">';
             $output .= '<h4 class="kiwi-section-title">Asynchronous Callback Responses</h4>';
             $output .= '<div class="kiwi-table-wrap">';
             $output .= '<table class="kiwi-table">';
@@ -337,8 +345,10 @@ class Kiwi_Dimoco_Blacklister_Shortcode
 
             $output .= '</tbody></table>';
             $output .= '</div>';
-            $output .= '</div>';
+            $output .= '</section>';
         }
+
+        $output .= '</section>';
 
         return $output;
     }
