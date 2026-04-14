@@ -2939,7 +2939,20 @@ kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer normalizes alias-heavy MO payload
     kiwi_assert_same('enc-123', $normalized['subscriber_reference'], 'Expected encrypted MSISDN aliases to normalize into subscriber_reference.');
     kiwi_assert_same('84072', $normalized['shortcode'], 'Expected business number aliases to normalize into shortcode.');
     kiwi_assert_same('JPLAY', $normalized['keyword'], 'Expected MO keyword to be normalized to uppercase without wildcard suffix.');
+    kiwi_assert_same('20801', $normalized['operator_code'], 'Expected NWC to remain the canonical operator code source.');
+    kiwi_assert_same('Orange', $normalized['operator_name'], 'Expected explicit operator name to remain unchanged when provided.');
     kiwi_assert_same('received', $normalized['status'], 'Expected MO callbacks to normalize to received status.');
+
+    $code_only = $normalizer->normalize_callback('nth_fr_one_off_jplay', 'mo', [
+        'msisdn' => 'enc-123',
+        'businessNumber' => '84072',
+        'content' => 'JPLAY txn_alias_12345678',
+        'operatorCode' => '20820',
+        'command' => 'deliverMessage',
+    ]);
+
+    kiwi_assert_same('20820', $code_only['operator_code'], 'Expected operator_code to normalize from operatorCode.');
+    kiwi_assert_same('20820', $code_only['operator_name'], 'Expected operator_name to default to operator_code when only operatorCode is provided.');
 });
 
 kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer maps messageRef and numeric messageStatus=2 as confirmed delivery', function (): void {
@@ -3158,6 +3171,11 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for du
 
     kiwi_assert_true($first['success'], 'Expected the first MO callback to trigger one MT submission.');
     kiwi_assert_same(1, count($client->calls), 'Expected duplicate MO callbacks to avoid a second MT submission.');
+    kiwi_assert_same(
+        'MyJoyplay kiwi mobile GmbH 4,5€ + prix SMS(ce n\'est pas un abonnement) https://mcontentfr.joy-play.com Problème? plainte.84072@allopass.com',
+        (string) ($client->calls[0]['transaction']['message_text'] ?? ''),
+        'Expected FR one-off default MT content wording to match the configured compliance text.'
+    );
     kiwi_assert_same('Duplicate MO callback ignored.', $second['message'], 'Expected the second identical MO callback to be treated as a duplicate event.');
 });
 

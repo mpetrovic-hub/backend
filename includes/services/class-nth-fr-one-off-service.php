@@ -489,11 +489,15 @@ class Kiwi_Nth_Fr_One_Off_Service
         $template = trim((string) ($service['mt_message_template'] ?? ''));
 
         if ($template === '') {
-            $price_label = (string) ($service['landing_price_label'] ?? '4,50 EUR par SMS + prix d\'un SMS');
+            $shortcode = trim((string) ($normalized_event['shortcode'] ?? ($service['shortcode'] ?? '')));
 
-            return 'Merci pour votre achat. '
-                . $price_label
-                . '. Ceci n\'est pas un abonnement.';
+            if ($shortcode === '') {
+                $shortcode = 'XXXXX';
+            }
+
+            return 'MyJoyplay kiwi mobile GmbH 4,5€ + prix SMS(ce n\'est pas un abonnement) https://mcontentfr.joy-play.com Problème? plainte.'
+                . $shortcode
+                . '@allopass.com';
         }
 
         $replacements = [

@@ -69,6 +69,10 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'carrier',
         ]);
 
+        if ($operator_name === '') {
+            $operator_name = $operator_code;
+        }
+
         $keyword = $this->normalize_keyword(
             $this->first_non_empty($payload, [
                 'keyword',

@@ -175,6 +175,10 @@ Implementation rule:
 
 - do not treat this flow as recurring access unless a different FR service program explicitly requires it
 
+Current repository default MT text (when `mt_message_template` is not configured in `KIWI_NTH_SERVICES`):
+
+- `MyJoyplay kiwi mobile GmbH 4,5€ + prix SMS(ce n'est pas un abonnement) https://mcontentfr.joy-play.com Problème? plainte.<shortcode>@allopass.com`
+
 ---
 
 ## FR-Specific Technical Rules
