@@ -201,6 +201,7 @@
     border: 1px solid #d6e2da;
     border-radius: 12px;
     overflow: hidden;
+    margin-bottom: 0.4rem !important;
 }
 
 .kiwi-lp-card__preview iframe,
