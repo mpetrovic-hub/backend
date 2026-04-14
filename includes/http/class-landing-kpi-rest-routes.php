@@ -7,16 +7,13 @@ if (!defined('ABSPATH')) {
 class Kiwi_Landing_Kpi_Rest_Routes
 {
     private $config;
-    private $event_repository;
     private $kpi_service;
 
     public function __construct(
         Kiwi_Config $config,
-        Kiwi_Landing_Kpi_Event_Repository $event_repository,
         Kiwi_Landing_Kpi_Service $kpi_service
     ) {
         $this->config = $config;
-        $this->event_repository = $event_repository;
         $this->kpi_service = $kpi_service;
     }
 
@@ -45,7 +42,6 @@ class Kiwi_Landing_Kpi_Rest_Routes
         $params = $this->normalize_params($request);
         $landing_key = trim((string) ($params['landing_key'] ?? ''));
         $step = strtolower(trim((string) ($params['step'] ?? '')));
-        $session_token = trim((string) ($params['session_token'] ?? ''));
 
         if (!$this->is_valid_landing_key($landing_key)) {
             return new WP_REST_Response([
@@ -61,36 +57,17 @@ class Kiwi_Landing_Kpi_Rest_Routes
             ], 400);
         }
 
-        if (!$this->is_valid_session_token($session_token)) {
-            return new WP_REST_Response([
-                'success' => false,
-                'error' => 'invalid_session_token',
-            ], 400);
-        }
-
         $landing = $this->config->get_landing_page($landing_key) ?? [];
-        $event_result = $this->event_repository->insert_step_event([
-            'landing_key' => $landing_key,
+        $incremented = $this->kpi_service->increment_step($landing_key, $step, [
             'service_key' => (string) ($landing['service_key'] ?? ''),
-            'session_token' => $session_token,
-            'event_step' => $step,
-            'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
-            'request_host' => $this->server_value('HTTP_HOST'),
-            'request_path' => $this->server_value('REQUEST_URI'),
-            'remote_ip' => $this->server_value('REMOTE_ADDR'),
-            'user_agent' => $this->sanitize_event_value($this->server_value('HTTP_USER_AGENT')),
-            'raw_context' => [
-                'source' => 'landing_page',
-                'payload' => [
-                    'landing_key' => $landing_key,
-                    'step' => $step,
-                ],
-            ],
+            'provider_key' => (string) ($landing['provider'] ?? ''),
+            'flow_key' => (string) ($landing['flow'] ?? ''),
         ]);
 
         return new WP_REST_Response([
-            'success' => true,
-            'inserted' => !empty($event_result['inserted']),
+            'success' => $incremented,
+            'incremented' => $incremented,
+            'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
         ], 200);
     }
 
@@ -140,20 +117,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
 
     private function is_valid_step(string $step): bool
     {
-        if ($step === '') {
-            return false;
-        }
-
-        return preg_match('/^cta[1-9][0-9]*$/', $step) === 1;
-    }
-
-    private function is_valid_session_token(string $session_token): bool
-    {
-        if ($session_token === '') {
-            return false;
-        }
-
-        return preg_match('/^[A-Za-z0-9_-]{8,120}$/', $session_token) === 1;
+        return in_array($step, ['cta1', 'cta2', 'cta3'], true);
     }
 
     private function sanitize_event_value(string $value): string
@@ -161,13 +125,4 @@ class Kiwi_Landing_Kpi_Rest_Routes
         return substr(trim($value), 0, 191);
     }
 
-    private function server_value(string $key): string
-    {
-        if (!isset($_SERVER[$key])) {
-            return '';
-        }
-
-        return trim((string) $_SERVER[$key]);
-    }
 }
-

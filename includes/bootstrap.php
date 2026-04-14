@@ -75,7 +75,7 @@ require_once __DIR__ . '/repositories/class-nth-event-repository.php';
 require_once __DIR__ . '/repositories/class-nth-flow-transaction-repository.php';
 require_once __DIR__ . '/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/repositories/class-sales-repository.php';
-require_once __DIR__ . '/repositories/class-landing-kpi-event-repository.php';
+require_once __DIR__ . '/repositories/class-landing-kpi-summary-repository.php';
 
 /**
  * Exporters

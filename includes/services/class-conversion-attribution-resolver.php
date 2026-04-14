@@ -8,13 +8,16 @@ class Kiwi_Conversion_Attribution_Resolver
 {
     private $repository;
     private $dispatcher;
+    private $landing_kpi_service;
 
     public function __construct(
         Kiwi_Click_Attribution_Repository $repository,
-        Kiwi_Affiliate_Postback_Dispatcher $dispatcher
+        Kiwi_Affiliate_Postback_Dispatcher $dispatcher,
+        ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null
     ) {
         $this->repository = $repository;
         $this->dispatcher = $dispatcher;
+        $this->landing_kpi_service = $landing_kpi_service;
     }
 
     public function attach_provider_references(array $binding): ?array
@@ -119,10 +122,12 @@ class Kiwi_Conversion_Attribution_Resolver
             'external_ref' => (string) ($conversion['external_ref'] ?? ''),
             'sale_reference' => (string) ($conversion['sale_reference'] ?? ''),
         ]);
+        $is_first_confirmed = trim((string) ($row['conversion_confirmed_at'] ?? '')) === '';
         $this->repository->mark_conversion_confirmed(
             (int) $row['id'],
             (string) ($conversion['occurred_at'] ?? '')
         );
+        $this->maybe_record_kpi_conversion($row, $conversion, $is_first_confirmed);
 
         $updated_row = $this->repository->get_by_id((int) $row['id']) ?? $row;
         $dispatch_result = $this->dispatcher->dispatch($updated_row, $conversion);
@@ -135,6 +140,29 @@ class Kiwi_Conversion_Attribution_Resolver
             'attribution_id' => (int) $row['id'],
             'postback' => $dispatch_result,
         ];
+    }
+
+    private function maybe_record_kpi_conversion(array $attribution_row, array $conversion, bool $is_first_confirmed): void
+    {
+        if (!$is_first_confirmed) {
+            return;
+        }
+
+        if (!$this->landing_kpi_service instanceof Kiwi_Landing_Kpi_Service) {
+            return;
+        }
+
+        $landing_key = trim((string) ($attribution_row['landing_page_key'] ?? ''));
+
+        if ($landing_key === '') {
+            return;
+        }
+
+        $this->landing_kpi_service->increment_conversion($landing_key, [
+            'service_key' => (string) ($conversion['service_key'] ?? ($attribution_row['service_key'] ?? '')),
+            'provider_key' => (string) ($conversion['provider_key'] ?? ($attribution_row['provider_key'] ?? '')),
+            'flow_key' => (string) ($conversion['flow_key'] ?? ($attribution_row['flow_key'] ?? '')),
+        ]);
     }
 
     public function resolve_pending_transaction_id(string $service_key, string $reference_hint): string

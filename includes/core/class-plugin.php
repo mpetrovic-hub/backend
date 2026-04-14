@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-04-13-1';
+    private const DB_SCHEMA_VERSION = '2026-04-14-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -142,14 +142,13 @@ class Kiwi_Plugin
         );
         $nth_rest_routes->register();
 
-        $landing_kpi_event_repository = new Kiwi_Landing_Kpi_Event_Repository();
+        $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
         $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
             $config,
-            $landing_kpi_event_repository
+            $landing_kpi_summary_repository
         );
         $landing_kpi_rest_routes = new Kiwi_Landing_Kpi_Rest_Routes(
             $config,
-            $landing_kpi_event_repository,
             $landing_kpi_service
         );
         $landing_kpi_rest_routes->register();
@@ -205,6 +204,10 @@ class Kiwi_Plugin
             $config,
             $click_attribution_repository
         );
+        $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
+            $config,
+            new Kiwi_Landing_Kpi_Summary_Repository()
+        );
         $primary_cta_resolver = new Kiwi_Landing_Primary_Cta_Resolver([
             new Kiwi_Nth_Primary_Cta_Adapter(),
         ]);
@@ -213,7 +216,8 @@ class Kiwi_Plugin
             $landing_page_session_repository,
             $this->plugin_base_url,
             $tracking_capture_service,
-            $primary_cta_resolver
+            $primary_cta_resolver,
+            $landing_kpi_service
         );
 
         $router->maybe_render_current_request();
@@ -363,9 +367,14 @@ TEXT;
         $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $affiliate_postback_dispatcher = new Kiwi_Affiliate_Postback_Dispatcher($config);
+        $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
+            $config,
+            new Kiwi_Landing_Kpi_Summary_Repository()
+        );
         $conversion_attribution_resolver = new Kiwi_Conversion_Attribution_Resolver(
             $click_attribution_repository,
-            $affiliate_postback_dispatcher
+            $affiliate_postback_dispatcher,
+            $landing_kpi_service
         );
         $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
             $config,
@@ -387,6 +396,7 @@ TEXT;
             'sales_repository' => $sales_repository,
             'click_attribution_repository' => $click_attribution_repository,
             'affiliate_postback_dispatcher' => $affiliate_postback_dispatcher,
+            'landing_kpi_service' => $landing_kpi_service,
             'conversion_attribution_resolver' => $conversion_attribution_resolver,
             'nth_fr_one_off_service' => $nth_fr_one_off_service,
         ];
@@ -619,7 +629,7 @@ TEXT;
         $nth_flow_transaction_repository = new Kiwi_Nth_Flow_Transaction_Repository();
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $sales_repository = new Kiwi_Sales_Repository();
-        $landing_kpi_event_repository = new Kiwi_Landing_Kpi_Event_Repository();
+        $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
 
         $operator_lookup_repository->create_table();
         $refund_repository->create_table();
@@ -629,7 +639,7 @@ TEXT;
         $nth_flow_transaction_repository->create_table();
         $click_attribution_repository->create_table();
         $sales_repository->create_table();
-        $landing_kpi_event_repository->create_table();
+        $landing_kpi_summary_repository->create_table();
     }
 
     protected function get_click_attribution_cleanup_limit(): int

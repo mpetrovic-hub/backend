@@ -231,7 +231,7 @@ require_once __DIR__ . '/../includes/repositories/class-nth-event-repository.php
 require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
-require_once __DIR__ . '/../includes/repositories/class-landing-kpi-event-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-landing-kpi-summary-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
@@ -1603,142 +1603,86 @@ class Kiwi_Test_Tracking_Capture_Service extends Kiwi_Tracking_Capture_Service
     }
 }
 
-class Kiwi_Test_Landing_Kpi_Event_Repository extends Kiwi_Landing_Kpi_Event_Repository
+class Kiwi_Test_Landing_Kpi_Summary_Repository extends Kiwi_Landing_Kpi_Summary_Repository
 {
     public $rows = [];
-    private $next_id = 1;
 
     public function create_table(): void
     {
     }
 
-    public function insert_step_event(array $data): array
+    public function increment_counter(string $landing_key, string $counter, array $context = []): bool
     {
-        $landing_key = trim((string) ($data['landing_key'] ?? ''));
-        $session_token = trim((string) ($data['session_token'] ?? ''));
-        $event_step = strtolower(trim((string) ($data['event_step'] ?? '')));
+        $landing_key = trim($landing_key);
+        $counter = strtolower(trim($counter));
 
-        if ($landing_key === '' || $session_token === '' || $event_step === '') {
-            return [
-                'inserted' => false,
-                'row' => null,
+        if ($landing_key === '' || !in_array($counter, ['clicks', 'cta1', 'cta2', 'cta3', 'conv'], true)) {
+            return false;
+        }
+
+        if (!isset($this->rows[$landing_key])) {
+            $this->rows[$landing_key] = [
+                'landing_key' => $landing_key,
+                'service_key' => (string) ($context['service_key'] ?? ''),
+                'provider_key' => (string) ($context['provider_key'] ?? ''),
+                'flow_key' => (string) ($context['flow_key'] ?? ''),
+                'clicks' => 0,
+                'cta1' => 0,
+                'cta1_cr' => 0.0,
+                'cta2' => 0,
+                'cta2_cr' => 0.0,
+                'cta3' => 0,
+                'cta3_cr' => 0.0,
+                'conv' => 0,
+                'conv_cr' => 0.0,
             ];
         }
 
-        $dedupe_key = sha1($landing_key . '|' . $session_token . '|' . $event_step);
+        $this->rows[$landing_key][$counter] = (int) ($this->rows[$landing_key][$counter] ?? 0) + 1;
+        $clicks = (int) ($this->rows[$landing_key]['clicks'] ?? 0);
+        $this->rows[$landing_key]['cta1_cr'] = $clicks > 0
+            ? round(((int) ($this->rows[$landing_key]['cta1'] ?? 0) / $clicks) * 100, 2)
+            : 0.0;
+        $this->rows[$landing_key]['cta2_cr'] = $clicks > 0
+            ? round(((int) ($this->rows[$landing_key]['cta2'] ?? 0) / $clicks) * 100, 2)
+            : 0.0;
+        $this->rows[$landing_key]['cta3_cr'] = $clicks > 0
+            ? round(((int) ($this->rows[$landing_key]['cta3'] ?? 0) / $clicks) * 100, 2)
+            : 0.0;
+        $this->rows[$landing_key]['conv_cr'] = $clicks > 0
+            ? round(((int) ($this->rows[$landing_key]['conv'] ?? 0) / $clicks) * 100, 2)
+            : 0.0;
 
-        foreach ($this->rows as $row) {
-            if (($row['dedupe_key'] ?? '') === $dedupe_key) {
-                return [
-                    'inserted' => false,
-                    'row' => $row,
-                ];
-            }
-        }
-
-        $row = array_merge(
-            [
-                'id' => $this->next_id++,
-                'created_at' => '2026-04-01 12:00:00',
-                'service_key' => '',
-                'event_value' => '',
-                'request_host' => '',
-                'request_path' => '',
-                'remote_ip' => '',
-                'user_agent' => '',
-                'raw_context' => '',
-            ],
-            $data,
-            [
-                'landing_key' => $landing_key,
-                'session_token' => $session_token,
-                'event_step' => $event_step,
-                'dedupe_key' => $dedupe_key,
-            ]
-        );
-
-        $this->rows[] = $row;
-
-        return [
-            'inserted' => true,
-            'row' => $row,
-        ];
+        return true;
     }
 
-    public function get_step_counts_by_landing(string $since_mysql, array $landing_keys = []): array
-    {
-        $since_mysql = trim($since_mysql);
-        $landing_keys = array_values(array_filter(array_map('strval', $landing_keys)));
-        $landing_filter = array_flip($landing_keys);
-        $counts = [];
-
-        foreach ($this->rows as $row) {
-            $created_at = trim((string) ($row['created_at'] ?? ''));
-            $landing_key = trim((string) ($row['landing_key'] ?? ''));
-            $event_step = strtolower(trim((string) ($row['event_step'] ?? '')));
-
-            if ($landing_key === '' || $event_step === '') {
-                continue;
-            }
-
-            if ($since_mysql !== '' && $created_at !== '' && $created_at < $since_mysql) {
-                continue;
-            }
-
-            if (!empty($landing_filter) && !isset($landing_filter[$landing_key])) {
-                continue;
-            }
-
-            if (!isset($counts[$landing_key])) {
-                $counts[$landing_key] = [];
-            }
-
-            if (!isset($counts[$landing_key][$event_step])) {
-                $counts[$landing_key][$event_step] = 0;
-            }
-
-            $counts[$landing_key][$event_step]++;
-        }
-
-        return $counts;
-    }
-}
-
-class Kiwi_Test_Landing_Kpi_Service extends Kiwi_Landing_Kpi_Service
-{
-    public $click_counts = [];
-    public $conversion_counts = [];
-
-    protected function fetch_click_counts(array $landing_keys, string $since_mysql): array
-    {
-        return $this->filter_counts($this->click_counts, $landing_keys);
-    }
-
-    protected function fetch_conversion_counts(array $landing_keys, string $since_mysql): array
-    {
-        return $this->filter_counts($this->conversion_counts, $landing_keys);
-    }
-
-    private function filter_counts(array $counts, array $landing_keys): array
+    public function get_rows(array $landing_keys = []): array
     {
         if (empty($landing_keys)) {
-            return $counts;
+            $rows = array_values($this->rows);
+            usort($rows, static function (array $left, array $right): int {
+                return strcmp((string) ($left['landing_key'] ?? ''), (string) ($right['landing_key'] ?? ''));
+            });
+
+            return $rows;
         }
 
-        $filtered = [];
         $allowed = array_flip(array_values(array_filter(array_map('strval', $landing_keys))));
+        $rows = [];
 
-        foreach ($counts as $key => $value) {
-            $landing_key = trim((string) $key);
-
-            if ($landing_key === '' || !isset($allowed[$landing_key])) {
+        foreach ($this->rows as $landing_key => $row) {
+            if (!isset($allowed[$landing_key])) {
                 continue;
             }
 
-            $filtered[$landing_key] = (int) $value;
+            $rows[] = $row;
         }
 
-        return $filtered;
+        usort($rows, static function (array $left, array $right): int {
+            return strcmp((string) ($left['landing_key'] ?? ''), (string) ($right['landing_key'] ?? ''));
+        });
+
+        return $rows;
     }
 }
 
@@ -2470,13 +2414,33 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver matches confirmed conversion
         'super-secret'
     );
     $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
-    $resolver = new Kiwi_Conversion_Attribution_Resolver($repository, $dispatcher);
+    $kpi_summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $kpi_service = new Kiwi_Landing_Kpi_Service(
+        new Kiwi_Test_Config(
+            100,
+            0,
+            0,
+            [],
+            [],
+            [],
+            [
+                'lp2-fr' => [
+                    'service_key' => 'nth_fr_one_off_jplay',
+                    'provider' => 'nth',
+                    'flow' => 'one-off',
+                ],
+            ]
+        ),
+        $kpi_summary_repository
+    );
+    $resolver = new Kiwi_Conversion_Attribution_Resolver($repository, $dispatcher, $kpi_service);
 
     $capture = $repository->upsert_capture([
         'tracking_token' => 'TOK1234567890123',
         'click_id' => 'aff:click:001',
         'provider_key' => 'nth',
         'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
         'flow_key' => 'one-off',
         'session_ref' => 'session-1',
         'expires_at' => '2026-04-05 12:00:00',
@@ -2525,6 +2489,7 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver matches confirmed conversion
     ]);
     kiwi_assert_same('postback_already_sent', $duplicate['reason'] ?? '', 'Expected duplicate confirmed callbacks to skip duplicate postback dispatch.');
     kiwi_assert_same(1, count($dispatcher->calls), 'Expected duplicate callbacks not to emit a second postback.');
+    kiwi_assert_same(1, (int) ($kpi_summary_repository->rows['lp2-fr']['conv'] ?? 0), 'Expected conversion KPI summary counter to increment exactly once across duplicate confirmed callbacks.');
 
     $not_confirmed = $resolver->handle_confirmed_conversion([
         'provider_key' => 'nth',
@@ -2746,9 +2711,9 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes registers event and report endpoints
             ],
         ]
     );
-    $event_repository = new Kiwi_Test_Landing_Kpi_Event_Repository();
-    $service = new Kiwi_Test_Landing_Kpi_Service($config, $event_repository);
-    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $event_repository, $service);
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $service);
 
     $routes->register_routes();
 
@@ -2757,7 +2722,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes registers event and report endpoints
     kiwi_assert_same('/landing-kpi/report', $GLOBALS['kiwi_test_rest_routes'][1]['route'] ?? '', 'Expected report endpoint route to match contract.');
 });
 
-kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes ingests deduplicated CTA step events', function (): void {
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes increments configured CTA steps in summary storage', function (): void {
     $config = new Kiwi_Test_Config(
         100,
         0,
@@ -2773,36 +2738,33 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes ingests deduplicated CTA step events
             ],
         ]
     );
-    $event_repository = new Kiwi_Test_Landing_Kpi_Event_Repository();
-    $service = new Kiwi_Test_Landing_Kpi_Service($config, $event_repository);
-    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $event_repository, $service);
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $service);
 
     $first = $routes->handle_event(new WP_REST_Request([], [
         'landing_key' => 'lp2-fr',
-        'session_token' => 'session_token_001',
         'step' => 'cta1',
         'event_value' => '.cta',
     ]));
     $duplicate = $routes->handle_event(new WP_REST_Request([], [
         'landing_key' => 'lp2-fr',
-        'session_token' => 'session_token_001',
         'step' => 'cta1',
         'event_value' => '.cta',
     ]));
     $invalid = $routes->handle_event(new WP_REST_Request([], [
         'landing_key' => 'lp2-fr',
-        'session_token' => 'session_token_001',
         'step' => 'invalid_step',
     ]));
 
     kiwi_assert_true(($first->data['success'] ?? false) === true, 'Expected valid KPI events to be accepted.');
-    kiwi_assert_true(($first->data['inserted'] ?? false) === true, 'Expected first KPI event to be inserted.');
-    kiwi_assert_true(($duplicate->data['inserted'] ?? true) === false, 'Expected duplicate KPI step events for same session to be deduplicated.');
-    kiwi_assert_same(1, count($event_repository->rows), 'Expected dedupe to keep one stored row for landing/session/step.');
+    kiwi_assert_true(($first->data['incremented'] ?? false) === true, 'Expected first KPI step event to increment summary counters.');
+    kiwi_assert_true(($duplicate->data['incremented'] ?? false) === true, 'Expected repeated KPI step events to increment aggregated counters.');
+    kiwi_assert_same(2, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected CTA1 counter to increment twice for repeated valid events.');
     kiwi_assert_same(400, $invalid->status, 'Expected invalid KPI step values to be rejected.');
 });
 
-kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing KPI rows with percentage rates', function (): void {
+kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing summary rows with percentage rates', function (): void {
     $config = new Kiwi_Test_Config(
         100,
         0,
@@ -2825,46 +2787,33 @@ kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing KPI rows with percent
             ],
         ]
     );
-    $event_repository = new Kiwi_Test_Landing_Kpi_Event_Repository();
-    $service = new Kiwi_Test_Landing_Kpi_Service($config, $event_repository);
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
 
+    for ($i = 0; $i < 100; $i++) {
+        $service->increment_click('lp2-fr');
+    }
     for ($i = 0; $i < 40; $i++) {
-        $event_repository->insert_step_event([
-            'landing_key' => 'lp2-fr',
-            'session_token' => 'lp2_cta1_' . $i,
-            'event_step' => 'cta1',
-        ]);
+        $service->increment_step('lp2-fr', 'cta1');
     }
     for ($i = 0; $i < 25; $i++) {
-        $event_repository->insert_step_event([
-            'landing_key' => 'lp2-fr',
-            'session_token' => 'lp2_cta2_' . $i,
-            'event_step' => 'cta2',
-        ]);
+        $service->increment_step('lp2-fr', 'cta2');
     }
     for ($i = 0; $i < 10; $i++) {
-        $event_repository->insert_step_event([
-            'landing_key' => 'lp2-fr',
-            'session_token' => 'lp2_cta3_' . $i,
-            'event_step' => 'cta3',
-        ]);
+        $service->increment_step('lp2-fr', 'cta3');
+    }
+    for ($i = 0; $i < 12; $i++) {
+        $service->increment_conversion('lp2-fr');
+    }
+    for ($i = 0; $i < 20; $i++) {
+        $service->increment_click('lp3-fr');
     }
     for ($i = 0; $i < 5; $i++) {
-        $event_repository->insert_step_event([
-            'landing_key' => 'lp3-fr',
-            'session_token' => 'lp3_cta1_' . $i,
-            'event_step' => 'cta1',
-        ]);
+        $service->increment_step('lp3-fr', 'cta1');
     }
-
-    $service->click_counts = [
-        'lp2-fr' => 100,
-        'lp3-fr' => 20,
-    ];
-    $service->conversion_counts = [
-        'lp2-fr' => 12,
-        'lp3-fr' => 2,
-    ];
+    for ($i = 0; $i < 2; $i++) {
+        $service->increment_conversion('lp3-fr');
+    }
 
     $report = $service->build_report(30);
     $rows = $report['rows'] ?? [];
@@ -2878,11 +2827,11 @@ kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing KPI rows with percent
     }
 
     kiwi_assert_true(is_array($lp2), 'Expected KPI report to include lp2-fr row.');
-    kiwi_assert_same(100, $lp2['clicks'] ?? 0, 'Expected click count to come from landing sessions aggregate.');
-    kiwi_assert_same(40, $lp2['cta1'] ?? 0, 'Expected cta1 count to come from KPI events aggregate.');
-    kiwi_assert_same(25, $lp2['cta2'] ?? 0, 'Expected cta2 count to come from KPI events aggregate.');
-    kiwi_assert_same(10, $lp2['cta3'] ?? 0, 'Expected cta3 count to come from KPI events aggregate.');
-    kiwi_assert_same(12, $lp2['conv'] ?? 0, 'Expected conversion count to come from conversion aggregate.');
+    kiwi_assert_same(100, $lp2['clicks'] ?? 0, 'Expected click count to come from summary counter aggregate.');
+    kiwi_assert_same(40, $lp2['cta1'] ?? 0, 'Expected cta1 count to come from summary counter aggregate.');
+    kiwi_assert_same(25, $lp2['cta2'] ?? 0, 'Expected cta2 count to come from summary counter aggregate.');
+    kiwi_assert_same(10, $lp2['cta3'] ?? 0, 'Expected cta3 count to come from summary counter aggregate.');
+    kiwi_assert_same(12, $lp2['conv'] ?? 0, 'Expected conversion count to come from summary counter aggregate.');
     kiwi_assert_same(40.0, $lp2['cta1_rate_pct'] ?? 0.0, 'Expected cta1 rate to be calculated against clicks.');
     kiwi_assert_same(25.0, $lp2['cta2_rate_pct'] ?? 0.0, 'Expected cta2 rate to be calculated against clicks.');
     kiwi_assert_same(10.0, $lp2['cta3_rate_pct'] ?? 0.0, 'Expected cta3 rate to be calculated against clicks.');

@@ -67,13 +67,19 @@ The landing-page system supports a generic KPI funnel for optimization analysis.
 ### Event model
 
 - `clicks`
-  - derived from unique landing sessions in `wp_kiwi_landing_page_sessions`
+  - incremented in the central landing-page router when a landing page is rendered
 - `cta1`, `cta2`, `cta3`
-  - client-side step events stored in `wp_kiwi_landing_kpi_events`
-  - deduped per `(landing_key, session_token, step)`
+  - incremented through the KPI event endpoint into one summary row per landing page
 - `conv`
-  - derived from confirmed conversion states in `wp_kiwi_click_attributions`
-  - includes `confirmed`, `postback_sent`, and `postback_failed`
+  - incremented once on first confirmed conversion match in attribution resolver
+  - duplicate callbacks do not increment `conv` again once conversion was already confirmed
+
+Storage model:
+
+- `wp_kiwi_landing_kpi_summary`
+  - one row per `landing_key`
+  - counters: `clicks`, `cta1`, `cta2`, `cta3`, `conv`
+  - precomputed rates: `cta1_cr`, `cta2_cr`, `cta3_cr`, `conv_cr`
 
 ### Per-landing selector mapping in `integration.php`
 
@@ -96,11 +102,11 @@ Notes:
 ### REST endpoints
 
 - `POST /wp-json/kiwi-backend/v1/landing-kpi/event`
-  - ingests client-side CTA step events
+  - increments CTA summary counters (`cta1`/`cta2`/`cta3`)
 - `GET /wp-json/kiwi-backend/v1/landing-kpi/report`
   - returns per-landing KPI rows with counts and rates
   - supports optional filters:
-    - `days` (default 30, max 365)
+    - `days` (accepted for compatibility; summary output is all-time)
     - `landing_key`
 
 ## Key tables and what they mean

@@ -13,19 +13,22 @@ class Kiwi_Landing_Page_Router
     private $plugin_base_url;
     private $tracking_capture_service;
     private $primary_cta_resolver;
+    private $landing_kpi_service;
 
     public function __construct(
         Kiwi_Config $config,
         Kiwi_Landing_Page_Session_Repository $landing_page_session_repository,
         string $plugin_base_url,
         ?Kiwi_Tracking_Capture_Service $tracking_capture_service = null,
-        ?Kiwi_Landing_Primary_Cta_Resolver $primary_cta_resolver = null
+        ?Kiwi_Landing_Primary_Cta_Resolver $primary_cta_resolver = null,
+        ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null
     ) {
         $this->config = $config;
         $this->landing_page_session_repository = $landing_page_session_repository;
         $this->plugin_base_url = rtrim($plugin_base_url, '/\\') . '/';
         $this->tracking_capture_service = $tracking_capture_service;
         $this->primary_cta_resolver = $primary_cta_resolver;
+        $this->landing_kpi_service = $landing_kpi_service;
     }
 
     public function maybe_render_current_request(): bool
@@ -100,12 +103,16 @@ class Kiwi_Landing_Page_Router
         $asset_base_url = $this->plugin_base_url;
 
         if ($this->is_filesystem_landing_page($landing_page)) {
+            $this->maybe_record_kpi_click($landing_key, $landing_page);
+
             return $this->render_filesystem_landing_page($landing_page, $landing_key, $session_token);
         }
 
         if ($template === null) {
             return false;
         }
+
+        $this->maybe_record_kpi_click($landing_key, $landing_page);
 
         include $template;
         exit;
@@ -360,6 +367,19 @@ class Kiwi_Landing_Page_Router
         }
 
         return str_replace('</', '<\/', $encoded);
+    }
+
+    private function maybe_record_kpi_click(string $landing_key, array $landing_page): void
+    {
+        if (!$this->landing_kpi_service instanceof Kiwi_Landing_Kpi_Service) {
+            return;
+        }
+
+        $this->landing_kpi_service->increment_click($landing_key, [
+            'service_key' => (string) ($landing_page['service_key'] ?? ''),
+            'provider_key' => (string) ($landing_page['provider'] ?? ''),
+            'flow_key' => (string) ($landing_page['flow'] ?? ''),
+        ]);
     }
 
     private function replace_stylesheet_href(string $html, string $css_url): string
