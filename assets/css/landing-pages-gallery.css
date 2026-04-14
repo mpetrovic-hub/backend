@@ -225,7 +225,7 @@
     gap: 0.45rem;
     padding: 0.55rem 0.7rem;
     border-top: 1px solid #d6e2da;
-    font-size: 0.83rem;
+    font-size: 0.74rem;
 }
 
 .kiwi-lp-card__preview-url {
@@ -273,7 +273,7 @@
 }
 
 .kiwi-lp-card__meta {
-    margin: 0;
+    margin: 0 !important;
     display: grid;
     grid-template-columns: 1fr;
     gap: 0.04rem;
@@ -293,10 +293,10 @@
 
 .kiwi-lp-card__meta dt {
     margin: 0 !important;
-    font-size: 0.74rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.035em;
+    font-size: 0.74rem !important;
+    font-weight: 600 !important;
+    text-transform: none !important;
+    letter-spacing: 0.01em;
     color: var(--kiwi-lp-muted);
     flex: 0 0 auto;
     line-height: 1.14;
@@ -309,8 +309,8 @@
 
 .kiwi-lp-card__meta dd {
     margin: 0 !important;
-    font-size: 0.74rem;
-    font-weight: 600;
+    font-size: 0.74rem !important;
+    font-weight: 600 !important;
     word-break: break-word;
     text-align: left;
     line-height: 1.14;
