@@ -73,6 +73,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
     {
         $key = (string) ($entry['key'] ?? '');
         $country = (string) ($entry['country'] ?? '');
+        $country_display = $this->format_country_for_display($country);
         $routing_mode = (string) ($entry['routing_mode'] ?? 'unknown');
         $flow = trim((string) ($entry['flow'] ?? ''));
         $service_key = trim((string) ($entry['service_key'] ?? ''));
@@ -90,7 +91,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $output .= $this->render_preview_block($entry);
 
         $output .= '<dl class="kiwi-lp-card__meta">';
-        $output .= $this->render_meta_item('Country', $country);
+        $output .= $this->render_meta_item('Country', $country_display);
         $output .= $this->render_meta_item('Key', $key);
         $output .= $this->render_meta_item('Flow', $flow);
         $output .= $this->render_meta_item('Service', $service_key);
@@ -201,6 +202,21 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $display_value = trim($value) !== '' ? $value : 'N/A';
 
         return '<div><dt>' . esc_html($label) . '</dt><dd>' . esc_html($display_value) . '</dd></div>';
+    }
+
+    private function format_country_for_display(string $country): string
+    {
+        $country = strtoupper(trim($country));
+
+        if (preg_match('/^[A-Z]{2}$/', $country) !== 1) {
+            return $country !== '' ? $country : 'N/A';
+        }
+
+        $first = ord($country[0]) - 65 + 0x1F1E6;
+        $second = ord($country[1]) - 65 + 0x1F1E6;
+        $flag = html_entity_decode('&#' . $first . ';&#' . $second . ';', ENT_NOQUOTES, 'UTF-8');
+
+        return $flag . ' ' . $country;
     }
 
     private function build_local_preview_srcdoc(array $entry): string
