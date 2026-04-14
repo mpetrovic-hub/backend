@@ -66,6 +66,7 @@ class Kiwi_Affiliate_Postback_Dispatcher
         $sale_reference = trim((string) ($conversion['sale_reference'] ?? ($attribution['sale_reference'] ?? '')));
         $service_key = trim((string) ($conversion['service_key'] ?? ($attribution['service_key'] ?? '')));
         $provider_key = trim((string) ($conversion['provider_key'] ?? ($attribution['provider_key'] ?? '')));
+        $operator_name = trim((string) ($conversion['operator_name'] ?? ($attribution['operator_name'] ?? '')));
         $signature = $this->build_signature($click_id, $sale_reference, $service_key, $provider_key);
         $url = strtr($template, [
             '{clickid}' => rawurlencode($click_id),
@@ -78,6 +79,10 @@ class Kiwi_Affiliate_Postback_Dispatcher
             '{{service_key}}' => rawurlencode($service_key),
             '{provider_key}' => rawurlencode($provider_key),
             '{{provider_key}}' => rawurlencode($provider_key),
+            '{operator_name}' => rawurlencode($operator_name),
+            '{{operator_name}}' => rawurlencode($operator_name),
+            '{sub7}' => rawurlencode($operator_name),
+            '{{sub7}}' => rawurlencode($operator_name),
             '{secure}' => rawurlencode($signature),
             '{hash}' => rawurlencode($signature),
             '{{secure}}' => rawurlencode($signature),
@@ -95,7 +100,26 @@ class Kiwi_Affiliate_Postback_Dispatcher
             }
         }
 
+        if ($operator_name !== '' && !$this->url_has_query_parameter($url, 'sub7')) {
+            $url .= (strpos($url, '?') === false ? '?' : '&')
+                . 'sub7='
+                . rawurlencode($operator_name);
+        }
+
         return $url;
+    }
+
+    private function url_has_query_parameter(string $url, string $parameter): bool
+    {
+        $query = parse_url($url, PHP_URL_QUERY);
+
+        if (!is_string($query) || $query === '') {
+            return false;
+        }
+
+        parse_str($query, $params);
+
+        return is_array($params) && array_key_exists($parameter, $params);
     }
 
     protected function send_request(string $url): array

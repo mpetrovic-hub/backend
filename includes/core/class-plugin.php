@@ -374,7 +374,8 @@ TEXT;
         $conversion_attribution_resolver = new Kiwi_Conversion_Attribution_Resolver(
             $click_attribution_repository,
             $affiliate_postback_dispatcher,
-            $landing_kpi_service
+            $landing_kpi_service,
+            $sales_repository
         );
         $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
             $config,

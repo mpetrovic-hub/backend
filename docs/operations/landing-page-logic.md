@@ -54,6 +54,7 @@ High-level flow:
 3. Confirmed conversions are resolved against attribution state using stable references (transaction/message/session/external refs).
 4. Successful one-off sales are persisted in `wp_kiwi_sales`.
 5. Affiliate postback dispatch is triggered only for confirmed conversions and only once after `postback_sent_at` is set.
+6. When a matching sale exists, outbound postback includes `sub7=<operator_name>` sourced from `wp_kiwi_sales.operator_name`.
 
 Important boundary:
 

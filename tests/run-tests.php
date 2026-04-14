@@ -1725,6 +1725,23 @@ class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
 
         return $row;
     }
+
+    public function find_by_sale_reference(string $sale_reference): ?array
+    {
+        $sale_reference = trim($sale_reference);
+
+        if ($sale_reference === '') {
+            return null;
+        }
+
+        foreach ($this->rows as $row) {
+            if ((string) ($row['sale_reference'] ?? '') === $sale_reference) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
 }
 
 class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
@@ -2529,6 +2546,60 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver can resolve confirmed conver
     kiwi_assert_true($result['matched'] ?? false, 'Expected transaction_id-based resolution to match a persisted attribution row.');
     kiwi_assert_true($result['dispatched'] ?? false, 'Expected transaction_id-based resolution to dispatch one postback.');
     kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback for transaction_id-based confirmed conversion handling.');
+});
+
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends sub7 from persisted sales operator_name', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $sales_repository->upsert([
+        'sale_reference' => 'sale-sub7-1',
+        'operator_name' => '20820',
+        'operator_code' => '20820',
+        'provider_key' => 'nth',
+        'status' => 'completed',
+    ]);
+    $config = new Kiwi_Test_Attribution_Config(
+        'https://offers.example.test/postback?clickid={clickid}&goal=sale',
+        ''
+    );
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
+    $resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $repository,
+        $dispatcher,
+        null,
+        $sales_repository
+    );
+
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKSUB7ATTRIBUTION',
+        'click_id' => 'aff:click:sub7',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+
+    $resolver->attach_provider_references([
+        'tracking_token' => (string) ($capture['tracking_token'] ?? ''),
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'transaction_ref' => 'flow-sub7-1',
+        'sale_reference' => 'sale-sub7-1',
+    ]);
+
+    $result = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_ref' => 'flow-sub7-1',
+        'sale_reference' => 'sale-sub7-1',
+    ]);
+
+    kiwi_assert_true($result['dispatched'] ?? false, 'Expected confirmed conversion to dispatch postback in sub7 enrichment flow.');
+    kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback call for sub7 enrichment flow.');
+    kiwi_assert_true(
+        strpos((string) ($dispatcher->calls[0] ?? ''), 'sub7=20820') !== false,
+        'Expected postback URL to include sub7 from wp_kiwi_sales.operator_name.'
+    );
 });
 
 kiwi_run_test('Kiwi_Shared_Sales_Recorder writes transaction_id to sales records when provided', function (): void {

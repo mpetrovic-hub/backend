@@ -9,15 +9,18 @@ class Kiwi_Conversion_Attribution_Resolver
     private $repository;
     private $dispatcher;
     private $landing_kpi_service;
+    private $sales_repository;
 
     public function __construct(
         Kiwi_Click_Attribution_Repository $repository,
         Kiwi_Affiliate_Postback_Dispatcher $dispatcher,
-        ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null
+        ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null,
+        ?Kiwi_Sales_Repository $sales_repository = null
     ) {
         $this->repository = $repository;
         $this->dispatcher = $dispatcher;
         $this->landing_kpi_service = $landing_kpi_service;
+        $this->sales_repository = $sales_repository;
     }
 
     public function attach_provider_references(array $binding): ?array
@@ -130,6 +133,7 @@ class Kiwi_Conversion_Attribution_Resolver
         $this->maybe_record_kpi_conversion($row, $conversion, $is_first_confirmed);
 
         $updated_row = $this->repository->get_by_id((int) $row['id']) ?? $row;
+        $conversion = $this->enrich_conversion_with_sales_data($conversion, $updated_row);
         $dispatch_result = $this->dispatcher->dispatch($updated_row, $conversion);
         $this->repository->record_postback_attempt((int) $row['id'], $dispatch_result);
 
@@ -140,6 +144,35 @@ class Kiwi_Conversion_Attribution_Resolver
             'attribution_id' => (int) $row['id'],
             'postback' => $dispatch_result,
         ];
+    }
+
+    private function enrich_conversion_with_sales_data(array $conversion, array $attribution_row): array
+    {
+        if (!$this->sales_repository instanceof Kiwi_Sales_Repository) {
+            return $conversion;
+        }
+
+        $sale_reference = trim((string) ($conversion['sale_reference'] ?? ($attribution_row['sale_reference'] ?? '')));
+
+        if ($sale_reference === '') {
+            return $conversion;
+        }
+
+        $sale = $this->sales_repository->find_by_sale_reference($sale_reference);
+
+        if (!is_array($sale)) {
+            return $conversion;
+        }
+
+        if (trim((string) ($conversion['operator_name'] ?? '')) === '') {
+            $conversion['operator_name'] = trim((string) ($sale['operator_name'] ?? ''));
+        }
+
+        if (trim((string) ($conversion['operator_code'] ?? '')) === '') {
+            $conversion['operator_code'] = trim((string) ($sale['operator_code'] ?? ''));
+        }
+
+        return $conversion;
     }
 
     private function maybe_record_kpi_conversion(array $attribution_row, array $conversion, bool $is_first_confirmed): void
