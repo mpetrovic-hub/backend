@@ -25,7 +25,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $errors = is_array($gallery_data['errors'] ?? null) ? $gallery_data['errors'] : [];
         $entry_count = (int) ($gallery_data['count'] ?? count($entries));
 
-        $output = '<section class="kiwi-page-shell kiwi-page-shell--fullwidth" aria-label="Landing Pages Gallery">';
+        $output = '<section class="kiwi-page-shell" aria-label="Landing Pages Gallery">';
         $output .= '<header class="kiwi-section-header">';
         $output .= '<div class="kiwi-section-header-content">';
         $output .= '<h2 class="kiwi-page-title">Landing Pages</h2>';
