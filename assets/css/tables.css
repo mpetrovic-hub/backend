@@ -5,9 +5,9 @@
 .kiwi-table-wrap {
     overflow-x: auto;
     margin-top: 0.55rem;
-    border: 1px solid var(--kiwi-color-border);
+    border: 1px solid #354b3d;
     border-radius: var(--kiwi-radius-sm);
-    background: #ffffff;
+    background: #1a271f;
 }
 
 .kiwi-table {
@@ -19,7 +19,7 @@
 }
 
 .kiwi-table thead {
-    background: #eef4f0;
+    background: #24362a;
 }
 
 .kiwi-table th {
@@ -27,22 +27,22 @@
     padding: 0.62rem 0.7rem;
     font-weight: 700;
     color: var(--kiwi-color-ink);
-    border-bottom: 1px solid var(--kiwi-color-border);
+    border-bottom: 1px solid #354b3d;
     white-space: nowrap;
 }
 
 .kiwi-table td {
     padding: 0.6rem 0.7rem;
-    border-bottom: 1px solid #e6ede9;
+    border-bottom: 1px solid #31463a;
     vertical-align: top;
 }
 
 .kiwi-table tbody tr:nth-child(even) {
-    background: #f8fbf9;
+    background: #1f3026;
 }
 
 .kiwi-table tbody tr:hover {
-    background: #eff6f2;
+    background: #2a4032;
 }
 
 .kiwi-table tbody tr:last-child td {
@@ -50,21 +50,21 @@
 }
 
 .kiwi-status--pending {
-    color: #8d6918;
+    color: #e4c479;
     font-weight: 700;
 }
 
 .kiwi-status--success {
-    color: #1b6b3f;
+    color: #84d6a8;
     font-weight: 700;
 }
 
 .kiwi-status--failure {
-    color: #b52a1e;
+    color: #ff978f;
     font-weight: 700;
 }
 
 .kiwi-status--warning {
-    color: #8d5414;
+    color: #f0c983;
     font-weight: 700;
 }

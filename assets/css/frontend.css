@@ -1,7 +1,7 @@
 .kiwi-page-shell {
-    --kiwi-shell-bg: radial-gradient(circle at 16% 8%, rgba(88, 219, 157, 0.14) 0%, rgba(88, 219, 157, 0) 35%),
-        radial-gradient(circle at 88% 0%, rgba(68, 128, 255, 0.16) 0%, rgba(68, 128, 255, 0) 38%),
-        linear-gradient(145deg, #f8faf8 0%, #eef4f0 52%, #e8f0ea 100%);
+    --kiwi-shell-bg: radial-gradient(circle at 10% 0%, rgba(79, 255, 182, 0.14) 0%, rgba(79, 255, 182, 0) 36%),
+        radial-gradient(circle at 88% 5%, rgba(85, 154, 255, 0.2) 0%, rgba(85, 154, 255, 0) 40%),
+        linear-gradient(145deg, #101a14 0%, #15241b 52%, #192c21 100%);
     position: relative;
     overflow: hidden;
     margin: 0 0 1rem 0;
@@ -21,7 +21,7 @@
     width: 360px;
     height: 360px;
     pointer-events: none;
-    background: radial-gradient(circle, rgba(73, 220, 156, 0.16) 0%, rgba(73, 220, 156, 0) 68%);
+    background: radial-gradient(circle, rgba(83, 236, 165, 0.22) 0%, rgba(83, 236, 165, 0) 70%);
 }
 
 .kiwi-page-shell::after {
@@ -31,7 +31,7 @@
     width: 380px;
     height: 380px;
     pointer-events: none;
-    background: radial-gradient(circle, rgba(77, 144, 255, 0.16) 0%, rgba(77, 144, 255, 0) 68%);
+    background: radial-gradient(circle, rgba(94, 161, 255, 0.22) 0%, rgba(94, 161, 255, 0) 70%);
 }
 
 .kiwi-page-shell > * {
@@ -99,14 +99,14 @@
     inset: -1px;
     border-radius: inherit;
     pointer-events: none;
-    background: linear-gradient(140deg, rgba(83, 220, 156, 0.35), rgba(63, 132, 255, 0.2), rgba(83, 220, 156, 0.08));
-    opacity: 0.15;
+    background: linear-gradient(140deg, rgba(83, 220, 156, 0.36), rgba(79, 141, 255, 0.32), rgba(83, 220, 156, 0.08));
+    opacity: 0.3;
 }
 
 .kiwi-preview-card:hover {
     transform: translateY(-2px);
-    border-color: #b4d7c1;
-    box-shadow: var(--kiwi-shadow-card-hover), 0 0 0 1px rgba(73, 201, 143, 0.1);
+    border-color: #648a73;
+    box-shadow: var(--kiwi-shadow-card-hover), 0 0 0 1px rgba(80, 220, 156, 0.12);
 }
 
 .kiwi-preview-card:focus-visible {
@@ -116,7 +116,7 @@
 
 .kiwi-preview {
     background: var(--kiwi-color-surface-soft);
-    border: 1px solid var(--kiwi-color-border);
+    border: 1px solid #354b3d;
     border-radius: var(--kiwi-radius-sm);
     overflow: hidden;
     margin-bottom: 0.15rem;
@@ -142,7 +142,7 @@
     display: flex;
     align-items: center;
     gap: 0.45rem;
-    border-top: 1px solid var(--kiwi-color-border);
+    border-top: 1px solid #354b3d;
     padding: 0.55rem 0.7rem;
     font-size: 0.74rem;
 }
@@ -153,7 +153,7 @@
 }
 
 .kiwi-preview-url {
-    color: #114f90;
+    color: #8dc4ff;
     text-decoration: none;
     overflow-wrap: anywhere;
 }
@@ -167,10 +167,10 @@
     margin-left: auto;
     width: 30px;
     height: 30px;
-    border: 1px solid #b8cec0;
+    border: 1px solid #4a6655;
     border-radius: var(--kiwi-radius-xs);
-    background: #eef7f1;
-    color: #1e5e37;
+    background: #263a2f;
+    color: #d6f1e1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -186,14 +186,14 @@
 
 .kiwi-copy-button:hover,
 .kiwi-copy-button:focus-visible {
-    background: #e1f2e8;
-    border-color: #97b8a4;
+    background: #2f4a3b;
+    border-color: #648a73;
 }
 
 .kiwi-copy-button.is-copied {
-    background: #d8efe2;
-    border-color: #7ead8f;
-    color: #1b6b3f;
+    background: #365844;
+    border-color: #73ac8f;
+    color: #dbffe9;
 }
 
 .kiwi-meta-list {

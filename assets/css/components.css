@@ -1,29 +1,29 @@
 :root {
     --kiwi-font-family: Manrope, "Avenir Next", "Segoe UI", sans-serif;
-    --kiwi-color-ink: #18231d;
-    --kiwi-color-muted: #5d6a61;
-    --kiwi-color-surface: #ffffff;
-    --kiwi-color-surface-soft: #f4f8f5;
-    --kiwi-color-border: #d7e2da;
-    --kiwi-color-border-soft: #c9d9cf;
-    --kiwi-color-accent: #257a49;
-    --kiwi-color-accent-strong: #1d673d;
-    --kiwi-color-accent-soft: #e3f4e8;
-    --kiwi-color-info-soft: #edf2ff;
-    --kiwi-color-info-border: #c9d7f4;
-    --kiwi-color-warning-soft: #fff8ea;
-    --kiwi-color-warning-border: #f0d8a6;
-    --kiwi-color-warning-text: #5d4a22;
-    --kiwi-color-error-soft: #fff1f0;
-    --kiwi-color-error-border: #f5c2c0;
-    --kiwi-color-error-text: #7a1f1a;
+    --kiwi-color-ink: #ebf2ed;
+    --kiwi-color-muted: #b4c6bb;
+    --kiwi-color-surface: #1d2b22;
+    --kiwi-color-surface-soft: #1a271f;
+    --kiwi-color-border: #334a3c;
+    --kiwi-color-border-soft: #446150;
+    --kiwi-color-accent: #70c891;
+    --kiwi-color-accent-strong: #5ab67d;
+    --kiwi-color-accent-soft: #254332;
+    --kiwi-color-info-soft: #28374f;
+    --kiwi-color-info-border: #496080;
+    --kiwi-color-warning-soft: #3a321f;
+    --kiwi-color-warning-border: #6b5731;
+    --kiwi-color-warning-text: #f3dfb3;
+    --kiwi-color-error-soft: #442a2a;
+    --kiwi-color-error-border: #805050;
+    --kiwi-color-error-text: #f7c5c2;
     --kiwi-radius-xs: 8px;
     --kiwi-radius-sm: 12px;
     --kiwi-radius-md: 16px;
     --kiwi-radius-pill: 999px;
-    --kiwi-shadow-subtle: 0 8px 24px rgba(20, 41, 29, 0.08);
-    --kiwi-shadow-card: 0 10px 24px rgba(16, 36, 24, 0.1);
-    --kiwi-shadow-card-hover: 0 14px 30px rgba(16, 36, 24, 0.2);
+    --kiwi-shadow-subtle: 0 10px 24px rgba(0, 0, 0, 0.35);
+    --kiwi-shadow-card: 0 14px 30px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(80, 220, 156, 0.06);
+    --kiwi-shadow-card-hover: 0 16px 34px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(90, 190, 140, 0.14);
 }
 
 .kiwi-button {
@@ -53,7 +53,7 @@
 
 .kiwi-button:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 3px rgba(37, 122, 73, 0.23);
+    box-shadow: 0 0 0 3px rgba(112, 200, 145, 0.28);
 }
 
 .kiwi-button:active {
@@ -68,15 +68,15 @@
 }
 
 .kiwi-button--secondary {
-    border-color: #bfd8c7;
-    background: #eff8f1;
-    color: #1e5e37;
+    border-color: #4a6655;
+    background: #263a2f;
+    color: #d6f1e1;
 }
 
 .kiwi-button--secondary:hover {
-    border-color: #97b8a4;
-    background: #e1f2e8;
-    color: #1b6b3f;
+    border-color: #648a73;
+    background: #2f4a3b;
+    color: #dbffe9;
 }
 
 .kiwi-notice {
@@ -100,7 +100,7 @@
 .kiwi-notice--info {
     background: var(--kiwi-color-info-soft);
     border-color: var(--kiwi-color-info-border);
-    color: #2d466e;
+    color: #d6e4fa;
 }
 
 .kiwi-notice--warning {
@@ -121,10 +121,10 @@
     align-items: center;
     min-height: 28px;
     padding: 0.35rem 0.75rem;
-    border: 1px solid #c6e7d2;
+    border: 1px solid #3d6a51;
     border-radius: var(--kiwi-radius-pill);
     background: var(--kiwi-color-accent-soft);
-    color: #0f5b32;
+    color: #d5f7df;
     font-size: 0.82rem;
     font-weight: 700;
     white-space: nowrap;
@@ -132,11 +132,11 @@
 
 .kiwi-card {
     background:
-        linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 253, 249, 0.92) 100%),
+        linear-gradient(145deg, rgba(27, 42, 33, 0.95) 0%, rgba(25, 39, 31, 0.92) 100%),
         var(--kiwi-color-surface);
-    border: 1px solid var(--kiwi-color-border);
+    border: 1px solid #3a5645;
     border-radius: var(--kiwi-radius-md);
-    box-shadow: var(--kiwi-shadow-card), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    box-shadow: var(--kiwi-shadow-card);
     padding: 0.85rem;
 }
 
@@ -163,9 +163,9 @@
 .kiwi-badge {
     display: inline-flex;
     align-items: center;
-    border: 1px solid #bfd8c7;
-    background: #eff8f1;
-    color: #1e5e37;
+    border: 1px solid #4e7d64;
+    background: #294735;
+    color: #d6f1e1;
     border-radius: var(--kiwi-radius-pill);
     font-size: 0.7rem;
     font-weight: 700;
@@ -175,15 +175,15 @@
 }
 
 .kiwi-badge--muted {
-    border-color: var(--kiwi-color-info-border);
-    background: var(--kiwi-color-info-soft);
-    color: #2d466e;
+    border-color: #496080;
+    background: #28374f;
+    color: #d6e4fa;
 }
 
 .kiwi-empty-state {
     text-align: center;
     background: var(--kiwi-color-surface);
-    border: 1px dashed var(--kiwi-color-border-soft);
+    border: 1px dashed #446150;
     border-radius: var(--kiwi-radius-md);
     padding: 1.4rem 1rem;
 }
@@ -204,7 +204,7 @@
     font-weight: 700;
     color: var(--kiwi-color-ink);
     background: var(--kiwi-color-accent-soft);
-    border: 1px solid #c6e7d2;
+    border: 1px solid #3d6a51;
     border-radius: var(--kiwi-radius-xs);
     padding: 0.3rem 0.55rem;
 }
