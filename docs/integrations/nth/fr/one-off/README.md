@@ -537,6 +537,10 @@ Use this file for:
 - click-to-SMS style landing-page behavior
 - FR-specific callback expectations for the one-off service
 
+Known-good debug trace:
+
+- [`known-good-fr-test-vector.md`](./known-good-fr-test-vector.md)
+
 Use `../../general-api-premium-sms.md` for:
 
 - generic NTH Premium SMS concepts

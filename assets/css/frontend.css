@@ -240,10 +240,6 @@
     margin-top: 0.35rem;
 }
 
-.kiwi-card + .kiwi-card {
-    margin-top: 0.8rem;
-}
-
 .kiwi-notice + .kiwi-notice,
 .kiwi-notice + .kiwi-card,
 .kiwi-card + .kiwi-notice {
