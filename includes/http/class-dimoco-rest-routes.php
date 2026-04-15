@@ -63,6 +63,7 @@ class Kiwi_Dimoco_Rest_Routes
     error_log('KIWI DIMOCO CALLBACK STEP 2: params read');
     error_log('KIWI DIMOCO CALLBACK XML LENGTH: ' . strlen($xml));
     error_log('KIWI DIMOCO CALLBACK DIGEST LENGTH: ' . strlen($received_digest));
+    error_log('KIWI DIMOCO CALLBACK DIGEST RAW: ' . $received_digest);
 
     if ($xml === '' || $received_digest === '') {
         error_log('KIWI DIMOCO CALLBACK: missing data or digest');
