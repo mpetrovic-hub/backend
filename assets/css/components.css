@@ -34,7 +34,7 @@
     min-height: 38px;
     padding: 0.5rem 1rem;
     border: 1px solid rgba(117, 140, 230, 0.42);
-    border-radius: var(--kiwi-radius-pill);
+    border-radius: var(--kiwi-radius-sm);
     background: linear-gradient(140deg, rgba(29, 36, 63, 0.92) 0%, rgba(17, 22, 43, 0.94) 100%);
     color: #e9eeff;
     font-size: 0.9rem;
