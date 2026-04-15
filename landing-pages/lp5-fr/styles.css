@@ -1,0 +1,150 @@
+.lp5-body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #222f47;
+  background-image:
+    radial-gradient(circle at 15% 10%, rgba(40, 223, 16, 0.156) 0%, rgba(255, 255, 255, 0) 62%),
+    radial-gradient(circle at 85% 90%, rgba(135, 211, 13, 0.156) 0%, rgba(255, 255, 255, 0) 84%),
+    linear-gradient(180deg, #465368 0%, #2c3e5a 55%, #162e50 100%);
+  font-family: "Avenir Next", "Montserrat", "Segoe UI", sans-serif;
+  color: #ffffff;
+}
+
+.lp5-container {
+  width: min(400px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 28px 22px 24px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.download-icon {
+  width: 140px;
+  height: 140px;
+  margin: 0 auto 16px;
+  border: 9px solid #ffffff;
+  border-radius: 50%;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.download-icon__arrow {
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 78px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.download-icon__bar {
+  position: absolute;
+  bottom: 29px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 58px;
+  height: 8px;
+  background: #ffffff;
+  border-radius: 2px;
+}
+
+.lp5-title {
+  margin: 0 0 14px;
+  font-size: 48px;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.intro {
+  margin: 0 0 20px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.cta {
+  display: block;
+  width: 100%;
+  max-width: 338px;
+  margin: 0 auto 22px;
+  height: 40px;
+  line-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  text-decoration: none;
+  background: linear-gradient(180deg, #ffb320 0%, #ff960f 48%, #f37717 100%);
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.28), 0 8px 20px rgba(0, 0, 0, 0.32);
+}
+
+.cta:focus-visible,
+.cta:hover {
+  filter: brightness(1.05);
+}
+
+.price {
+  margin: 0 0 18px;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.disclaimer {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.disclaimer a {
+  color: #ffbf7d;
+}
+
+.terms {
+  display: inline-block;
+  margin-top: 18px;
+  color: #ffb3b3;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+@media (max-width: 420px) {
+  .lp5-container {
+    padding: 20px 14px 18px;
+  }
+
+  .download-icon {
+    width: 116px;
+    height: 116px;
+    border-width: 7px;
+    margin-bottom: 14px;
+  }
+
+  .download-icon__arrow {
+    top: 10px;
+    font-size: 64px;
+  }
+
+  .download-icon__bar {
+    bottom: 23px;
+    width: 49px;
+    height: 7px;
+  }
+
+  .lp5-title {
+    font-size: clamp(23px, 6vw, 44px);
+  }
+
+  .cta {
+    max-width: 320px;
+    height: 48px;
+    line-height: 16px;
+    font-size: clamp(15px, 4.4vw, 18px); /* (min, default, max) */
+  }
+}
