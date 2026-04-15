@@ -59,8 +59,10 @@ class Kiwi_Dimoco_Rest_Routes
 
     $xml = (string) $request->get_param('data');
     $received_digest = (string) $request->get_param('digest');
+    $raw_params = $request->get_params();
 
     error_log('KIWI DIMOCO CALLBACK STEP 2: params read');
+    error_log('KIWI DIMOCO CALLBACK RAW PARAMS: ' . wp_json_encode($raw_params));
     error_log('KIWI DIMOCO CALLBACK XML LENGTH: ' . strlen($xml));
     error_log('KIWI DIMOCO CALLBACK DIGEST LENGTH: ' . strlen($received_digest));
     error_log('KIWI DIMOCO CALLBACK DIGEST RAW: ' . $received_digest);
