@@ -3215,7 +3215,7 @@ kiwi_run_test('Kiwi_Nth_Client rejects submit requests with missing required rou
             'nth_fr_one_off_jplay' => [
                 'country' => 'FR',
                 'flow' => 'one-off',
-                'mt_submission_url' => 'https://premium.mobile-gw.com:9443',
+                'mt_submission_url' => 'http://mobilegate58.nth.ch:9099',
                 'username' => 'user',
                 'password' => 'pass',
                 'shortcode' => '84072',
@@ -3227,6 +3227,7 @@ kiwi_run_test('Kiwi_Nth_Client rejects submit requests with missing required rou
 
     $response = $client->submit_message('nth_fr_one_off_jplay', [
         'flow_reference' => 'flow-1',
+        'session_id' => 'session-client-validation-1',
         'subscriber_reference' => 'enc-123',
         'shortcode' => '84072',
         'message_text' => 'Merci pour votre achat.',
@@ -3249,7 +3250,7 @@ kiwi_run_test('Kiwi_Nth_Client rejects legacy submit template keys in strict mod
             'nth_fr_one_off_jplay' => [
                 'country' => 'FR',
                 'flow' => 'one-off',
-                'mt_submission_url' => 'https://premium.mobile-gw.com:9443',
+                'mt_submission_url' => 'http://mobilegate58.nth.ch:9099',
                 'username' => 'user',
                 'password' => 'pass',
                 'shortcode' => '84072',
@@ -3273,6 +3274,7 @@ kiwi_run_test('Kiwi_Nth_Client rejects legacy submit template keys in strict mod
 
     $response = $client->submit_message('nth_fr_one_off_jplay', [
         'flow_reference' => 'txn_1bdac2bce5f0459a-342be0d2db7e',
+        'session_id' => 'session-client-validation-2',
         'subscriber_reference' => '1000000111043765',
         'shortcode' => '84072',
         'message_text' => 'Merci',
@@ -3284,6 +3286,56 @@ kiwi_run_test('Kiwi_Nth_Client rejects legacy submit template keys in strict mod
     kiwi_assert_true(
         strpos((string) ($response['error'] ?? ''), 'Unsupported legacy NTH submitMessage template keys') !== false,
         'Expected strict validation error to explain that legacy keys are no longer accepted.'
+    );
+});
+
+kiwi_run_test('Kiwi_Nth_Client requires sessionId in strict submit template contract', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'mt_submission_url' => 'http://mobilegate58.nth.ch:9099',
+                'username' => 'user',
+                'password' => 'pass',
+                'shortcode' => '84072',
+                'price' => 450,
+                'submit_message_body' => [
+                    'command' => 'submitMessage',
+                    'username' => '{username}',
+                    'password' => '{password}',
+                    'msisdn' => '{subscriber_reference}',
+                    'businessNumber' => '{shortcode}',
+                    'content' => '{message_text}',
+                    'price' => '{price}',
+                    'nwc' => '{nwc}',
+                    'encoding' => '{encoding}',
+                    'messageRef' => '{flow_reference}',
+                ],
+            ],
+        ]
+    );
+    $client = new Kiwi_Nth_Client($config);
+
+    $response = $client->submit_message('nth_fr_one_off_jplay', [
+        'flow_reference' => 'txn_1bdac2bce5f0459a-342be0d2db7e',
+        'session_id' => 'session-contract-1',
+        'subscriber_reference' => '1000000111043765',
+        'shortcode' => '84072',
+        'message_text' => 'Merci',
+        'price' => 450,
+        'nwc' => '20820',
+    ]);
+
+    kiwi_assert_true(!$response['success'], 'Expected strict submit template validation to require sessionId key.');
+    kiwi_assert_true(
+        strpos((string) ($response['error'] ?? ''), 'sessionId') !== false,
+        'Expected strict validation error to call out missing sessionId key in submit_message_body template.'
     );
 });
 
@@ -3337,6 +3389,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for du
         'Message' => 'JPLAY',
         'NWC' => '20801',
         'Operator' => 'Orange',
+        'session_id' => 'session-dup-1',
     ];
 
     $first = $service->handle_inbound_mo('nth_fr_one_off_jplay', $payload);
@@ -3344,6 +3397,11 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for du
 
     kiwi_assert_true($first['success'], 'Expected the first MO callback to trigger one MT submission.');
     kiwi_assert_same(1, count($client->calls), 'Expected duplicate MO callbacks to avoid a second MT submission.');
+    kiwi_assert_same(
+        'session-dup-1',
+        (string) ($client->calls[0]['transaction']['session_id'] ?? ''),
+        'Expected FR one-off MT submit payload to propagate MO session_id as sessionId input.'
+    );
     kiwi_assert_same(
         'MyJoyplay kiwi mobile GmbH 4,5€ + prix SMS(ce n\'est pas un abonnement) https://mcontentfr.joy-play.com Problème? plainte.84072@allopass.com',
         (string) ($client->calls[0]['transaction']['message_text'] ?? ''),
@@ -3391,6 +3449,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when FR routing 
         'Business_Number' => '84072',
         'Message' => 'JPLAY',
         'Operator' => 'Unknown',
+        'session_id' => 'session-routing-missing',
     ]);
 
     kiwi_assert_true(!$result['success'], 'Expected FR MO processing to stop when no NWC can be resolved.');
@@ -3400,6 +3459,55 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when FR routing 
     kiwi_assert_same('mt_submission_blocked', $result['submit_event']['event_type'], 'Expected the internal blocked event to be classified separately from provider callbacks.');
     kiwi_assert_same('routing_data_missing', $result['transaction']['current_status'], 'Expected the flow transaction to keep the blocked-routing status.');
     kiwi_assert_same(1, $result['transaction']['is_terminal'], 'Expected the blocked-routing transaction to be marked terminal.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when MO session_id is missing', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-session-missing',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+    ]);
+
+    kiwi_assert_true(!$result['success'], 'Expected FR MO processing to stop when session_id is missing.');
+    kiwi_assert_same('session_id_missing', $result['message'], 'Expected missing MO session_id to expose session_id_missing status.');
+    kiwi_assert_same(0, count($client->calls), 'Expected missing session_id to prevent MT submission attempt.');
+    kiwi_assert_same('session_id_missing', $result['transaction']['current_status'], 'Expected transaction status to record missing session_id.');
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id to attribution and confirmed postback flow', function (): void {
@@ -3472,12 +3580,18 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
         'keyword' => 'JPLAY',
         'NWC' => '20801',
         'Operator' => 'Orange',
+        'session_id' => 'session-mo-bind-1',
     ]);
 
     kiwi_assert_same(1, count($client->calls), 'Expected MO with suffixed transaction_id to continue MT submission flow.');
     kiwi_assert_true(
         strpos((string) ($client->calls[0]['transaction']['flow_reference'] ?? ''), 'txn_mocorr_12345678-') === 0,
         'Expected provider flow_reference to be rooted in MO-supplied transaction_id.'
+    );
+    kiwi_assert_same(
+        'session-mo-bind-1',
+        (string) ($client->calls[0]['transaction']['session_id'] ?? ''),
+        'Expected MO session_id to be propagated without overriding flow_reference/messageRef transaction correlation.'
     );
     $stored_meta = $transaction_repository->rows[1]['meta_json'] ?? null;
     $stored_meta = is_array($stored_meta) ? $stored_meta : [];
@@ -3500,6 +3614,72 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
     kiwi_assert_true(
         strpos($postback_dispatcher->calls[0], 'clickid=aff%3Amo%3Atxid%3A1') !== false,
         'Expected MO-correlated attribution to resolve original clickid for postback dispatch.'
+    );
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service prefers MO sessionId over request_id for MT session binding', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-session-priority</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-session-priority-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY txn_priority_12345678',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'request_id' => 'request-should-not-be-used',
+        'sessionId' => 'session-priority-1',
+    ]);
+
+    kiwi_assert_true($result['success'], 'Expected MT submission flow to continue when MO sessionId is present.');
+    kiwi_assert_same(1, count($client->calls), 'Expected one MT submit call for session-priority MO callback.');
+    kiwi_assert_same(
+        'session-priority-1',
+        (string) ($client->calls[0]['transaction']['session_id'] ?? ''),
+        'Expected submit transaction session_id to use MO sessionId instead of generic request_id.'
+    );
+    kiwi_assert_true(
+        strpos((string) ($client->calls[0]['transaction']['flow_reference'] ?? ''), 'txn_priority_12345678-') === 0,
+        'Expected flow_reference/messageRef txn correlation to remain txn-rooted.'
     );
 });
 
@@ -3552,6 +3732,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service uses txn-rooted flow references when 
         'Message' => 'JPLAY',
         'NWC' => '20801',
         'Operator' => 'Orange',
+        'session_id' => 'session-fallback-1',
     ]);
 
     kiwi_assert_true($result['success'], 'Expected fallback MO path to continue through MT submit.');

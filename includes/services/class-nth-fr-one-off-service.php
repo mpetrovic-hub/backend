@@ -100,6 +100,7 @@ class Kiwi_Nth_Fr_One_Off_Service
 
         $flow_reference = $this->build_provider_flow_reference($attribution_transaction_id);
         $sale_reference = $flow_reference;
+        $session_id = $this->resolve_mo_session_id($normalized_event);
         $message_text = $this->build_mt_message_text($service, $normalized_event);
         $nwc = $this->resolve_nwc($service, $normalized_event);
 
@@ -132,6 +133,7 @@ class Kiwi_Nth_Fr_One_Off_Service
             'meta_json' => [
                 'initial_event' => $normalized_event,
                 'attribution_transaction_id' => $attribution_transaction_id,
+                'session_id' => $session_id,
             ],
         ];
 
@@ -144,6 +146,7 @@ class Kiwi_Nth_Fr_One_Off_Service
 
         $submit_transaction = [
             'flow_reference' => $flow_reference,
+            'session_id' => $session_id,
             'subscriber_reference' => $subscriber_reference,
             'shortcode' => $shortcode,
             'keyword' => $keyword,
@@ -411,8 +414,38 @@ class Kiwi_Nth_Fr_One_Off_Service
         return trim((string) ($service['default_nwc'] ?? ''));
     }
 
+    private function resolve_mo_session_id(array $normalized_event): string
+    {
+        $raw_payload = $normalized_event['raw_payload'] ?? [];
+
+        if (is_array($raw_payload)) {
+            foreach ($raw_payload as $key => $value) {
+                $normalized_key = preg_replace('/[^a-z0-9]/', '', strtolower((string) $key));
+
+                if ($normalized_key !== 'sessionid') {
+                    continue;
+                }
+
+                $session_id = trim((string) $value);
+
+                if ($session_id !== '') {
+                    return $session_id;
+                }
+            }
+        }
+
+        return trim((string) ($normalized_event['external_request_id'] ?? ''));
+    }
+
     private function resolve_blocked_reason(array $submit_transaction): ?array
     {
+        if (trim((string) ($submit_transaction['session_id'] ?? '')) === '') {
+            return [
+                'status' => 'session_id_missing',
+                'detail' => 'Missing NTH session_id for FR one-off MT submission.',
+            ];
+        }
+
         if (trim((string) ($submit_transaction['nwc'] ?? '')) === '') {
             return [
                 'status' => 'routing_data_missing',

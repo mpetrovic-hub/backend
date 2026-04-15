@@ -201,7 +201,9 @@ command=submitMessage&username=user1&password=pass1&msisdn=00414411112222&busine
 Repository adapter note:
 - outbound `submitMessage` templates are validated in strict mode.
 - legacy aliases are rejected (`operation`, `message`, `shortcode`, `reference`, `message_ref`, `messageref`).
-- use documented keys only: `command`, `content`, `businessNumber`, `messageRef`.
+- use documented keys only: `command`, `content`, `businessNumber`, `messageRef`, `sessionId`.
+- `messageRef` is used for customer-side transaction correlation (`txn_...` style flow reference in this repository).
+- `sessionId` must be propagated from the incoming MO (`deliverMessage`) callback.
 
 Sample XML response:
 ```xml

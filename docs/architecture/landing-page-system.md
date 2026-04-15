@@ -383,7 +383,7 @@ This document should preserve operational and compliance details such as:
 - flow: `one-off`
 - business number / shortcode: `84072`
 - keyword: `Jplay*`
-- MT submission URL: `https://premium.mobile-gw.com:9443`
+- MT submission URL: `http://mobilegate58.nth.ch:9099`
 - encoding: `UTF-8`
 - billing type: `MT billing`
 - end user cost: `4.5 EUR`

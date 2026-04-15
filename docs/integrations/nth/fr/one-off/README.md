@@ -79,7 +79,7 @@ When generic NTH behavior and FR-specific rules overlap, treat this file as the 
 - end user cost: `4.5 EUR`
 - tariff factor: `100`
 - `price` parameter: `450`
-- MT submission URL: `https://premium.mobile-gw.com:9443`
+- MT submission URL: `http://mobilegate58.nth.ch:9099`
 - encoding: `UTF-8`
 
 ### Connection and credential notes
@@ -484,8 +484,10 @@ This means the premium charge is applied on the outbound MT message.
 
 Our backend sends the premium MT message to NTH using:
 
-- MT submission URL: `https://premium.mobile-gw.com:9443`
+- MT submission URL: `http://mobilegate58.nth.ch:9099`
 - encoding: `UTF-8`
+- `messageRef`: internal flow reference (for example `txn_...-...`) for sale correlation
+- `sessionId`: value received from MO `deliverMessage` callback (`sessionId`)
 
 The correct `NWC` value must be selected according to the operator.
 
@@ -589,7 +591,7 @@ The key implementation facts are:
 - billing type: `MT billing`
 - end user cost: `4.5 EUR`
 - `price` parameter: `450`
-- MT submission URL: `https://premium.mobile-gw.com:9443`
+- MT submission URL: `http://mobilegate58.nth.ch:9099`
 - encrypted MSISDN is used instead of the real MSISDN
 - encrypted MSISDN validity: `2 months`
 - session validity: `24 hours`

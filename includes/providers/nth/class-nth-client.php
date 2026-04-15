@@ -62,6 +62,7 @@ class Kiwi_Nth_Client
             'nwc' => trim((string) ($transaction['nwc'] ?? '')),
             'password' => $password,
             'price' => (string) ($transaction['price'] ?? ($service['price'] ?? '')),
+            'session_id' => trim((string) ($transaction['session_id'] ?? '')),
             'service_key' => $service_key,
             'shortcode' => trim((string) ($transaction['shortcode'] ?? ($service['shortcode'] ?? ''))),
             'subscriber_reference' => trim((string) ($transaction['subscriber_reference'] ?? '')),
@@ -191,6 +192,7 @@ class Kiwi_Nth_Client
             'nwc' => '{nwc}',
             'encoding' => '{encoding}',
             'messageRef' => '{flow_reference}',
+            'sessionId' => '{session_id}',
         ];
     }
 
@@ -240,10 +242,10 @@ class Kiwi_Nth_Client
         if (!empty($present_legacy_keys)) {
             return 'Unsupported legacy NTH submitMessage template keys: '
                 . implode(', ', $present_legacy_keys)
-                . '. Use command/content/businessNumber/messageRef.';
+                . '. Use command/content/businessNumber/messageRef/sessionId.';
         }
 
-        $required_keys = ['command', 'content', 'businessNumber', 'messageRef'];
+        $required_keys = ['command', 'content', 'businessNumber', 'messageRef', 'sessionId'];
         $missing_keys = [];
 
         foreach ($required_keys as $required_key) {
@@ -273,6 +275,7 @@ class Kiwi_Nth_Client
             'nwc',
             'password',
             'price',
+            'session_id',
             'subscriber_reference',
             'username',
         ];
