@@ -4303,7 +4303,7 @@ XML;
     kiwi_assert_same(0, count($operator_lookup_repository->rows), 'Expected refund callbacks not to be routed into operator-lookup storage.');
 });
 
-kiwi_run_test('Kiwi_Dimoco_Rest_Routes rejects missing-order callbacks when digest matches multiple services', function (): void {
+kiwi_run_test('Kiwi_Dimoco_Rest_Routes accepts missing-order callbacks when digest matches multiple shared-secret services', function (): void {
     $config = new Kiwi_Test_Config(
         100,
         0,
@@ -4354,9 +4354,15 @@ XML;
         'digest' => $digest,
     ]));
 
-    kiwi_assert_same(400, $response->status, 'Expected ambiguous digest-only callback resolution to be rejected.');
-    kiwi_assert_same('Ambiguous DIMOCO callback service.', $response->data['message'] ?? '', 'Expected ambiguity failures to explain why the callback was rejected.');
-    kiwi_assert_same(0, count($refund_repository->rows), 'Expected ambiguous callbacks not to be persisted.');
+    kiwi_assert_same(200, $response->status, 'Expected ambiguous digest-only callback resolution to be accepted when all matched services share one secret.');
+    kiwi_assert_same(1, count($refund_repository->rows), 'Expected ambiguous shared-secret callbacks to be persisted.');
+    kiwi_assert_same('', $refund_repository->rows[0]['service_key'] ?? '', 'Expected shared-secret fallback callbacks to keep service attribution unresolved.');
+    kiwi_assert_same('', $refund_repository->rows[0]['service_label'] ?? '', 'Expected shared-secret fallback callbacks to keep service label unresolved.');
+    kiwi_assert_same(
+        'digest_fallback_ambiguous_shared_secret_accepted',
+        $refund_repository->rows[0]['raw']['callback_resolution']['strategy'] ?? '',
+        'Expected callback raw payload metadata to record the shared-secret fallback strategy.'
+    );
 });
 
 kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service keeps the no-request-id failure branch', function (): void {

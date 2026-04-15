@@ -93,6 +93,13 @@ class Kiwi_Dimoco_Rest_Routes
         ], (int) ($service_resolution['status'] ?? 400));
     }
 
+    if (($service_resolution['strategy'] ?? '') === 'digest_fallback_ambiguous_shared_secret_accepted') {
+        error_log(
+            'KIWI DIMOCO CALLBACK: accepted callback with unresolved service attribution; matched service keys='
+            . implode(',', (array) ($service_resolution['matched_service_keys'] ?? []))
+        );
+    }
+
     error_log('KIWI DIMOCO CALLBACK STEP 5: service_key=' . (string) ($service['service_key'] ?? ''));
     error_log('KIWI DIMOCO CALLBACK STEP 6: callback digest already verified during service resolution');
     error_log('KIWI DIMOCO CALLBACK STEP 7: before parser');
@@ -109,6 +116,10 @@ class Kiwi_Dimoco_Rest_Routes
 
     $parsed_result['service_key'] = $service['service_key'] ?? '';
     $parsed_result['service_label'] = $service['label'] ?? '';
+    $parsed_result['raw']['callback_resolution'] = [
+        'strategy' => (string) ($service_resolution['strategy'] ?? ''),
+        'matched_service_keys' => array_values((array) ($service_resolution['matched_service_keys'] ?? [])),
+    ];
 
 
 
@@ -197,6 +208,19 @@ class Kiwi_Dimoco_Rest_Routes
         }
 
         if ($matched_count > 1) {
+            if ($this->all_services_share_same_secret($matched_services)) {
+                return [
+                    'service' => [
+                        'service_key' => '',
+                        'label' => '',
+                    ],
+                    'status' => 200,
+                    'message' => '',
+                    'strategy' => 'digest_fallback_ambiguous_shared_secret_accepted',
+                    'matched_service_keys' => $this->extract_service_keys($matched_services),
+                ];
+            }
+
             return [
                 'service' => null,
                 'status' => 400,
@@ -231,6 +255,38 @@ class Kiwi_Dimoco_Rest_Routes
         }
 
         return $matched_services;
+    }
+
+    private function all_services_share_same_secret(array $services): bool
+    {
+        $secrets = [];
+
+        foreach ($services as $service) {
+            $secret = trim((string) ($service['secret'] ?? ''));
+
+            if ($secret === '') {
+                return false;
+            }
+
+            $secrets[$secret] = true;
+        }
+
+        return count($secrets) === 1;
+    }
+
+    private function extract_service_keys(array $services): array
+    {
+        $service_keys = [];
+
+        foreach ($services as $service) {
+            $service_key = trim((string) ($service['service_key'] ?? ''));
+
+            if ($service_key !== '') {
+                $service_keys[] = $service_key;
+            }
+        }
+
+        return array_values(array_unique($service_keys));
     }
 
     private function resolve_dimoco_service_by_order_from_xml(string $xml): ?array

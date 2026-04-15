@@ -253,7 +253,10 @@ This backend resolves the internal DIMOCO service in two steps:
 Safety rule for step 2:
 - accept the callback only when exactly one configured service secret matches
 - reject the callback when there is no match
-- reject the callback when multiple services match (ambiguous attribution)
+- when multiple services match:
+  - accept and store the callback if all matched services share the same secret
+  - keep service attribution unresolved in that case
+  - reject only if multiple matches are present and they do not share one secret
 
 ## Repository note
 
