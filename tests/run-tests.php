@@ -1812,6 +1812,7 @@ class Kiwi_Test_Affiliate_Postback_Dispatcher extends Kiwi_Affiliate_Postback_Di
 class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
 {
     public $upsert_calls = [];
+    public $pid_updates = [];
     public $rows = [];
     private $next_id = 1;
 
@@ -1843,6 +1844,32 @@ class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
         }
 
         return null;
+    }
+
+    public function update_pid_by_sale_reference(string $sale_reference, string $pid): bool
+    {
+        $sale_reference = trim($sale_reference);
+        $pid = trim($pid);
+
+        if ($sale_reference === '' || $pid === '') {
+            return false;
+        }
+
+        foreach ($this->rows as $index => $row) {
+            if ((string) ($row['sale_reference'] ?? '') !== $sale_reference) {
+                continue;
+            }
+
+            $this->rows[$index]['pid'] = $pid;
+            $this->pid_updates[] = [
+                'sale_reference' => $sale_reference,
+                'pid' => $pid,
+            ];
+
+            return true;
+        }
+
+        return false;
     }
 }
 
@@ -2701,6 +2728,124 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends sub7 from persisted 
     kiwi_assert_true(
         strpos((string) ($dispatcher->calls[0] ?? ''), 'sub7=20820') !== false,
         'Expected postback URL to include sub7 from wp_kiwi_sales.operator_name.'
+    );
+});
+
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists pid from attribution query params into sales record', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $sales_repository->upsert([
+        'sale_reference' => 'sale-pid-1',
+        'provider_key' => 'nth',
+        'status' => 'completed',
+        'pid' => '',
+    ]);
+    $config = new Kiwi_Test_Attribution_Config(
+        'https://offers.example.test/postback?clickid={clickid}&goal=sale',
+        ''
+    );
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
+    $resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $repository,
+        $dispatcher,
+        null,
+        $sales_repository
+    );
+
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKPIDATTRIBUTION01',
+        'click_id' => 'aff:click:pid1',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'raw_context' => [
+            'query_params' => [
+                'pid' => ' partner<>_A:1 + ',
+            ],
+        ],
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+
+    $resolver->attach_provider_references([
+        'tracking_token' => (string) ($capture['tracking_token'] ?? ''),
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'transaction_ref' => 'flow-pid-1',
+        'sale_reference' => 'sale-pid-1',
+    ]);
+
+    $result = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_ref' => 'flow-pid-1',
+        'sale_reference' => 'sale-pid-1',
+    ]);
+
+    kiwi_assert_true($result['dispatched'] ?? false, 'Expected confirmed conversion to dispatch postback in pid persistence flow.');
+    kiwi_assert_same(1, count($sales_repository->pid_updates), 'Expected one pid update write for confirmed conversion with pid context.');
+    kiwi_assert_same(
+        'partner_A:1',
+        (string) ($sales_repository->find_by_sale_reference('sale-pid-1')['pid'] ?? ''),
+        'Expected pid to be sanitized and persisted into wp_kiwi_sales.'
+    );
+});
+
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver leaves sales pid unchanged when attribution has no pid', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $sales_repository->upsert([
+        'sale_reference' => 'sale-pid-2',
+        'provider_key' => 'nth',
+        'status' => 'completed',
+        'pid' => 'existing_pid',
+    ]);
+    $config = new Kiwi_Test_Attribution_Config(
+        'https://offers.example.test/postback?clickid={clickid}&goal=sale',
+        ''
+    );
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
+    $resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $repository,
+        $dispatcher,
+        null,
+        $sales_repository
+    );
+
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKPIDATTRIBUTION02',
+        'click_id' => 'aff:click:pid2',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'raw_context' => [
+            'query_params' => [
+                'gclid' => 'gclid-123',
+            ],
+        ],
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+
+    $resolver->attach_provider_references([
+        'tracking_token' => (string) ($capture['tracking_token'] ?? ''),
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'transaction_ref' => 'flow-pid-2',
+        'sale_reference' => 'sale-pid-2',
+    ]);
+
+    $result = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_ref' => 'flow-pid-2',
+        'sale_reference' => 'sale-pid-2',
+    ]);
+
+    kiwi_assert_true($result['dispatched'] ?? false, 'Expected confirmed conversion to dispatch postback in no-pid flow.');
+    kiwi_assert_same(0, count($sales_repository->pid_updates), 'Expected no pid write when attribution query params do not include pid.');
+    kiwi_assert_same(
+        'existing_pid',
+        (string) ($sales_repository->find_by_sale_reference('sale-pid-2')['pid'] ?? ''),
+        'Expected existing pid value to remain unchanged when no pid is present in attribution context.'
     );
 });
 

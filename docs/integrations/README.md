@@ -22,7 +22,7 @@ Each aggregator should have its own folder:
 
 Example:
 - `integrations/dimoco/README.md`
-- `integrations/dimoco/general-api.md`
+- `integrations/dimoco/general-api-dimoco.md`
 - `integrations/dimoco/de/subscription/README.md`
 - `integrations/dimoco/source/`
 

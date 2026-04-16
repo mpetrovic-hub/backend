@@ -26,6 +26,7 @@ class Kiwi_Sales_Repository
             updated_at DATETIME NOT NULL,
             sale_reference VARCHAR(100) NOT NULL DEFAULT '',
             transaction_id VARCHAR(120) NOT NULL DEFAULT '',
+            pid VARCHAR(191) NOT NULL DEFAULT '',
             provider_key VARCHAR(50) NOT NULL DEFAULT '',
             country VARCHAR(10) NOT NULL DEFAULT '',
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
@@ -48,6 +49,7 @@ class Kiwi_Sales_Repository
             KEY country (country),
             KEY flow_key (flow_key),
             KEY transaction_id (transaction_id),
+            KEY pid (pid),
             KEY external_sale_id (external_sale_id),
             KEY created_at (created_at)
         ) {$charset_collate};";
@@ -105,6 +107,7 @@ class Kiwi_Sales_Repository
                 'updated_at' => $now,
                 'sale_reference' => $data['sale_reference'] ?? '',
                 'transaction_id' => $data['transaction_id'] ?? '',
+                'pid' => $data['pid'] ?? '',
                 'provider_key' => $data['provider_key'] ?? '',
                 'country' => $data['country'] ?? '',
                 'flow_key' => $data['flow_key'] ?? '',
@@ -123,6 +126,7 @@ class Kiwi_Sales_Repository
                 'context_json' => isset($data['context_json']) ? wp_json_encode($data['context_json']) : '',
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -158,6 +162,7 @@ class Kiwi_Sales_Repository
             [
                 'updated_at' => $this->current_time_mysql(),
                 'transaction_id' => $data['transaction_id'] ?? '',
+                'pid' => $data['pid'] ?? '',
                 'provider_key' => $data['provider_key'] ?? '',
                 'country' => $data['country'] ?? '',
                 'flow_key' => $data['flow_key'] ?? '',
@@ -184,6 +189,7 @@ class Kiwi_Sales_Repository
                 '%s',
                 '%s',
                 '%s',
+                '%s',
                 '%d',
                 '%s',
                 '%s',
@@ -197,6 +203,31 @@ class Kiwi_Sales_Repository
                 '%s',
             ],
             ['%d']
+        );
+
+        return $result !== false;
+    }
+
+    public function update_pid_by_sale_reference(string $sale_reference, string $pid): bool
+    {
+        global $wpdb;
+
+        $sale_reference = trim($sale_reference);
+        $pid = $this->sanitize_pid($pid);
+
+        if ($sale_reference === '' || $pid === '') {
+            return false;
+        }
+
+        $result = $wpdb->update(
+            $this->get_table_name(),
+            [
+                'updated_at' => $this->current_time_mysql(),
+                'pid' => $pid,
+            ],
+            ['sale_reference' => $sale_reference],
+            ['%s', '%s'],
+            ['%s']
         );
 
         return $result !== false;
@@ -224,5 +255,19 @@ class Kiwi_Sales_Repository
         }
 
         return gmdate('Y-m-d H:i:s');
+    }
+
+    private function sanitize_pid(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 }

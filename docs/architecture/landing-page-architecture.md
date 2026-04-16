@@ -1,4 +1,4 @@
-# Landing Page System
+# Landing Page Architecture
 
 ## Purpose
 
@@ -59,7 +59,7 @@ This architecture introduces a folder-per-landing-page model so each landing pag
 
 ```text
 /architecture
-  landing-page-system.md
+  landing-page-architecture.md
 
 /integrations
   nth-fr-one-off.md
@@ -67,7 +67,7 @@ This architecture introduces a folder-per-landing-page model so each landing pag
   ...
 
 /operations
-  landing-page-logic.md
+  landing-page-prod-behaviour.md
   ...
 
 /landing-pages
@@ -616,4 +616,4 @@ This keeps the system easier to maintain while preserving explicit technical and
 
 - `/README.md`
 - `/integrations/nth-fr-one-off.md`
-- `/operations/landing-page-logic.md`
+- `/operations/landing-page-prod-behaviour.md`

@@ -24,7 +24,7 @@ It should not duplicate repository-wide engineering rules from `AGENTS.md`.
 
 ## Folder structure
 
-- `general-api.md`  
+- `general-api-dimoco.md`  
   General Dimoco API documentation that applies across multiple countries or flows.
 
 - `<country-code>/<flow-name>/README.md`  
@@ -36,14 +36,14 @@ It should not duplicate repository-wide engineering rules from `AGENTS.md`.
 ## How to use this folder
 
 ### Start here
-1. Read `general-api.md`
+1. Read `general-api-dimoco.md`
 2. Then read the relevant country/flow document
 3. Check `docs/operations/credentials-and-environments.md` if the change affects authentication, secrets, callbacks, or environments
 4. Check `docs/architecture/capability-matrix.md` if capability coverage or reuse matters
 
 ## Documentation split
 
-### `general-api.md`
+### `general-api-dimoco.md`
 Use this file for information that is generally true for Dimoco, for example:
 - authentication model
 - common endpoints or endpoint groups
@@ -111,7 +111,7 @@ Update this folder when:
 - mapping rules change
 - new operational constraints are discovered
 
-Update `general-api.md` when the change affects Dimoco broadly.  
+Update `general-api-dimoco.md` when the change affects Dimoco broadly.  
 Update the relevant country/flow file when the change is setup-specific.
 
 ## Credentials and configuration

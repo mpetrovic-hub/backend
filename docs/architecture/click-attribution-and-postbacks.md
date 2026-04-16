@@ -63,6 +63,10 @@ No provider-specific callback shape should leak into shared attribution code.
 - outbound postback audit (`postback_sent_at`, response code/body, attempts, errors)
 - retention fields (`expires_at`)
 
+`wp_kiwi_sales` can be enriched from attribution context on confirmed conversion, including:
+
+- `pid` (captured from landing query params when present, sanitized before persistence)
+
 ## Security and Data Handling
 
 - raw `clickid` is never stored in cookies
@@ -87,5 +91,6 @@ No provider-specific callback shape should leak into shared attribution code.
 - NTH resolves pending attribution rows by service/reference and reuses the shared `transaction_id` as the provider reference root
 - NTH MO adapter may extract `transaction_id` from keyword-suffixed MO content (for example `JPLAY txn_xxx`) at the provider boundary
 - NTH service passes normalized conversion signals into `Kiwi_Conversion_Attribution_Resolver`
+- resolver may enrich the matched sale row with shared attribution metadata (for example `pid`) without leaking provider callback fields into sales writes
 
 This is an integration example, not an NTH-only architecture. Additional providers should reuse the same shared resolver/dispatcher capability.

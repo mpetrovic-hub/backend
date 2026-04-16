@@ -1,4 +1,4 @@
-# Landing Page Logic (Operations)
+# Landing Page Production Behaviour (Operations)
 
 This runbook describes how landing pages work in runtime, which configuration controls them, and how to operate them safely in production.
 

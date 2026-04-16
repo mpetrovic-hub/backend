@@ -3,7 +3,7 @@
 This document describes the Austria-specific Dimoco subscription integration used in this repository.
 
 It complements:
-- `../../general-api.md`
+- `../../general-api-dimoco.md`
 - `../../../operations/credentials-and-environments.md`
 
 This file is specific to:
@@ -16,7 +16,7 @@ This file is specific to:
 Primary source:
 - `../../source/2025 AT kiwi mobile StarBabes_115512_&_Getstronger_115510 integration guide.pdf`
 
-Use `../../general-api.md` for generic Dimoco pay:smart behavior.  
+Use `../../general-api-dimoco.md` for generic Dimoco pay:smart behavior.  
 Use this file for Austria-specific setup and flow behavior.
 
 ## Scope
@@ -451,7 +451,7 @@ Use this AT file for:
 - which callbacks must exist
 - which business outcome rules apply to AT subscription processing
 
-Use `../../general-api.md` for:
+Use `../../general-api-dimoco.md` for:
 - generic digest rules
 - generic callback format
 - generic Dimoco action definitions

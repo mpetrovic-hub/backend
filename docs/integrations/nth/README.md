@@ -24,8 +24,8 @@ It should not duplicate repository-wide engineering rules from `AGENTS.md`.
 
 ## Folder structure
 
-- `general-api-premium-sms.md` and `general-api-carrier-billing.md`
-  General NTH API documentation that applies across multiple countries or flows. `general-api-premium-sms.md` for Premium-SMS-services and `general-api-carrier-billing.md` for carrier-billing
+- `general-api-premium-sms-nth.md` and `general-api-carrier-billing.md`
+  General NTH API documentation that applies across multiple countries or flows. `general-api-premium-sms-nth.md` for Premium-SMS-services and `general-api-carrier-billing.md` for carrier-billing
 
 - `<country-code>/<flow-name>/README.md`  
   Country- and flow-specific NTH integration documentation.

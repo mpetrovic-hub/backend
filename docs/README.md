@@ -26,7 +26,7 @@ Do **not** store real credentials or secrets in this repository.
 - `integrations/dimoco/README.md`  
   Overview of the Dimoco integration docs.
 
-- `integrations/dimoco/general-api.md`  
+- `integrations/dimoco/general-api-dimoco.md`  
   General Dimoco API notes that apply across multiple countries or flows.
 
 - `integrations/dimoco/countries/<country-code>/<flow-name>/README.md`  
@@ -44,7 +44,7 @@ Do **not** store real credentials or secrets in this repository.
 - `architecture/capability-matrix.md`  
   Overview of which capabilities exist for which aggregator, country, or flow.
 
-- `architecture/landing-page-system.md`  
+- `architecture/landing-page-architecture.md`  
   Source-of-truth architecture for filesystem-based landing-page discovery and routing.
 
 - `architecture/click-attribution-and-postbacks.md`
@@ -53,7 +53,7 @@ Do **not** store real credentials or secrets in this repository.
 - `operations/credentials-and-environments.md`  
   Documentation of credential names, ownership, environments, and secret locations without storing actual secret values.
 
-- `operations/landing-page-logic.md`  
+- `operations/landing-page-prod-behaviour.md`  
   Runtime landing-page logic and operations runbook, including a legacy migration appendix.
 
 ## How integration docs are organized
@@ -70,7 +70,7 @@ These files describe what is broadly true for one aggregator, such as:
 - high-level mapping to internal concepts
 
 Examples:
-- `integrations/dimoco/general-api.md`
+- `integrations/dimoco/general-api-dimoco.md`
 - `integrations/nth/general-api.md`
 
 ### 2. Country- and flow-specific integration documentation

@@ -12,7 +12,7 @@ Primary sources:
 - `MOBIVAS - ON POINT GUIDE TO GREECE 2022.pdf` (for Greek service-flow clarification, especially the subscription flow on pages 5-6)
 
 Reference style/source template:
-- `general-api-premium-sms.md`
+- `../nth/general-api-premium-sms-nth.md`
 
 ## Scope
 

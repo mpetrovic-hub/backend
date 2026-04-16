@@ -133,6 +133,7 @@ class Kiwi_Conversion_Attribution_Resolver
         $this->maybe_record_kpi_conversion($row, $conversion, $is_first_confirmed);
 
         $updated_row = $this->repository->get_by_id((int) $row['id']) ?? $row;
+        $this->maybe_persist_sale_pid_from_attribution($updated_row, $conversion);
         $conversion = $this->enrich_conversion_with_sales_data($conversion, $updated_row);
         $dispatch_result = $this->dispatcher->dispatch($updated_row, $conversion);
         $this->repository->record_postback_attempt((int) $row['id'], $dispatch_result);
@@ -173,6 +174,78 @@ class Kiwi_Conversion_Attribution_Resolver
         }
 
         return $conversion;
+    }
+
+    private function maybe_persist_sale_pid_from_attribution(array $attribution_row, array $conversion): void
+    {
+        if (!$this->sales_repository instanceof Kiwi_Sales_Repository) {
+            return;
+        }
+
+        $sale_reference = trim((string) ($conversion['sale_reference'] ?? ($attribution_row['sale_reference'] ?? '')));
+
+        if ($sale_reference === '') {
+            return;
+        }
+
+        $raw_context = $attribution_row['raw_context'] ?? null;
+        $query_params = $this->resolve_query_params_from_raw_context($raw_context);
+        $pid = $this->resolve_pid_from_query_params($query_params);
+
+        if ($pid === '') {
+            return;
+        }
+
+        $this->sales_repository->update_pid_by_sale_reference($sale_reference, $pid);
+    }
+
+    private function resolve_query_params_from_raw_context($raw_context): array
+    {
+        if (is_array($raw_context)) {
+            $query_params = $raw_context['query_params'] ?? [];
+
+            return is_array($query_params) ? $query_params : [];
+        }
+
+        if (!is_string($raw_context) || trim($raw_context) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw_context, true);
+
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $query_params = $decoded['query_params'] ?? [];
+
+        return is_array($query_params) ? $query_params : [];
+    }
+
+    private function resolve_pid_from_query_params(array $query_params): string
+    {
+        foreach ($query_params as $key => $value) {
+            if (strtolower((string) $key) !== 'pid' || is_array($value)) {
+                continue;
+            }
+
+            $candidate = trim((string) $value);
+
+            if ($candidate === '') {
+                continue;
+            }
+
+            $candidate = preg_replace('/[^A-Za-z0-9._~:-]/', '', $candidate);
+            $candidate = is_string($candidate) ? $candidate : '';
+
+            if ($candidate === '') {
+                continue;
+            }
+
+            return substr($candidate, 0, 191);
+        }
+
+        return '';
     }
 
     private function maybe_record_kpi_conversion(array $attribution_row, array $conversion, bool $is_first_confirmed): void

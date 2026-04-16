@@ -40,9 +40,9 @@ This document does **not** own:
 
 Use the following related documents for those areas:
 
-- `../../general-api-premium-sms.md` for generic NTH Premium SMS behavior
+- `../../general-api-premium-sms-nth.md` for generic NTH Premium SMS behavior
 - `../../../operations/credentials-and-environments.md` for credentials and environment handling
-- `/architecture/landing-page-system.md` for landing-page architecture and folder conventions
+- `/architecture/landing-page-architecture.md` for landing-page architecture and folder conventions
 
 ---
 
@@ -57,7 +57,7 @@ Additional setup clarification:
 
 - direct feedback from NTH regarding `MO Delivery URL` and `Notification URL`
 
-When generic NTH behavior and FR-specific rules overlap, treat this file as the source of truth for **FR one-off specifics**, and use `../../general-api-premium-sms.md` for the generic behavior around them.
+When generic NTH behavior and FR-specific rules overlap, treat this file as the source of truth for **FR one-off specifics**, and use `../../general-api-premium-sms-nth.md` for the generic behavior around them.
 
 ---
 
@@ -541,7 +541,7 @@ Known-good debug trace:
 
 - [`known-good-fr-test-vector.md`](./known-good-fr-test-vector.md)
 
-Use `../../general-api-premium-sms.md` for:
+Use `../../general-api-premium-sms-nth.md` for:
 
 - generic NTH Premium SMS concepts
 - generic operation meanings
