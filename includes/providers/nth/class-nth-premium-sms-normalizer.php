@@ -69,9 +69,7 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'carrier',
         ]);
 
-        if ($operator_name === '') {
-            $operator_name = $operator_code;
-        }
+        $operator_name = $this->resolve_operator_name($operator_name, $operator_code, $service);
 
         $keyword = $this->normalize_keyword(
             $this->first_non_empty($payload, [
@@ -518,6 +516,73 @@ class Kiwi_Nth_Premium_Sms_Normalizer
         $keyword = rtrim($keyword, '*');
 
         return preg_replace('/[^A-Z0-9]/', '', $keyword) ?? '';
+    }
+
+    private function resolve_operator_name(string $operator_name, string $operator_code, array $service): string
+    {
+        $operator_name = trim($operator_name);
+        $operator_code = trim($operator_code);
+
+        if ($operator_name !== '' && $operator_name !== $operator_code) {
+            return $operator_name;
+        }
+
+        $mapped_name = $this->resolve_operator_name_from_service_mapping($operator_code, $service);
+
+        if ($mapped_name !== '') {
+            return $mapped_name;
+        }
+
+        if ($operator_name !== '') {
+            return $operator_name;
+        }
+
+        return $operator_code;
+    }
+
+    private function resolve_operator_name_from_service_mapping(string $operator_code, array $service): string
+    {
+        $operator_code = trim($operator_code);
+
+        if ($operator_code === '') {
+            return '';
+        }
+
+        $operator_name_map = $service['operator_name_map'] ?? [];
+
+        if (is_array($operator_name_map) && isset($operator_name_map[$operator_code])) {
+            $mapped_name = trim((string) $operator_name_map[$operator_code]);
+
+            if ($mapped_name !== '') {
+                return $mapped_name;
+            }
+        }
+
+        $operator_nwc_map = $service['operator_nwc_map'] ?? [];
+
+        if (!is_array($operator_nwc_map)) {
+            return '';
+        }
+
+        foreach ($operator_nwc_map as $candidate_name => $candidate_code) {
+            if (trim((string) $candidate_code) !== $operator_code) {
+                continue;
+            }
+
+            $candidate_name = trim((string) $candidate_name);
+
+            if ($candidate_name === '' || $candidate_name === $operator_code) {
+                continue;
+            }
+
+            if (preg_match('/^[0-9]+$/', $candidate_name)) {
+                continue;
+            }
+
+            return $candidate_name;
+        }
+
+        return '';
     }
 
     private function normalize_timestamp(string $timestamp): string

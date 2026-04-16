@@ -3273,6 +3273,45 @@ kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer normalizes alias-heavy MO payload
     kiwi_assert_same('20820', $code_only['operator_name'], 'Expected operator_name to default to operator_code when only operatorCode is provided.');
 });
 
+kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer resolves operator_name from operator_code via service mapping', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'operator_nwc_map' => [
+                    '20820' => '20820',
+                    'Orange' => '20801',
+                    'Bouygues Telecom' => '20820',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+
+    $normalized = $normalizer->normalize_callback('nth_fr_one_off_jplay', 'mo', [
+        'msisdn' => 'enc-operator-map-1',
+        'businessNumber' => '84072',
+        'content' => 'JPLAY txn_operator_map_1234',
+        'operatorCode' => '20820',
+        'command' => 'deliverMessage',
+    ]);
+
+    kiwi_assert_same('20820', $normalized['operator_code'], 'Expected operator_code to remain the canonical normalized operator code.');
+    kiwi_assert_same(
+        'Bouygues Telecom',
+        $normalized['operator_name'],
+        'Expected operator_name to be resolved from service mapping when only operatorCode is provided.'
+    );
+});
+
 kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer maps messageRef and numeric messageStatus=2 as confirmed delivery', function (): void {
     $config = new Kiwi_Test_Config(
         100,
