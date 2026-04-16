@@ -25,15 +25,20 @@ class Kiwi_Dimoco_Blacklister_Shortcode
      * Repository for storing and retrieving DIMOCO callback responses related to blacklist actions
      */
     private $callback_blacklist_repository;
+    private $frontend_auth_gate;
 
     public function __construct(
         Kiwi_Dimoco_Blacklist_Batch_Service $batch_service,
         Kiwi_Config $config,
-        Kiwi_Dimoco_Callback_Blacklist_Repository $callback_blacklist_repository
+        Kiwi_Dimoco_Callback_Blacklist_Repository $callback_blacklist_repository,
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     ) {
         $this->batch_service = $batch_service;
         $this->config = $config;
         $this->callback_blacklist_repository = $callback_blacklist_repository;
+        $this->frontend_auth_gate = $frontend_auth_gate instanceof Kiwi_Frontend_Auth_Gate
+            ? $frontend_auth_gate
+            : new Kiwi_Frontend_Auth_Gate();
     }
 
     /**
@@ -55,6 +60,12 @@ class Kiwi_Dimoco_Blacklister_Shortcode
      */
     public function render(): string
     {
+        if (!$this->frontend_auth_gate->can_access_tools()) {
+            return $this->frontend_auth_gate->render_login_form([
+                'message' => 'Please sign in to access the DIMOCO blacklist tool.',
+            ]);
+        }
+
         $output = '';
 
         // Current form values / state

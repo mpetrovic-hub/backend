@@ -17,14 +17,19 @@ class Kiwi_Hlr_Lookup_Shortcode
      * Repository for stored asynchronous DIMOCO operator lookup callbacks
      */
     private $callback_operator_lookup_repository;
+    private $frontend_auth_gate;
 
     public function __construct(
         Kiwi_Operator_Lookup_Batch_Service $batch_service,
-        Kiwi_Dimoco_Callback_Operator_Lookup_Repository $callback_operator_lookup_repository
+        Kiwi_Dimoco_Callback_Operator_Lookup_Repository $callback_operator_lookup_repository,
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     )
     {
         $this->batch_service = $batch_service;
         $this->callback_operator_lookup_repository = $callback_operator_lookup_repository;
+        $this->frontend_auth_gate = $frontend_auth_gate instanceof Kiwi_Frontend_Auth_Gate
+            ? $frontend_auth_gate
+            : new Kiwi_Frontend_Auth_Gate();
     }
 
     /**
@@ -44,6 +49,12 @@ class Kiwi_Hlr_Lookup_Shortcode
      */
     public function render(): string
     {
+        if (!$this->frontend_auth_gate->can_access_tools()) {
+            return $this->frontend_auth_gate->render_login_form([
+                'message' => 'Please sign in to access the HLR lookup tool.',
+            ]);
+        }
+
         $output = '';
 
         // Current form state

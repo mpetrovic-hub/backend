@@ -18,17 +18,26 @@ class Kiwi_Plugin
     private $plugin_root_path;
     private $plugin_base_url;
     private $schema_checked = false;
+    private $frontend_auth_gate;
 
-    public function __construct(string $plugin_root_path, string $plugin_base_url)
+    public function __construct(
+        string $plugin_root_path,
+        string $plugin_base_url,
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
+    )
     {
         $this->plugin_root_path = rtrim($plugin_root_path, '/\\');
         $this->plugin_base_url = rtrim($plugin_base_url, '/\\') . '/';
+        $this->frontend_auth_gate = $frontend_auth_gate instanceof Kiwi_Frontend_Auth_Gate
+            ? $frontend_auth_gate
+            : new Kiwi_Frontend_Auth_Gate();
     }
 
     public function register(): void
     {
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
 
+        add_action('init', [$this, 'handle_frontend_auth']);
         add_action('init', [$this, 'register_shortcodes']);
         add_action('init', [$this, 'register_rest_routes']);
         add_action('init', [$this, 'ensure_operator_lookup_callback_table']);
@@ -87,28 +96,37 @@ class Kiwi_Plugin
 
         $hlr_shortcode = new Kiwi_Hlr_Lookup_Shortcode(
             $runtime['operator_lookup_batch_service'],
-            $runtime['dimoco_callback_operator_lookup_repository']
+            $runtime['dimoco_callback_operator_lookup_repository'],
+            $this->frontend_auth_gate
         );
         $hlr_shortcode->register();
 
         $dimoco_refund_shortcode = new Kiwi_Dimoco_Refunder_Shortcode(
             $runtime['dimoco_refund_batch_service'],
             $runtime['config'],
-            $runtime['dimoco_callback_refund_repository']
+            $runtime['dimoco_callback_refund_repository'],
+            $this->frontend_auth_gate
         );
         $dimoco_refund_shortcode->register();
 
         $dimoco_blacklist_shortcode = new Kiwi_Dimoco_Blacklister_Shortcode(
             $runtime['dimoco_blacklist_batch_service'],
             $runtime['config'],
-            $runtime['dimoco_callback_blacklist_repository']
+            $runtime['dimoco_callback_blacklist_repository'],
+            $this->frontend_auth_gate
         );
         $dimoco_blacklist_shortcode->register();
 
         $landing_pages_gallery_shortcode = new Kiwi_Landing_Pages_Gallery_Shortcode(
-            new Kiwi_Landing_Page_Gallery_Service($runtime['config'])
+            new Kiwi_Landing_Page_Gallery_Service($runtime['config']),
+            $this->frontend_auth_gate
         );
         $landing_pages_gallery_shortcode->register();
+    }
+
+    public function handle_frontend_auth(): void
+    {
+        $this->frontend_auth_gate->handle_auth_request();
     }
 
     public function register_rest_routes(): void
@@ -222,6 +240,12 @@ class Kiwi_Plugin
     {
         if (!isset($_GET['kiwi_hlr_export'])) {
             return;
+        }
+
+        if (!$this->frontend_auth_gate->can_access_tools()) {
+            $this->frontend_auth_gate->render_login_required_and_exit(
+                'Please sign in to export HLR results.'
+            );
         }
 
         $batch_id = '';

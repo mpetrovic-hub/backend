@@ -7,10 +7,17 @@ if (!defined('ABSPATH')) {
 class Kiwi_Landing_Pages_Gallery_Shortcode
 {
     private $gallery_service;
+    private $frontend_auth_gate;
 
-    public function __construct(Kiwi_Landing_Page_Gallery_Service $gallery_service)
+    public function __construct(
+        Kiwi_Landing_Page_Gallery_Service $gallery_service,
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
+    )
     {
         $this->gallery_service = $gallery_service;
+        $this->frontend_auth_gate = $frontend_auth_gate instanceof Kiwi_Frontend_Auth_Gate
+            ? $frontend_auth_gate
+            : new Kiwi_Frontend_Auth_Gate();
     }
 
     public function register(): void
@@ -20,6 +27,12 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
 
     public function render(): string
     {
+        if (!$this->frontend_auth_gate->can_access_tools()) {
+            return $this->frontend_auth_gate->render_login_form([
+                'message' => 'Please sign in to access the landing-pages gallery.',
+            ]);
+        }
+
         $gallery_data = $this->gallery_service->build_gallery_data();
         $entries = is_array($gallery_data['entries'] ?? null) ? $gallery_data['entries'] : [];
         $errors = is_array($gallery_data['errors'] ?? null) ? $gallery_data['errors'] : [];

@@ -210,6 +210,7 @@ if (!class_exists('WP_REST_Response')) {
 
 require_once __DIR__ . '/../includes/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/../includes/core/class-config.php';
+require_once __DIR__ . '/../includes/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
 require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-client.php';
@@ -1151,9 +1152,10 @@ class Kiwi_Test_Dimoco_Blacklister_Shortcode extends Kiwi_Dimoco_Blacklister_Sho
         Kiwi_Dimoco_Callback_Blacklist_Repository $callback_blacklist_repository,
         int $async_timeout_seconds = 1,
         int $async_poll_interval_microseconds = 0,
-        string $generated_result_state_id = 'kiwi_dimoco_blacklister_test_state'
+        string $generated_result_state_id = 'kiwi_dimoco_blacklister_test_state',
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     ) {
-        parent::__construct($batch_service, $config, $callback_blacklist_repository);
+        parent::__construct($batch_service, $config, $callback_blacklist_repository, $frontend_auth_gate);
 
         $this->async_timeout_seconds = $async_timeout_seconds;
         $this->async_poll_interval_microseconds = $async_poll_interval_microseconds;
@@ -1219,9 +1221,10 @@ class Kiwi_Test_Dimoco_Refunder_Shortcode extends Kiwi_Dimoco_Refunder_Shortcode
         Kiwi_Dimoco_Callback_Refund_Repository $callback_refund_repository,
         string $generated_result_state_id = 'kiwi_dimoco_refunder_test_state',
         int $async_timeout_seconds = 1,
-        int $async_poll_interval_microseconds = 0
+        int $async_poll_interval_microseconds = 0,
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     ) {
-        parent::__construct($batch_service, $config, $callback_refund_repository);
+        parent::__construct($batch_service, $config, $callback_refund_repository, $frontend_auth_gate);
 
         $this->generated_result_state_id = $generated_result_state_id;
         $this->async_timeout_seconds = $async_timeout_seconds;
@@ -1284,9 +1287,10 @@ class Kiwi_Test_Hlr_Lookup_Shortcode extends Kiwi_Hlr_Lookup_Shortcode
         Kiwi_Operator_Lookup_Batch_Service $batch_service,
         Kiwi_Dimoco_Callback_Operator_Lookup_Repository $callback_operator_lookup_repository,
         string $generated_result_state_id = 'kiwi_hlr_lookup_test_state',
-        string $generated_export_batch_id = 'kiwi_hlr_export_test_batch'
+        string $generated_export_batch_id = 'kiwi_hlr_export_test_batch',
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     ) {
-        parent::__construct($batch_service, $callback_operator_lookup_repository);
+        parent::__construct($batch_service, $callback_operator_lookup_repository, $frontend_auth_gate);
 
         $this->generated_result_state_id = $generated_result_state_id;
         $this->generated_export_batch_id = $generated_export_batch_id;
@@ -4163,6 +4167,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
     $init_callbacks = $GLOBALS['kiwi_test_hooks']['init'] ?? [];
     kiwi_assert_same(
         [
+            'handle_frontend_auth',
             'register_shortcodes',
             'register_rest_routes',
             'ensure_operator_lookup_callback_table',
@@ -5475,5 +5480,126 @@ kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode renders all asynchronous callback rows 
     kiwi_assert_true(strpos($output, 'Operator resolved 2') !== false, 'Expected the second asynchronous HLR callback row to be rendered.');
     kiwi_assert_true(strpos($output, 'Magenta') !== false, 'Expected the second operator from the async callback table to be rendered.');
 
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi frontend auth denies unauthenticated access to tool shortcodes', function (): void {
+    $_GET = [];
+    $_POST = [];
+    unset($_COOKIE['kiwi_frontend_auth']);
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-secret-1', PASSWORD_DEFAULT),
+    ]);
+    $shortcode = new Kiwi_Hlr_Lookup_Shortcode(
+        new Kiwi_Test_Noop_Operator_Lookup_Batch_Service(),
+        new Kiwi_Test_Hlr_Callback_Repository([]),
+        $gate
+    );
+
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('Kiwi Tools Login', $output, 'Expected unauthenticated users to receive the auth login form.');
+    kiwi_assert_contains('Please sign in to access the HLR lookup tool.', $output, 'Expected login prompt context to be rendered for the protected HLR tool.');
+});
+
+kiwi_run_test('Kiwi frontend auth allows valid credential login for protected tool shortcodes', function (): void {
+    $_GET = [];
+    $_POST = [];
+    unset($_COOKIE['kiwi_frontend_auth']);
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-secret-2', PASSWORD_DEFAULT),
+    ]);
+    $logged_in = $gate->login('admin', 'kiwi-secret-2');
+    $shortcode = new Kiwi_Hlr_Lookup_Shortcode(
+        new Kiwi_Test_Noop_Operator_Lookup_Batch_Service(),
+        new Kiwi_Test_Hlr_Callback_Repository([]),
+        $gate
+    );
+
+    $output = $shortcode->render();
+
+    kiwi_assert_true($logged_in, 'Expected valid auth credentials to produce an authenticated session.');
+    kiwi_assert_contains('HLR Lookup', $output, 'Expected authenticated users to receive the original HLR tool output.');
+});
+
+kiwi_run_test('Kiwi frontend auth logout revokes previously granted access', function (): void {
+    $_GET = [];
+    $_POST = [];
+    unset($_COOKIE['kiwi_frontend_auth']);
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-secret-3', PASSWORD_DEFAULT),
+    ]);
+
+    kiwi_assert_true($gate->login('admin', 'kiwi-secret-3'), 'Expected valid credentials to authenticate before logout.');
+    $gate->logout();
+
+    $shortcode = new Kiwi_Hlr_Lookup_Shortcode(
+        new Kiwi_Test_Noop_Operator_Lookup_Batch_Service(),
+        new Kiwi_Test_Hlr_Callback_Repository([]),
+        $gate
+    );
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('Kiwi Tools Login', $output, 'Expected logout to remove access and show the auth login form again.');
+});
+
+kiwi_run_test('Kiwi frontend auth keeps existing HLR submit flow behavior after successful login', function (): void {
+    $_GET = [];
+    $_POST = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+    unset($_COOKIE['kiwi_frontend_auth']);
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-secret-4', PASSWORD_DEFAULT),
+    ]);
+    kiwi_assert_true($gate->login('admin', 'kiwi-secret-4'), 'Expected authenticated session setup to succeed before validating flow behavior.');
+
+    $batch_service = new Kiwi_Test_Operator_Lookup_Batch_Service([
+        'total_input' => 1,
+        'unique_input' => 1,
+        'processed' => 1,
+        'results' => [
+            [
+                'msisdn' => '436641234567',
+                'provider' => 'dimoco',
+                'feature' => 'operator_lookup',
+                'success' => true,
+                'status_code' => 200,
+                'api_status' => 'ok',
+                'hlr_status' => '',
+                'operator' => 'A1',
+                'request_id' => 'req-1',
+                'messages' => ['done'],
+            ],
+        ],
+    ]);
+    $shortcode = new Kiwi_Test_Hlr_Lookup_Shortcode(
+        $batch_service,
+        new Kiwi_Test_Hlr_Callback_Repository([]),
+        'kiwi_hlr_lookup_auth_state',
+        'kiwi_hlr_export_auth_batch',
+        $gate
+    );
+
+    $_POST = [
+        'kiwi_hlr_form_action' => 'lookup',
+        'kiwi_hlr_lookup_nonce' => 'kiwi_hlr_lookup_action',
+        'kiwi_hlr_input' => '436641234567',
+    ];
+
+    $render_result = $shortcode->render();
+
+    kiwi_assert_same('', $render_result, 'Expected authenticated submissions to continue redirect-based result-state flow.');
+    kiwi_assert_same(1, count($batch_service->calls), 'Expected authenticated submit flow to still execute the batch service exactly once.');
+    kiwi_assert_same('kiwi_hlr_lookup_auth_state', $shortcode->redirect_result_state_id, 'Expected authenticated submit flow to keep redirecting to stored result-state tokens.');
+
+    $_POST = [];
     $_GET = [];
 });

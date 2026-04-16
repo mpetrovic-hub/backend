@@ -23,15 +23,20 @@ class Kiwi_Dimoco_Refunder_Shortcode
 
     // Repository for storing and retrieving DIMOCO callback responses related to refunds     
     private $callback_refund_repository;
+    private $frontend_auth_gate;
 
     public function __construct(
         Kiwi_Dimoco_Refund_Batch_Service $batch_service,
         Kiwi_Config $config,
-        Kiwi_Dimoco_Callback_Refund_Repository $callback_refund_repository
+        Kiwi_Dimoco_Callback_Refund_Repository $callback_refund_repository,
+        ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     ) {
         $this->batch_service = $batch_service;
         $this->config = $config;
         $this->callback_refund_repository = $callback_refund_repository;
+        $this->frontend_auth_gate = $frontend_auth_gate instanceof Kiwi_Frontend_Auth_Gate
+            ? $frontend_auth_gate
+            : new Kiwi_Frontend_Auth_Gate();
     }
 
     /**
@@ -52,6 +57,12 @@ class Kiwi_Dimoco_Refunder_Shortcode
      */
     public function render(): string
     {
+        if (!$this->frontend_auth_gate->can_access_tools()) {
+            return $this->frontend_auth_gate->render_login_form([
+                'message' => 'Please sign in to access the DIMOCO refund tool.',
+            ]);
+        }
+
         $output = '';
 
         // Current form values / state
