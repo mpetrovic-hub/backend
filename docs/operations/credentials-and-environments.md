@@ -118,6 +118,16 @@ Examples:
 
 Do not store actual environment secret values in this file.
 
+## Landing-page multi-domain operations
+
+For exposing landing pages on multiple public domains:
+
+- no additional plugin constants are required for v1 proxy/CNAME rollout
+- domain onboarding is handled at infrastructure level (DNS, certificates, reverse proxy)
+- landing routing metadata remains in each `landing-pages/<landing-key>/integration.php` (`backend_path`, optional `hostnames`/`dedicated_path`)
+- keep full user journeys on one public hostname; current attribution/session cookies are host-scoped
+- if a future flow requires cross-root-domain redirects with shared attribution continuity, treat that as a separate capability design (not part of current baseline)
+
 ## Where to document details
 
 For aggregator-specific configuration details, see:

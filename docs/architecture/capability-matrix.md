@@ -21,33 +21,41 @@ For aggregator-specific details, see:
 
 | Aggregator | Capability | Country | Flow | Status | Notes |
 |---|---|---|---|---|---|
-| Dimoco | add-blacklist | AT | blocklist | implemented | AT subscription guide documents add/remove/check blocklist actions |
-| Dimoco | add-blacklist | generic | add-blocklist | implemented | Existing backend capability; external Dimoco action name is `add-blocklist` |
-| Dimoco | check-blacklist | generic | check-blocklist | documented | Supported by Dimoco API docs; implementation status in repo should be confirmed |
-| Dimoco | close-subscription | AT | subscription | documented | AT subscription guide documents unsubscribe flow |
-| Dimoco | identify | AT | subscription pre-step | documented | AT subscription guide documents identify as routing step for CLICK vs WEB TAN |
-| Dimoco | operator-lookup | AT | subscription pre-step | implemented | AT subscription guide documents async and sync operator lookup variants |
-| Dimoco | operator-lookup | generic / multi-country | API action | implemented | Existing backend capability; currently known via Dimoco |
-| Dimoco | prompt | AT | free SMS MT | documented | AT subscription guide documents prompt for free MT sending |
-| Dimoco | refund | AT / PL / service-specific config exists | API action | implemented | Existing backend capability; generic Dimoco refund support documented |
-| Dimoco | remove-blacklist | generic | remove-blocklist | documented | Supported by Dimoco API docs; implementation status in repo should be confirmed |
-| Dimoco | renew-subscription | AT | subscription | documented | AT subscription guide documents renewals handled by DIMOCO |
-| Dimoco | subscription | AT | subscription | documented | AT subscription flow documented for Getstronger and StarBabes2Go |
-| Lily | operator-lookup | generic / GR | API action | implemented | Existing backend capability; currently known via Lily |
-| NTH | close-session | generic | session-based services | documented | Generic NTH Premium SMS function |
-| NTH | deliverEvent | generic | event callback | documented | Generic NTH Premium SMS callback / operation |
-| NTH | deliverMessage | generic | MO delivery | documented | Generic NTH Premium SMS callback / operation |
-| NTH | delivery-report handling | FR | one-off | documented | FR setup documents MT delivery report callback |
-| NTH | click attribution + affiliate postback | FR | one-off | implemented | Shared attribution capability is wired for NTH FR one-off confirmed conversions; each capture stores an internal `transaction_id`; duplicate callbacks can retry failed postbacks until sent |
-| NTH | init-session | generic | web-initiated services | documented | Generic NTH Premium SMS function; use depends on service program |
-| NTH | MO handling | FR | one-off | documented | FR setup expects MO keyword flow with encrypted MSISDN |
-| NTH | MT billing | FR | one-off | documented | FR setup uses premium MT submission with `price=450` |
-| NTH | number lookup | generic | web-initiated services | documented | Mentioned in generic NTH Premium SMS docs as normally required for web-initiated services |
-| NTH | one-off payment | FR | one-off / web-initiated MO keyword / click-to-SMS style | documented | FR Premium SMS setup documented; MT billing |
-| NTH | submitMessage | generic | MT submission | documented | Generic NTH Premium SMS operation |
-| NTH | validate-pin | generic | web-initiated services | documented | Generic NTH Premium SMS function |
+| Shared/Core | filesystem landing-page discovery + routing | generic | landing pages | implemented | Filesystem registry + router resolution by backend path or dedicated host/path |
+| Shared/Core | click attribution capture (server-side) | generic | landing entry | implemented | `wp_kiwi_click_attributions` with opaque tracking token cookie and server-side refs |
+| Shared/Core | conversion attribution resolver + affiliate postback dispatch | generic | confirmed conversions | implemented | Confirmed-only dispatch, idempotent postbacks, retry on failed postback until `postback_sent_at` is set |
+| Shared/Core | landing KPI summary tracking | generic | clicks / cta1..ctaN / conv | implemented | `wp_kiwi_landing_kpi_summary` + KPI REST endpoints |
+| Shared/Core | sales persistence + enrichment | generic | confirmed sales | implemented | `wp_kiwi_sales` with transaction correlation and enrichment fields (for example `pid`) |
+| Dimoco | operator-lookup | generic / multi-country | API action | implemented | Existing backend capability routed through Dimoco where configured |
+| Dimoco | refund | generic | API action | implemented | Existing backend capability with callback persistence |
+| Dimoco | add-blacklist | generic | add-blocklist | implemented | Existing backend capability; external action name is `add-blocklist` |
+| Dimoco | check-blacklist | generic | check-blocklist | documented | Supported by Dimoco API docs; no confirmed implementation path in repository |
+| Dimoco | remove-blacklist | generic | remove-blocklist | documented | Supported by Dimoco API docs; no confirmed implementation path in repository |
+| Dimoco | identify | AT | subscription pre-step | documented | AT subscription guide documents identify routing step |
+| Dimoco | subscription lifecycle (start / renew / close) | AT | subscription | documented | AT subscription guide documents start/renew/close semantics |
+| Dimoco | prompt | AT | free SMS MT | documented | AT subscription guide documents prompt for free MT |
+| Lily | operator-lookup | generic / GR | API action | implemented | Existing backend capability via Lily provider |
+| NTH | MO callback handling (`deliverMessage`) | FR | one-off | implemented | Implemented callback parsing/normalization and MO-driven flow start |
+| NTH | MT submission (`submitMessage`) | FR | one-off | implemented | MT submission implemented with strict payload contract, `messageRef`, and `sessionId` propagation |
+| NTH | MT delivery-report handling (`deliverReport`) | FR | one-off | implemented | Intermediate/final status mapping and confirmed-conversion handling implemented |
+| NTH | one-off sale persistence | FR | one-off | implemented | Confirmed terminal reports persist sales into `wp_kiwi_sales` |
+| NTH | click attribution + affiliate postback | FR | one-off | implemented | Shared attribution capability wired end-to-end for NTH FR one-off |
+| NTH | operator name normalization from `operatorCode` | FR | one-off | implemented | Resolver maps operator code to readable operator name from service mapping when available |
+| NTH | init-session | generic | web-initiated services | documented | Generic NTH Premium SMS operation; not confirmed as implemented in this repo |
+| NTH | number lookup | generic | web-initiated services | documented | Generic NTH Premium SMS operation; not confirmed as implemented in this repo |
+| NTH | validate-pin | generic | web-initiated services | documented | Generic NTH Premium SMS operation; not confirmed as implemented in this repo |
+| NTH | close-session | generic | session-based services | documented | Generic NTH Premium SMS operation; not confirmed as implemented in this repo |
+| NTH | deliverEvent | generic | event callback | documented | Generic NTH callback type; not used by current FR one-off implementation |
 
 ## Notes
+
+### Shared/Core
+Current known repository capabilities:
+- filesystem landing-page system with centralized routing and CTA injection
+- shared click attribution and conversion correlation
+- outbound affiliate postback dispatch with idempotency and signing options
+- landing KPI summary tracking
+- shared sales persistence/enrichment
 
 ### Dimoco
 Current known repository capabilities:
@@ -68,7 +76,7 @@ Further country / flow documentation has not yet been added.
 Current documented setup:
 - `FR / one-off`
 
-The FR one-off setup is:
+The FR one-off setup is implemented as:
 - Premium SMS
 - one-time payment
 - MT billing

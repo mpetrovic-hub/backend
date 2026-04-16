@@ -45,6 +45,30 @@ At runtime, the router:
 
 For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic.
 
+## Multi-domain exposure via proxy/CNAME
+
+Landing pages can be exposed on multiple public domains without changing core plugin routing or attribution behavior.
+
+Recommended setup:
+
+- keep each landing page `backend_path` stable and unique (for example `/lp/fr/myjoyplay5`)
+- point each public domain/hostname to the same backend WordPress runtime via DNS + reverse proxy/CNAME
+- keep `hostnames` metadata populated in `integration.php` for diagnostics visibility and optional dedicated-host routing
+
+Proxy/edge requirements:
+
+- terminate TLS with a valid certificate for each public hostname
+- preserve original `Host` and forward standard `X-Forwarded-*` headers
+- forward request paths unchanged (no path rewrites for landing routes)
+- avoid exposing non-canonical backend origin hosts to end users when possible
+
+Tracking/cookie note:
+
+- click/session implementation remains unchanged
+- `kiwi_landing_session` and attribution token cookies are host-scoped in current implementation
+- attribution works as expected when one user journey stays on one public hostname
+- avoid mid-flow redirects between different root domains unless an explicit cross-domain handoff design is introduced
+
 ## Conversion and attribution behavior
 
 High-level flow:
@@ -165,6 +189,8 @@ When validating a landing-page flow in production or staging, verify:
 4. NTH callback logs show `incoming` and `handled` traces.
 5. Confirmed `deliverReport` results in sale persistence (`wp_kiwi_sales`).
 6. Affiliate postback is sent once for confirmed conversions and retried only when `postback_sent_at` is empty.
+7. `backend_path` routes resolve correctly on every public hostname that proxies to the backend runtime.
+8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 
 ## Troubleshooting quick map
 

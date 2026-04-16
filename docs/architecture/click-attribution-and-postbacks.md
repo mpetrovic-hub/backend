@@ -67,6 +67,29 @@ No provider-specific callback shape should leak into shared attribution code.
 
 - `pid` (captured from landing query params when present, sanitized before persistence)
 
+## Retention and Cleanup
+
+Attribution rows are intentionally temporary and use explicit expiry.
+
+- row expiry timestamp: `expires_at`
+- TTL config key: `KIWI_CLICK_ATTRIBUTION_TTL_SECONDS`
+  - default: `172800` seconds (48 hours)
+  - minimum enforced value: `60` seconds
+- cleanup batch size config key: `KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT`
+  - default: `500`
+  - minimum enforced value: `1`
+
+Cleanup execution behavior:
+
+- cleanup is triggered on WordPress `init`
+- cleanup execution is throttled by a transient lock
+- lock TTL is `300` seconds (about 5 minutes)
+- each cleanup run deletes expired rows in bounded batches (up to configured cleanup limit)
+
+Cookie retention note:
+
+- the opaque tracking token cookie uses the same configured attribution TTL window
+
 ## Security and Data Handling
 
 - raw `clickid` is never stored in cookies

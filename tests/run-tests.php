@@ -2465,10 +2465,12 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     );
 
     $path_match = $router->resolve_request('backend.kiwimobile.de', '/lp/fr/myjoyplay');
+    $public_host_path_match = $router->resolve_request('landing-public.example.test', '/lp/fr/myjoyplay');
     $host_match = $router->resolve_request('frlp2.joy-play.com', '/');
     $no_match = $router->resolve_request('backend.kiwimobile.de', '/other');
 
     kiwi_assert_same('lp2-fr', $path_match['landing_key'], 'Expected backend path matching to resolve the configured landing page.');
+    kiwi_assert_same('lp2-fr', $public_host_path_match['landing_key'], 'Expected backend path matching to be host-agnostic for proxied public domains.');
     kiwi_assert_same('lp2-fr', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
 });
