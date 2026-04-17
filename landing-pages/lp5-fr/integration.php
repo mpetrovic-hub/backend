@@ -17,11 +17,10 @@ return [
     'backend_path' => '/lp/fr/myjoyplay5',
     'dedicated_path' => '/',
     'hostnames' => ['frlp5.joy-play.com', 'your.joy-play.com'],
-    'dedicated_path' => '/',
     'service_key' => 'nth_fr_one_off_jplay',
     'shortcode' => '84072',
     'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
     'kpi_cta_steps' => [
-        'cta1' => 'class="cta"',
+        'cta1' => 'class="cta"', //defines the selector for the cta1 KPI
     ],
 ];

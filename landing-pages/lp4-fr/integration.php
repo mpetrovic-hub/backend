@@ -16,7 +16,7 @@ return [
 
     'backend_path' => '/lp/fr/myjoyplay4',
     'dedicated_path' => '/',
-    'hostnames' => ['frlp4.joy-play.com'],
+    'hostnames' => ['your.joy-play.com'], // defines the hostnames on which the landing page will be available, e.g. ['frlp4.joy-play.com', 'your.joy-play.com']
     'service_key' => 'nth_fr_one_off_jplay',
     'shortcode' => '84072',
     'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
