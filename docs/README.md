@@ -56,6 +56,9 @@ Do **not** store real credentials or secrets in this repository.
 - `operations/landing-page-prod-behaviour.md`  
   Runtime landing-page logic and operations runbook, including a legacy migration appendix.
 
+- `operations/vps-endpoint-runbook.md`
+  VPS edge-endpoint operations guide for reverse-proxy domain exposure to backend landing routes.
+
 ## How integration docs are organized
 
 Aggregator documentation is split into two levels:
