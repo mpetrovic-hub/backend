@@ -7,7 +7,7 @@ Backend plugin for mVAS landing-page and aggregator flows.
 Full documentation lives in:
 
 - `docs/README.md`
-- `refactor_CHANGELOG.md`
+- `CHANGELOG.md`
 
 ## Quick Test
 

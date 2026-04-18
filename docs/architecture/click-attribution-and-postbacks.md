@@ -106,6 +106,49 @@ Cookie retention note:
 - expired temporary rows are cleaned in bounded batches
 - each attribution row gets an internal `transaction_id` so provider callbacks can be correlated through stable server-side references
 
+## Tracking-first S2S Postback Contract
+
+This section describes the operational S2S tracking contract used to move from landing click capture to outbound affiliate postback dispatch.
+
+### End-to-end S2S sequence
+
+1. User lands with affiliate query params (for example `clickid`).
+2. `Kiwi_Tracking_Capture_Service` stores attribution server-side and sets an opaque `tracking_token` cookie.
+3. Provider callbacks arrive later with provider-specific references (not with the original affiliate `clickid`).
+4. Provider layer normalizes callback fields and forwards stable refs to `Kiwi_Conversion_Attribution_Resolver`.
+5. Resolver matches attribution, enforces `confirmed`-only dispatch, and calls `Kiwi_Affiliate_Postback_Dispatcher`.
+6. Dispatcher builds the outbound URL template, applies placeholders/signature, and sends an S2S HTTP request.
+7. Postback audit fields (`postback_sent_at`, attempts, response/error fields) are persisted for retry/idempotency behavior.
+
+### Full S2S URL template example
+
+`https://offers-kiwimobile.affise.com/postback?clickid={clickid}&click_id={click_id}&sale_reference={sale_reference}&service_key={service_key}&provider_key={provider_key}&operator_name={operator_name}&sub7={sub7}&secure={secure}&hash={hash}&goal=sale`
+
+### Placeholder mapping (source of truth)
+
+- `clickid` / `click_id`
+  - affiliate click identifier captured at landing entry
+- `sale_reference`
+  - internal sale/correlation reference resolved during conversion handling
+- `service_key`
+  - internal service identifier from normalized conversion context
+- `provider_key`
+  - provider identifier from normalized conversion context
+- `operator_name`
+  - resolved operator label when available
+- `sub7`
+  - alias of `operator_name` for affiliate reporting dimensions
+- `secure` / `hash`
+  - signature/checksum generated from configured signature algorithm/base/secret
+
+### Dispatch behavior rules
+
+- all substituted values are URL-encoded before request dispatch
+- if signature exists and template has neither `{secure}` nor `{hash}`, dispatcher appends configured signature parameter automatically
+- if `operator_name` exists and template has no `sub7` parameter, dispatcher appends `sub7=<operator_name>` automatically
+- successful dispatch is transport-level HTTP `2xx`
+- idempotency boundary is `postback_sent_at`: once set, duplicate callback deliveries must not emit another postback
+
 ## Current Wiring Example (NTH FR one-off)
 
 - landing entry capture runs in `Kiwi_Landing_Page_Router`

@@ -38,20 +38,31 @@ class Kiwi_Lily_Client
 
         if (is_wp_error($response)) {
             return [
+                'http_success' => false,
                 'success' => false,
+                'status_code' => 0,
+                'data' => [],
+                'raw_body' => '',
                 'error' => $response->get_error_message()
             ];
         }
 
         $status_code = wp_remote_retrieve_response_code($response);
-        $body        = wp_remote_retrieve_body($response);
+        $raw_body    = wp_remote_retrieve_body($response);
+        $http_success = ($status_code >= 200 && $status_code < 300);
 
-        $data = json_decode($body, true);
+        $data = json_decode($raw_body, true);
+        if (!is_array($data)) {
+            $data = [];
+        }
 
         return [
-            'success' => $status_code === 200,
+            'http_success' => $http_success,
+            'success' => $http_success,
             'status_code' => $status_code,
-            'data' => $data
+            'data' => $data,
+            'raw_body' => $raw_body,
+            'error' => '',
         ];
     }
 }

@@ -67,8 +67,8 @@ Expected keys:
 
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
   - outbound affiliate postback URL template
-  - supports placeholders such as `{clickid}` / `{{clickid}}` and optional `{hash}` / `{secure}` (`{{hash}}` / `{{secure}}` also supported)
-  - example: `https://offers-kiwimobile.affise.com/postback?clickid={{clickid}}&secure=7e09e7feb5d6f029ae4bb755955b6727&goal=sale`
+  - supports placeholders such as `{clickid}` / `{{clickid}}`, `{operator_name}` / `{{operator_name}}`, `{sub7}` / `{{sub7}}`, and optional `{hash}` / `{secure}` (`{{hash}}` / `{{secure}}` also supported)
+  - example (full placeholder set): `https://offers-kiwimobile.affise.com/postback?clickid={clickid}&click_id={click_id}&sale_reference={sale_reference}&service_key={service_key}&provider_key={provider_key}&operator_name={operator_name}&sub7={sub7}&secure={secure}&hash={hash}&goal=sale`
 
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
   - shared secret for outgoing affiliate postback signing/checksum generation
@@ -83,6 +83,31 @@ Expected keys:
 - `KIWI_CLICK_ATTRIBUTION_CLICK_ID_KEYS`
 - `KIWI_CLICK_ATTRIBUTION_TTL_SECONDS`
 - `KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT`
+
+Runtime enrichment note:
+
+- when `operator_name` is available during conversion resolution, outbound postbacks include `sub7=<operator_name>`
+- if the template already defines a `sub7` query parameter, that value is used; otherwise `sub7` is appended automatically
+- no additional credential key is required for this enrichment
+
+Supported postback parameters/placeholders:
+
+- `clickid` / `click_id`
+  - affiliate click identifier from attribution capture; URL-encoded before dispatch
+- `sale_reference`
+  - internal sale/correlation reference resolved during conversion handling
+- `service_key`
+  - internal service identifier (for example flow/service mapping key)
+- `provider_key`
+  - upstream provider identifier (for example `nth`, `dimoco`, `lily`)
+- `operator_name`
+  - resolved operator label when available in normalized conversion/sales context
+- `sub7`
+  - alias for `operator_name` used by Affise-style reporting dimensions
+- `secure` / `hash`
+  - signature/checksum value generated from configured signature algorithm/base/secret
+- signature parameter fallback (`KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`)
+  - when a signature is available and template does not include `{secure}` or `{hash}`, dispatcher appends this query parameter automatically
 
 Do not store real values for these secrets in repository docs.
 

@@ -17,6 +17,8 @@ $GLOBALS['kiwi_test_transients'] = [];
 $GLOBALS['kiwi_test_options'] = [];
 $GLOBALS['kiwi_test_shortcodes'] = [];
 $GLOBALS['kiwi_test_rest_routes'] = [];
+$GLOBALS['kiwi_test_http_responses'] = [];
+$GLOBALS['kiwi_test_http_requests'] = [];
 
 function add_action($hook, $callback): void
 {
@@ -148,6 +150,71 @@ function esc_textarea($text)
     return (string) $text;
 }
 
+if (!class_exists('WP_Error')) {
+    class WP_Error
+    {
+        private $code;
+        private $message;
+
+        public function __construct(string $code = '', string $message = '')
+        {
+            $this->code = $code;
+            $this->message = $message;
+        }
+
+        public function get_error_message(): string
+        {
+            return $this->message;
+        }
+
+        public function get_error_code(): string
+        {
+            return $this->code;
+        }
+    }
+}
+
+function is_wp_error($thing): bool
+{
+    return $thing instanceof WP_Error;
+}
+
+function wp_remote_post($url, array $args = [])
+{
+    $GLOBALS['kiwi_test_http_requests'][] = [
+        'url' => (string) $url,
+        'args' => $args,
+    ];
+
+    if (empty($GLOBALS['kiwi_test_http_responses'])) {
+        return new WP_Error('kiwi_test_http_missing_response', 'No fake HTTP response configured.');
+    }
+
+    return array_shift($GLOBALS['kiwi_test_http_responses']);
+}
+
+function wp_remote_retrieve_response_code($response): int
+{
+    if (is_array($response) && isset($response['response']) && is_array($response['response'])) {
+        return (int) ($response['response']['code'] ?? 0);
+    }
+
+    if (is_array($response) && isset($response['status_code'])) {
+        return (int) $response['status_code'];
+    }
+
+    return 0;
+}
+
+function wp_remote_retrieve_body($response): string
+{
+    if (is_array($response) && isset($response['body'])) {
+        return (string) $response['body'];
+    }
+
+    return '';
+}
+
 if (!class_exists('WP_REST_Server')) {
     class WP_REST_Server
     {
@@ -214,6 +281,8 @@ require_once __DIR__ . '/../includes/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
 require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-client.php';
+require_once __DIR__ . '/../includes/providers/lily/class-lily-client.php';
+require_once __DIR__ . '/../includes/providers/lily/class-lily-response-parser.php';
 require_once __DIR__ . '/../includes/services/class-msisdn-normalizer.php';
 require_once __DIR__ . '/../includes/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/../includes/services/class-dimoco-refund-batch-service.php';
@@ -4559,6 +4628,118 @@ kiwi_run_test('Kiwi_Operator_Lookup_Batch_Service keeps deduping and retrying th
         $result['results'][0]['messages'],
         'Expected the retry marker to stay appended after throttling.'
     );
+});
+
+kiwi_run_test('Kiwi_Lily_HLR marks 200+OK+SUCCESS as transport and business success', function (): void {
+    $GLOBALS['kiwi_test_http_requests'] = [];
+    $GLOBALS['kiwi_test_http_responses'] = [
+        [
+            'response' => ['code' => 200],
+            'body' => wp_json_encode([
+                'status' => 'OK',
+                'messages' => [],
+                'payload' => [
+                    'hlrStatus' => 'SUCCESS',
+                    'operator' => 'WIND',
+                    'msisdn' => '306906854036',
+                ],
+            ]),
+        ],
+    ];
+
+    $client = new Kiwi_Lily_Client(new Kiwi_Test_Config());
+    $parser = new Kiwi_Lily_Response_Parser();
+    $parsed = $parser->parse_hlr_response($client->hlr_lookup('306906854036'));
+
+    kiwi_assert_true($parsed['http_success'], 'Expected HTTP 200 to be transport-successful for Lily.');
+    kiwi_assert_true($parsed['success'], 'Expected status=OK and hlrStatus=SUCCESS to be business-successful for Lily.');
+    kiwi_assert_same(200, $parsed['status_code'], 'Expected status code to be preserved on successful Lily parsing.');
+});
+
+kiwi_run_test('Kiwi_Lily_HLR marks 202+OK+OK as success under 2xx transport contract', function (): void {
+    $GLOBALS['kiwi_test_http_requests'] = [];
+    $GLOBALS['kiwi_test_http_responses'] = [
+        [
+            'response' => ['code' => 202],
+            'body' => wp_json_encode([
+                'status' => 'OK',
+                'messages' => ['Accepted for processing'],
+                'payload' => [
+                    'hlrStatus' => 'OK',
+                    'operator' => 'VODAFONE',
+                    'msisdn' => '306906854037',
+                ],
+            ]),
+        ],
+    ];
+
+    $client = new Kiwi_Lily_Client(new Kiwi_Test_Config());
+    $parser = new Kiwi_Lily_Response_Parser();
+    $parsed = $parser->parse_hlr_response($client->hlr_lookup('306906854037'));
+
+    kiwi_assert_true($parsed['http_success'], 'Expected HTTP 202 to be transport-successful under the Lily 2xx contract.');
+    kiwi_assert_true($parsed['success'], 'Expected status=OK and hlrStatus=OK to remain business-successful for Lily.');
+    kiwi_assert_same(202, $parsed['status_code'], 'Expected non-200 2xx status code to be preserved for Lily.');
+});
+
+kiwi_run_test('Kiwi_Lily_HLR keeps 2xx transport success but fails business success for empty or invalid body', function (): void {
+    $GLOBALS['kiwi_test_http_requests'] = [];
+    $GLOBALS['kiwi_test_http_responses'] = [
+        [
+            'response' => ['code' => 204],
+            'body' => '',
+        ],
+    ];
+
+    $client = new Kiwi_Lily_Client(new Kiwi_Test_Config());
+    $parser = new Kiwi_Lily_Response_Parser();
+    $parsed = $parser->parse_hlr_response($client->hlr_lookup('306906854038'));
+
+    kiwi_assert_true($parsed['http_success'], 'Expected HTTP 204 to stay transport-successful under the Lily 2xx contract.');
+    kiwi_assert_true(!$parsed['success'], 'Expected empty JSON body to fail Lily business-success evaluation.');
+    kiwi_assert_same(204, $parsed['status_code'], 'Expected status code preservation for 2xx responses with invalid body.');
+    kiwi_assert_true(
+        in_array('Missing or invalid JSON response body.', $parsed['messages'], true),
+        'Expected parser reason to explain why business success failed for empty/invalid JSON.'
+    );
+    kiwi_assert_same('', $parsed['raw']['raw_body'] ?? null, 'Expected raw body context to be preserved even when empty.');
+});
+
+kiwi_run_test('Kiwi_Lily_HLR keeps non-2xx details in failure output', function (): void {
+    $body = wp_json_encode([
+        'status' => 'ERROR',
+        'messages' => ['Rate limit exceeded'],
+        'payload' => [
+            'hlrStatus' => 'REQUEST THROTTLED',
+            'operator' => '',
+            'msisdn' => '306906854039',
+        ],
+    ]);
+
+    $GLOBALS['kiwi_test_http_requests'] = [];
+    $GLOBALS['kiwi_test_http_responses'] = [
+        [
+            'response' => ['code' => 429],
+            'body' => $body,
+        ],
+    ];
+
+    $client = new Kiwi_Lily_Client(new Kiwi_Test_Config());
+    $parser = new Kiwi_Lily_Response_Parser();
+    $parsed = $parser->parse_hlr_response($client->hlr_lookup('306906854039'));
+
+    kiwi_assert_true(!$parsed['http_success'], 'Expected non-2xx responses to fail Lily transport success.');
+    kiwi_assert_true(!$parsed['success'], 'Expected non-2xx responses to fail Lily business success.');
+    kiwi_assert_same(429, $parsed['status_code'], 'Expected non-2xx status code to be preserved for Lily.');
+    kiwi_assert_true(
+        in_array('Rate limit exceeded', $parsed['messages'], true),
+        'Expected provider messages from non-2xx bodies to be preserved.'
+    );
+    kiwi_assert_true(
+        in_array('Transport HTTP status is non-2xx.', $parsed['messages'], true),
+        'Expected parser reason to explain non-2xx transport failure.'
+    );
+    kiwi_assert_same($body, $parsed['raw']['raw_body'] ?? '', 'Expected non-2xx raw body context to be preserved.');
 });
 
 kiwi_run_test('Kiwi_Dimoco_Response_Parser preserves XML field extraction and status mapping', function (): void {
