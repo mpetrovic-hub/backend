@@ -177,9 +177,12 @@ class Kiwi_Landing_Page_Gallery_Service
         $urls = [];
 
         foreach ($hostnames as $hostname) {
+            $public_path = $backend_path !== '' ? $backend_path : $dedicated_path;
+            $public_label = $backend_path !== '' ? 'Public hostname route' : 'Dedicated hostname';
+
             $urls[] = [
-                'url' => 'https://' . $hostname . $dedicated_path,
-                'label' => 'Dedicated hostname',
+                'url' => 'https://' . $hostname . $public_path,
+                'label' => $public_label,
                 'absolute' => true,
                 'inferred' => false,
                 'path_only' => false,
@@ -198,13 +201,25 @@ class Kiwi_Landing_Page_Gallery_Service
             $current_host_base_url = $this->resolve_current_host_base_url();
 
             if ($current_host_base_url !== '') {
-                $urls[] = [
-                    'url' => $current_host_base_url . $backend_path,
-                    'label' => 'Inferred current-site URL',
-                    'absolute' => true,
-                    'inferred' => true,
-                    'path_only' => false,
-                ];
+                $inferred_url = $current_host_base_url . $backend_path;
+                $has_explicit_match = false;
+
+                foreach ($urls as $url_item) {
+                    if ((string) ($url_item['url'] ?? '') === $inferred_url) {
+                        $has_explicit_match = true;
+                        break;
+                    }
+                }
+
+                if (!$has_explicit_match) {
+                    $urls[] = [
+                        'url' => $inferred_url,
+                        'label' => 'Inferred current-site URL',
+                        'absolute' => true,
+                        'inferred' => true,
+                        'path_only' => false,
+                    ];
+                }
             }
         }
 

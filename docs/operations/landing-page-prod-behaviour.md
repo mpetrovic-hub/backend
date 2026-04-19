@@ -27,9 +27,10 @@ The plugin exposes a landing-page diagnostics/gallery shortcode:
 - source: filesystem landing pages discovered through the shared config/registry path
 - card metadata: `country`, `key`, `flow`, `service_key`, provider, routing mode
 - URL behavior:
-  - when `hostnames` + `dedicated_path` exist, cards show absolute HTTPS URLs per hostname
+  - when `hostnames` + `backend_path` exist, cards show absolute HTTPS outside URLs as `https://<hostname><backend_path>`
+  - when `hostnames` exist but `backend_path` is missing, cards fall back to `https://<hostname><dedicated_path>`
   - when only `backend_path` exists, cards show the backend path strategy and an inferred current-site URL (explicitly labeled as inferred)
-  - if multiple URL candidates exist, cards show a primary URL plus expandable additional URLs
+  - cards render one primary URL in the preview URL row (the best explicit outside URL when available)
 
 Discovery validation warnings (for broken folders) are surfaced in the shortcode output while valid entries keep rendering.
 

@@ -2214,14 +2214,14 @@ kiwi_run_test('Kiwi_Landing_Page_Gallery_Service normalizes metadata and dedicat
         kiwi_assert_same('nth_fr_one_off_jplay', $entry['service_key'] ?? '', 'Expected service_key metadata to be carried into gallery output.');
         kiwi_assert_same('hybrid', $entry['routing_mode'] ?? '', 'Expected hostnames plus backend_path to be marked as hybrid routing.');
         kiwi_assert_same(
-            'https://frlp2.joy-play.com/offer/fr',
+            'https://frlp2.joy-play.com/lp/fr/myjoyplay',
             $entry['primary_url']['url'] ?? '',
-            'Expected dedicated hostnames to produce absolute public URLs.'
+            'Expected hostname-based gallery URLs to align with outside backend-path routing.'
         );
         kiwi_assert_same(
-            'https://frlp2.joy-play.com/offer/fr',
+            'https://frlp2.joy-play.com/lp/fr/myjoyplay',
             $entry['preview_url'] ?? '',
-            'Expected preview URL to prefer absolute dedicated hostname URLs.'
+            'Expected preview URL to use the same outside hostname + backend_path route.'
         );
         kiwi_assert_true(
             is_file((string) ($entry['index_path'] ?? '')),
@@ -2345,9 +2345,9 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
         kiwi_assert_contains('lp2-fr', $output, 'Expected the shortcode to render the landing-page key.');
         kiwi_assert_contains('nth_fr_one_off_jplay', $output, 'Expected the shortcode to render service_key metadata.');
         kiwi_assert_contains(
-            '<span class="kiwi-url-label">URL:</span> <a class="kiwi-preview-url" href="https://backend.example.test/lp/fr/myjoyplay"',
+            '<span class="kiwi-url-label">URL:</span> <a class="kiwi-preview-url" href="https://frlp2.joy-play.com/lp/fr/myjoyplay"',
             $output,
-            'Expected primary URL display to prefer the inferred current-site URL and use label "URL".'
+            'Expected primary URL display to prefer explicit outside hostname routes and use label "URL".'
         );
         kiwi_assert_contains(
             'class="kiwi-copy-button"',
@@ -2355,7 +2355,7 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
             'Expected the preview URL row to render a copy-to-clipboard button.'
         );
         kiwi_assert_contains(
-            'data-copy-text="https://backend.example.test/lp/fr/myjoyplay"',
+            'data-copy-text="https://frlp2.joy-play.com/lp/fr/myjoyplay"',
             $output,
             'Expected the copy button to carry the resolved primary URL as copy payload.'
         );

@@ -141,7 +141,9 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
         $output .= ' sandbox="allow-forms allow-same-origin allow-scripts" referrerpolicy="no-referrer"></iframe>';
 
         $public_urls = is_array($entry['public_urls'] ?? null) ? $entry['public_urls'] : [];
-        $primary_url = $this->resolve_primary_url_for_display($public_urls);
+        $primary_url = is_array($entry['primary_url'] ?? null)
+            ? $entry['primary_url']
+            : $this->resolve_primary_url_for_display($public_urls);
         $primary_url_value = '';
 
         if (is_array($primary_url) && trim((string) ($primary_url['url'] ?? '')) !== '') {
@@ -182,7 +184,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
                 continue;
             }
 
-            if (($url_item['absolute'] ?? false) && !empty($url_item['inferred'])) {
+            if (($url_item['absolute'] ?? false) && empty($url_item['inferred'])) {
                 return $url_item;
             }
         }
@@ -192,7 +194,7 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
                 continue;
             }
 
-            if (($url_item['absolute'] ?? false) && empty($url_item['inferred'])) {
+            if (($url_item['absolute'] ?? false) && !empty($url_item['inferred'])) {
                 return $url_item;
             }
         }
