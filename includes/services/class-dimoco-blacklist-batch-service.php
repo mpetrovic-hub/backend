@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 if (!defined('ABSPATH')) {
     exit;
@@ -116,11 +116,10 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                 $lookup_messages = $lookup_result['messages'];
             }
 
-            // if (!(bool) ($lookup_result['success'] ?? false) || $lookup_request_id === '') {
-            //    $detail = 'Operator lookup could not be started.';
-
+            // request_id is the authoritative async correlation key for lookup callbacks.
+            // As long as request_id exists, we continue to callback polling even when the
+            // synchronous lookup success flag is false.
             if ($lookup_request_id === '') {
-                // ohne request_id können wir nicht auf Callback warten
                 $detail = 'Operator lookup could not be started.';
 
 

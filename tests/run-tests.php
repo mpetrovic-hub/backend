@@ -1946,6 +1946,33 @@ class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
     }
 }
 
+class Kiwi_Test_Failing_Sales_Repository extends Kiwi_Sales_Repository
+{
+    public $upsert_calls = [];
+    public $rows = [];
+
+    public function create_table(): void
+    {
+    }
+
+    public function upsert(array $data): array
+    {
+        $this->upsert_calls[] = $data;
+
+        return [];
+    }
+
+    public function find_by_sale_reference(string $sale_reference): ?array
+    {
+        return null;
+    }
+
+    public function update_pid_by_sale_reference(string $sale_reference, string $pid): bool
+    {
+        return false;
+    }
+}
+
 class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
 {
     public $calls = [];
@@ -4107,6 +4134,83 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on success
     kiwi_assert_same(1, count($postback_dispatcher->calls), 'Expected duplicate callbacks not to emit duplicate postbacks.');
 });
 
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service can expose clear-sale event to sales drift when sales persistence fails', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-sales-drift-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_repository = new Kiwi_Test_Failing_Sales_Repository();
+    $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-sales-drift-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-sales-drift-1',
+    ]);
+
+    $notification = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-sales-drift-1',
+        'status' => 'delivered',
+        'encrypted_msisdn' => 'enc-sales-drift-1',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+
+    $terminal_success_notifications = array_values(array_filter(
+        $event_repository->rows,
+        static function (array $row): bool {
+            return (($row['event_type'] ?? '') === 'notification_callback')
+                && !empty($row['is_terminal'])
+                && !empty($row['is_success']);
+        }
+    ));
+
+    kiwi_assert_true($notification['success'], 'Expected delivered NTH notification to remain accepted.');
+    kiwi_assert_same(1, count($terminal_success_notifications), 'Expected one terminal successful notification event to be persisted.');
+    kiwi_assert_same(1, count($sales_repository->upsert_calls), 'Expected one attempted wp_kiwi_sales upsert for the clear-sale signal.');
+    kiwi_assert_same(0, count($sales_repository->rows), 'Expected no wp_kiwi_sales row persisted when repository upsert fails.');
+    kiwi_assert_same(0, (int) ($notification['transaction']['sale_id'] ?? 0), 'Expected flow transaction to keep sale_id=0 when sales persistence fails.');
+});
+
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service retries attribution postback on duplicate notification when first postback failed', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -4959,6 +5063,143 @@ kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service keeps the no-request-id failu
 
     kiwi_assert_same('operator_lookup_failed', $result['results'][0]['action_status_text'], 'Expected missing request IDs to keep producing operator_lookup_failed.');
     kiwi_assert_same([], $client->add_blocklist_calls, 'Expected add-blocklist not to run when operator lookup cannot be started.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service continues on request_id even when lookup success is false', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'svc' => [
+                'label' => 'Service Label',
+            ],
+        ]
+    );
+    $provider = new Kiwi_Test_Lookup_Provider(
+        [
+            '436641234567' => [
+                [
+                    'success' => false,
+                    'request_id' => 'lookup-req-authoritative',
+                    'status_code' => 503,
+                    'reference' => 'lookup-ref',
+                    'messages' => ['Lookup queued despite sync failure'],
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Msisdn_Normalizer();
+    $service = new Kiwi_Operator_Lookup_Service($provider, $normalizer);
+    $repository = new Kiwi_Test_Operator_Lookup_Repository(
+        [
+            'lookup-req-authoritative' => [
+                [
+                    'operator' => 'A1',
+                ],
+            ],
+        ]
+    );
+    $client = new Kiwi_Test_Dimoco_Client(
+        [
+            'success' => true,
+            'status_code' => 200,
+            'request' => [
+                'action' => 'add-blocklist',
+                'request_id' => 'blacklist-req-authoritative',
+                'order' => 'order-1',
+                'msisdn' => '436641234567',
+                'operator' => 'A1',
+            ],
+            'xml' => <<<XML
+<response>
+    <action>add-blocklist</action>
+    <action_result>
+        <status>0</status>
+        <code>200</code>
+        <detail>Accepted</detail>
+    </action_result>
+    <request_id>blacklist-req-authoritative</request_id>
+    <reference>blacklist-ref-authoritative</reference>
+    <payment_parameters>
+        <order>order-1</order>
+    </payment_parameters>
+    <customer>
+        <msisdn>436641234567</msisdn>
+        <operator>A1</operator>
+    </customer>
+</response>
+XML,
+        ]
+    );
+    $batch_service = new Kiwi_Test_Dimoco_Blacklist_Batch_Service(
+        $service,
+        $repository,
+        $client,
+        new Kiwi_Dimoco_Response_Parser(),
+        $config,
+        $normalizer
+    );
+
+    $result = $batch_service->process('svc', 'merchant', '436641234567');
+
+    kiwi_assert_same(
+        [
+            [
+                'service_key' => 'svc',
+                'msisdn' => '436641234567',
+                'operator' => 'A1',
+                'blocklist_scope' => 'merchant',
+            ],
+        ],
+        $client->add_blocklist_calls,
+        'Expected add-blocklist to run when request_id exists, even if synchronous lookup success is false.'
+    );
+    kiwi_assert_same('success', $result['results'][0]['action_status_text'], 'Expected request_id-based callback resolution to produce successful add-blocklist flow.');
+});
+
+kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service requires request_id even when lookup success is true', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'svc' => [
+                'label' => 'Service Label',
+            ],
+        ]
+    );
+    $provider = new Kiwi_Test_Lookup_Provider(
+        [
+            '436641234567' => [
+                [
+                    'success' => true,
+                    'status_code' => 200,
+                    'reference' => 'lookup-ref',
+                    'messages' => ['Lookup response without request id'],
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Msisdn_Normalizer();
+    $service = new Kiwi_Operator_Lookup_Service($provider, $normalizer);
+    $repository = new Kiwi_Test_Operator_Lookup_Repository([]);
+    $client = new Kiwi_Test_Dimoco_Client();
+    $batch_service = new Kiwi_Test_Dimoco_Blacklist_Batch_Service(
+        $service,
+        $repository,
+        $client,
+        new Kiwi_Dimoco_Response_Parser(),
+        $config,
+        $normalizer
+    );
+
+    $result = $batch_service->process('svc', 'merchant', '436641234567');
+
+    kiwi_assert_same('operator_lookup_failed', $result['results'][0]['action_status_text'], 'Expected missing request_id to remain a hard failure gate.');
+    kiwi_assert_same([], $client->add_blocklist_calls, 'Expected add-blocklist not to run when request_id is missing, even if lookup success is true.');
 });
 
 kiwi_run_test('Kiwi_Dimoco_Blacklist_Batch_Service keeps the callback-success branch', function (): void {
