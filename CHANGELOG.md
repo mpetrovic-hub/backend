@@ -3,7 +3,8 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-04-19:
-- Updated landing-pages gallery URL derivation to align with proxy/public-host routing by preferring `https://<hostname><backend_path>` outside URLs over dedicated-root host links.
+- [Gallery Routing] Updated landing-pages gallery URL derivation to align with proxy/public-host routing by preferring `https://<hostname><backend_path>` outside URLs over dedicated-root host links.
+- [Test Coverage] Added regression coverage for NTH sales persistence-failure handling and DIMOCO blacklist batch lookup callback gating around authoritative `request_id` behavior.
 
 2026-04-18:
 - Hardened Lily HLR success handling by separating transport success (`http_success`, any HTTP 2xx) from business success (`status=OK` and `hlrStatus` in `OK|SUCCESS`).
