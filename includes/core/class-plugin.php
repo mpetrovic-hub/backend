@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-04-21-1';
+    private const DB_SCHEMA_VERSION = '2026-04-21-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -163,13 +163,15 @@ class Kiwi_Plugin
         $nth_rest_routes->register();
 
         $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
+        $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
         $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
             $config,
             $landing_kpi_summary_repository
         );
         $landing_kpi_rest_routes = new Kiwi_Landing_Kpi_Rest_Routes(
             $config,
-            $landing_kpi_service
+            $landing_kpi_service,
+            $landing_engagement_repository
         );
         $landing_kpi_rest_routes->register();
     }
@@ -399,10 +401,17 @@ TEXT;
             $config,
             new Kiwi_Landing_Kpi_Summary_Repository()
         );
+        $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
         $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
+        $premium_sms_mo_engagement_evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
+            $config,
+            $click_attribution_repository,
+            $landing_engagement_repository
+        );
         $premium_sms_fraud_monitor_service = new Kiwi_Premium_Sms_Fraud_Monitor_Service(
             $config,
-            $premium_sms_fraud_signal_repository
+            $premium_sms_fraud_signal_repository,
+            $premium_sms_mo_engagement_evaluator
         );
         $conversion_attribution_resolver = new Kiwi_Conversion_Attribution_Resolver(
             $click_attribution_repository,
@@ -430,10 +439,12 @@ TEXT;
             'sales_recorder' => $sales_recorder,
             'sales_repository' => $sales_repository,
             'click_attribution_repository' => $click_attribution_repository,
+            'landing_engagement_repository' => $landing_engagement_repository,
             'affiliate_postback_dispatcher' => $affiliate_postback_dispatcher,
             'landing_kpi_service' => $landing_kpi_service,
             'conversion_attribution_resolver' => $conversion_attribution_resolver,
             'premium_sms_fraud_signal_repository' => $premium_sms_fraud_signal_repository,
+            'premium_sms_mo_engagement_evaluator' => $premium_sms_mo_engagement_evaluator,
             'premium_sms_fraud_monitor_service' => $premium_sms_fraud_monitor_service,
             'nth_fr_one_off_service' => $nth_fr_one_off_service,
         ];
@@ -667,6 +678,7 @@ TEXT;
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $sales_repository = new Kiwi_Sales_Repository();
         $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
+        $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
         $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
 
         $operator_lookup_repository->create_table();
@@ -678,6 +690,7 @@ TEXT;
         $click_attribution_repository->create_table();
         $sales_repository->create_table();
         $landing_kpi_summary_repository->create_table();
+        $landing_engagement_repository->create_table();
         $premium_sms_fraud_signal_repository->create_table();
     }
 

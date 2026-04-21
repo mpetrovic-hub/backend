@@ -8,13 +8,16 @@ class Kiwi_Landing_Kpi_Rest_Routes
 {
     private $config;
     private $kpi_service;
+    private $landing_engagement_repository;
 
     public function __construct(
         Kiwi_Config $config,
-        Kiwi_Landing_Kpi_Service $kpi_service
+        Kiwi_Landing_Kpi_Service $kpi_service,
+        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null
     ) {
         $this->config = $config;
         $this->kpi_service = $kpi_service;
+        $this->landing_engagement_repository = $landing_engagement_repository;
     }
 
     public function register(): void
@@ -42,6 +45,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
         $params = $this->normalize_params($request);
         $landing_key = trim((string) ($params['landing_key'] ?? ''));
         $step = strtolower(trim((string) ($params['step'] ?? '')));
+        $event_type = strtolower(trim((string) ($params['event_type'] ?? '')));
 
         if (!$this->is_valid_landing_key($landing_key)) {
             return new WP_REST_Response([
@@ -50,23 +54,45 @@ class Kiwi_Landing_Kpi_Rest_Routes
             ], 400);
         }
 
-        if (!$this->is_valid_step($step)) {
+        $has_valid_step = $this->is_valid_step($step);
+        $has_valid_event_type = $this->is_valid_event_type($event_type);
+
+        if (!$has_valid_step && !$has_valid_event_type) {
+            $error = $step !== '' && $event_type === ''
+                ? 'invalid_step'
+                : 'invalid_event';
+
             return new WP_REST_Response([
                 'success' => false,
-                'error' => 'invalid_step',
+                'error' => $error,
             ], 400);
         }
 
         $landing = $this->config->get_landing_page($landing_key) ?? [];
-        $incremented = $this->kpi_service->increment_step($landing_key, $step, [
-            'service_key' => (string) ($landing['service_key'] ?? ''),
-            'provider_key' => (string) ($landing['provider'] ?? ''),
-            'flow_key' => (string) ($landing['flow'] ?? ''),
-        ]);
+        $incremented = false;
+        $engagement_recorded = false;
+
+        if ($has_valid_step) {
+            $incremented = $this->kpi_service->increment_step($landing_key, $step, [
+                'service_key' => (string) ($landing['service_key'] ?? ''),
+                'provider_key' => (string) ($landing['provider'] ?? ''),
+                'flow_key' => (string) ($landing['flow'] ?? ''),
+            ]);
+        }
+
+        if ($has_valid_event_type) {
+            $engagement_recorded = $this->capture_landing_engagement_event(
+                $landing_key,
+                $event_type,
+                $params,
+                is_array($landing) ? $landing : []
+            );
+        }
 
         return new WP_REST_Response([
-            'success' => $incremented,
+            'success' => $incremented || $engagement_recorded,
             'incremented' => $incremented,
+            'engagement_recorded' => $engagement_recorded,
             'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
         ], 200);
     }
@@ -120,9 +146,41 @@ class Kiwi_Landing_Kpi_Rest_Routes
         return in_array($step, ['cta1', 'cta2', 'cta3'], true);
     }
 
+    private function is_valid_event_type(string $event_type): bool
+    {
+        return in_array($event_type, ['page_loaded', 'cta_click'], true);
+    }
+
     private function sanitize_event_value(string $value): string
     {
         return substr(trim($value), 0, 191);
+    }
+
+    private function capture_landing_engagement_event(
+        string $landing_key,
+        string $event_type,
+        array $params,
+        array $landing
+    ): bool {
+        if (!$this->landing_engagement_repository instanceof Kiwi_Premium_Sms_Landing_Engagement_Repository) {
+            return false;
+        }
+
+        $session_token = trim((string) ($params['session_token'] ?? ''));
+
+        if ($session_token === '') {
+            return false;
+        }
+
+        $record = $this->landing_engagement_repository->upsert_event([
+            'landing_key' => $landing_key,
+            'session_token' => $session_token,
+            'service_key' => (string) ($landing['service_key'] ?? ''),
+            'provider_key' => (string) ($landing['provider'] ?? ''),
+            'flow_key' => (string) ($landing['flow'] ?? ''),
+        ], $event_type);
+
+        return !empty($record);
     }
 
 }

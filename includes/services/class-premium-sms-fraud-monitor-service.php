@@ -8,13 +8,16 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
 {
     private $config;
     private $repository;
+    private $engagement_evaluator;
 
     public function __construct(
         Kiwi_Config $config,
-        Kiwi_Premium_Sms_Fraud_Signal_Repository $repository
+        Kiwi_Premium_Sms_Fraud_Signal_Repository $repository,
+        ?Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service $engagement_evaluator = null
     ) {
         $this->config = $config;
         $this->repository = $repository;
+        $this->engagement_evaluator = $engagement_evaluator;
     }
 
     public function capture_inbound_mo(array $signal_context): array
@@ -36,6 +39,10 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
         $occurred_at = trim((string) ($signal_context['occurred_at'] ?? ''));
         $threshold_1h = max(1, $this->config->get_premium_sms_fraud_threshold_1h());
         $threshold_24h = max(1, $this->config->get_premium_sms_fraud_threshold_24h());
+        $engagement_evaluation = $this->evaluate_engagement($signal_context);
+        $engagement_reasons = array_values(array_unique(array_filter(array_map('strval', $engagement_evaluation['reasons'] ?? []))));
+        $has_engagement_soft_flag = !empty($engagement_reasons);
+        $engagement_mode = $this->config->get_premium_sms_fraud_mo_engagement_mode();
 
         $identity_candidates = [
             'subscriber' => trim((string) ($signal_context['subscriber_reference'] ?? '')),
@@ -60,14 +67,14 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             $count_24h = (int) ($counts['count_24h'] ?? 0);
             $count_total = (int) ($counts['count_total'] ?? 0);
 
-            $is_soft_flag = $count_1h >= $threshold_1h || $count_24h >= $threshold_24h;
-            $soft_flag_reason = $this->build_soft_flag_reason(
-                $is_soft_flag,
+            $count_reasons = $this->build_count_threshold_reasons(
                 $count_1h,
                 $count_24h,
                 $threshold_1h,
                 $threshold_24h
             );
+            $is_soft_flag = !empty($count_reasons) || $has_engagement_soft_flag;
+            $soft_flag_reason = $this->build_soft_flag_reason(array_merge($count_reasons, $engagement_reasons));
 
             $record = $this->repository->insert_if_new([
                 'provider_key' => $provider_key,
@@ -86,6 +93,8 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'meta_json' => [
                     'threshold_1h' => $threshold_1h,
                     'threshold_24h' => $threshold_24h,
+                    'engagement_mode' => $engagement_mode,
+                    'engagement' => $engagement_evaluation,
                 ],
             ]);
 
@@ -109,20 +118,18 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             'signals' => $signals,
             'has_soft_flag' => !empty($flagged_identity_types),
             'soft_flagged_identity_types' => $flagged_identity_types,
+            'engagement' => $engagement_evaluation,
+            'engagement_soft_flag_reasons' => $engagement_reasons,
+            'should_block' => $engagement_mode === 'block' && $has_engagement_soft_flag,
         ];
     }
 
-    private function build_soft_flag_reason(
-        bool $is_soft_flag,
+    private function build_count_threshold_reasons(
         int $count_1h,
         int $count_24h,
         int $threshold_1h,
         int $threshold_24h
-    ): string {
-        if (!$is_soft_flag) {
-            return '';
-        }
-
+    ): array {
         $reasons = [];
 
         if ($count_1h >= $threshold_1h) {
@@ -133,6 +140,35 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             $reasons[] = 'count_24h>=' . $threshold_24h;
         }
 
+        return $reasons;
+    }
+
+    private function build_soft_flag_reason(array $reasons): string
+    {
+        $reasons = array_values(array_unique(array_filter(array_map('strval', $reasons))));
+
         return implode(' OR ', $reasons);
+    }
+
+    private function evaluate_engagement(array $signal_context): array
+    {
+        if (!$this->engagement_evaluator instanceof Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service) {
+            return [
+                'linked' => false,
+                'has_soft_flag' => false,
+                'reasons' => [],
+                'attribution' => [],
+                'engagement' => [],
+                'metrics' => [],
+            ];
+        }
+
+        return $this->engagement_evaluator->evaluate_inbound_mo([
+            'service_key' => (string) ($signal_context['service_key'] ?? ''),
+            'occurred_at' => (string) ($signal_context['occurred_at'] ?? ''),
+            'transaction_id' => (string) ($signal_context['transaction_id'] ?? ''),
+            'reference_hint' => (string) ($signal_context['reference_hint'] ?? ''),
+            'session_ref' => (string) ($signal_context['session_ref'] ?? ''),
+        ]);
     }
 }

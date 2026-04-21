@@ -58,12 +58,24 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         $session_ref = $this->resolve_mo_session_id($normalized_event);
-        $this->capture_fraud_signal_non_blocking(
+        $reference_hint = trim((string) ($normalized_event['external_request_id'] ?? ''));
+        $attribution_transaction_id = $this->extract_transaction_id_from_mo_content(
+            $normalized_event,
+            (string) ($service['keyword'] ?? '')
+        );
+
+        if ($attribution_transaction_id === '') {
+            $attribution_transaction_id = $this->resolve_attribution_transaction_id($service_key, $reference_hint);
+        }
+
+        $fraud_capture_result = $this->capture_fraud_signal_non_blocking(
             $service_key,
             $service,
             $normalized_event,
             $event_record,
-            $session_ref
+            $session_ref,
+            $attribution_transaction_id,
+            $reference_hint
         );
 
         $subscriber_reference = trim((string) ($normalized_event['subscriber_reference'] ?? ''));
@@ -98,16 +110,6 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'event' => $event_record['row'],
                 'transaction' => $existing_transaction,
             ];
-        }
-
-        $reference_hint = trim((string) ($normalized_event['external_request_id'] ?? ''));
-        $attribution_transaction_id = $this->extract_transaction_id_from_mo_content(
-            $normalized_event,
-            (string) ($service['keyword'] ?? '')
-        );
-
-        if ($attribution_transaction_id === '') {
-            $attribution_transaction_id = $this->resolve_attribution_transaction_id($service_key, $reference_hint);
         }
 
         $flow_reference = $this->build_provider_flow_reference($attribution_transaction_id);
@@ -146,6 +148,7 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'initial_event' => $normalized_event,
                 'attribution_transaction_id' => $attribution_transaction_id,
                 'session_id' => $session_id,
+                'fraud_monitor' => $fraud_capture_result,
             ],
         ];
 
@@ -169,7 +172,11 @@ class Kiwi_Nth_Fr_One_Off_Service
             'price' => $transaction_data['price'],
         ];
 
-        $blocked_reason = $this->resolve_blocked_reason($submit_transaction);
+        $blocked_reason = $this->resolve_fraud_blocked_reason($fraud_capture_result);
+
+        if ($blocked_reason === null) {
+            $blocked_reason = $this->resolve_blocked_reason($submit_transaction);
+        }
 
         if ($blocked_reason !== null) {
             $blocked_event = $this->build_blocked_event(
@@ -187,6 +194,7 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'meta_json' => $this->merge_transaction_meta($transaction, [
                     'initial_event' => $normalized_event,
                     'blocked_event' => $blocked_event,
+                    'fraud_monitor' => $fraud_capture_result,
                 ]),
             ]);
 
@@ -482,6 +490,26 @@ class Kiwi_Nth_Fr_One_Off_Service
         return null;
     }
 
+    private function resolve_fraud_blocked_reason(array $fraud_capture_result): ?array
+    {
+        if (empty($fraud_capture_result['should_block'])) {
+            return null;
+        }
+
+        $reasons = array_values(array_unique(array_filter(
+            array_map('strval', $fraud_capture_result['engagement_soft_flag_reasons'] ?? [])
+        )));
+
+        if (empty($reasons)) {
+            $reasons[] = 'engagement_soft_flag';
+        }
+
+        return [
+            'status' => 'fraud_engagement_blocked',
+            'detail' => 'Blocked by premium-sms MO engagement fraud policy: ' . implode(', ', $reasons),
+        ];
+    }
+
     private function build_blocked_event(
         string $service_key,
         array $transaction_data,
@@ -701,14 +729,25 @@ class Kiwi_Nth_Fr_One_Off_Service
         array $service,
         array $normalized_event,
         array $event_record,
-        string $session_ref
-    ): void {
+        string $session_ref,
+        string $transaction_id = '',
+        string $reference_hint = ''
+    ): array {
+        $default_result = [
+            'signals' => [],
+            'has_soft_flag' => false,
+            'soft_flagged_identity_types' => [],
+            'engagement' => [],
+            'engagement_soft_flag_reasons' => [],
+            'should_block' => false,
+        ];
+
         if (!$this->premium_sms_fraud_monitor_service instanceof Kiwi_Premium_Sms_Fraud_Monitor_Service) {
-            return;
+            return $default_result;
         }
 
         try {
-            $this->premium_sms_fraud_monitor_service->capture_inbound_mo([
+            return $this->premium_sms_fraud_monitor_service->capture_inbound_mo([
                 'provider_key' => (string) ($normalized_event['provider'] ?? 'nth'),
                 'service_key' => $service_key,
                 'flow_key' => (string) ($normalized_event['flow_key'] ?? ($service['flow'] ?? '')),
@@ -717,10 +756,14 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'occurred_at' => (string) ($normalized_event['occurred_at'] ?? ''),
                 'subscriber_reference' => (string) ($normalized_event['subscriber_reference'] ?? ''),
                 'session_ref' => $session_ref,
+                'transaction_id' => $transaction_id,
+                'reference_hint' => $reference_hint,
             ]);
         } catch (Throwable $error) {
             error_log('[kiwi-premium-sms-fraud] capture failed for service_key=' . $service_key . ' reason=' . $error->getMessage());
         }
+
+        return $default_result;
     }
 
     private function resolve_fraud_source_event_key(array $normalized_event, array $event_record): string

@@ -132,6 +132,32 @@ If these constants are not defined:
 - callback logging defaults to `KIWI_DEBUG`
 - payload logging defaults to callback-logging setting
 
+## Premium SMS fraud monitoring toggles
+
+Premium-SMS fraud monitoring supports MO volume signals and landing-engagement signals.
+
+Optional `wp-config.php` keys:
+
+- `KIWI_PREMIUM_SMS_FRAUD_THRESHOLD_1H`
+  - soft-flag MO identity when count within 1 hour reaches this value
+  - default: `3`
+- `KIWI_PREMIUM_SMS_FRAUD_THRESHOLD_24H`
+  - soft-flag MO identity when count within 24 hours reaches this value
+  - default: `6`
+- `KIWI_PREMIUM_SMS_FRAUD_MO_ENGAGEMENT_MODE`
+  - `observe` (default) or `block`
+  - `observe`: record/report signals only
+  - `block`: allow NTH one-off integration to block MT submission on suspicious MO engagement signals
+- `KIWI_PREMIUM_SMS_FRAUD_MO_REQUIRE_PAGE_LOADED`
+  - require `page_loaded` landing telemetry for engagement checks
+  - default: `true`
+- `KIWI_PREMIUM_SMS_FRAUD_MO_REQUIRE_CTA_CLICK`
+  - require `cta_click` landing telemetry for engagement checks
+  - default: `true`
+- `KIWI_PREMIUM_SMS_FRAUD_MO_MIN_SECONDS_AFTER_LOAD`
+  - suspicious-speed threshold for `MO occurred_at - page_loaded_at`
+  - default: `1`
+
 ## Environment note
 
 If different environments use different credential sets or endpoints, document the overall pattern here.

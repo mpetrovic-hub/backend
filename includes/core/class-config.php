@@ -376,6 +376,40 @@ class Kiwi_Config
             : 6;
     }
 
+    public function get_premium_sms_fraud_mo_engagement_mode(): string
+    {
+        $mode = defined('KIWI_PREMIUM_SMS_FRAUD_MO_ENGAGEMENT_MODE')
+            ? strtolower(trim((string) KIWI_PREMIUM_SMS_FRAUD_MO_ENGAGEMENT_MODE))
+            : 'observe';
+
+        return in_array($mode, ['observe', 'block'], true) ? $mode : 'observe';
+    }
+
+    public function get_premium_sms_fraud_mo_require_page_loaded(): bool
+    {
+        if (!defined('KIWI_PREMIUM_SMS_FRAUD_MO_REQUIRE_PAGE_LOADED')) {
+            return true;
+        }
+
+        return (bool) KIWI_PREMIUM_SMS_FRAUD_MO_REQUIRE_PAGE_LOADED;
+    }
+
+    public function get_premium_sms_fraud_mo_require_cta_click(): bool
+    {
+        if (!defined('KIWI_PREMIUM_SMS_FRAUD_MO_REQUIRE_CTA_CLICK')) {
+            return true;
+        }
+
+        return (bool) KIWI_PREMIUM_SMS_FRAUD_MO_REQUIRE_CTA_CLICK;
+    }
+
+    public function get_premium_sms_fraud_mo_min_seconds_after_load(): int
+    {
+        return defined('KIWI_PREMIUM_SMS_FRAUD_MO_MIN_SECONDS_AFTER_LOAD')
+            ? max(0, (int) KIWI_PREMIUM_SMS_FRAUD_MO_MIN_SECONDS_AFTER_LOAD)
+            : 1;
+    }
+
     public function get_affiliate_postback_url_template(): string
     {
         return defined('KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE')

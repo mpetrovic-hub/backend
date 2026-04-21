@@ -302,6 +302,7 @@ require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-rep
 require_once __DIR__ . '/../includes/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-kpi-summary-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
@@ -313,6 +314,7 @@ require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
 require_once __DIR__ . '/../includes/services/class-affiliate-postback-dispatcher.php';
 require_once __DIR__ . '/../includes/services/class-conversion-attribution-resolver.php';
 require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
+require_once __DIR__ . '/../includes/services/class-premium-sms-mo-engagement-evaluator-service.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver.php';
@@ -521,6 +523,10 @@ class Kiwi_Test_Config extends Kiwi_Config
     private $nth_submit_timeout;
     private $premium_sms_fraud_threshold_1h;
     private $premium_sms_fraud_threshold_24h;
+    private $premium_sms_fraud_mo_engagement_mode;
+    private $premium_sms_fraud_mo_require_page_loaded;
+    private $premium_sms_fraud_mo_require_cta_click;
+    private $premium_sms_fraud_mo_min_seconds_after_load;
 
     public function __construct(
         int $hlr_batch_limit = 100,
@@ -532,7 +538,11 @@ class Kiwi_Test_Config extends Kiwi_Config
         array $landing_pages = [],
         int $nth_submit_timeout = 180,
         int $premium_sms_fraud_threshold_1h = 3,
-        int $premium_sms_fraud_threshold_24h = 6
+        int $premium_sms_fraud_threshold_24h = 6,
+        string $premium_sms_fraud_mo_engagement_mode = 'observe',
+        bool $premium_sms_fraud_mo_require_page_loaded = true,
+        bool $premium_sms_fraud_mo_require_cta_click = true,
+        int $premium_sms_fraud_mo_min_seconds_after_load = 1
     ) {
         $this->hlr_batch_limit = $hlr_batch_limit;
         $this->hlr_request_delay_ms = $hlr_request_delay_ms;
@@ -544,6 +554,10 @@ class Kiwi_Test_Config extends Kiwi_Config
         $this->nth_submit_timeout = $nth_submit_timeout;
         $this->premium_sms_fraud_threshold_1h = $premium_sms_fraud_threshold_1h;
         $this->premium_sms_fraud_threshold_24h = $premium_sms_fraud_threshold_24h;
+        $this->premium_sms_fraud_mo_engagement_mode = $premium_sms_fraud_mo_engagement_mode;
+        $this->premium_sms_fraud_mo_require_page_loaded = $premium_sms_fraud_mo_require_page_loaded;
+        $this->premium_sms_fraud_mo_require_cta_click = $premium_sms_fraud_mo_require_cta_click;
+        $this->premium_sms_fraud_mo_min_seconds_after_load = $premium_sms_fraud_mo_min_seconds_after_load;
     }
 
     public function get_hlr_batch_limit(): int
@@ -620,6 +634,28 @@ class Kiwi_Test_Config extends Kiwi_Config
     public function get_premium_sms_fraud_threshold_24h(): int
     {
         return $this->premium_sms_fraud_threshold_24h;
+    }
+
+    public function get_premium_sms_fraud_mo_engagement_mode(): string
+    {
+        $mode = strtolower(trim((string) $this->premium_sms_fraud_mo_engagement_mode));
+
+        return in_array($mode, ['observe', 'block'], true) ? $mode : 'observe';
+    }
+
+    public function get_premium_sms_fraud_mo_require_page_loaded(): bool
+    {
+        return (bool) $this->premium_sms_fraud_mo_require_page_loaded;
+    }
+
+    public function get_premium_sms_fraud_mo_require_cta_click(): bool
+    {
+        return (bool) $this->premium_sms_fraud_mo_require_cta_click;
+    }
+
+    public function get_premium_sms_fraud_mo_min_seconds_after_load(): int
+    {
+        return max(0, (int) $this->premium_sms_fraud_mo_min_seconds_after_load);
     }
 }
 
@@ -1611,6 +1647,9 @@ class Kiwi_Test_Premium_Sms_Fraud_Monitor_Service extends Kiwi_Premium_Sms_Fraud
                 'signals' => [],
                 'has_soft_flag' => false,
                 'soft_flagged_identity_types' => [],
+                'engagement' => [],
+                'engagement_soft_flag_reasons' => [],
+                'should_block' => false,
             ];
     }
 
@@ -1986,6 +2025,107 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
         $next = str_pad((string) $this->next_transaction_sequence++, 6, '0', STR_PAD_LEFT);
 
         return 'txn_test_' . $next;
+    }
+}
+
+class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_Sms_Landing_Engagement_Repository
+{
+    public $rows = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function upsert_event(array $context, string $event_type, string $occurred_at = ''): array
+    {
+        $landing_key = trim((string) ($context['landing_key'] ?? ''));
+        $session_token = trim((string) ($context['session_token'] ?? ''));
+        $event_type = strtolower(trim($event_type));
+        $occurred_at = trim($occurred_at) !== '' ? trim($occurred_at) : '2026-04-01 12:00:00';
+
+        if ($landing_key === '' || $session_token === '') {
+            return [];
+        }
+
+        if (!in_array($event_type, ['page_loaded', 'cta_click'], true)) {
+            return [];
+        }
+
+        $id = null;
+
+        foreach ($this->rows as $row_id => $row) {
+            if (($row['landing_key'] ?? '') !== $landing_key) {
+                continue;
+            }
+
+            if (($row['session_token'] ?? '') !== $session_token) {
+                continue;
+            }
+
+            $id = $row_id;
+            break;
+        }
+
+        if ($id === null) {
+            $id = $this->next_id++;
+            $this->rows[$id] = [
+                'id' => $id,
+                'created_at' => '2026-04-01 12:00:00',
+                'updated_at' => '2026-04-01 12:00:00',
+                'provider_key' => (string) ($context['provider_key'] ?? ''),
+                'service_key' => (string) ($context['service_key'] ?? ''),
+                'flow_key' => (string) ($context['flow_key'] ?? ''),
+                'landing_key' => $landing_key,
+                'session_token' => $session_token,
+                'page_loaded_at' => '',
+                'first_cta_click_at' => '',
+                'last_cta_click_at' => '',
+                'cta_click_count' => 0,
+                'last_event_at' => $occurred_at,
+            ];
+        }
+
+        $row = $this->rows[$id];
+        $row['updated_at'] = '2026-04-01 12:00:00';
+        $row['provider_key'] = (string) ($row['provider_key'] !== '' ? $row['provider_key'] : (string) ($context['provider_key'] ?? ''));
+        $row['service_key'] = (string) ($row['service_key'] !== '' ? $row['service_key'] : (string) ($context['service_key'] ?? ''));
+        $row['flow_key'] = (string) ($row['flow_key'] !== '' ? $row['flow_key'] : (string) ($context['flow_key'] ?? ''));
+        $row['last_event_at'] = $occurred_at;
+
+        if ($event_type === 'page_loaded') {
+            if ((string) ($row['page_loaded_at'] ?? '') === '') {
+                $row['page_loaded_at'] = $occurred_at;
+            }
+        } elseif ($event_type === 'cta_click') {
+            if ((string) ($row['first_cta_click_at'] ?? '') === '') {
+                $row['first_cta_click_at'] = $occurred_at;
+            }
+
+            $row['last_cta_click_at'] = $occurred_at;
+            $row['cta_click_count'] = max(0, (int) ($row['cta_click_count'] ?? 0)) + 1;
+        }
+
+        $this->rows[$id] = $row;
+
+        return $row;
+    }
+
+    public function get_by_landing_session(string $landing_key, string $session_token): ?array
+    {
+        foreach ($this->rows as $row) {
+            if (($row['landing_key'] ?? '') !== $landing_key) {
+                continue;
+            }
+
+            if (($row['session_token'] ?? '') !== $session_token) {
+                continue;
+            }
+
+            return $row;
+        }
+
+        return null;
     }
 }
 
@@ -3405,6 +3545,56 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes increments configured CTA steps in s
     kiwi_assert_same(400, $invalid->status, 'Expected invalid KPI step values to be rejected.');
 });
 
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events without changing KPI counters', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $service, $engagement_repository);
+
+    $page_loaded = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-kpi-1',
+        'event_type' => 'page_loaded',
+    ]));
+    $cta_click_a = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-kpi-1',
+        'event_type' => 'cta_click',
+        'event_value' => 'cta1:.cta',
+    ]));
+    $cta_click_b = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-kpi-1',
+        'event_type' => 'cta_click',
+        'event_value' => 'cta1:.cta',
+    ]));
+
+    $row = $engagement_repository->get_by_landing_session('lp2-fr', 'sess-kpi-1');
+
+    kiwi_assert_true(($page_loaded->data['engagement_recorded'] ?? false), 'Expected page_loaded engagement event to be stored.');
+    kiwi_assert_true(($cta_click_a->data['engagement_recorded'] ?? false), 'Expected first cta_click engagement event to be stored.');
+    kiwi_assert_true(($cta_click_b->data['engagement_recorded'] ?? false), 'Expected repeated cta_click engagement events to update click count.');
+    kiwi_assert_true(is_array($row), 'Expected engagement storage row to be persisted by landing/session.');
+    kiwi_assert_same('2026-04-01 12:00:00', (string) ($row['page_loaded_at'] ?? ''), 'Expected first page_loaded timestamp to be captured.');
+    kiwi_assert_same(2, (int) ($row['cta_click_count'] ?? 0), 'Expected cta_click count to increment for repeated click events.');
+    kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected engagement-only events not to mutate KPI CTA counters.');
+});
+
 kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing summary rows with percentage rates', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -3915,6 +4105,166 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Signal_Repository keeps idempotent source-
     kiwi_assert_same(3, (int) ($snapshot['count_total'] ?? 0), 'Expected total snapshot count to stay scoped to service_key.');
 });
 
+kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository upserts by landing/session and preserves first timestamps', function (): void {
+    $repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+
+    $first_load = $repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-1',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+    ], 'page_loaded', '2026-04-01 12:00:01');
+    $second_load = $repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-1',
+    ], 'page_loaded', '2026-04-01 12:00:05');
+    $first_click = $repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-1',
+    ], 'cta_click', '2026-04-01 12:00:07');
+    $second_click = $repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-1',
+    ], 'cta_click', '2026-04-01 12:00:09');
+
+    kiwi_assert_same(1, count($repository->rows), 'Expected one engagement row per landing/session pair.');
+    kiwi_assert_same('2026-04-01 12:00:01', (string) ($first_load['page_loaded_at'] ?? ''), 'Expected first page_loaded timestamp to be persisted.');
+    kiwi_assert_same('2026-04-01 12:00:01', (string) ($second_load['page_loaded_at'] ?? ''), 'Expected repeated page_loaded events not to overwrite initial page_loaded_at.');
+    kiwi_assert_same('2026-04-01 12:00:07', (string) ($first_click['first_cta_click_at'] ?? ''), 'Expected first cta click timestamp to be recorded once.');
+    kiwi_assert_same('2026-04-01 12:00:09', (string) ($second_click['last_cta_click_at'] ?? ''), 'Expected last cta click timestamp to advance with later clicks.');
+    kiwi_assert_same(2, (int) ($second_click['cta_click_count'] ?? 0), 'Expected cta click count to increment on each click event.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service flags unknown links and fast MO deltas', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [],
+        180,
+        3,
+        6,
+        'observe',
+        true,
+        true,
+        1
+    );
+    $click_repository = new Kiwi_Test_Click_Attribution_Repository();
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
+        $config,
+        $click_repository,
+        $engagement_repository
+    );
+
+    $unknown = $evaluator->evaluate_inbound_mo([
+        'service_key' => 'nth_fr_one_off_jplay',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'transaction_id' => 'txn_unknown_11111111',
+    ]);
+
+    $capture = $click_repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890FRA',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
+        'session_ref' => 'sess-fast-1',
+        'transaction_id' => 'txn_fast_12345678',
+        'expires_at' => '2026-04-03 12:00:00',
+    ]);
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-fast-1',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ], 'page_loaded', '2026-04-01 12:00:00');
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-fast-1',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ], 'cta_click', '2026-04-01 12:00:00');
+
+    $fast = $evaluator->evaluate_inbound_mo([
+        'service_key' => 'nth_fr_one_off_jplay',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+    ]);
+
+    kiwi_assert_true(in_array('unknown_link', $unknown['reasons'] ?? [], true), 'Expected missing attribution/engagement linkage to be flagged as unknown_link.');
+    kiwi_assert_true(($unknown['has_soft_flag'] ?? false) === true, 'Expected unknown link evaluation to be soft-flagged.');
+    kiwi_assert_true(in_array('mo_too_fast_after_load<1s', $fast['reasons'] ?? [], true), 'Expected sub-1s MO delta to be flagged as suspicious.');
+    kiwi_assert_true(($fast['linked'] ?? false) === true, 'Expected evaluator to treat matched attribution + engagement rows as linked.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service merges engagement reasons and enables block mode when configured', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [],
+        180,
+        3,
+        6,
+        'block',
+        true,
+        true,
+        1
+    );
+    $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $click_repository = new Kiwi_Test_Click_Attribution_Repository();
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
+        $config,
+        $click_repository,
+        $engagement_repository
+    );
+    $service = new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, $fraud_repository, $evaluator);
+
+    $capture = $click_repository->upsert_capture([
+        'tracking_token' => 'TOK1234567890FRB',
+        'service_key' => 'svc_block',
+        'landing_page_key' => 'lp2-fr',
+        'session_ref' => 'sess-block-1',
+        'transaction_id' => 'txn_block_12345678',
+        'expires_at' => '2026-04-03 12:00:00',
+    ]);
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-block-1',
+        'service_key' => 'svc_block',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+    ], 'page_loaded', '2026-04-01 12:00:00');
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-block-1',
+        'service_key' => 'svc_block',
+    ], 'cta_click', '2026-04-01 12:00:00');
+
+    $result = $service->capture_inbound_mo([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_block',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'source_event_key' => 'event-block-1',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'subscriber_reference' => 'enc-block-1',
+        'session_ref' => 'sess-block-1',
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+    ]);
+
+    $first_row = $fraud_repository->rows[0] ?? [];
+
+    kiwi_assert_true(($result['has_soft_flag'] ?? false) === true, 'Expected engagement-based suspicious delta to set soft-flag.');
+    kiwi_assert_true(($result['should_block'] ?? false) === true, 'Expected block mode to request blocking when engagement reasons are present.');
+    kiwi_assert_contains('mo_too_fast_after_load<1s', (string) ($first_row['soft_flag_reason'] ?? ''), 'Expected persisted soft_flag_reason to include engagement rule trigger.');
+});
+
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities and soft-flags when either threshold is exceeded', function (): void {
     $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
     $config = new Kiwi_Test_Config(
@@ -4126,6 +4476,82 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service captures fraud signal once for dedupe
     kiwi_assert_same('enc-fraud-123', (string) ($fraud_monitor->calls[0]['subscriber_reference'] ?? ''), 'Expected fraud capture context to include subscriber identity.');
     kiwi_assert_same('session-fraud-1', (string) ($fraud_monitor->calls[0]['session_ref'] ?? ''), 'Expected fraud capture context to include session identity.');
     kiwi_assert_same(1, count($client->calls), 'Expected MT submission behavior to remain unchanged by fraud capture wiring.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when fraud monitor requests engagement blocking', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ],
+        [],
+        180,
+        3,
+        6,
+        'block',
+        true,
+        true,
+        1
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-should-not-send</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $fraud_monitor = new Kiwi_Test_Premium_Sms_Fraud_Monitor_Service([
+        'signals' => [],
+        'has_soft_flag' => true,
+        'soft_flagged_identity_types' => ['session'],
+        'engagement' => [],
+        'engagement_soft_flag_reasons' => ['unknown_link'],
+        'should_block' => true,
+    ]);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder,
+        null,
+        $fraud_monitor
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-fraud-block-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-fraud-block-1',
+    ]);
+
+    kiwi_assert_true(!$result['success'], 'Expected fraud blocking mode to stop MO processing before MT submission.');
+    kiwi_assert_same('fraud_engagement_blocked', (string) ($result['message'] ?? ''), 'Expected fraud-based block status to be surfaced to caller.');
+    kiwi_assert_same(0, count($client->calls), 'Expected fraud block path to skip downstream MT submission call.');
+    kiwi_assert_same('fraud_engagement_blocked', (string) ($result['transaction']['current_status'] ?? ''), 'Expected blocked transaction to persist fraud_engagement_blocked status.');
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when FR routing data is missing', function (): void {
