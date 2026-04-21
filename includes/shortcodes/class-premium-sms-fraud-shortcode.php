@@ -64,14 +64,13 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
 
         if (!empty($rows)) {
             $output .= '<section class="kiwi-card kiwi-table-card">';
-            $output .= '<h4 class="kiwi-section-title">Fraud Signals</h4>';
+            $output .= '<h4 class="kiwi-section-title">MO Fraud Signals</h4>';
             $output .= '<div class="kiwi-table-wrap">';
             $output .= '<table class="kiwi-table">';
             $output .= '<thead><tr>';
-            $output .= '<th>Last Seen</th>';
+            $output .= '<th>Last Updated</th>';
             $output .= '<th>Service</th>';
             $output .= '<th>Provider</th>';
-            $output .= '<th>Flow</th>';
             $output .= '<th>Identity Type</th>';
             $output .= '<th>Identity</th>';
             $output .= '<th>1h</th>';
@@ -89,7 +88,6 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['occurred_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['service_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
-                $output .= '<td>' . esc_html((string) ($row['flow_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_type'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_value'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['count_1h'] ?? '0')) . '</td>';
@@ -111,10 +109,9 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<div class="kiwi-table-wrap">';
             $output .= '<table class="kiwi-table">';
             $output .= '<thead><tr>';
-            $output .= '<th>Updated</th>';
+            $output .= '<th>Last Updated</th>';
             $output .= '<th>Service</th>';
             $output .= '<th>Provider</th>';
-            $output .= '<th>Flow</th>';
             $output .= '<th>Landing</th>';
             $output .= '<th>Session</th>';
             $output .= '<th>Page Loaded</th>';
@@ -135,7 +132,6 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['updated_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['service_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
-                $output .= '<td>' . esc_html((string) ($row['flow_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['landing_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['session_token'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['page_loaded_at'] ?? '')) . '</td>';
