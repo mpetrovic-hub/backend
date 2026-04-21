@@ -126,7 +126,8 @@ class Kiwi_Plugin
         $premium_sms_fraud_shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode(
             $runtime['premium_sms_fraud_signal_repository'],
             $runtime['config'],
-            $this->frontend_auth_gate
+            $this->frontend_auth_gate,
+            $runtime['premium_sms_landing_engagement_repository']
         );
         $premium_sms_fraud_shortcode->register();
     }
@@ -350,6 +351,7 @@ TEXT;
         $dimoco_callback_refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
         $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
         $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
+        $premium_sms_landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
 
         $operator_lookup_service = new Kiwi_Operator_Lookup_Service(
             $routed_operator_lookup_provider,
@@ -383,6 +385,7 @@ TEXT;
             'dimoco_blacklist_batch_service' => $dimoco_blacklist_batch_service,
             'operator_lookup_batch_service' => $operator_lookup_batch_service,
             'premium_sms_fraud_signal_repository' => $premium_sms_fraud_signal_repository,
+            'premium_sms_landing_engagement_repository' => $premium_sms_landing_engagement_repository,
         ];
     }
 

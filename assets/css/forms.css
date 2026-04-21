@@ -107,3 +107,43 @@
 .kiwi-form-actions--compact {
     margin-top: 0.9rem !important;
 }
+
+.kiwi-form-row-inline {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+}
+
+.kiwi-field--compact {
+    min-width: 170px;
+}
+
+.kiwi-field--checkbox {
+    min-width: 120px;
+    display: flex !important;
+    align-items: center;
+    gap: 0.45rem;
+    padding-bottom: 0.3rem;
+}
+
+.kiwi-field--checkbox .kiwi-field-label {
+    margin: 0;
+}
+
+.kiwi-field--checkbox input[type="checkbox"] {
+    width: 17px;
+    height: 17px;
+}
+
+@media (max-width: 760px) {
+    .kiwi-form-row-inline {
+        display: grid !important;
+        gap: 0.55rem;
+    }
+
+    .kiwi-field--compact,
+    .kiwi-field--checkbox {
+        min-width: 0;
+    }
+}

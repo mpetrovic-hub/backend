@@ -155,6 +155,60 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
         return is_array($row) ? $row : null;
     }
 
+    public function get_recent(array $filters = [], int $limit = 100): array
+    {
+        global $wpdb;
+
+        $limit = max(1, min(500, $limit));
+        $where_sql = ['1 = 1'];
+        $params = [];
+
+        $service_key = trim((string) ($filters['service_key'] ?? ''));
+        if ($service_key !== '') {
+            $where_sql[] = 'service_key = %s';
+            $params[] = $service_key;
+        }
+
+        $provider_key = trim((string) ($filters['provider_key'] ?? ''));
+        if ($provider_key !== '') {
+            $where_sql[] = 'provider_key = %s';
+            $params[] = $provider_key;
+        }
+
+        $flow_key = trim((string) ($filters['flow_key'] ?? ''));
+        if ($flow_key !== '') {
+            $where_sql[] = 'flow_key = %s';
+            $params[] = $flow_key;
+        }
+
+        $landing_key = trim((string) ($filters['landing_key'] ?? ''));
+        if ($landing_key !== '') {
+            $where_sql[] = 'landing_key = %s';
+            $params[] = $landing_key;
+        }
+
+        $session_token = trim((string) ($filters['session_token'] ?? ''));
+        if ($session_token !== '') {
+            $where_sql[] = 'session_token = %s';
+            $params[] = $session_token;
+        }
+
+        $params[] = $limit;
+
+        $sql = "SELECT *
+                FROM {$this->get_table_name()}
+                WHERE " . implode(' AND ', $where_sql) . '
+                ORDER BY updated_at DESC, id DESC
+                LIMIT %d';
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare($sql, ...$params),
+            ARRAY_A
+        );
+
+        return is_array($rows) ? $rows : [];
+    }
+
     protected function insert_row(array $data): bool
     {
         global $wpdb;
