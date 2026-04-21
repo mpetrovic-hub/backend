@@ -33,6 +33,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         }
 
         $filters = $this->read_filters_from_request();
+        $filter_options = $this->build_filter_options();
         $rows = $this->repository->get_recent($filters, (int) ($filters['limit'] ?? 100));
 
         $output = '';
@@ -43,7 +44,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $output .= '<p class="kiwi-page-subtitle">Review inbound MO volume snapshots and soft flags by identity.</p>';
         $output .= '</div>';
         $output .= '</header>';
-        $output .= $this->render_filter_form($filters);
+        $output .= $this->render_filter_form($filters, $filter_options);
 
         if (empty($rows)) {
             $output .= '<div class="kiwi-notice kiwi-notice--info"><p>No fraud-monitor rows found for the selected filters.</p></div>';
@@ -97,28 +98,43 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         return $output;
     }
 
-    private function render_filter_form(array $filters): string
+    private function render_filter_form(array $filters, array $filter_options): string
     {
         $service_key = (string) ($filters['service_key'] ?? '');
         $provider_key = (string) ($filters['provider_key'] ?? '');
-        $flow_key = (string) ($filters['flow_key'] ?? '');
         $identity_type = (string) ($filters['identity_type'] ?? '');
         $flagged_only = !empty($filters['flagged_only']);
         $limit = (int) ($filters['limit'] ?? 100);
+        $service_keys = isset($filter_options['service_keys']) && is_array($filter_options['service_keys'])
+            ? $filter_options['service_keys']
+            : [];
+        $provider_keys = isset($filter_options['provider_keys']) && is_array($filter_options['provider_keys'])
+            ? $filter_options['provider_keys']
+            : [];
 
         $output = '';
         $output .= '<form method="get" class="kiwi-form kiwi-form-card">';
         $output .= '<div class="kiwi-form-row kiwi-field">';
         $output .= '<label class="kiwi-field-label" for="kiwi_fraud_service_key">Service Key</label>';
-        $output .= '<input id="kiwi_fraud_service_key" class="kiwi-input kiwi-width-medium" type="text" name="kiwi_fraud_service_key" value="' . esc_attr($service_key) . '">';
+        $output .= '<select id="kiwi_fraud_service_key" class="kiwi-select kiwi-width-medium" name="kiwi_fraud_service_key">';
+        $output .= '<option value="">all</option>';
+
+        foreach ($service_keys as $option) {
+            $output .= '<option value="' . esc_attr($option) . '"' . selected($service_key, $option, false) . '>' . esc_html($option) . '</option>';
+        }
+
+        $output .= '</select>';
         $output .= '</div>';
         $output .= '<div class="kiwi-form-row kiwi-field">';
         $output .= '<label class="kiwi-field-label" for="kiwi_fraud_provider_key">Provider Key</label>';
-        $output .= '<input id="kiwi_fraud_provider_key" class="kiwi-input kiwi-width-medium" type="text" name="kiwi_fraud_provider_key" value="' . esc_attr($provider_key) . '">';
-        $output .= '</div>';
-        $output .= '<div class="kiwi-form-row kiwi-field">';
-        $output .= '<label class="kiwi-field-label" for="kiwi_fraud_flow_key">Flow Key</label>';
-        $output .= '<input id="kiwi_fraud_flow_key" class="kiwi-input kiwi-width-medium" type="text" name="kiwi_fraud_flow_key" value="' . esc_attr($flow_key) . '">';
+        $output .= '<select id="kiwi_fraud_provider_key" class="kiwi-select kiwi-width-medium" name="kiwi_fraud_provider_key">';
+        $output .= '<option value="">all</option>';
+
+        foreach ($provider_keys as $option) {
+            $output .= '<option value="' . esc_attr($option) . '"' . selected($provider_key, $option, false) . '>' . esc_html($option) . '</option>';
+        }
+
+        $output .= '</select>';
         $output .= '</div>';
         $output .= '<div class="kiwi-form-row kiwi-field">';
         $output .= '<label class="kiwi-field-label" for="kiwi_fraud_identity_type">Identity Type</label>';
@@ -169,10 +185,39 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         return [
             'service_key' => $service_key,
             'provider_key' => $provider_key,
-            'flow_key' => $flow_key,
             'identity_type' => $identity_type,
             'flagged_only' => isset($_GET['kiwi_fraud_flagged_only']) && wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1',
             'limit' => max(1, min(500, $limit)),
+        ];
+    }
+
+    private function build_filter_options(): array
+    {
+        $rows = $this->repository->get_recent([], 500);
+        $service_keys = [];
+        $provider_keys = [];
+
+        foreach ($rows as $row) {
+            $service_key = trim((string) ($row['service_key'] ?? ''));
+            $provider_key = trim((string) ($row['provider_key'] ?? ''));
+
+            if ($service_key !== '') {
+                $service_keys[] = $service_key;
+            }
+
+            if ($provider_key !== '') {
+                $provider_keys[] = $provider_key;
+            }
+        }
+
+        $service_keys = array_values(array_unique($service_keys));
+        $provider_keys = array_values(array_unique($provider_keys));
+        sort($service_keys, SORT_STRING);
+        sort($provider_keys, SORT_STRING);
+
+        return [
+            'service_keys' => $service_keys,
+            'provider_keys' => $provider_keys,
         ];
     }
 }
