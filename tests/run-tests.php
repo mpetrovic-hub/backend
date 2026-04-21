@@ -2127,6 +2127,38 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
 
         return null;
     }
+
+    public function get_recent(array $filters = [], int $limit = 100): array
+    {
+        $rows = array_values($this->rows);
+        $service_key = trim((string) ($filters['service_key'] ?? ''));
+        $provider_key = trim((string) ($filters['provider_key'] ?? ''));
+
+        if ($service_key !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($service_key): bool {
+                return (string) ($row['service_key'] ?? '') === $service_key;
+            }));
+        }
+
+        if ($provider_key !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($provider_key): bool {
+                return (string) ($row['provider_key'] ?? '') === $provider_key;
+            }));
+        }
+
+        usort($rows, static function (array $left, array $right): int {
+            $left_ts = strtotime((string) ($left['updated_at'] ?? '')) ?: 0;
+            $right_ts = strtotime((string) ($right['updated_at'] ?? '')) ?: 0;
+
+            if ($left_ts === $right_ts) {
+                return (int) ($right['id'] ?? 0) <=> (int) ($left['id'] ?? 0);
+            }
+
+            return $right_ts <=> $left_ts;
+        });
+
+        return array_slice($rows, 0, max(1, min(500, $limit)));
+    }
 }
 
 class Kiwi_Test_Tracking_Capture_Service extends Kiwi_Tracking_Capture_Service
@@ -6839,6 +6871,65 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode discovers service keys from non-
     $output = $shortcode->render();
 
     kiwi_assert_contains('value="at_service_getstronger"', $output, 'Expected generic service-key discovery to include non-NTH configured service maps.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag columns and reasons', function (): void {
+    $_POST = [];
+    $_GET = [
+        'kiwi_fraud_flagged_only' => '1',
+        'kiwi_fraud_limit' => '50',
+    ];
+
+    $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp5-fr',
+        'session_token' => 'sess-fast-flagged',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+    ], 'page_loaded', '2026-04-01 12:00:00');
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp5-fr',
+        'session_token' => 'sess-fast-flagged',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+    ], 'cta_click', '2026-04-01 12:00:00');
+
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp5-fr',
+        'session_token' => 'sess-normal-unflagged',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+    ], 'page_loaded', '2026-04-01 12:00:00');
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp5-fr',
+        'session_token' => 'sess-normal-unflagged',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+    ], 'cta_click', '2026-04-01 12:00:03');
+
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode(
+        $fraud_repository,
+        new Kiwi_Test_Config(),
+        new Kiwi_Frontend_Auth_Gate(),
+        $engagement_repository
+    );
+
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('Landing Engagement Signals', $output, 'Expected engagement section title to render.');
+    kiwi_assert_contains('<th>Soft Flag</th>', $output, 'Expected engagement table to include soft-flag column.');
+    kiwi_assert_contains('<th>Reason</th>', $output, 'Expected engagement table to include reason column.');
+    kiwi_assert_contains('fast_click', $output, 'Expected engagement soft-flag reason fast_click to be rendered.');
+    kiwi_assert_contains('sess-fast-flagged', $output, 'Expected flagged engagement row to be present.');
+    kiwi_assert_true(strpos($output, 'sess-normal-unflagged') === false, 'Expected flagged_only filter to hide non-flagged engagement rows.');
+
+    $_GET = [];
 });
 
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows from fraud signal storage', function (): void {

@@ -122,9 +122,15 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Last CTA Click</th>';
             $output .= '<th>CTA Clicks</th>';
             $output .= '<th>Last Event</th>';
+            $output .= '<th>Soft Flag</th>';
+            $output .= '<th>Reason</th>';
             $output .= '</tr></thead><tbody>';
 
             foreach ($engagement_rows as $row) {
+                $engagement_soft_flag = $this->resolve_engagement_soft_flag($row);
+                $flag_text = !empty($engagement_soft_flag['is_soft_flag']) ? '1' : '0';
+                $flag_class = !empty($engagement_soft_flag['is_soft_flag']) ? 'kiwi-status--failure' : 'kiwi-status--success';
+
                 $output .= '<tr>';
                 $output .= '<td>' . esc_html((string) ($row['updated_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['service_key'] ?? '')) . '</td>';
@@ -137,6 +143,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['last_cta_click_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['cta_click_count'] ?? '0')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['last_event_at'] ?? '')) . '</td>';
+                $output .= '<td class="' . esc_attr($flag_class) . '">' . esc_html($flag_text) . '</td>';
+                $output .= '<td>' . esc_html((string) ($engagement_soft_flag['soft_flag_reason'] ?? '')) . '</td>';
                 $output .= '</tr>';
             }
 
@@ -351,9 +359,63 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             return [];
         }
 
-        return $this->landing_engagement_repository->get_recent([
+        $rows = $this->landing_engagement_repository->get_recent([
             'service_key' => (string) ($filters['service_key'] ?? ''),
             'provider_key' => (string) ($filters['provider_key'] ?? ''),
         ], (int) ($filters['limit'] ?? 100));
+
+        if (empty($filters['flagged_only'])) {
+            return $rows;
+        }
+
+        return array_values(array_filter($rows, function (array $row): bool {
+            $result = $this->resolve_engagement_soft_flag($row);
+
+            return !empty($result['is_soft_flag']);
+        }));
+    }
+
+    private function resolve_engagement_soft_flag(array $row): array
+    {
+        $reasons = [];
+        $page_loaded_at = trim((string) ($row['page_loaded_at'] ?? ''));
+        $first_cta_click_at = trim((string) ($row['first_cta_click_at'] ?? ''));
+        $last_cta_click_at = trim((string) ($row['last_cta_click_at'] ?? ''));
+        $cta_click_count = max(0, (int) ($row['cta_click_count'] ?? 0));
+        $has_click_signal = $cta_click_count > 0 || $first_cta_click_at !== '' || $last_cta_click_at !== '';
+
+        if ($has_click_signal && $page_loaded_at === '') {
+            $reasons[] = 'missing_load';
+        }
+
+        if ($page_loaded_at !== '' && $first_cta_click_at !== '') {
+            $delta_seconds = $this->seconds_delta($page_loaded_at, $first_cta_click_at);
+            $min_seconds = max(0, (int) $this->config->get_premium_sms_fraud_mo_min_seconds_after_load());
+
+            if ($delta_seconds !== null && $delta_seconds < 0) {
+                $reasons[] = 'click_before_load';
+            } elseif ($delta_seconds !== null && $delta_seconds < $min_seconds) {
+                $reasons[] = 'fast_click';
+            }
+        }
+
+        $reasons = array_values(array_unique($reasons));
+
+        return [
+            'is_soft_flag' => !empty($reasons),
+            'soft_flag_reason' => implode(' OR ', $reasons),
+        ];
+    }
+
+    private function seconds_delta(string $from, string $to): ?int
+    {
+        $from_ts = strtotime($from);
+        $to_ts = strtotime($to);
+
+        if ($from_ts === false || $to_ts === false) {
+            return null;
+        }
+
+        return (int) ($to_ts - $from_ts);
     }
 }
