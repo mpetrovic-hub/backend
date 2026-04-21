@@ -7,13 +7,18 @@ if (!defined('ABSPATH')) {
 class Kiwi_Premium_Sms_Fraud_Shortcode
 {
     private $repository;
+    private $config;
     private $frontend_auth_gate;
 
     public function __construct(
         Kiwi_Premium_Sms_Fraud_Signal_Repository $repository,
+        ?Kiwi_Config $config = null,
         ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     ) {
         $this->repository = $repository;
+        $this->config = $config instanceof Kiwi_Config
+            ? $config
+            : new Kiwi_Config();
         $this->frontend_auth_gate = $frontend_auth_gate instanceof Kiwi_Frontend_Auth_Gate
             ? $frontend_auth_gate
             : new Kiwi_Frontend_Auth_Gate();
@@ -207,6 +212,31 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
 
             if ($provider_key !== '') {
                 $provider_keys[] = $provider_key;
+            }
+        }
+
+        foreach ($this->config->get_nth_services() as $service_key => $service) {
+            $service_key = trim((string) $service_key);
+
+            if ($service_key !== '') {
+                $service_keys[] = $service_key;
+            }
+        }
+
+        foreach ($this->config->get_landing_pages() as $landing_page) {
+            if (!is_array($landing_page)) {
+                continue;
+            }
+
+            $landing_service_key = trim((string) ($landing_page['service_key'] ?? ''));
+            $landing_provider_key = trim((string) ($landing_page['provider'] ?? ''));
+
+            if ($landing_service_key !== '') {
+                $service_keys[] = $landing_service_key;
+            }
+
+            if ($landing_provider_key !== '') {
+                $provider_keys[] = $landing_provider_key;
             }
         }
 

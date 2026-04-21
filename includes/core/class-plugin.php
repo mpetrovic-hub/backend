@@ -125,6 +125,7 @@ class Kiwi_Plugin
 
         $premium_sms_fraud_shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode(
             $runtime['premium_sms_fraud_signal_repository'],
+            $runtime['config'],
             $this->frontend_auth_gate
         );
         $premium_sms_fraud_shortcode->register();

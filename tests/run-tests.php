@@ -6350,6 +6350,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode requires frontend auth when gate
     ]);
     $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode(
         new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository(),
+        null,
         $gate
     );
 
@@ -6357,6 +6358,34 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode requires frontend auth when gate
 
     kiwi_assert_contains('Kiwi Tools Login', $output, 'Expected fraud shortcode to enforce the shared frontend auth gate.');
     kiwi_assert_contains('Please sign in to access the Premium SMS fraud monitor tool.', $output, 'Expected fraud shortcode login message context to be rendered.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode shows configured service keys even when no fraud rows exist yet', function (): void {
+    $_POST = [];
+    $_GET = [];
+
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+            ],
+        ]
+    );
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode(
+        new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository(),
+        $config,
+        new Kiwi_Frontend_Auth_Gate()
+    );
+
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('value="nth_fr_one_off_jplay"', $output, 'Expected Service Key dropdown to include configured NTH services even before first fraud signal row.');
 });
 
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows from fraud signal storage', function (): void {
@@ -6415,7 +6444,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'soft_flag_reason' => 'count_1h>=3',
     ]);
 
-    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
     $output = $shortcode->render();
 
     kiwi_assert_contains('Premium SMS Fraud Monitor', $output, 'Expected fraud shortcode title to render.');
