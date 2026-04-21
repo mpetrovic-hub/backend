@@ -6980,10 +6980,12 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag col
     kiwi_assert_contains('Landing Engagement Signals', $output, 'Expected engagement section title to render.');
     kiwi_assert_contains('<th>PID</th>', $output, 'Expected engagement table to include PID column.');
     kiwi_assert_contains('<th>Click ID</th>', $output, 'Expected engagement table to include Click ID column.');
+    kiwi_assert_contains('<th>Delta (Load->First CTA)</th>', $output, 'Expected engagement table to include load-to-first-CTA delta column.');
     kiwi_assert_contains('<th>Soft Flag</th>', $output, 'Expected engagement table to include soft-flag column.');
     kiwi_assert_contains('<th>Reason</th>', $output, 'Expected engagement table to include reason column.');
     kiwi_assert_contains('pid-fast', $output, 'Expected engagement rows to render persisted pid values.');
     kiwi_assert_contains('click-fast', $output, 'Expected engagement rows to render persisted click_id values.');
+    kiwi_assert_contains('0s', $output, 'Expected engagement table to render computed delta in seconds when both timestamps are present.');
     kiwi_assert_contains('fast_click', $output, 'Expected engagement soft-flag reason fast_click to be rendered.');
     kiwi_assert_contains('sess-fast-flagged', $output, 'Expected flagged engagement row to be present.');
     kiwi_assert_true(strpos($output, 'sess-normal-unflagged') === false, 'Expected flagged_only filter to hide non-flagged engagement rows.');

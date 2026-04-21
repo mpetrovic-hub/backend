@@ -122,6 +122,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Session</th>';
             $output .= '<th>Page Loaded</th>';
             $output .= '<th>First CTA Click</th>';
+            $output .= '<th>Delta (Load->First CTA)</th>';
             $output .= '<th>Last CTA Click</th>';
             $output .= '<th>CTA Clicks</th>';
             $output .= '<th>Last Event</th>';
@@ -131,6 +132,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
 
             foreach ($engagement_rows as $row) {
                 $engagement_soft_flag = $this->resolve_engagement_soft_flag($row);
+                $engagement_delta = $this->resolve_engagement_delta_label($row);
                 $flag_text = !empty($engagement_soft_flag['is_soft_flag']) ? '1' : '0';
                 $flag_class = !empty($engagement_soft_flag['is_soft_flag']) ? 'kiwi-status--failure' : 'kiwi-status--success';
 
@@ -144,6 +146,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['session_token'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['page_loaded_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['first_cta_click_at'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html($engagement_delta) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['last_cta_click_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['cta_click_count'] ?? '0')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['last_event_at'] ?? '')) . '</td>';
@@ -419,6 +422,24 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             'is_soft_flag' => !empty($reasons),
             'soft_flag_reason' => implode(' OR ', $reasons),
         ];
+    }
+
+    private function resolve_engagement_delta_label(array $row): string
+    {
+        $page_loaded_at = trim((string) ($row['page_loaded_at'] ?? ''));
+        $first_cta_click_at = trim((string) ($row['first_cta_click_at'] ?? ''));
+
+        if ($page_loaded_at === '' || $first_cta_click_at === '') {
+            return '';
+        }
+
+        $delta_seconds = $this->seconds_delta($page_loaded_at, $first_cta_click_at);
+
+        if ($delta_seconds === null) {
+            return '';
+        }
+
+        return (string) $delta_seconds . 's';
     }
 
     private function seconds_delta(string $from, string $to): ?int
