@@ -2,6 +2,10 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-04-21:
+- [Fraud Monitor] Added Premium SMS fraud-monitoring foundations with a dedicated signal repository/service, shortcode UI, and plugin/config wiring, then extended the shortcode with service dropdown filtering and all-services loading. Follow-up commits added click/page-load derived fraud metrics and exposed `signal`, `click_id`, and `delta` fields with regression coverage.
+- [PID Tracking] Extended tracking attribution to persist `pid` through capture, KPI routes, repositories, and fraud/engagement services so monitoring outputs retain partner context end-to-end. Included test updates across the touched service and shortcode paths.
+
 2026-04-19:
 - [Gallery Routing] Updated landing-pages gallery URL derivation to align with proxy/public-host routing by preferring `https://<hostname><backend_path>` outside URLs over dedicated-root host links.
 - [Test Coverage] Added regression coverage for NTH sales persistence-failure handling and DIMOCO blacklist batch lookup callback gating around authoritative `request_id` behavior.

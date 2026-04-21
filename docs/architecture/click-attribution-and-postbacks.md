@@ -63,9 +63,31 @@ No provider-specific callback shape should leak into shared attribution code.
 - outbound postback audit (`postback_sent_at`, response code/body, attempts, errors)
 - retention fields (`expires_at`)
 
+`wp_kiwi_premium_sms_landing_engagements` stores landing-session engagement evidence used by MO fraud monitoring, including:
+
+- context (`service_key`, `provider_key`, `flow_key`, `landing_key`, `session_token`)
+- engagement timestamps (`page_loaded_at`, `first_cta_click_at`, `last_cta_click_at`) and click count
+- source context snapshots (`pid`, `click_id`)
+
+`wp_kiwi_premium_sms_fraud_signals` stores per-MO fraud snapshots, including:
+
+- volume metrics (`count_1h`, `count_24h`, `count_total`)
+- soft-flag outcome and reason
+- source context snapshots (`pid`, `click_id`)
+
 `wp_kiwi_sales` can be enriched from attribution context on confirmed conversion, including:
 
 - `pid` (captured from landing query params when present, sanitized before persistence)
+
+## Fraud Monitoring Propagation (Shared Premium SMS)
+
+The shared attribution layer now feeds downstream fraud-monitoring context:
+
+1. Landing entry capture stores `click_id` (required) and optional `pid` in `wp_kiwi_click_attributions`.
+2. Landing KPI engagement events (`page_loaded`, `cta_click`) resolve and persist `pid`/`click_id` into `wp_kiwi_premium_sms_landing_engagements`.
+3. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id` into `wp_kiwi_premium_sms_fraud_signals`.
+
+This keeps provider payload parsing at the boundary while giving the shared fraud capability stable traffic-source dimensions.
 
 ## Retention and Cleanup
 

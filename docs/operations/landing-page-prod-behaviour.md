@@ -44,6 +44,8 @@ At runtime, the router:
 4. Builds primary CTA centrally (provider adapter), then injects `{{KIWI_PRIMARY_CTA_HREF}}` in HTML.
 5. Renders filesystem HTML and wires `styles.css`.
 
+Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`) for fraud-linkage snapshots.
+
 For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic.
 
 ## Multi-domain exposure via proxy/CNAME
@@ -150,6 +152,14 @@ Notes:
 - `wp_kiwi_sales`
   - confirmed sale records (including `transaction_id`)
 
+- `wp_kiwi_premium_sms_landing_engagements`
+  - landing-session engagement evidence (`page_loaded_at`, first/last CTA click, click count)
+  - source snapshots (`pid`, `click_id`)
+
+- `wp_kiwi_premium_sms_fraud_signals`
+  - MO fraud snapshots per identity (`subscriber`/`session`)
+  - per-service volume counts, soft-flag reasons, source snapshots (`pid`, `click_id`)
+
 ## Configuration switches
 
 ### Landing-page loading
@@ -192,6 +202,7 @@ When validating a landing-page flow in production or staging, verify:
 6. Affiliate postback is sent once for confirmed conversions and retried only when `postback_sent_at` is empty.
 7. `backend_path` routes resolve correctly on every public hostname that proxies to the backend runtime.
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
+9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
 
 ## Troubleshooting quick map
 
