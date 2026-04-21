@@ -215,13 +215,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             }
         }
 
-        foreach ($this->config->get_nth_services() as $service_key => $service) {
-            $service_key = trim((string) $service_key);
-
-            if ($service_key !== '') {
-                $service_keys[] = $service_key;
-            }
-        }
+        $service_keys = array_merge($service_keys, $this->discover_configured_service_keys());
 
         foreach ($this->config->get_landing_pages() as $landing_page) {
             if (!is_array($landing_page)) {
@@ -249,5 +243,59 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             'service_keys' => $service_keys,
             'provider_keys' => $provider_keys,
         ];
+    }
+
+    private function discover_configured_service_keys(): array
+    {
+        $service_keys = [];
+        $methods = get_class_methods($this->config);
+
+        if (!is_array($methods)) {
+            return [];
+        }
+
+        foreach ($methods as $method) {
+            if (!is_string($method) || !preg_match('/^get_.+_services$/', $method)) {
+                continue;
+            }
+
+            if (!is_callable([$this->config, $method])) {
+                continue;
+            }
+
+            try {
+                $reflection = new ReflectionMethod($this->config, $method);
+
+                if ($reflection->getNumberOfRequiredParameters() > 0) {
+                    continue;
+                }
+
+                $services = $this->config->{$method}();
+            } catch (Throwable $error) {
+                continue;
+            }
+
+            if (!is_array($services)) {
+                continue;
+            }
+
+            foreach ($services as $service_key => $service_config) {
+                $candidate = trim((string) $service_key);
+
+                if ($candidate !== '' && is_array($service_config)) {
+                    $service_keys[] = $candidate;
+                }
+
+                if (is_array($service_config)) {
+                    $embedded_service_key = trim((string) ($service_config['service_key'] ?? ''));
+
+                    if ($embedded_service_key !== '') {
+                        $service_keys[] = $embedded_service_key;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($service_keys));
     }
 }

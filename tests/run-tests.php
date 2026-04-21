@@ -6388,6 +6388,33 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode shows configured service keys ev
     kiwi_assert_contains('value="nth_fr_one_off_jplay"', $output, 'Expected Service Key dropdown to include configured NTH services even before first fraud signal row.');
 });
 
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode discovers service keys from non-NTH service maps', function (): void {
+    $_POST = [];
+    $_GET = [];
+
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [
+            'at_service_getstronger' => [
+                'label' => 'Get Stronger',
+            ],
+        ],
+        []
+    );
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode(
+        new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository(),
+        $config,
+        new Kiwi_Frontend_Auth_Gate()
+    );
+
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('value="at_service_getstronger"', $output, 'Expected generic service-key discovery to include non-NTH configured service maps.');
+});
+
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows from fraud signal storage', function (): void {
     $_POST = [];
     $_GET = [
