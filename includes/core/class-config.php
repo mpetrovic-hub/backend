@@ -362,6 +362,20 @@ class Kiwi_Config
             : 500;
     }
 
+    public function get_premium_sms_fraud_threshold_1h(): int
+    {
+        return defined('KIWI_PREMIUM_SMS_FRAUD_THRESHOLD_1H')
+            ? max(1, (int) KIWI_PREMIUM_SMS_FRAUD_THRESHOLD_1H)
+            : 3;
+    }
+
+    public function get_premium_sms_fraud_threshold_24h(): int
+    {
+        return defined('KIWI_PREMIUM_SMS_FRAUD_THRESHOLD_24H')
+            ? max(1, (int) KIWI_PREMIUM_SMS_FRAUD_THRESHOLD_24H)
+            : 6;
+    }
+
     public function get_affiliate_postback_url_template(): string
     {
         return defined('KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE')

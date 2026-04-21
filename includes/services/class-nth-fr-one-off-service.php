@@ -13,6 +13,7 @@ class Kiwi_Nth_Fr_One_Off_Service
     private $flow_transaction_repository;
     private $sales_recorder;
     private $conversion_attribution_resolver;
+    private $premium_sms_fraud_monitor_service;
 
     public function __construct(
         Kiwi_Config $config,
@@ -21,7 +22,8 @@ class Kiwi_Nth_Fr_One_Off_Service
         Kiwi_Nth_Event_Repository $event_repository,
         Kiwi_Nth_Flow_Transaction_Repository $flow_transaction_repository,
         Kiwi_Shared_Sales_Recorder $sales_recorder,
-        ?Kiwi_Conversion_Attribution_Resolver $conversion_attribution_resolver = null
+        ?Kiwi_Conversion_Attribution_Resolver $conversion_attribution_resolver = null,
+        ?Kiwi_Premium_Sms_Fraud_Monitor_Service $premium_sms_fraud_monitor_service = null
     ) {
         $this->config = $config;
         $this->normalizer = $normalizer;
@@ -30,6 +32,7 @@ class Kiwi_Nth_Fr_One_Off_Service
         $this->flow_transaction_repository = $flow_transaction_repository;
         $this->sales_recorder = $sales_recorder;
         $this->conversion_attribution_resolver = $conversion_attribution_resolver;
+        $this->premium_sms_fraud_monitor_service = $premium_sms_fraud_monitor_service;
     }
 
     public function handle_inbound_mo(string $service_key, array $payload): array
@@ -53,6 +56,15 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'event' => $event_record['row'],
             ];
         }
+
+        $session_ref = $this->resolve_mo_session_id($normalized_event);
+        $this->capture_fraud_signal_non_blocking(
+            $service_key,
+            $service,
+            $normalized_event,
+            $event_record,
+            $session_ref
+        );
 
         $subscriber_reference = trim((string) ($normalized_event['subscriber_reference'] ?? ''));
         $shortcode = trim((string) ($normalized_event['shortcode'] ?? ''));
@@ -100,7 +112,7 @@ class Kiwi_Nth_Fr_One_Off_Service
 
         $flow_reference = $this->build_provider_flow_reference($attribution_transaction_id);
         $sale_reference = $flow_reference;
-        $session_id = $this->resolve_mo_session_id($normalized_event);
+        $session_id = $session_ref;
         $message_text = $this->build_mt_message_text($service, $normalized_event);
         $nwc = $this->resolve_nwc($service, $normalized_event);
 
@@ -682,5 +694,49 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         return gmdate('Y-m-d H:i:s');
+    }
+
+    private function capture_fraud_signal_non_blocking(
+        string $service_key,
+        array $service,
+        array $normalized_event,
+        array $event_record,
+        string $session_ref
+    ): void {
+        if (!$this->premium_sms_fraud_monitor_service instanceof Kiwi_Premium_Sms_Fraud_Monitor_Service) {
+            return;
+        }
+
+        try {
+            $this->premium_sms_fraud_monitor_service->capture_inbound_mo([
+                'provider_key' => (string) ($normalized_event['provider'] ?? 'nth'),
+                'service_key' => $service_key,
+                'flow_key' => (string) ($normalized_event['flow_key'] ?? ($service['flow'] ?? '')),
+                'country' => (string) ($normalized_event['country'] ?? ($service['country'] ?? '')),
+                'source_event_key' => $this->resolve_fraud_source_event_key($normalized_event, $event_record),
+                'occurred_at' => (string) ($normalized_event['occurred_at'] ?? ''),
+                'subscriber_reference' => (string) ($normalized_event['subscriber_reference'] ?? ''),
+                'session_ref' => $session_ref,
+            ]);
+        } catch (Throwable $error) {
+            error_log('[kiwi-premium-sms-fraud] capture failed for service_key=' . $service_key . ' reason=' . $error->getMessage());
+        }
+    }
+
+    private function resolve_fraud_source_event_key(array $normalized_event, array $event_record): string
+    {
+        $dedupe_key = trim((string) ($normalized_event['dedupe_key'] ?? ($event_record['row']['dedupe_key'] ?? '')));
+
+        if ($dedupe_key !== '') {
+            return $dedupe_key;
+        }
+
+        $event_id = (int) ($event_record['row']['id'] ?? 0);
+
+        if ($event_id > 0) {
+            return 'nth_event_' . $event_id;
+        }
+
+        return 'nth_event_' . substr(sha1(wp_json_encode($normalized_event)), 0, 24);
     }
 }

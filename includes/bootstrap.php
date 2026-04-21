@@ -62,6 +62,7 @@ require_once __DIR__ . '/services/class-landing-primary-cta-resolver.php';
 require_once __DIR__ . '/services/class-landing-kpi-service.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
+require_once __DIR__ . '/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/services/class-nth-fr-one-off-service.php';
 
@@ -77,6 +78,7 @@ require_once __DIR__ . '/repositories/class-nth-flow-transaction-repository.php'
 require_once __DIR__ . '/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/repositories/class-sales-repository.php';
 require_once __DIR__ . '/repositories/class-landing-kpi-summary-repository.php';
+require_once __DIR__ . '/repositories/class-premium-sms-fraud-signal-repository.php';
 
 /**
  * Exporters
@@ -90,6 +92,7 @@ require_once __DIR__ . '/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-refunder-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-blacklister-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-landing-pages-gallery-shortcode.php';
+require_once __DIR__ . '/shortcodes/class-premium-sms-fraud-shortcode.php';
 
 /**
  * HTTP / REST

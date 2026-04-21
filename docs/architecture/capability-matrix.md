@@ -26,6 +26,7 @@ For aggregator-specific details, see:
 | Shared/Core | conversion attribution resolver + affiliate postback dispatch | generic | confirmed conversions | implemented | Confirmed-only dispatch, idempotent postbacks, retry on failed postback until `postback_sent_at` is set |
 | Shared/Core | landing KPI summary tracking | generic | clicks / cta1..ctaN / conv | implemented | `wp_kiwi_landing_kpi_summary` + KPI REST endpoints |
 | Shared/Core | sales persistence + enrichment | generic | confirmed sales | implemented | `wp_kiwi_sales` with transaction correlation and enrichment fields (for example `pid`) |
+| Shared/Core | premium-SMS inbound MO fraud monitoring (soft-flag) | generic | premium-SMS inbound MO | implemented | `wp_kiwi_premium_sms_fraud_signals`, dual identity (`subscriber`/`session`), per-service 1h/24h snapshot counts, observe-only soft flags |
 | Dimoco | operator-lookup | generic / multi-country | API action | implemented | Existing backend capability routed through Dimoco where configured |
 | Dimoco | refund | generic | API action | implemented | Existing backend capability with callback persistence |
 | Dimoco | add-blacklist | generic | add-blocklist | implemented | Existing backend capability; external action name is `add-blocklist` |
@@ -56,6 +57,7 @@ Current known repository capabilities:
 - outbound affiliate postback dispatch with idempotency and signing options
 - landing KPI summary tracking
 - shared sales persistence/enrichment
+- premium-SMS inbound MO fraud-monitor snapshots with observe-only soft-flagging
 
 ### Dimoco
 Current known repository capabilities:

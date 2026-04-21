@@ -34,5 +34,5 @@ Logout mechanism:
 - Append `?kiwi_frontend_auth_action=logout` to a tool page URL (optionally add `&kiwi_frontend_auth_redirect=<urlencoded-target>`).
 
 Scope:
-- Protected: plugin frontend tools (`kiwi_hlr_lookup`, `kiwi_dimoco_refunder`, `kiwi_dimoco_blacklister`, `kiwi_landing_pages_gallery`) and HLR export trigger.
+- Protected: plugin frontend tools (`kiwi_hlr_lookup`, `kiwi_dimoco_refunder`, `kiwi_dimoco_blacklister`, `kiwi_landing_pages_gallery`, `kiwi_premium_sms_fraud`) and HLR export trigger.
 - Not protected by this layer: landing-page router traffic, REST callbacks, and WordPress admin.

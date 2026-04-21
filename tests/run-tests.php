@@ -302,15 +302,18 @@ require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-rep
 require_once __DIR__ . '/../includes/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-kpi-summary-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-refunder-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-hlr-lookup-shortcode.php';
+require_once __DIR__ . '/../includes/shortcodes/class-premium-sms-fraud-shortcode.php';
 require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
 require_once __DIR__ . '/../includes/services/class-affiliate-postback-dispatcher.php';
 require_once __DIR__ . '/../includes/services/class-conversion-attribution-resolver.php';
 require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
+require_once __DIR__ . '/../includes/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver.php';
 require_once __DIR__ . '/../includes/services/class-landing-kpi-service.php';
@@ -516,6 +519,8 @@ class Kiwi_Test_Config extends Kiwi_Config
     private $nth_services;
     private $landing_pages;
     private $nth_submit_timeout;
+    private $premium_sms_fraud_threshold_1h;
+    private $premium_sms_fraud_threshold_24h;
 
     public function __construct(
         int $hlr_batch_limit = 100,
@@ -525,7 +530,9 @@ class Kiwi_Test_Config extends Kiwi_Config
         array $dimoco_services = [],
         array $nth_services = [],
         array $landing_pages = [],
-        int $nth_submit_timeout = 180
+        int $nth_submit_timeout = 180,
+        int $premium_sms_fraud_threshold_1h = 3,
+        int $premium_sms_fraud_threshold_24h = 6
     ) {
         $this->hlr_batch_limit = $hlr_batch_limit;
         $this->hlr_request_delay_ms = $hlr_request_delay_ms;
@@ -535,6 +542,8 @@ class Kiwi_Test_Config extends Kiwi_Config
         $this->nth_services = $nth_services;
         $this->landing_pages = $landing_pages;
         $this->nth_submit_timeout = $nth_submit_timeout;
+        $this->premium_sms_fraud_threshold_1h = $premium_sms_fraud_threshold_1h;
+        $this->premium_sms_fraud_threshold_24h = $premium_sms_fraud_threshold_24h;
     }
 
     public function get_hlr_batch_limit(): int
@@ -601,6 +610,16 @@ class Kiwi_Test_Config extends Kiwi_Config
     public function get_nth_submit_timeout(): int
     {
         return $this->nth_submit_timeout;
+    }
+
+    public function get_premium_sms_fraud_threshold_1h(): int
+    {
+        return $this->premium_sms_fraud_threshold_1h;
+    }
+
+    public function get_premium_sms_fraud_threshold_24h(): int
+    {
+        return $this->premium_sms_fraud_threshold_24h;
     }
 }
 
@@ -1398,6 +1417,208 @@ class Kiwi_Test_Hlr_Lookup_Shortcode extends Kiwi_Hlr_Lookup_Shortcode
     protected function redirect_to_result_state(string $result_state_id): void
     {
         $this->redirect_result_state_id = $result_state_id;
+    }
+}
+
+class Kiwi_Test_Premium_Sms_Fraud_Signal_Repository extends Kiwi_Premium_Sms_Fraud_Signal_Repository
+{
+    public $rows = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function insert_if_new(array $data): array
+    {
+        $source_event_key = trim((string) ($data['source_event_key'] ?? ''));
+        $identity_type = trim((string) ($data['identity_type'] ?? ''));
+
+        if ($source_event_key === '' || $identity_type === '') {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        foreach ($this->rows as $row) {
+            if (($row['source_event_key'] ?? '') !== $source_event_key) {
+                continue;
+            }
+
+            if (($row['identity_type'] ?? '') !== $identity_type) {
+                continue;
+            }
+
+            return [
+                'inserted' => false,
+                'row' => $row,
+            ];
+        }
+
+        $id = $this->next_id++;
+        $row = [
+            'id' => $id,
+            'created_at' => (string) ($data['created_at'] ?? '2026-04-01 12:00:00'),
+            'provider_key' => (string) ($data['provider_key'] ?? ''),
+            'service_key' => (string) ($data['service_key'] ?? ''),
+            'flow_key' => (string) ($data['flow_key'] ?? ''),
+            'country' => (string) ($data['country'] ?? ''),
+            'source_event_key' => $source_event_key,
+            'identity_type' => $identity_type,
+            'identity_value' => (string) ($data['identity_value'] ?? ''),
+            'occurred_at' => (string) ($data['occurred_at'] ?? '2026-04-01 12:00:00'),
+            'count_1h' => (int) ($data['count_1h'] ?? 0),
+            'count_24h' => (int) ($data['count_24h'] ?? 0),
+            'count_total' => (int) ($data['count_total'] ?? 0),
+            'is_soft_flag' => !empty($data['is_soft_flag']) ? 1 : 0,
+            'soft_flag_reason' => (string) ($data['soft_flag_reason'] ?? ''),
+            'meta_json' => isset($data['meta_json']) ? json_encode($data['meta_json']) : '',
+        ];
+
+        $this->rows[] = $row;
+
+        return [
+            'inserted' => true,
+            'row' => $row,
+        ];
+    }
+
+    public function build_counts_snapshot(
+        string $service_key,
+        string $identity_type,
+        string $identity_value,
+        string $occurred_at
+    ): array {
+        $service_key = trim($service_key);
+        $identity_type = trim($identity_type);
+        $identity_value = trim($identity_value);
+
+        if ($service_key === '' || $identity_type === '' || $identity_value === '') {
+            return [
+                'count_1h' => 0,
+                'count_24h' => 0,
+                'count_total' => 0,
+            ];
+        }
+
+        $now = strtotime($occurred_at);
+
+        if ($now === false) {
+            $now = strtotime('2026-04-01 12:00:00');
+        }
+
+        $count_total = 0;
+        $count_24h = 0;
+        $count_1h = 0;
+
+        foreach ($this->rows as $row) {
+            if (($row['service_key'] ?? '') !== $service_key) {
+                continue;
+            }
+
+            if (($row['identity_type'] ?? '') !== $identity_type) {
+                continue;
+            }
+
+            if (($row['identity_value'] ?? '') !== $identity_value) {
+                continue;
+            }
+
+            $row_time = strtotime((string) ($row['occurred_at'] ?? ''));
+
+            if ($row_time === false || $row_time > $now) {
+                continue;
+            }
+
+            $count_total++;
+
+            if ($row_time >= ($now - 24 * 3600)) {
+                $count_24h++;
+            }
+
+            if ($row_time >= ($now - 3600)) {
+                $count_1h++;
+            }
+        }
+
+        return [
+            'count_1h' => $count_1h + 1,
+            'count_24h' => $count_24h + 1,
+            'count_total' => $count_total + 1,
+        ];
+    }
+
+    public function get_recent(array $filters = [], int $limit = 100): array
+    {
+        $rows = $this->rows;
+
+        if (trim((string) ($filters['service_key'] ?? '')) !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
+                return (string) ($row['service_key'] ?? '') === (string) $filters['service_key'];
+            }));
+        }
+
+        if (trim((string) ($filters['provider_key'] ?? '')) !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
+                return (string) ($row['provider_key'] ?? '') === (string) $filters['provider_key'];
+            }));
+        }
+
+        if (trim((string) ($filters['flow_key'] ?? '')) !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
+                return (string) ($row['flow_key'] ?? '') === (string) $filters['flow_key'];
+            }));
+        }
+
+        if (trim((string) ($filters['identity_type'] ?? '')) !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
+                return (string) ($row['identity_type'] ?? '') === (string) $filters['identity_type'];
+            }));
+        }
+
+        if (!empty($filters['flagged_only'])) {
+            $rows = array_values(array_filter($rows, static function (array $row): bool {
+                return !empty($row['is_soft_flag']);
+            }));
+        }
+
+        usort($rows, static function (array $left, array $right): int {
+            $left_ts = strtotime((string) ($left['occurred_at'] ?? '')) ?: 0;
+            $right_ts = strtotime((string) ($right['occurred_at'] ?? '')) ?: 0;
+
+            if ($left_ts === $right_ts) {
+                return (int) ($right['id'] ?? 0) <=> (int) ($left['id'] ?? 0);
+            }
+
+            return $right_ts <=> $left_ts;
+        });
+
+        return array_slice($rows, 0, max(1, min(500, $limit)));
+    }
+}
+
+class Kiwi_Test_Premium_Sms_Fraud_Monitor_Service extends Kiwi_Premium_Sms_Fraud_Monitor_Service
+{
+    public $calls = [];
+    private $result;
+
+    public function __construct(array $result = [])
+    {
+        $this->result = $result !== []
+            ? $result
+            : [
+                'signals' => [],
+                'has_soft_flag' => false,
+                'soft_flagged_identity_types' => [],
+            ];
+    }
+
+    public function capture_inbound_mo(array $signal_context): array
+    {
+        $this->calls[] = $signal_context;
+
+        return $this->result;
     }
 }
 
@@ -3625,6 +3846,153 @@ kiwi_run_test('Kiwi_Nth_Client requires sessionId in strict submit template cont
     );
 });
 
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Signal_Repository keeps idempotent source-event rows and per-service count scope', function (): void {
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+
+    $first_insert = $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'source_event_key' => 'event-1',
+        'identity_type' => 'subscriber',
+        'identity_value' => 'enc-1',
+        'occurred_at' => '2026-04-01 10:00:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => false,
+    ]);
+    $second_insert = $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'source_event_key' => 'event-2',
+        'identity_type' => 'subscriber',
+        'identity_value' => 'enc-1',
+        'occurred_at' => '2026-04-01 10:20:00',
+        'count_1h' => 2,
+        'count_24h' => 2,
+        'count_total' => 2,
+        'is_soft_flag' => false,
+    ]);
+    $duplicate_insert = $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'source_event_key' => 'event-2',
+        'identity_type' => 'subscriber',
+        'identity_value' => 'enc-1',
+        'occurred_at' => '2026-04-01 10:20:00',
+    ]);
+    $other_service_insert = $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_b',
+        'flow_key' => 'flow-b',
+        'source_event_key' => 'event-3',
+        'identity_type' => 'subscriber',
+        'identity_value' => 'enc-1',
+        'occurred_at' => '2026-04-01 10:25:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => false,
+    ]);
+
+    $snapshot = $repository->build_counts_snapshot(
+        'svc_a',
+        'subscriber',
+        'enc-1',
+        '2026-04-01 10:30:00'
+    );
+
+    kiwi_assert_true(!empty($first_insert['inserted']), 'Expected first source-event row to be inserted.');
+    kiwi_assert_true(!empty($second_insert['inserted']), 'Expected second unique source-event row to be inserted.');
+    kiwi_assert_true(empty($duplicate_insert['inserted']), 'Expected duplicate source_event_key + identity_type insert to be ignored.');
+    kiwi_assert_true(!empty($other_service_insert['inserted']), 'Expected same identity in another service_key to be insertable.');
+    kiwi_assert_same(3, count($repository->rows), 'Expected repository to persist only unique source-event rows.');
+    kiwi_assert_same(3, (int) ($snapshot['count_1h'] ?? 0), 'Expected 1h snapshot count to stay scoped to service_key.');
+    kiwi_assert_same(3, (int) ($snapshot['count_24h'] ?? 0), 'Expected 24h snapshot count to stay scoped to service_key.');
+    kiwi_assert_same(3, (int) ($snapshot['count_total'] ?? 0), 'Expected total snapshot count to stay scoped to service_key.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities and soft-flags when either threshold is exceeded', function (): void {
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [],
+        180,
+        3,
+        6
+    );
+    $service = new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, $repository);
+
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'source_event_key' => 'seed-1',
+        'identity_type' => 'session',
+        'identity_value' => 'session-abc',
+        'occurred_at' => '2026-04-01 11:00:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'source_event_key' => 'seed-2',
+        'identity_type' => 'session',
+        'identity_value' => 'session-abc',
+        'occurred_at' => '2026-04-01 11:10:00',
+        'count_1h' => 2,
+        'count_24h' => 2,
+        'count_total' => 2,
+    ]);
+
+    $result = $service->capture_inbound_mo([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'country' => 'FR',
+        'source_event_key' => 'event-capture-1',
+        'occurred_at' => '2026-04-01 11:20:00',
+        'subscriber_reference' => 'enc-123',
+        'session_ref' => 'session-abc',
+    ]);
+
+    kiwi_assert_same(2, count($result['signals'] ?? []), 'Expected fraud monitor to persist one row per available identity type.');
+    kiwi_assert_true(!empty($result['has_soft_flag']), 'Expected either-key threshold logic to mark the capture result as soft-flagged.');
+    kiwi_assert_same(['session'], $result['soft_flagged_identity_types'] ?? [], 'Expected session identity to carry the soft flag in this scenario.');
+    kiwi_assert_same(4, count($repository->rows), 'Expected seed rows plus both new identity rows to be persisted.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service skips empty identities and records available identity safely', function (): void {
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $service = new Kiwi_Premium_Sms_Fraud_Monitor_Service(new Kiwi_Test_Config(), $repository);
+
+    $result = $service->capture_inbound_mo([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'country' => 'FR',
+        'source_event_key' => 'event-capture-2',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'subscriber_reference' => '',
+        'session_ref' => 'session-only-1',
+    ]);
+
+    kiwi_assert_same(1, count($result['signals'] ?? []), 'Expected only the non-empty identity to be recorded.');
+    kiwi_assert_same('session', $result['signals'][0]['identity_type'] ?? '', 'Expected session identity row to be stored when subscriber is empty.');
+    kiwi_assert_same(1, count($repository->rows), 'Expected repository to store exactly one signal row when one identity is available.');
+});
+
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for duplicate MO callbacks', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -3694,6 +4062,70 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for du
         'Expected FR one-off default MT content wording to match the configured compliance text.'
     );
     kiwi_assert_same('Duplicate MO callback ignored.', $second['message'], 'Expected the second identical MO callback to be treated as a duplicate event.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service captures fraud signal once for deduped MO callbacks without changing MT behavior', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-fraud-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $fraud_monitor = new Kiwi_Test_Premium_Sms_Fraud_Monitor_Service();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder,
+        null,
+        $fraud_monitor
+    );
+
+    $payload = [
+        'Encrypted_MSISDN' => 'enc-fraud-123',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-fraud-1',
+    ];
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', $payload);
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', $payload);
+
+    kiwi_assert_same(1, count($fraud_monitor->calls), 'Expected fraud capture to run only for the first inserted MO event.');
+    kiwi_assert_same('enc-fraud-123', (string) ($fraud_monitor->calls[0]['subscriber_reference'] ?? ''), 'Expected fraud capture context to include subscriber identity.');
+    kiwi_assert_same('session-fraud-1', (string) ($fraud_monitor->calls[0]['session_ref'] ?? ''), 'Expected fraud capture context to include session identity.');
+    kiwi_assert_same(1, count($client->calls), 'Expected MT submission behavior to remain unchanged by fraud capture wiring.');
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when FR routing data is missing', function (): void {
@@ -5903,6 +6335,93 @@ kiwi_run_test('Kiwi_Hlr_Lookup_Shortcode renders all asynchronous callback rows 
     kiwi_assert_true(strpos($output, 'Operator resolved 1') !== false, 'Expected the first asynchronous HLR callback row to be rendered.');
     kiwi_assert_true(strpos($output, 'Operator resolved 2') !== false, 'Expected the second asynchronous HLR callback row to be rendered.');
     kiwi_assert_true(strpos($output, 'Magenta') !== false, 'Expected the second operator from the async callback table to be rendered.');
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode requires frontend auth when gate is configured', function (): void {
+    $_GET = [];
+    $_POST = [];
+    unset($_COOKIE['kiwi_frontend_auth']);
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-fraud-secret-1', PASSWORD_DEFAULT),
+    ]);
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode(
+        new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository(),
+        $gate
+    );
+
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('Kiwi Tools Login', $output, 'Expected fraud shortcode to enforce the shared frontend auth gate.');
+    kiwi_assert_contains('Please sign in to access the Premium SMS fraud monitor tool.', $output, 'Expected fraud shortcode login message context to be rendered.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows from fraud signal storage', function (): void {
+    $_POST = [];
+    $_GET = [
+        'kiwi_fraud_service_key' => 'svc_a',
+        'kiwi_fraud_provider_key' => 'nth',
+        'kiwi_fraud_flow_key' => 'flow-a',
+        'kiwi_fraud_identity_type' => 'session',
+        'kiwi_fraud_flagged_only' => '1',
+        'kiwi_fraud_limit' => '50',
+    ];
+    unset($_COOKIE['kiwi_frontend_auth']);
+
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'source_event_key' => 'row-1',
+        'identity_type' => 'session',
+        'identity_value' => 'session-flagged-1',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'count_1h' => 3,
+        'count_24h' => 4,
+        'count_total' => 4,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'source_event_key' => 'row-2',
+        'identity_type' => 'session',
+        'identity_value' => 'session-not-flagged',
+        'occurred_at' => '2026-04-01 12:01:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => false,
+        'soft_flag_reason' => '',
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_b',
+        'flow_key' => 'flow-b',
+        'source_event_key' => 'row-3',
+        'identity_type' => 'session',
+        'identity_value' => 'session-other-service',
+        'occurred_at' => '2026-04-01 12:02:00',
+        'count_1h' => 3,
+        'count_24h' => 3,
+        'count_total' => 3,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('Premium SMS Fraud Monitor', $output, 'Expected fraud shortcode title to render.');
+    kiwi_assert_contains('session-flagged-1', $output, 'Expected filtered flagged row to be rendered.');
+    kiwi_assert_true(strpos($output, 'session-not-flagged') === false, 'Expected flagged_only filter to remove non-flagged rows.');
+    kiwi_assert_true(strpos($output, 'session-other-service') === false, 'Expected service_key filter to remove rows from other services.');
 
     $_GET = [];
 });
