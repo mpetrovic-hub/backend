@@ -18,6 +18,7 @@ class Kiwi_Tracking_Capture_Service
     public function capture_from_request(array $landing_page, string $session_token, array $query_params): ?array
     {
         $click_id = $this->resolve_click_id($query_params);
+        $pid = $this->resolve_pid($query_params);
 
         if ($click_id === '') {
             return null;
@@ -37,6 +38,7 @@ class Kiwi_Tracking_Capture_Service
             'landing_page_key' => trim((string) ($landing_page['key'] ?? '')),
             'flow_key' => trim((string) ($landing_page['flow'] ?? '')),
             'service_key' => $service_key,
+            'pid' => $pid,
             'session_ref' => $this->resolve_optional_reference(
                 $query_params,
                 ['session_ref', 'sessionid', 'session_id', 'sid'],
@@ -172,5 +174,31 @@ class Kiwi_Tracking_Capture_Service
         }
 
         return $value;
+    }
+
+    private function resolve_pid(array $query_params): string
+    {
+        foreach ($query_params as $key => $value) {
+            if (strtolower((string) $key) !== 'pid' || is_array($value)) {
+                continue;
+            }
+
+            $pid = trim((string) $value);
+
+            if ($pid === '') {
+                continue;
+            }
+
+            $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+            $pid = is_string($pid) ? $pid : '';
+
+            if ($pid === '') {
+                continue;
+            }
+
+            return substr($pid, 0, 191);
+        }
+
+        return '';
     }
 }

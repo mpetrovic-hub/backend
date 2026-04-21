@@ -71,6 +71,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Last Updated</th>';
             $output .= '<th>Service</th>';
             $output .= '<th>Provider</th>';
+            $output .= '<th>PID</th>';
             $output .= '<th>Identity Type</th>';
             $output .= '<th>Identity</th>';
             $output .= '<th>1h</th>';
@@ -88,6 +89,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['occurred_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['service_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['pid'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_type'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_value'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['count_1h'] ?? '0')) . '</td>';
@@ -112,6 +114,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Last Updated</th>';
             $output .= '<th>Service</th>';
             $output .= '<th>Provider</th>';
+            $output .= '<th>PID</th>';
             $output .= '<th>Landing</th>';
             $output .= '<th>Session</th>';
             $output .= '<th>Page Loaded</th>';
@@ -132,6 +135,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['updated_at'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['service_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['pid'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['landing_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['session_token'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['page_loaded_at'] ?? '')) . '</td>';
@@ -158,6 +162,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
     {
         $service_key = (string) ($filters['service_key'] ?? '');
         $provider_key = (string) ($filters['provider_key'] ?? '');
+        $pid = (string) ($filters['pid'] ?? '');
         $identity_type = (string) ($filters['identity_type'] ?? '');
         $flagged_only = !empty($filters['flagged_only']);
         $limit = (int) ($filters['limit'] ?? 100);
@@ -194,6 +199,10 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $output .= '</select>';
         $output .= '</div>';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
+        $output .= '<label class="kiwi-field-label" for="kiwi_fraud_pid">PID</label>';
+        $output .= '<input id="kiwi_fraud_pid" class="kiwi-input kiwi-width-small" type="text" name="kiwi_fraud_pid" value="' . esc_attr($pid) . '">';
+        $output .= '</div>';
+        $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_fraud_identity_type">Identity Type</label>';
         $output .= '<select id="kiwi_fraud_identity_type" class="kiwi-select kiwi-width-small" name="kiwi_fraud_identity_type">';
         $output .= '<option value="">all</option>';
@@ -226,6 +235,9 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $provider_key = isset($_GET['kiwi_fraud_provider_key'])
             ? sanitize_text_field(wp_unslash((string) $_GET['kiwi_fraud_provider_key']))
             : '';
+        $pid = isset($_GET['kiwi_fraud_pid'])
+            ? $this->sanitize_pid_from_request(wp_unslash((string) $_GET['kiwi_fraud_pid']))
+            : '';
         $identity_type = isset($_GET['kiwi_fraud_identity_type'])
             ? strtolower(sanitize_text_field(wp_unslash((string) $_GET['kiwi_fraud_identity_type'])))
             : '';
@@ -240,6 +252,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         return [
             'service_key' => $service_key,
             'provider_key' => $provider_key,
+            'pid' => $pid,
             'identity_type' => $identity_type,
             'flagged_only' => isset($_GET['kiwi_fraud_flagged_only']) && wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1',
             'limit' => max(1, min(500, $limit)),
@@ -358,6 +371,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $rows = $this->landing_engagement_repository->get_recent([
             'service_key' => (string) ($filters['service_key'] ?? ''),
             'provider_key' => (string) ($filters['provider_key'] ?? ''),
+            'pid' => (string) ($filters['pid'] ?? ''),
         ], (int) ($filters['limit'] ?? 100));
 
         if (empty($filters['flagged_only'])) {
@@ -413,5 +427,19 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         }
 
         return (int) ($to_ts - $from_ts);
+    }
+
+    private function sanitize_pid_from_request(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 }

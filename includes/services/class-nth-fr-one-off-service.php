@@ -754,6 +754,7 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'country' => (string) ($normalized_event['country'] ?? ($service['country'] ?? '')),
                 'source_event_key' => $this->resolve_fraud_source_event_key($normalized_event, $event_record),
                 'occurred_at' => (string) ($normalized_event['occurred_at'] ?? ''),
+                'pid' => (string) ($normalized_event['pid'] ?? ''),
                 'subscriber_reference' => (string) ($normalized_event['subscriber_reference'] ?? ''),
                 'session_ref' => $session_ref,
                 'transaction_id' => $transaction_id,

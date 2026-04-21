@@ -32,6 +32,7 @@ class Kiwi_Click_Attribution_Repository
             landing_page_key VARCHAR(100) NOT NULL DEFAULT '',
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             service_key VARCHAR(100) NOT NULL DEFAULT '',
+            pid VARCHAR(191) NOT NULL DEFAULT '',
             session_ref VARCHAR(150) NOT NULL DEFAULT '',
             transaction_ref VARCHAR(150) NOT NULL DEFAULT '',
             message_ref VARCHAR(150) NOT NULL DEFAULT '',
@@ -52,6 +53,7 @@ class Kiwi_Click_Attribution_Repository
             KEY click_id (click_id),
             KEY provider_key (provider_key),
             KEY service_key (service_key),
+            KEY pid (pid),
             KEY session_ref (session_ref),
             KEY transaction_ref (transaction_ref),
             KEY message_ref (message_ref),
@@ -89,6 +91,7 @@ class Kiwi_Click_Attribution_Repository
                 'landing_page_key' => (string) ($data['landing_page_key'] ?? ($existing['landing_page_key'] ?? '')),
                 'flow_key' => (string) ($data['flow_key'] ?? ($existing['flow_key'] ?? '')),
                 'service_key' => (string) ($data['service_key'] ?? ($existing['service_key'] ?? '')),
+                'pid' => $this->sanitize_pid((string) ($data['pid'] ?? ($existing['pid'] ?? ''))),
                 'session_ref' => (string) ($data['session_ref'] ?? ($existing['session_ref'] ?? '')),
                 'external_ref' => (string) ($data['external_ref'] ?? ($existing['external_ref'] ?? '')),
                 'raw_context' => $data['raw_context'] ?? null,
@@ -113,6 +116,7 @@ class Kiwi_Click_Attribution_Repository
                 'landing_page_key' => (string) ($data['landing_page_key'] ?? ''),
                 'flow_key' => (string) ($data['flow_key'] ?? ''),
                 'service_key' => (string) ($data['service_key'] ?? ''),
+                'pid' => $this->sanitize_pid((string) ($data['pid'] ?? '')),
                 'session_ref' => (string) ($data['session_ref'] ?? ''),
                 'transaction_ref' => (string) ($data['transaction_ref'] ?? ''),
                 'message_ref' => (string) ($data['message_ref'] ?? ''),
@@ -122,6 +126,7 @@ class Kiwi_Click_Attribution_Repository
                 'raw_context' => isset($data['raw_context']) ? wp_json_encode($data['raw_context']) : '',
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -416,6 +421,7 @@ class Kiwi_Click_Attribution_Repository
             'landing_page_key' => '%s',
             'flow_key' => '%s',
             'service_key' => '%s',
+            'pid' => '%s',
             'session_ref' => '%s',
             'transaction_ref' => '%s',
             'message_ref' => '%s',
@@ -552,5 +558,19 @@ class Kiwi_Click_Attribution_Repository
         }
 
         return 'txn_' . substr(md5(uniqid('', true)), 0, 16);
+    }
+
+    private function sanitize_pid(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 }

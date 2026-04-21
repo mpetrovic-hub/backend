@@ -43,6 +43,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
         $engagement_reasons = array_values(array_unique(array_filter(array_map('strval', $engagement_evaluation['reasons'] ?? []))));
         $has_engagement_soft_flag = !empty($engagement_reasons);
         $engagement_mode = $this->config->get_premium_sms_fraud_mo_engagement_mode();
+        $pid = $this->resolve_pid((string) ($signal_context['pid'] ?? ''), $engagement_evaluation);
 
         $identity_candidates = [
             'subscriber' => trim((string) ($signal_context['subscriber_reference'] ?? '')),
@@ -80,6 +81,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'provider_key' => $provider_key,
                 'service_key' => $service_key,
                 'flow_key' => $flow_key,
+                'pid' => $pid,
                 'country' => $country,
                 'source_event_key' => $source_event_key,
                 'identity_type' => $identity_type,
@@ -121,6 +123,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             'engagement' => $engagement_evaluation,
             'engagement_soft_flag_reasons' => $engagement_reasons,
             'should_block' => $engagement_mode === 'block' && $has_engagement_soft_flag,
+            'pid' => $pid,
         ];
     }
 
@@ -157,6 +160,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'linked' => false,
                 'has_soft_flag' => false,
                 'reasons' => [],
+                'pid' => '',
                 'attribution' => [],
                 'engagement' => [],
                 'metrics' => [],
@@ -170,5 +174,30 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             'reference_hint' => (string) ($signal_context['reference_hint'] ?? ''),
             'session_ref' => (string) ($signal_context['session_ref'] ?? ''),
         ]);
+    }
+
+    private function resolve_pid(string $signal_pid, array $engagement_evaluation): string
+    {
+        $signal_pid = $this->sanitize_pid($signal_pid);
+
+        if ($signal_pid !== '') {
+            return $signal_pid;
+        }
+
+        return $this->sanitize_pid((string) ($engagement_evaluation['pid'] ?? ''));
+    }
+
+    private function sanitize_pid(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 }

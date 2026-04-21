@@ -27,6 +27,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             provider_key VARCHAR(50) NOT NULL DEFAULT '',
             service_key VARCHAR(100) NOT NULL DEFAULT '',
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
+            pid VARCHAR(191) NOT NULL DEFAULT '',
             landing_key VARCHAR(100) NOT NULL DEFAULT '',
             session_token VARCHAR(150) NOT NULL DEFAULT '',
             page_loaded_at DATETIME NULL,
@@ -39,6 +40,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             KEY service_key (service_key),
             KEY provider_key (provider_key),
             KEY flow_key (flow_key),
+            KEY pid (pid),
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
@@ -67,6 +69,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'provider_key' => trim((string) ($context['provider_key'] ?? '')),
                 'service_key' => trim((string) ($context['service_key'] ?? '')),
                 'flow_key' => trim((string) ($context['flow_key'] ?? '')),
+                'pid' => $this->sanitize_pid((string) ($context['pid'] ?? '')),
                 'landing_key' => $landing_key,
                 'session_token' => $session_token,
                 'page_loaded_at' => null,
@@ -103,6 +106,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'flow_key' => $this->prefer_non_empty(
                 trim((string) ($row['flow_key'] ?? '')),
                 trim((string) ($context['flow_key'] ?? ''))
+            ),
+            'pid' => $this->prefer_non_empty(
+                trim((string) ($row['pid'] ?? '')),
+                $this->sanitize_pid((string) ($context['pid'] ?? ''))
             ),
         ];
 
@@ -181,6 +188,12 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             $params[] = $flow_key;
         }
 
+        $pid = $this->sanitize_pid((string) ($filters['pid'] ?? ''));
+        if ($pid !== '') {
+            $where_sql[] = 'pid = %s';
+            $params[] = $pid;
+        }
+
         $landing_key = trim((string) ($filters['landing_key'] ?? ''));
         if ($landing_key !== '') {
             $where_sql[] = 'landing_key = %s';
@@ -221,6 +234,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'provider_key' => (string) ($data['provider_key'] ?? ''),
                 'service_key' => (string) ($data['service_key'] ?? ''),
                 'flow_key' => (string) ($data['flow_key'] ?? ''),
+                'pid' => $this->sanitize_pid((string) ($data['pid'] ?? '')),
                 'landing_key' => (string) ($data['landing_key'] ?? ''),
                 'session_token' => (string) ($data['session_token'] ?? ''),
                 'page_loaded_at' => $this->normalize_nullable_datetime($data['page_loaded_at'] ?? null),
@@ -230,6 +244,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'last_event_at' => (string) ($data['last_event_at'] ?? $this->current_time_mysql()),
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -263,6 +278,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'provider_key' => '%s',
             'service_key' => '%s',
             'flow_key' => '%s',
+            'pid' => '%s',
             'page_loaded_at' => '%s',
             'first_cta_click_at' => '%s',
             'last_cta_click_at' => '%s',
@@ -283,6 +299,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
             if ($field === 'cta_click_count') {
                 $value = max(0, (int) $value);
+            }
+
+            if ($field === 'pid') {
+                $value = $this->sanitize_pid((string) $value);
             }
 
             $fields[$field] = $value;
@@ -357,5 +377,19 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
     private function prefer_non_empty(string $existing, string $candidate): string
     {
         return $existing !== '' ? $existing : $candidate;
+    }
+
+    private function sanitize_pid(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 }

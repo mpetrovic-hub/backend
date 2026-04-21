@@ -26,6 +26,7 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
             provider_key VARCHAR(50) NOT NULL DEFAULT '',
             service_key VARCHAR(100) NOT NULL DEFAULT '',
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
+            pid VARCHAR(191) NOT NULL DEFAULT '',
             country VARCHAR(10) NOT NULL DEFAULT '',
             source_event_key VARCHAR(191) NOT NULL DEFAULT '',
             identity_type VARCHAR(20) NOT NULL DEFAULT '',
@@ -42,6 +43,7 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
             KEY service_key (service_key),
             KEY provider_key (provider_key),
             KEY flow_key (flow_key),
+            KEY pid (pid),
             KEY identity_lookup (service_key, identity_type, identity_value),
             KEY occurred_at (occurred_at),
             KEY is_soft_flag (is_soft_flag)
@@ -81,6 +83,7 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
                 'provider_key' => (string) ($data['provider_key'] ?? ''),
                 'service_key' => (string) ($data['service_key'] ?? ''),
                 'flow_key' => (string) ($data['flow_key'] ?? ''),
+                'pid' => $this->sanitize_pid((string) ($data['pid'] ?? '')),
                 'country' => (string) ($data['country'] ?? ''),
                 'source_event_key' => $source_event_key,
                 'identity_type' => $identity_type,
@@ -94,6 +97,7 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
                 'meta_json' => isset($data['meta_json']) ? wp_json_encode($data['meta_json']) : '',
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -198,6 +202,12 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
         if ($flow_key !== '') {
             $where_sql[] = 'flow_key = %s';
             $params[] = $flow_key;
+        }
+
+        $pid = $this->sanitize_pid((string) ($filters['pid'] ?? ''));
+        if ($pid !== '') {
+            $where_sql[] = 'pid = %s';
+            $params[] = $pid;
         }
 
         $identity_type = trim((string) ($filters['identity_type'] ?? ''));
@@ -345,6 +355,20 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
         }
 
         return gmdate('Y-m-d H:i:s', $timestamp);
+    }
+
+    protected function sanitize_pid(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 
     protected function current_time_mysql(): string

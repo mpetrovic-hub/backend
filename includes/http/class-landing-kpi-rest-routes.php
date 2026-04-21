@@ -9,15 +9,18 @@ class Kiwi_Landing_Kpi_Rest_Routes
     private $config;
     private $kpi_service;
     private $landing_engagement_repository;
+    private $click_attribution_repository;
 
     public function __construct(
         Kiwi_Config $config,
         Kiwi_Landing_Kpi_Service $kpi_service,
-        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null
+        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null,
+        ?Kiwi_Click_Attribution_Repository $click_attribution_repository = null
     ) {
         $this->config = $config;
         $this->kpi_service = $kpi_service;
         $this->landing_engagement_repository = $landing_engagement_repository;
+        $this->click_attribution_repository = $click_attribution_repository;
     }
 
     public function register(): void
@@ -178,9 +181,54 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'service_key' => (string) ($landing['service_key'] ?? ''),
             'provider_key' => (string) ($landing['provider'] ?? ''),
             'flow_key' => (string) ($landing['flow'] ?? ''),
+            'pid' => $this->resolve_pid_for_engagement($params, $landing, $session_token),
         ], $event_type);
 
         return !empty($record);
+    }
+
+    private function resolve_pid_for_engagement(array $params, array $landing, string $session_token): string
+    {
+        $pid = $this->sanitize_pid((string) ($params['pid'] ?? ''));
+
+        if ($pid !== '') {
+            return $pid;
+        }
+
+        if (!$this->click_attribution_repository instanceof Kiwi_Click_Attribution_Repository) {
+            return '';
+        }
+
+        $service_key = trim((string) ($landing['service_key'] ?? ''));
+
+        if ($service_key === '' || $session_token === '') {
+            return '';
+        }
+
+        $attribution = $this->click_attribution_repository->find_unique_pending_by_service_reference(
+            $service_key,
+            $session_token
+        );
+
+        if (!is_array($attribution)) {
+            return '';
+        }
+
+        return $this->sanitize_pid((string) ($attribution['pid'] ?? ''));
+    }
+
+    private function sanitize_pid(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 
 }

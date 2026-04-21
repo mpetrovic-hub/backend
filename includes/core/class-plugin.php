@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-04-21-2';
+    private const DB_SCHEMA_VERSION = '2026-04-21-3';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -165,6 +165,7 @@ class Kiwi_Plugin
 
         $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
         $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+        $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
             $config,
             $landing_kpi_summary_repository
@@ -172,7 +173,8 @@ class Kiwi_Plugin
         $landing_kpi_rest_routes = new Kiwi_Landing_Kpi_Rest_Routes(
             $config,
             $landing_kpi_service,
-            $landing_engagement_repository
+            $landing_engagement_repository,
+            $click_attribution_repository
         );
         $landing_kpi_rest_routes->register();
     }

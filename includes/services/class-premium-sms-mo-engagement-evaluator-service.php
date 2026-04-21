@@ -39,6 +39,7 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
         );
         $engagement = $this->resolve_engagement_row($attribution);
         $reasons = [];
+        $pid = $this->resolve_pid($attribution, $engagement);
 
         if (!is_array($attribution) || !is_array($engagement)) {
             $reasons[] = 'unknown_link';
@@ -80,6 +81,7 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
             'linked' => is_array($attribution) && is_array($engagement),
             'has_soft_flag' => !empty($reasons),
             'reasons' => $reasons,
+            'pid' => $pid,
             'attribution' => is_array($attribution) ? $attribution : [],
             'engagement' => is_array($engagement) ? $engagement : [],
             'metrics' => [
@@ -91,6 +93,7 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
                 'min_seconds_after_load' => $min_seconds_after_load,
                 'require_page_loaded' => $require_page_loaded,
                 'require_cta_click' => $require_cta_click,
+                'pid' => $pid,
             ],
         ];
     }
@@ -183,5 +186,82 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
         }
 
         return gmdate('Y-m-d H:i:s');
+    }
+
+    private function resolve_pid(?array $attribution, ?array $engagement): string
+    {
+        if (is_array($engagement)) {
+            $engagement_pid = $this->sanitize_pid((string) ($engagement['pid'] ?? ''));
+
+            if ($engagement_pid !== '') {
+                return $engagement_pid;
+            }
+        }
+
+        if (!is_array($attribution)) {
+            return '';
+        }
+
+        $pid = $this->sanitize_pid((string) ($attribution['pid'] ?? ''));
+
+        if ($pid !== '') {
+            return $pid;
+        }
+
+        return $this->resolve_pid_from_raw_context($attribution['raw_context'] ?? null);
+    }
+
+    private function resolve_pid_from_raw_context($raw_context): string
+    {
+        if (is_array($raw_context)) {
+            return $this->resolve_pid_from_query_params($raw_context['query_params'] ?? []);
+        }
+
+        if (!is_string($raw_context) || trim($raw_context) === '') {
+            return '';
+        }
+
+        $decoded = json_decode($raw_context, true);
+
+        if (!is_array($decoded)) {
+            return '';
+        }
+
+        return $this->resolve_pid_from_query_params($decoded['query_params'] ?? []);
+    }
+
+    private function resolve_pid_from_query_params($query_params): string
+    {
+        if (!is_array($query_params)) {
+            return '';
+        }
+
+        foreach ($query_params as $key => $value) {
+            if (strtolower((string) $key) !== 'pid' || is_array($value)) {
+                continue;
+            }
+
+            $pid = $this->sanitize_pid((string) $value);
+
+            if ($pid !== '') {
+                return $pid;
+            }
+        }
+
+        return '';
+    }
+
+    private function sanitize_pid(string $pid): string
+    {
+        $pid = trim($pid);
+
+        if ($pid === '') {
+            return '';
+        }
+
+        $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+        $pid = is_string($pid) ? $pid : '';
+
+        return substr($pid, 0, 191);
     }
 }
