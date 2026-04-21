@@ -182,6 +182,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'provider_key' => (string) ($landing['provider'] ?? ''),
             'flow_key' => (string) ($landing['flow'] ?? ''),
             'pid' => $this->resolve_pid_for_engagement($params, $landing, $session_token),
+            'click_id' => $this->resolve_click_id_for_engagement($params, $landing, $session_token),
         ], $event_type);
 
         return !empty($record);
@@ -229,6 +230,70 @@ class Kiwi_Landing_Kpi_Rest_Routes
         $pid = is_string($pid) ? $pid : '';
 
         return substr($pid, 0, 191);
+    }
+
+    private function resolve_click_id_for_engagement(array $params, array $landing, string $session_token): string
+    {
+        $click_id = $this->resolve_click_id_from_params($params);
+
+        if ($click_id !== '') {
+            return $click_id;
+        }
+
+        if (!$this->click_attribution_repository instanceof Kiwi_Click_Attribution_Repository) {
+            return '';
+        }
+
+        $service_key = trim((string) ($landing['service_key'] ?? ''));
+
+        if ($service_key === '' || $session_token === '') {
+            return '';
+        }
+
+        $attribution = $this->click_attribution_repository->find_unique_pending_by_service_reference(
+            $service_key,
+            $session_token
+        );
+
+        if (!is_array($attribution)) {
+            return '';
+        }
+
+        return $this->sanitize_click_id((string) ($attribution['click_id'] ?? ''));
+    }
+
+    private function resolve_click_id_from_params(array $params): string
+    {
+        $keys = array_merge(['click_id'], $this->config->get_click_attribution_click_id_keys());
+        $keys = array_values(array_unique(array_map('strval', $keys)));
+
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $params) || is_array($params[$key])) {
+                continue;
+            }
+
+            $candidate = $this->sanitize_click_id((string) $params[$key]);
+
+            if ($candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return '';
+    }
+
+    private function sanitize_click_id(string $click_id): string
+    {
+        $click_id = trim($click_id);
+
+        if ($click_id === '') {
+            return '';
+        }
+
+        $click_id = preg_replace('/[^A-Za-z0-9._~:-]/', '', $click_id);
+        $click_id = is_string($click_id) ? $click_id : '';
+
+        return substr($click_id, 0, 191);
     }
 
 }

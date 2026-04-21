@@ -44,6 +44,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
         $has_engagement_soft_flag = !empty($engagement_reasons);
         $engagement_mode = $this->config->get_premium_sms_fraud_mo_engagement_mode();
         $pid = $this->resolve_pid((string) ($signal_context['pid'] ?? ''), $engagement_evaluation);
+        $click_id = $this->resolve_click_id((string) ($signal_context['click_id'] ?? ($signal_context['clickid'] ?? '')), $engagement_evaluation);
 
         $identity_candidates = [
             'subscriber' => trim((string) ($signal_context['subscriber_reference'] ?? '')),
@@ -82,6 +83,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'service_key' => $service_key,
                 'flow_key' => $flow_key,
                 'pid' => $pid,
+                'click_id' => $click_id,
                 'country' => $country,
                 'source_event_key' => $source_event_key,
                 'identity_type' => $identity_type,
@@ -124,6 +126,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             'engagement_soft_flag_reasons' => $engagement_reasons,
             'should_block' => $engagement_mode === 'block' && $has_engagement_soft_flag,
             'pid' => $pid,
+            'click_id' => $click_id,
         ];
     }
 
@@ -161,6 +164,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'has_soft_flag' => false,
                 'reasons' => [],
                 'pid' => '',
+                'click_id' => '',
                 'attribution' => [],
                 'engagement' => [],
                 'metrics' => [],
@@ -199,5 +203,30 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
         $pid = is_string($pid) ? $pid : '';
 
         return substr($pid, 0, 191);
+    }
+
+    private function resolve_click_id(string $signal_click_id, array $engagement_evaluation): string
+    {
+        $signal_click_id = $this->sanitize_click_id($signal_click_id);
+
+        if ($signal_click_id !== '') {
+            return $signal_click_id;
+        }
+
+        return $this->sanitize_click_id((string) ($engagement_evaluation['click_id'] ?? ''));
+    }
+
+    private function sanitize_click_id(string $click_id): string
+    {
+        $click_id = trim($click_id);
+
+        if ($click_id === '') {
+            return '';
+        }
+
+        $click_id = preg_replace('/[^A-Za-z0-9._~:-]/', '', $click_id);
+        $click_id = is_string($click_id) ? $click_id : '';
+
+        return substr($click_id, 0, 191);
     }
 }

@@ -72,6 +72,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Service</th>';
             $output .= '<th>Provider</th>';
             $output .= '<th>PID</th>';
+            $output .= '<th>Click ID</th>';
             $output .= '<th>Identity Type</th>';
             $output .= '<th>Identity</th>';
             $output .= '<th>1h</th>';
@@ -90,6 +91,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['service_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['pid'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['click_id'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_type'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_value'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['count_1h'] ?? '0')) . '</td>';
@@ -115,6 +117,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Service</th>';
             $output .= '<th>Provider</th>';
             $output .= '<th>PID</th>';
+            $output .= '<th>Click ID</th>';
             $output .= '<th>Landing</th>';
             $output .= '<th>Session</th>';
             $output .= '<th>Page Loaded</th>';
@@ -136,6 +139,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['service_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['pid'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['click_id'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['landing_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['session_token'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['page_loaded_at'] ?? '')) . '</td>';

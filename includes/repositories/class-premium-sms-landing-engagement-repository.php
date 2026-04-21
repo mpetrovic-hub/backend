@@ -28,6 +28,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             service_key VARCHAR(100) NOT NULL DEFAULT '',
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             pid VARCHAR(191) NOT NULL DEFAULT '',
+            click_id VARCHAR(191) NOT NULL DEFAULT '',
             landing_key VARCHAR(100) NOT NULL DEFAULT '',
             session_token VARCHAR(150) NOT NULL DEFAULT '',
             page_loaded_at DATETIME NULL,
@@ -41,6 +42,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             KEY provider_key (provider_key),
             KEY flow_key (flow_key),
             KEY pid (pid),
+            KEY click_id (click_id),
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
@@ -70,6 +72,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'service_key' => trim((string) ($context['service_key'] ?? '')),
                 'flow_key' => trim((string) ($context['flow_key'] ?? '')),
                 'pid' => $this->sanitize_pid((string) ($context['pid'] ?? '')),
+                'click_id' => $this->sanitize_click_id((string) ($context['click_id'] ?? '')),
                 'landing_key' => $landing_key,
                 'session_token' => $session_token,
                 'page_loaded_at' => null,
@@ -110,6 +113,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'pid' => $this->prefer_non_empty(
                 trim((string) ($row['pid'] ?? '')),
                 $this->sanitize_pid((string) ($context['pid'] ?? ''))
+            ),
+            'click_id' => $this->prefer_non_empty(
+                trim((string) ($row['click_id'] ?? '')),
+                $this->sanitize_click_id((string) ($context['click_id'] ?? ''))
             ),
         ];
 
@@ -194,6 +201,12 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             $params[] = $pid;
         }
 
+        $click_id = $this->sanitize_click_id((string) ($filters['click_id'] ?? ''));
+        if ($click_id !== '') {
+            $where_sql[] = 'click_id = %s';
+            $params[] = $click_id;
+        }
+
         $landing_key = trim((string) ($filters['landing_key'] ?? ''));
         if ($landing_key !== '') {
             $where_sql[] = 'landing_key = %s';
@@ -235,6 +248,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'service_key' => (string) ($data['service_key'] ?? ''),
                 'flow_key' => (string) ($data['flow_key'] ?? ''),
                 'pid' => $this->sanitize_pid((string) ($data['pid'] ?? '')),
+                'click_id' => $this->sanitize_click_id((string) ($data['click_id'] ?? '')),
                 'landing_key' => (string) ($data['landing_key'] ?? ''),
                 'session_token' => (string) ($data['session_token'] ?? ''),
                 'page_loaded_at' => $this->normalize_nullable_datetime($data['page_loaded_at'] ?? null),
@@ -244,6 +258,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'last_event_at' => (string) ($data['last_event_at'] ?? $this->current_time_mysql()),
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -279,6 +294,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'service_key' => '%s',
             'flow_key' => '%s',
             'pid' => '%s',
+            'click_id' => '%s',
             'page_loaded_at' => '%s',
             'first_cta_click_at' => '%s',
             'last_cta_click_at' => '%s',
@@ -303,6 +319,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
             if ($field === 'pid') {
                 $value = $this->sanitize_pid((string) $value);
+            }
+
+            if ($field === 'click_id') {
+                $value = $this->sanitize_click_id((string) $value);
             }
 
             $fields[$field] = $value;
@@ -391,5 +411,19 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
         $pid = is_string($pid) ? $pid : '';
 
         return substr($pid, 0, 191);
+    }
+
+    private function sanitize_click_id(string $click_id): string
+    {
+        $click_id = trim($click_id);
+
+        if ($click_id === '') {
+            return '';
+        }
+
+        $click_id = preg_replace('/[^A-Za-z0-9._~:-]/', '', $click_id);
+        $click_id = is_string($click_id) ? $click_id : '';
+
+        return substr($click_id, 0, 191);
     }
 }
