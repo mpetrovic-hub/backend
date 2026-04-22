@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-04-22:
+- [Fraud Docs] Updated architecture and operations documentation to describe premium-SMS fraud monitoring as a combined volume-and-engagement capability with source-context snapshots (`pid`, `click_id`). Added explicit propagation notes from attribution through landing engagement telemetry into fraud snapshots and updated production validation guidance for the fraud shortcode.
+
 2026-04-21:
 - [Fraud Monitor] Added Premium SMS fraud-monitoring foundations with a dedicated signal repository/service, shortcode UI, and plugin/config wiring, then extended the shortcode with service dropdown filtering and all-services loading. Follow-up commits added click/page-load derived fraud metrics and exposed `signal`, `click_id`, and `delta` fields with regression coverage.
 - [PID Tracking] Extended tracking attribution to persist `pid` through capture, KPI routes, repositories, and fraud/engagement services so monitoring outputs retain partner context end-to-end. Included test updates across the touched service and shortcode paths.
