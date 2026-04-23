@@ -7087,6 +7087,61 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
     $_GET = [];
 });
 
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode applies flow_key filter to fraud signal rows', function (): void {
+    $_POST = [];
+    $_GET = [
+        'kiwi_fraud_service_key' => 'svc_a',
+        'kiwi_fraud_provider_key' => 'nth',
+        'kiwi_fraud_pid' => 'pid-a',
+        'kiwi_fraud_flow_key' => 'flow-a',
+        'kiwi_fraud_identity_type' => 'session',
+        'kiwi_fraud_flagged_only' => '1',
+        'kiwi_fraud_limit' => '50',
+    ];
+
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'pid' => 'pid-a',
+        'click_id' => 'click-a',
+        'source_event_key' => 'row-flow-1',
+        'identity_type' => 'session',
+        'identity_value' => 'session-flow-a',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'count_1h' => 3,
+        'count_24h' => 3,
+        'count_total' => 3,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-b',
+        'pid' => 'pid-a',
+        'click_id' => 'click-b',
+        'source_event_key' => 'row-flow-2',
+        'identity_type' => 'session',
+        'identity_value' => 'session-flow-b',
+        'occurred_at' => '2026-04-01 12:01:00',
+        'count_1h' => 3,
+        'count_24h' => 3,
+        'count_total' => 3,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('session-flow-a', $output, 'Expected matching flow_key row to remain visible.');
+    kiwi_assert_true(strpos($output, 'session-flow-b') === false, 'Expected flow_key filter to remove rows from other flows.');
+
+    $_GET = [];
+});
+
 kiwi_run_test('Kiwi frontend auth denies unauthenticated access to tool shortcodes', function (): void {
     $_GET = [];
     $_POST = [];

@@ -242,6 +242,9 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $provider_key = isset($_GET['kiwi_fraud_provider_key'])
             ? sanitize_text_field(wp_unslash((string) $_GET['kiwi_fraud_provider_key']))
             : '';
+        $flow_key = isset($_GET['kiwi_fraud_flow_key'])
+            ? sanitize_text_field(wp_unslash((string) $_GET['kiwi_fraud_flow_key']))
+            : '';
         $pid = isset($_GET['kiwi_fraud_pid'])
             ? $this->sanitize_pid_from_request(wp_unslash((string) $_GET['kiwi_fraud_pid']))
             : '';
@@ -259,6 +262,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         return [
             'service_key' => $service_key,
             'provider_key' => $provider_key,
+            'flow_key' => $flow_key,
             'pid' => $pid,
             'identity_type' => $identity_type,
             'flagged_only' => isset($_GET['kiwi_fraud_flagged_only']) && wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1',
@@ -378,6 +382,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $rows = $this->landing_engagement_repository->get_recent([
             'service_key' => (string) ($filters['service_key'] ?? ''),
             'provider_key' => (string) ($filters['provider_key'] ?? ''),
+            'flow_key' => (string) ($filters['flow_key'] ?? ''),
             'pid' => (string) ($filters['pid'] ?? ''),
         ], (int) ($filters['limit'] ?? 100));
 
