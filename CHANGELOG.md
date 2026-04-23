@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-04-23:
+- [Fraud Monitor] Wired the hidden `kiwi_fraud_flow_key` request filter through the Premium SMS fraud shortcode so backend filtering applies consistently to fraud-signal and landing-engagement rows, with regression coverage. The shortcode UI remains unchanged and intentionally does not expose a visible flow field.
+
 2026-04-22:
 - [Fraud Docs] Updated architecture and operations documentation to describe premium-SMS fraud monitoring as a combined volume-and-engagement capability with source-context snapshots (`pid`, `click_id`). Added explicit propagation notes from attribution through landing engagement telemetry into fraud snapshots and updated production validation guidance for the fraud shortcode.
 
