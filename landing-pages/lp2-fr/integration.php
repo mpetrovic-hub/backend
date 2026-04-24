@@ -17,7 +17,7 @@ return [
     'backend_path' => '/lp/fr/myjoyplay',
     'dedicated_path' => '/',
     'hostnames' => [ 'your.joy-play.com', 'frlp2.joy-play.com' ],
-    'asset_base_url' => 'https://kiwimobile.de/wp-content/uploads/2025/05/',
+    'asset_base_url' => 'https://kiwimobile.de/backend/wp-content/uploads/assets/',
     'service_key' => 'nth_fr_one_off_jplay',
     'shortcode' => '84072',
     'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
