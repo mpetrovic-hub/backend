@@ -1,6 +1,6 @@
 body {
   margin: 0;
-  background: radial-gradient(circle at 50% 15%, #14384e 0%, #051112 48%, #03060c 100%);  
+  background: radial-gradient(circle at 50% 15%, #14384e 0%, #051112 60%, #0d3035 100%);  
   color: #f0f4f8;
   font-family: Arial, sans-serif;
 }
@@ -24,7 +24,7 @@ body {
   width: 25%;
   max-width: 400px;
   height: auto;
-  margin-top: 17px auto; 
+  margin-top: 17px; 
 }
 
 h1 {
@@ -79,7 +79,7 @@ p {
 .disclaimer {
   font-size: 14px;
   color: #e2e2e2;
-  margin: 50px 0 0 0;
+  margin: 42px 0 0 0;
 }
 
 .terms {
