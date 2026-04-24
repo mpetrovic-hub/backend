@@ -1,7 +1,6 @@
 body {
   margin: 0;
-  background: radial-gradient(circle at 50% 15%, #0c2230 0%, #050b12 48%, #03060c 100%);
-  background: green;
+  background: radial-gradient(circle at 50% 15%, #14384e 0%, #051112 48%, #03060c 100%);  
   color: #f0f4f8;
   font-family: Arial, sans-serif;
 }
@@ -25,8 +24,7 @@ body {
   width: 25%;
   max-width: 400px;
   height: auto;
-  /* border-radius: 14px; */
-  /* box-shadow: 0 0 28px rgba(40, 214, 204, 0.35); */
+  margin: 17px auto; 
 }
 
 h1 {
