@@ -89,6 +89,7 @@ class Kiwi_Landing_Page_Gallery_Service
             'preview_url' => $url_bundle['preview_url'],
             'index_path' => trim((string) ($landing_page['index_path'] ?? '')),
             'styles_path' => trim((string) ($landing_page['styles_path'] ?? '')),
+            'asset_base_url' => trim((string) ($landing_page['asset_base_url'] ?? '')),
             'documentation' => trim((string) ($landing_page['documentation'] ?? '')),
             'active' => !array_key_exists('active', $landing_page) || (bool) $landing_page['active'],
         ];

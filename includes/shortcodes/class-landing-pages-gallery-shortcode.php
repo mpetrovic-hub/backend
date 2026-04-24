@@ -269,6 +269,45 @@ class Kiwi_Landing_Pages_Gallery_Shortcode
             }
         }
 
+        $html = $this->replace_srcdoc_local_asset_paths($html, (string) ($entry['asset_base_url'] ?? ''));
+
         return $html;
+    }
+
+    private function replace_srcdoc_local_asset_paths(string $html, string $asset_base_url): string
+    {
+        $asset_base_url = trim($asset_base_url);
+
+        if ($asset_base_url === '') {
+            return $html;
+        }
+
+        $asset_base_url = rtrim($asset_base_url, '/\\') . '/';
+        $pattern = '/(<(?:img|source|video|audio|script|a|link)\b[^>]*\b(?:src|href)=["\'])\.\/([^"\']+)(["\'][^>]*>)/i';
+        $rewritten_html = preg_replace_callback(
+            $pattern,
+            function (array $matches) use ($asset_base_url): string {
+                $relative_path = trim((string) ($matches[2] ?? ''));
+
+                if ($relative_path === '' || strtolower($relative_path) === 'styles.css') {
+                    return (string) ($matches[0] ?? '');
+                }
+
+                $normalized_path = str_replace('\\', '/', $relative_path);
+                $normalized_path = ltrim($normalized_path, '/');
+                $segments = array_values(array_filter(explode('/', $normalized_path), static function (string $segment): bool {
+                    return $segment !== '';
+                }));
+                $encoded_segments = array_map('rawurlencode', $segments);
+                $encoded_path = implode('/', $encoded_segments);
+
+                return (string) ($matches[1] ?? '')
+                    . esc_attr($asset_base_url . $encoded_path)
+                    . (string) ($matches[3] ?? '');
+            },
+            $html
+        );
+
+        return is_string($rewritten_html) ? $rewritten_html : $html;
     }
 }

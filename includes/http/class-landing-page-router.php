@@ -202,8 +202,9 @@ class Kiwi_Landing_Page_Router
             (string) ($landing_page['cta_href'] ?? '#')
         );
 
-        $asset_base_url = $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/';
-        $css_url = $asset_base_url . 'styles.css';
+        $landing_folder_asset_base_url = $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/';
+        $asset_base_url = $this->resolve_filesystem_asset_base_url($landing_page, $landing_key);
+        $css_url = $landing_folder_asset_base_url . 'styles.css';
         $html = $this->replace_stylesheet_href($html, $css_url);
         $html = $this->replace_local_asset_paths($html, $asset_base_url);
 
@@ -412,6 +413,17 @@ class Kiwi_Landing_Page_Router
         }
 
         return $stylesheet_link . "\n" . $html;
+    }
+
+    private function resolve_filesystem_asset_base_url(array $landing_page, string $landing_key): string
+    {
+        $configured_asset_base_url = trim((string) ($landing_page['asset_base_url'] ?? ''));
+
+        if ($configured_asset_base_url !== '') {
+            return rtrim($configured_asset_base_url, '/\\') . '/';
+        }
+
+        return $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/';
     }
 
     private function replace_local_asset_paths(string $html, string $asset_base_url): string
