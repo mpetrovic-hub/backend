@@ -19,6 +19,13 @@ body {
   border-radius: 8px;
 }
 
+.additional-image {
+  width: 100%;
+  max-width: 400px;
+  height: auto;
+  margin-top: 17px; 
+}
+
 h1 {
   font-size: 18px;
   margin: 8px 0 8px;
