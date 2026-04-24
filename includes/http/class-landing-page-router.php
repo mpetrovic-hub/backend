@@ -206,17 +206,8 @@ class Kiwi_Landing_Page_Router
         $landing_folder_asset_base_url = $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/';
         $asset_base_url = $this->resolve_filesystem_asset_base_url($landing_page, $landing_key);
         $css_url = $landing_folder_asset_base_url . 'styles.css';
-        $html = $this->replace_stylesheet_href($html, $css_url);
+        $html = $this->apply_filesystem_stylesheet($html, $styles_path, $asset_base_url, $css_url);
         $html = $this->replace_local_asset_paths($html, $asset_base_url);
-
-        if (is_file($styles_path) && is_readable($styles_path)) {
-            $css_content = file_get_contents($styles_path);
-
-            if (is_string($css_content) && trim($css_content) !== '') {
-                $css_content = $this->replace_local_css_asset_paths($css_content, $asset_base_url);
-                $html = $this->inject_inline_styles($html, $css_content);
-            }
-        }
 
         $html = $this->inject_kpi_tracker_script(
             $html,
@@ -415,6 +406,47 @@ class Kiwi_Landing_Page_Router
         }
 
         return $stylesheet_link . "\n" . $html;
+    }
+
+    private function apply_filesystem_stylesheet(
+        string $html,
+        string $styles_path,
+        string $asset_base_url,
+        string $css_url
+    ): string {
+        $css_content = $this->read_filesystem_stylesheet($styles_path);
+
+        if ($css_content === null) {
+            return $this->replace_stylesheet_href($html, $css_url);
+        }
+
+        $css_content = $this->replace_local_css_asset_paths($css_content, $asset_base_url);
+        $html = $this->remove_stylesheet_href($html);
+
+        return $this->inject_inline_styles($html, $css_content);
+    }
+
+    private function read_filesystem_stylesheet(string $styles_path): ?string
+    {
+        if (!is_file($styles_path) || !is_readable($styles_path)) {
+            return null;
+        }
+
+        $css_content = file_get_contents($styles_path);
+
+        if (!is_string($css_content) || trim($css_content) === '') {
+            return null;
+        }
+
+        return $css_content;
+    }
+
+    private function remove_stylesheet_href(string $html): string
+    {
+        $pattern = '/<link\b(?=[^>]*\brel=["\'][^"\']*\bstylesheet\b[^"\']*["\'])(?=[^>]*\bhref=["\'](?:[^"\']*\/|\.\/)?styles\.css(?:\?[^"\']*)?["\'])[^>]*>\s*/i';
+        $html = preg_replace($pattern, '', $html);
+
+        return is_string($html) ? $html : '';
     }
 
     private function resolve_filesystem_asset_base_url(array $landing_page, string $landing_key): string

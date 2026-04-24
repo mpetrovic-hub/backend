@@ -3020,6 +3020,97 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
 });
 
+kiwi_run_test('Kiwi_Landing_Page_Router inlines readable filesystem styles and removes stylesheet link', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_router_inline_styles');
+
+    try {
+        $styles_path = $project_root . DIRECTORY_SEPARATOR . 'styles.css';
+        kiwi_write_file(
+            $styles_path,
+            "body { font-family: Arial, sans-serif; }\n.hero { background-image: url('./hero-bg.png'); }\n"
+        );
+
+        $router = new Kiwi_Landing_Page_Router(
+            new Kiwi_Test_Config(),
+            new Kiwi_Landing_Page_Session_Repository(),
+            'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/'
+        );
+        $apply_stylesheet_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'apply_filesystem_stylesheet');
+
+        $html = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body>LP</body></html>';
+        $output = $apply_stylesheet_method->invoke(
+            $router,
+            $html,
+            $styles_path,
+            'https://backend.kiwimobile.de/wp-content/uploads/assets/',
+            'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/styles.css'
+        );
+
+        kiwi_assert_contains('<style>', $output, 'Expected readable filesystem CSS to be inlined into the landing page.');
+        kiwi_assert_contains('body { font-family: Arial, sans-serif; }', $output, 'Expected inlined CSS to preserve stylesheet content.');
+        kiwi_assert_contains(
+            "url('https://backend.kiwimobile.de/wp-content/uploads/assets/hero-bg.png')",
+            $output,
+            'Expected inlined CSS asset paths to be rewritten through the landing-page asset base URL.'
+        );
+        kiwi_assert_true(
+            strpos($output, '<link rel="stylesheet"') === false,
+            'Expected the external stylesheet link to be removed when CSS is inlined.'
+        );
+        kiwi_assert_true(
+            strpos($output, 'lp4-fr/styles.css') === false,
+            'Expected inlined output not to request the landing-page styles.css file.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router falls back to external stylesheet link when inline styles are unavailable', function (): void {
+    $router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Config(),
+        new Kiwi_Landing_Page_Session_Repository(),
+        'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/'
+    );
+    $apply_stylesheet_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'apply_filesystem_stylesheet');
+    $missing_styles_path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_missing_styles_' . uniqid('', true) . '.css';
+    $css_url = 'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/styles.css';
+
+    $html_with_link = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body>LP</body></html>';
+    $output_with_link = $apply_stylesheet_method->invoke(
+        $router,
+        $html_with_link,
+        $missing_styles_path,
+        'https://backend.kiwimobile.de/wp-content/uploads/assets/',
+        $css_url
+    );
+
+    kiwi_assert_contains(
+        'href="' . $css_url . '"',
+        $output_with_link,
+        'Expected fallback CSS handling to rewrite the existing local stylesheet link.'
+    );
+    kiwi_assert_true(
+        strpos($output_with_link, '<style>') === false,
+        'Expected fallback CSS handling not to inject an empty inline style block.'
+    );
+
+    $html_without_link = '<!doctype html><html><head><title>LP</title></head><body>LP</body></html>';
+    $output_without_link = $apply_stylesheet_method->invoke(
+        $router,
+        $html_without_link,
+        $missing_styles_path,
+        'https://backend.kiwimobile.de/wp-content/uploads/assets/',
+        $css_url
+    );
+
+    kiwi_assert_contains(
+        '<link rel="stylesheet" href="' . $css_url . '">',
+        $output_without_link,
+        'Expected fallback CSS handling to insert the external stylesheet link when source HTML has none.'
+    );
+});
+
 kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to default landing-page asset URL', function (): void {
     $router = new Kiwi_Landing_Page_Router(
         new Kiwi_Test_Config(),
@@ -3028,22 +3119,14 @@ kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to
     );
 
     $resolve_asset_base_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_filesystem_asset_base_url');
-    $replace_stylesheet_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_stylesheet_href');
     $replace_local_assets_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_local_asset_paths');
     $replace_local_css_assets_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_local_css_asset_paths');
 
     $html = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body><img class="hero" src="./hero-dragonfight.jpg"><script src="./core.js"></script><a href="./terms.pdf">Terms</a></body></html>';
-    $landing_folder_asset_base_url = 'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/';
     $asset_base_url = $resolve_asset_base_method->invoke($router, [], 'lp4-fr');
-    $html = $replace_stylesheet_method->invoke($router, $html, $landing_folder_asset_base_url . 'styles.css');
     $html = $replace_local_assets_method->invoke($router, $html, $asset_base_url);
     $css = $replace_local_css_assets_method->invoke($router, ".hero { background-image: url('./hero-bg.png'); }", $asset_base_url);
 
-    kiwi_assert_contains(
-        'href="https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp4-fr/styles.css"',
-        $html,
-        'Expected styles.css path to remain served from the plugin landing-page folder.'
-    );
     kiwi_assert_contains(
         'src="https://backend.kiwimobile.de/wp-content/uploads/assets/hero-dragonfight.jpg"',
         $html,
@@ -3074,23 +3157,15 @@ kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to
     );
 
     $resolve_asset_base_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_filesystem_asset_base_url');
-    $replace_stylesheet_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_stylesheet_href');
     $replace_local_assets_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_local_asset_paths');
 
     $html = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body><img class="hero" src="./FR-Joyplay_LandingPage_Overview_Collage.png"></body></html>';
-    $landing_folder_asset_base_url = 'https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp2-fr/';
     $external_asset_base_url = $resolve_asset_base_method->invoke($router, [
         'asset_base_url' => 'https://assets.example.test/custom/',
     ], 'lp2-fr');
 
-    $html = $replace_stylesheet_method->invoke($router, $html, $landing_folder_asset_base_url . 'styles.css');
     $html = $replace_local_assets_method->invoke($router, $html, $external_asset_base_url);
 
-    kiwi_assert_contains(
-        'href="https://backend.kiwimobile.de/wp-content/plugins/kiwi-backend/landing-pages/lp2-fr/styles.css"',
-        $html,
-        'Expected styles.css to remain served from the landing-page folder.'
-    );
     kiwi_assert_contains(
         'src="https://assets.example.test/custom/FR-Joyplay_LandingPage_Overview_Collage.png"',
         $html,
