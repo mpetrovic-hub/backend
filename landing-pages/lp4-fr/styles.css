@@ -20,8 +20,7 @@ body {
   box-shadow: 0 0 28px rgba(40, 214, 204, 0.35);
 }
 
-.additional-image {
-  width: 100%;
+.additional-image {  
   max-width: 400px;
   height: auto;
   margin-top: 17px; 
