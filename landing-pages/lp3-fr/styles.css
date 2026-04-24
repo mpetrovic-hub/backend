@@ -19,8 +19,7 @@ body {
   border-radius: 8px;
 }
 
-.additional-image {
-  width: 100%;
+.additional-image {  
   max-width: 400px;
   height: auto;
   margin-top: 17px; 
