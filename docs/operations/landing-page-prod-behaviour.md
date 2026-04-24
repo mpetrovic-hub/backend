@@ -16,7 +16,8 @@ Each page folder must follow the filesystem contract:
   - `styles.css`
   - `integration.php`
 - `integration.php` links page routing to service/flow/provider docs
-- optional `asset_base_url` can point `./asset.ext` references in `index.html` to a shared asset folder, for example `https://kiwimobile.de/wp-content/uploads/2025/05/`
+- default media asset folder: `https://backend.kiwimobile.de/wp-content/uploads/assets/`
+- optional `asset_base_url` can override that default for `./asset.ext` references in `index.html` and `styles.css`
 
 Business logic is centralized in plugin services. Landing-page folders are presentation plus metadata only.
 
@@ -45,7 +46,7 @@ At runtime, the router:
 4. Builds primary CTA centrally (provider adapter), then injects `{{KIWI_PRIMARY_CTA_HREF}}` in HTML.
 5. Renders filesystem HTML and wires `styles.css`.
 
-For filesystem HTML, local asset references such as `./hero.png` are rewritten at render time. By default they resolve to the landing-page plugin folder. If `asset_base_url` is set in `integration.php`, those local asset references resolve under that configured base URL instead. `styles.css` remains served from the landing-page folder and is also inlined by the router.
+For filesystem HTML and CSS, local media references such as `./hero.png` are rewritten at render time to `https://backend.kiwimobile.de/wp-content/uploads/assets/hero.png` by default. If `asset_base_url` is set in `integration.php`, those local asset references resolve under that configured base URL instead. `styles.css` remains served from the landing-page folder and is also inlined by the router.
 
 Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`) for fraud-linkage snapshots.
 

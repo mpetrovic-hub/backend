@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Landing_Page_Router
 {
     private const PRIMARY_CTA_PLACEHOLDER = '{{KIWI_PRIMARY_CTA_HREF}}';
+    private const DEFAULT_FILESYSTEM_ASSET_BASE_URL = 'https://backend.kiwimobile.de/wp-content/uploads/assets/';
 
     private $config;
     private $landing_page_session_repository;
@@ -212,6 +213,7 @@ class Kiwi_Landing_Page_Router
             $css_content = file_get_contents($styles_path);
 
             if (is_string($css_content) && trim($css_content) !== '') {
+                $css_content = $this->replace_local_css_asset_paths($css_content, $asset_base_url);
                 $html = $this->inject_inline_styles($html, $css_content);
             }
         }
@@ -423,7 +425,7 @@ class Kiwi_Landing_Page_Router
             return rtrim($configured_asset_base_url, '/\\') . '/';
         }
 
-        return $this->plugin_base_url . 'landing-pages/' . rawurlencode($landing_key) . '/';
+        return self::DEFAULT_FILESYSTEM_ASSET_BASE_URL;
     }
 
     private function replace_local_asset_paths(string $html, string $asset_base_url): string
@@ -457,6 +459,36 @@ class Kiwi_Landing_Page_Router
         );
 
         return is_string($rewritten_html) ? $rewritten_html : $html;
+    }
+
+    private function replace_local_css_asset_paths(string $css, string $asset_base_url): string
+    {
+        $asset_base_url = rtrim($asset_base_url, '/\\') . '/';
+        $pattern = '/url\(\s*([\'"]?)\.\/([^\'"\)]+)\1\s*\)/i';
+        $rewritten_css = preg_replace_callback(
+            $pattern,
+            function (array $matches) use ($asset_base_url): string {
+                $quote = (string) ($matches[1] ?? '');
+                $relative_path = trim((string) ($matches[2] ?? ''));
+
+                if ($relative_path === '') {
+                    return (string) ($matches[0] ?? '');
+                }
+
+                $normalized_path = str_replace('\\', '/', $relative_path);
+                $normalized_path = ltrim($normalized_path, '/');
+                $segments = array_values(array_filter(explode('/', $normalized_path), static function (string $segment): bool {
+                    return $segment !== '';
+                }));
+                $encoded_segments = array_map('rawurlencode', $segments);
+                $encoded_path = implode('/', $encoded_segments);
+
+                return 'url(' . $quote . $asset_base_url . $encoded_path . $quote . ')';
+            },
+            $css
+        );
+
+        return is_string($rewritten_css) ? $rewritten_css : $css;
     }
 
     private function inject_inline_styles(string $html, string $css_content): string

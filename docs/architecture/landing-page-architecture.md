@@ -169,7 +169,6 @@ return [
     'business_number' => '84072',
     'keyword' => 'Jplay*',
     'documentation' => '/integrations/nth-fr-one-off.md',
-    'asset_base_url' => 'https://kiwimobile.de/wp-content/uploads/2025/05/',
     'title' => 'France One-off LP2',
     'active' => true,
 ];
@@ -207,7 +206,7 @@ These are not always mandatory, but should be included when known:
 - `service_type`
 - `business_number`
 - `keyword`
-- `asset_base_url` for shared media folders used by `./asset.ext` references in `index.html`
+- `asset_base_url` only when a page must override the default shared media folder
 - `title`
 - `active`
 
@@ -496,7 +495,7 @@ return [
 
 `{{KIWI_PRIMARY_CTA_HREF}}` is a render-time placeholder resolved by centralized backend flow logic.
 Landing-page folders should not encode provider-specific CTA payload assembly directly in HTML.
-When `asset_base_url` is configured, `./asset.ext` references in `index.html` resolve under that shared media folder at render time; `styles.css` remains local to the landing-page folder.
+By default, `./asset.ext` references in `index.html` and `styles.css` resolve under `https://backend.kiwimobile.de/wp-content/uploads/assets/` at render time. When `asset_base_url` is configured, it overrides that shared media folder; `styles.css` remains local to the landing-page folder.
 
 ---
 

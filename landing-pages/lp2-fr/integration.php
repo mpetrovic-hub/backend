@@ -17,7 +17,6 @@ return [
     'backend_path' => '/lp/fr/myjoyplay', // defines the path on which the backend will be available, e.g. /lp/fr/myjoyplay3
     'dedicated_path' => '/',
     'hostnames' => [ 'your.joy-play.com', 'frlp2.joy-play.com' ], // defines the hostnames on which the landing page will be available, e.g. ['frlp3.joy-play.com', 'your.joy-play.com']
-    'asset_base_url' => 'https://backend.kiwimobile.de/wp-content/uploads/assets/', // defines the base URL for assets, e.g. 'https://backend.kiwimobile.de/wp-content/uploads/assets/'
     'service_key' => 'nth_fr_one_off_jplay',
     'shortcode' => '84072',
     'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
