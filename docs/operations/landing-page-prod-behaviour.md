@@ -10,7 +10,7 @@ Landing pages are discovered from `landing-pages/` and resolved by request path 
 
 Each page folder must follow the filesystem contract:
 
-- folder format: `lp<version>-<country>`
+- folder format: `lp<version>-<country>`; optional test/variant suffixes can be appended as `lp<version>-<country>-<variant>`
 - required files:
   - `index.html`
   - `styles.css`
@@ -59,6 +59,7 @@ Landing pages can be exposed on multiple public domains without changing core pl
 Recommended setup:
 
 - keep each landing page `backend_path` stable and unique (for example `/lp/fr/myjoyplay5`)
+- for backend-path-only test variants, leave `hostnames` empty to avoid taking over a dedicated-host root route
 - point each public domain/hostname to the same backend WordPress runtime via DNS + reverse proxy/CNAME
 - keep `hostnames` metadata populated in `integration.php` for diagnostics visibility and optional dedicated-host routing
 

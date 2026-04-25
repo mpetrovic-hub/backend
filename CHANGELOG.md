@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-04-24:
+- [Hero LCP] Improved Joyplay LP4 hero-image loading behavior by adding explicit intrinsic dimensions and `fetchpriority="high"` on the main visual in `landing-pages/lp4-fr/index.html`. This reduces layout uncertainty and prioritizes hero delivery for faster Largest Contentful Paint.
+
 2026-04-23:
 - [Fraud Monitor] Wired the hidden `kiwi_fraud_flow_key` request filter through the Premium SMS fraud shortcode so backend filtering applies consistently to fraud-signal and landing-engagement rows, with regression coverage. The shortcode UI remains unchanged and intentionally does not expose a visible flow field.
 

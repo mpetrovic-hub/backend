@@ -130,17 +130,25 @@ Landing-page folders must follow this format:
 lp<version>-<country>
 ```
 
+Test or variant pages may append a lowercase, hyphen-separated suffix:
+
+```text
+lp<version>-<country>-<variant>
+```
+
 Examples:
 
 - `lp2-fr`
 - `lp14-at`
 - `lp17-gr`
+- `lp4-fr-img-preload-test`
 
 ### Naming rules
 
 - the `lp` prefix is required
 - `<version>` must be numeric
 - `<country>` should be a lowercase country code
+- optional variant suffixes must use lowercase letters, numbers, and hyphens
 - the folder name must be stable once used in production
 - the folder name is the landing-page key and must match the metadata `key`
 

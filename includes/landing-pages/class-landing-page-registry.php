@@ -112,7 +112,7 @@ class Kiwi_Landing_Page_Registry
 
             if (!$this->is_valid_folder_name($entry)) {
                 $this->errors[] = sprintf(
-                    'Landing page folder "%s" does not match naming format "lp<version>-<country>".',
+                    'Landing page folder "%s" does not match naming format "lp<version>-<country>" or "lp<version>-<country>-<variant>".',
                     $entry
                 );
                 continue;
@@ -326,6 +326,6 @@ class Kiwi_Landing_Page_Registry
 
     private function is_valid_folder_name(string $folder_name): bool
     {
-        return preg_match('/^lp[0-9]+-[a-z]{2,3}$/', $folder_name) === 1;
+        return preg_match('/^lp[0-9]+-[a-z]{2,3}(?:-[a-z0-9]+)*$/', $folder_name) === 1;
     }
 }

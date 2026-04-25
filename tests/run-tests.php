@@ -2462,6 +2462,10 @@ kiwi_run_test('Kiwi_Landing_Page_Registry discovers folder landing pages and par
 
     try {
         kiwi_write_landing_page_fixture($project_root, 'lp2-fr');
+        kiwi_write_landing_page_fixture($project_root, 'lp4-fr-img-preload-test', [
+            'backend_path' => '/lp/fr/myjoyplay4-img-preload-test',
+            'hostnames' => [],
+        ]);
 
         $registry = new Kiwi_Landing_Page_Registry(
             $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
@@ -2472,7 +2476,9 @@ kiwi_run_test('Kiwi_Landing_Page_Registry discovers folder landing pages and par
 
         kiwi_assert_same([], $errors, 'Expected valid landing page folders to load without validation errors.');
         kiwi_assert_true(isset($landing_pages['lp2-fr']), 'Expected lp2-fr to be discovered from the filesystem.');
+        kiwi_assert_true(isset($landing_pages['lp4-fr-img-preload-test']), 'Expected suffix test variants to be discovered from the filesystem.');
         kiwi_assert_same('nth-fr-one-off', $landing_pages['lp2-fr']['flow'] ?? '', 'Expected landing page flow metadata to be parsed from integration.php.');
+        kiwi_assert_same('/lp/fr/myjoyplay4-img-preload-test', $landing_pages['lp4-fr-img-preload-test']['backend_path'] ?? '', 'Expected suffix test variant backend path metadata to be parsed.');
         kiwi_assert_same('/integrations/nth/fr/one-off/README.md', $landing_pages['lp2-fr']['documentation'] ?? '', 'Expected documentation path to normalize to /integrations/.');
         kiwi_assert_true(is_file((string) ($landing_pages['lp2-fr']['documentation_resolved_path'] ?? '')), 'Expected documentation link to resolve to an existing docs file.');
         kiwi_assert_same('filesystem', $landing_pages['lp2-fr']['render_mode'] ?? '', 'Expected discovered entries to be marked as filesystem-rendered.');
