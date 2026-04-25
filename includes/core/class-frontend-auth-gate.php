@@ -54,6 +54,8 @@ class Kiwi_Frontend_Auth_Gate
     }
     public function can_access_tools(): bool
     {
+        $this->send_tool_nocache_headers();
+
         return !$this->is_enforced() || $this->is_authenticated();
     }
     public function is_enforced(): bool
@@ -142,6 +144,8 @@ class Kiwi_Frontend_Auth_Gate
     }
     public function render_login_form(array $context = []): string
     {
+        $this->send_tool_nocache_headers();
+
         if (!$this->is_enforced()) {
             return $this->render_not_configured_notice();
         }
@@ -359,6 +363,25 @@ class Kiwi_Frontend_Auth_Gate
             . '<p>Please set <code>KIWI_FRONTEND_AUTH_USERNAME</code> and <code>KIWI_FRONTEND_AUTH_PASSWORD_HASH</code> in <code>wp-config.php</code>.</p>'
             . '</div></section>';
     }
+
+    private function send_tool_nocache_headers(): void
+    {
+        if (headers_sent()) {
+            return;
+        }
+
+        if (function_exists('nocache_headers')) {
+            nocache_headers();
+        } else {
+            header('Expires: Wed, 11 Jan 1984 05:00:00 GMT', true);
+            header('Cache-Control: no-cache, must-revalidate, max-age=0, no-store, private', true);
+            header('Pragma: no-cache', true);
+        }
+
+        header('CDN-Cache-Control: no-store', false);
+        header('X-LiteSpeed-Cache-Control: no-cache', false);
+    }
+
     private function read_error_code(): string
     {
         if (!isset($_GET[self::ERROR_QUERY_ARG])) {
