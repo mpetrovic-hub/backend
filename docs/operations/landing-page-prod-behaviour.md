@@ -28,6 +28,7 @@ The plugin exposes a landing-page diagnostics/gallery shortcode:
 - shortcode: `[kiwi_landing_pages_gallery]`
 - source: filesystem landing pages discovered through the shared config/registry path
 - card metadata: `country`, `key`, `flow`, `service_key`, provider, routing mode
+- auth/cache behavior: when frontend tool auth is enabled, both the gallery login form and authenticated gallery response send `nocache` headers plus `CDN-Cache-Control: no-store` and `X-LiteSpeed-Cache-Control: no-cache`
 - URL behavior:
   - when `hostnames` + `backend_path` exist, cards show absolute HTTPS outside URLs as `https://<hostname><backend_path>`
   - when `hostnames` exist but `backend_path` is missing, cards fall back to `https://<hostname><dedicated_path>`
@@ -208,6 +209,7 @@ When validating a landing-page flow in production or staging, verify:
 7. `backend_path` routes resolve correctly on every public hostname that proxies to the backend runtime.
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
+10. If the gallery is auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
 
 ## Troubleshooting quick map
 

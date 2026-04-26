@@ -36,3 +36,6 @@ Logout mechanism:
 Scope:
 - Protected: plugin frontend tools (`kiwi_hlr_lookup`, `kiwi_dimoco_refunder`, `kiwi_dimoco_blacklister`, `kiwi_landing_pages_gallery`, `kiwi_premium_sms_fraud`) and HLR export trigger.
 - Not protected by this layer: landing-page router traffic, REST callbacks, and WordPress admin.
+
+Cache behavior:
+- Protected tool responses and login forms send no-cache headers, including `CDN-Cache-Control: no-store` and `X-LiteSpeed-Cache-Control: no-cache`, to avoid serving stale authenticated or logged-out tool pages through edge caches.

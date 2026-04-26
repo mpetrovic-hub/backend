@@ -2,6 +2,13 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-04-26:
+- [No Changes] No medium-impact or higher commits landed in repository history on 2026-04-26.
+
+2026-04-25:
+- [LP Variant] Added the `lp4-fr-img-preload-test` landing-page variant and expanded landing-page registry naming support to accept optional `-<variant>` suffixes, with docs updated for variant path/hostname behavior. Added regression coverage to ensure suffix-based filesystem entries are discovered and parsed correctly.
+- [Auth Cache] Hardened frontend tool authentication responses by sending explicit no-cache headers on tool access checks and login-form rendering in `Kiwi_Frontend_Auth_Gate`. This prevents stale cached auth pages and aligns behavior across origin and CDN cache layers.
+
 2026-04-24:
 - [Hero LCP] Improved Joyplay LP4 hero-image loading behavior by adding explicit intrinsic dimensions and `fetchpriority="high"` on the main visual in `landing-pages/lp4-fr/index.html`. This reduces layout uncertainty and prioritizes hero delivery for faster Largest Contentful Paint.
 
