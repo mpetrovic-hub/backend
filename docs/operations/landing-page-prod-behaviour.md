@@ -18,6 +18,7 @@ Each page folder must follow the filesystem contract:
 - `integration.php` links page routing to service/flow/provider docs
 - default media asset folder: `https://backend.kiwimobile.de/wp-content/uploads/assets/`
 - optional `asset_base_url` can override that default for `./asset.ext` references in `index.html` and `styles.css`
+- hero/LCP images should be preloaded with high fetch priority and explicit image dimensions; when small responsive variants exist, the preload and `<img>` should use matching responsive image candidates
 
 Business logic is centralized in plugin services. Landing-page folders are presentation plus metadata only.
 
@@ -48,6 +49,8 @@ At runtime, the router:
 5. Renders filesystem HTML and wires `styles.css`.
 
 For filesystem HTML and CSS, local media references such as `./hero.png` are rewritten at render time to `https://backend.kiwimobile.de/wp-content/uploads/assets/hero.png` by default. If `asset_base_url` is set in `integration.php`, those local asset references resolve under that configured base URL instead. When readable, `styles.css` is inlined into the rendered HTML and its external stylesheet link is suppressed; if it cannot be read, the router falls back to the external stylesheet URL from the landing-page folder.
+
+Responsive hero candidates in `srcset` and `imagesrcset` are not rewritten by the filesystem renderer. Use absolute URLs under the effective asset base for those candidate lists, and keep the preload candidates in sync with the visible hero `<img>` candidates so the browser does not fetch a duplicate LCP image.
 
 Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`) for fraud-linkage snapshots.
 
