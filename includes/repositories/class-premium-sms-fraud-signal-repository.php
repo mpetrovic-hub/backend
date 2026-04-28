@@ -55,6 +55,45 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
         dbDelta($sql);
     }
 
+    public function normalize_unknown_link_soft_flags(): void
+    {
+        global $wpdb;
+
+        $table_name = $this->get_table_name();
+        $rows = $wpdb->get_results(
+            "SELECT id, soft_flag_reason
+             FROM {$table_name}
+             WHERE soft_flag_reason LIKE '%unknown_link%'",
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            return;
+        }
+
+        foreach ($rows as $row) {
+            $id = (int) ($row['id'] ?? 0);
+
+            if ($id <= 0) {
+                continue;
+            }
+
+            $reasons = $this->remove_unknown_link_reason((string) ($row['soft_flag_reason'] ?? ''));
+            $soft_flag_reason = implode(' OR ', $reasons);
+
+            $wpdb->update(
+                $table_name,
+                [
+                    'is_soft_flag' => $soft_flag_reason !== '' ? 1 : 0,
+                    'soft_flag_reason' => substr($soft_flag_reason, 0, 191),
+                ],
+                ['id' => $id],
+                ['%d', '%s'],
+                ['%d']
+            );
+        }
+    }
+
     public function insert_if_new(array $data): array
     {
         $source_event_key = trim((string) ($data['source_event_key'] ?? ''));
@@ -379,6 +418,25 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
         $pid = is_string($pid) ? $pid : '';
 
         return substr($pid, 0, 191);
+    }
+
+    private function remove_unknown_link_reason(string $reason): array
+    {
+        $parts = preg_split('/\s+OR\s+/i', trim($reason));
+        $parts = is_array($parts) ? $parts : [];
+        $reasons = [];
+
+        foreach ($parts as $part) {
+            $part = trim((string) $part);
+
+            if ($part === '' || strtolower($part) === 'unknown_link') {
+                continue;
+            }
+
+            $reasons[] = $part;
+        }
+
+        return array_values(array_unique($reasons));
     }
 
     protected function sanitize_click_id(string $click_id): string

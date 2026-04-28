@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-04-21-4';
+    private const DB_SCHEMA_VERSION = '2026-04-28-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -697,6 +697,7 @@ TEXT;
         $landing_kpi_summary_repository->create_table();
         $landing_engagement_repository->create_table();
         $premium_sms_fraud_signal_repository->create_table();
+        $premium_sms_fraud_signal_repository->normalize_unknown_link_soft_flags();
     }
 
     protected function get_click_attribution_cleanup_limit(): int

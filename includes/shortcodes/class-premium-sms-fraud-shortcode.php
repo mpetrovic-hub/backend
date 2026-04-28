@@ -42,7 +42,13 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
 
         $filters = $this->read_filters_from_request();
         $filter_options = $this->build_filter_options();
-        $rows = $this->repository->get_recent($filters, (int) ($filters['limit'] ?? 100));
+        $limit = (int) ($filters['limit'] ?? 100);
+        $candidate_limit = !empty($filters['flagged_only']) ? 500 : $limit;
+        $rows = $this->normalize_mo_fraud_rows(
+            $this->repository->get_recent($filters, $candidate_limit),
+            !empty($filters['flagged_only']),
+            $limit
+        );
         $engagement_rows = $this->load_engagement_rows($filters);
 
         $output = '';
@@ -83,8 +89,9 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '</tr></thead><tbody>';
 
             foreach ($rows as $row) {
-                $flag_text = !empty($row['is_soft_flag']) ? '1' : '0';
-                $flag_class = !empty($row['is_soft_flag']) ? 'kiwi-status--failure' : 'kiwi-status--success';
+                $mo_soft_flag = $this->resolve_mo_soft_flag($row);
+                $flag_text = !empty($mo_soft_flag['is_soft_flag']) ? '1' : '0';
+                $flag_class = !empty($mo_soft_flag['is_soft_flag']) ? 'kiwi-status--failure' : 'kiwi-status--success';
 
                 $output .= '<tr>';
                 $output .= '<td>' . esc_html((string) ($row['occurred_at'] ?? '')) . '</td>';
@@ -98,7 +105,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['count_24h'] ?? '0')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['count_total'] ?? '0')) . '</td>';
                 $output .= '<td class="' . esc_attr($flag_class) . '">' . esc_html($flag_text) . '</td>';
-                $output .= '<td>' . esc_html((string) ($row['soft_flag_reason'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($mo_soft_flag['soft_flag_reason'] ?? '')) . '</td>';
                 $output .= '</tr>';
             }
 
@@ -163,6 +170,63 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $output .= '</section>';
 
         return $output;
+    }
+
+    private function normalize_mo_fraud_rows(array $rows, bool $flagged_only, int $limit): array
+    {
+        $normalized_rows = [];
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $soft_flag = $this->resolve_mo_soft_flag($row);
+
+            if ($flagged_only && empty($soft_flag['is_soft_flag'])) {
+                continue;
+            }
+
+            $row['is_soft_flag'] = !empty($soft_flag['is_soft_flag']) ? 1 : 0;
+            $row['soft_flag_reason'] = (string) ($soft_flag['soft_flag_reason'] ?? '');
+            $normalized_rows[] = $row;
+
+            if (count($normalized_rows) >= max(1, min(500, $limit))) {
+                break;
+            }
+        }
+
+        return $normalized_rows;
+    }
+
+    private function resolve_mo_soft_flag(array $row): array
+    {
+        $reasons = $this->normalize_mo_soft_flag_reasons((string) ($row['soft_flag_reason'] ?? ''));
+        $is_soft_flag = !empty($row['is_soft_flag']) && !empty($reasons);
+
+        return [
+            'is_soft_flag' => $is_soft_flag,
+            'soft_flag_reason' => implode(' OR ', $reasons),
+        ];
+    }
+
+    private function normalize_mo_soft_flag_reasons(string $reason): array
+    {
+        $parts = preg_split('/\s+OR\s+/i', trim($reason));
+        $parts = is_array($parts) ? $parts : [];
+        $reasons = [];
+
+        foreach ($parts as $part) {
+            $part = trim((string) $part);
+
+            if ($part === '' || strtolower($part) === 'unknown_link') {
+                continue;
+            }
+
+            $reasons[] = $part;
+        }
+
+        return array_values(array_unique($reasons));
     }
 
     private function render_filter_form(array $filters, array $filter_options): string

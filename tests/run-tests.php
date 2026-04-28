@@ -7288,6 +7288,22 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'is_soft_flag' => true,
         'soft_flag_reason' => 'count_1h>=3',
     ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_a',
+        'flow_key' => 'flow-a',
+        'pid' => 'pid-a',
+        'click_id' => 'click-a',
+        'source_event_key' => 'row-legacy-unknown-link',
+        'identity_type' => 'session',
+        'identity_value' => 'session-legacy-unknown-link',
+        'occurred_at' => '2026-04-01 12:04:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'unknown_link',
+    ]);
 
     $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
     $output = $shortcode->render();
@@ -7300,6 +7316,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
     kiwi_assert_true(strpos($output, 'session-not-flagged') === false, 'Expected flagged_only filter to remove non-flagged rows.');
     kiwi_assert_true(strpos($output, 'session-other-service') === false, 'Expected service_key filter to remove rows from other services.');
     kiwi_assert_true(strpos($output, 'session-other-pid') === false, 'Expected pid filter to remove flagged rows from other pid values.');
+    kiwi_assert_true(strpos($output, 'session-legacy-unknown-link') === false, 'Expected flagged_only filter to remove legacy unknown_link-only rows.');
+    kiwi_assert_true(strpos($output, 'unknown_link') === false, 'Expected shortcode not to render unknown_link as a soft-flag reason.');
 
     $_GET = [];
 });
@@ -7349,7 +7367,6 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode applies flow_key filter to fraud
         'is_soft_flag' => true,
         'soft_flag_reason' => 'count_1h>=3',
     ]);
-
     $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
     $output = $shortcode->render();
 
