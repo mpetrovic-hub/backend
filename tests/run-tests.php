@@ -2759,7 +2759,7 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
         ]);
         kiwi_write_file(
             $project_root . DIRECTORY_SEPARATOR . 'landing-pages' . DIRECTORY_SEPARATOR . 'lp2-fr' . DIRECTORY_SEPARATOR . 'index.html',
-            "<!doctype html>\n<html><head><link rel=\"stylesheet\" href=\"./styles.css\"></head><body><img src=\"./FR-Joyplay_LandingPage_Overview_Collage.png\" alt=\"Joyplay\">LP</body></html>\n"
+            "<!doctype html>\n<html><head><link rel=\"preload\" as=\"image\" href=\"./FR-Joyplay_LandingPage_Overview_Collage_420.png\" imagesrcset=\"./FR-Joyplay_LandingPage_Overview_Collage_360.png 360w, ./FR-Joyplay_LandingPage_Overview_Collage_420.png 420w\"><link rel=\"stylesheet\" href=\"./styles.css\"></head><body><img src=\"./FR-Joyplay_LandingPage_Overview_Collage.png\" srcset=\"./FR-Joyplay_LandingPage_Overview_Collage_360.png 360w, ./FR-Joyplay_LandingPage_Overview_Collage_420.png 420w\" alt=\"Joyplay\">LP</body></html>\n"
         );
         kiwi_write_file(
             $project_root . DIRECTORY_SEPARATOR . 'landing-pages' . DIRECTORY_SEPARATOR . 'lp2-fr' . DIRECTORY_SEPARATOR . 'styles.css',
@@ -2818,6 +2818,16 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
             'src="https://backend.kiwimobile.de/wp-content/uploads/assets/FR-Joyplay_LandingPage_Overview_Collage.png"',
             $output,
             'Expected srcdoc previews to rewrite local assets through the default landing-page asset base URL.'
+        );
+        kiwi_assert_contains(
+            'imagesrcset="https://backend.kiwimobile.de/wp-content/uploads/assets/FR-Joyplay_LandingPage_Overview_Collage_360.png 360w, https://backend.kiwimobile.de/wp-content/uploads/assets/FR-Joyplay_LandingPage_Overview_Collage_420.png 420w"',
+            $output,
+            'Expected srcdoc previews to rewrite local preload imagesrcset candidates through the default landing-page asset base URL.'
+        );
+        kiwi_assert_contains(
+            'srcset="https://backend.kiwimobile.de/wp-content/uploads/assets/FR-Joyplay_LandingPage_Overview_Collage_360.png 360w, https://backend.kiwimobile.de/wp-content/uploads/assets/FR-Joyplay_LandingPage_Overview_Collage_420.png 420w"',
+            $output,
+            'Expected srcdoc previews to rewrite local img srcset candidates through the default landing-page asset base URL.'
         );
         kiwi_assert_contains(
             "url('https://backend.kiwimobile.de/wp-content/uploads/assets/preview-bg.png')",
@@ -3128,7 +3138,7 @@ kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to
     $replace_local_assets_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_local_asset_paths');
     $replace_local_css_assets_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_local_css_asset_paths');
 
-    $html = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body><img class="hero" src="./hero-dragonfight.jpg"><script src="./core.js"></script><a href="./terms.pdf">Terms</a></body></html>';
+    $html = '<!doctype html><html><head><link rel="preload" as="image" href="./hero-420.webp" imagesrcset="./hero-360.webp 360w, ./hero-420.webp 420w, https://cdn.example.test/hero-800.webp 800w, /rooted.webp 900w, data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw== 1x"><link rel="stylesheet" href="./styles.css"></head><body><img class="hero" src="./hero-dragonfight.jpg" srcset="./hero-360.webp 360w, ./hero-420.webp 420w, https://cdn.example.test/hero-800.webp 800w, /rooted.webp 900w, data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw== 1x"><script src="./core.js"></script><a href="./terms.pdf">Terms</a></body></html>';
     $asset_base_url = $resolve_asset_base_method->invoke($router, [], 'lp4-fr');
     $html = $replace_local_assets_method->invoke($router, $html, $asset_base_url);
     $css = $replace_local_css_assets_method->invoke($router, ".hero { background-image: url('./hero-bg.png'); }", $asset_base_url);
@@ -3137,6 +3147,16 @@ kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to
         'src="https://backend.kiwimobile.de/wp-content/uploads/assets/hero-dragonfight.jpg"',
         $html,
         'Expected local img src paths to be rewritten to the default landing-page asset URL.'
+    );
+    kiwi_assert_contains(
+        'imagesrcset="https://backend.kiwimobile.de/wp-content/uploads/assets/hero-360.webp 360w, https://backend.kiwimobile.de/wp-content/uploads/assets/hero-420.webp 420w, https://cdn.example.test/hero-800.webp 800w, /rooted.webp 900w, data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw== 1x"',
+        $html,
+        'Expected local imagesrcset candidates to be rewritten while preserving descriptors and non-local candidates.'
+    );
+    kiwi_assert_contains(
+        'srcset="https://backend.kiwimobile.de/wp-content/uploads/assets/hero-360.webp 360w, https://backend.kiwimobile.de/wp-content/uploads/assets/hero-420.webp 420w, https://cdn.example.test/hero-800.webp 800w, /rooted.webp 900w, data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw== 1x"',
+        $html,
+        'Expected local img srcset candidates to be rewritten while preserving descriptors and non-local candidates.'
     );
     kiwi_assert_contains(
         'src="https://backend.kiwimobile.de/wp-content/uploads/assets/core.js"',
@@ -3165,7 +3185,7 @@ kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to
     $resolve_asset_base_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_filesystem_asset_base_url');
     $replace_local_assets_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'replace_local_asset_paths');
 
-    $html = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body><img class="hero" src="./FR-Joyplay_LandingPage_Overview_Collage.png"></body></html>';
+    $html = '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body><img class="hero" src="./FR-Joyplay_LandingPage_Overview_Collage.png" srcset="./FR-Joyplay_LandingPage_Overview_Collage_360.png 360w, ./FR-Joyplay_LandingPage_Overview_Collage_420.png 420w, https://cdn.example.test/keep.png 800w, /root/keep.png 900w, data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw== 1x"></body></html>';
     $external_asset_base_url = $resolve_asset_base_method->invoke($router, [
         'asset_base_url' => 'https://assets.example.test/custom/',
     ], 'lp2-fr');
@@ -3176,6 +3196,11 @@ kiwi_run_test('Kiwi_Landing_Page_Router rewrites local filesystem asset paths to
         'src="https://assets.example.test/custom/FR-Joyplay_LandingPage_Overview_Collage.png"',
         $html,
         'Expected local img src paths to be rewritten to the configured external asset base URL.'
+    );
+    kiwi_assert_contains(
+        'srcset="https://assets.example.test/custom/FR-Joyplay_LandingPage_Overview_Collage_360.png 360w, https://assets.example.test/custom/FR-Joyplay_LandingPage_Overview_Collage_420.png 420w, https://cdn.example.test/keep.png 800w, /root/keep.png 900w, data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw== 1x"',
+        $html,
+        'Expected local srcset candidates to be rewritten to the configured external asset base URL while preserving non-local candidates.'
     );
 });
 

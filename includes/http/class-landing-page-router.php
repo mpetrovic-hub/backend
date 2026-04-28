@@ -474,23 +474,70 @@ class Kiwi_Landing_Page_Router
                     return (string) ($matches[0] ?? '');
                 }
 
-                $normalized_path = str_replace('\\', '/', $relative_path);
-                $normalized_path = ltrim($normalized_path, '/');
-
-                $segments = array_values(array_filter(explode('/', $normalized_path), static function (string $segment): bool {
-                    return $segment !== '';
-                }));
-                $encoded_segments = array_map('rawurlencode', $segments);
-                $encoded_path = implode('/', $encoded_segments);
-
                 return (string) ($matches[1] ?? '')
-                    . htmlspecialchars($asset_base_url . $encoded_path, ENT_QUOTES, 'UTF-8')
+                    . htmlspecialchars($this->build_local_asset_url($asset_base_url, $relative_path), ENT_QUOTES, 'UTF-8')
                     . (string) ($matches[3] ?? '');
             },
             $html
         );
 
+        $html = is_string($rewritten_html) ? $rewritten_html : $html;
+        $rewritten_html = preg_replace_callback(
+            '/\b(srcset|imagesrcset)=(["\'])(.*?)\2/is',
+            function (array $matches) use ($asset_base_url): string {
+                $attribute_name = (string) ($matches[1] ?? '');
+                $quote = (string) ($matches[2] ?? '"');
+                $candidate_list = (string) ($matches[3] ?? '');
+
+                return $attribute_name
+                    . '='
+                    . $quote
+                    . $this->replace_local_srcset_candidates($candidate_list, $asset_base_url, [$this, 'escape_html_attribute'])
+                    . $quote;
+            },
+            $html
+        );
+
         return is_string($rewritten_html) ? $rewritten_html : $html;
+    }
+
+    private function build_local_asset_url(string $asset_base_url, string $relative_path): string
+    {
+        $asset_base_url = rtrim($asset_base_url, '/\\') . '/';
+        $normalized_path = str_replace('\\', '/', trim($relative_path));
+        $normalized_path = ltrim($normalized_path, '/');
+        $segments = array_values(array_filter(explode('/', $normalized_path), static function (string $segment): bool {
+            return $segment !== '';
+        }));
+        $encoded_segments = array_map('rawurlencode', $segments);
+
+        return $asset_base_url . implode('/', $encoded_segments);
+    }
+
+    private function replace_local_srcset_candidates(string $candidate_list, string $asset_base_url, callable $escape_callback): string
+    {
+        $rewritten_candidates = preg_replace_callback(
+            '/(^|,)(\s*)\.\/([^\s,]+)/',
+            function (array $matches) use ($asset_base_url, $escape_callback): string {
+                $relative_path = (string) ($matches[3] ?? '');
+
+                if ($relative_path === '') {
+                    return (string) ($matches[0] ?? '');
+                }
+
+                return (string) ($matches[1] ?? '')
+                    . (string) ($matches[2] ?? '')
+                    . call_user_func($escape_callback, $this->build_local_asset_url($asset_base_url, $relative_path));
+            },
+            $candidate_list
+        );
+
+        return is_string($rewritten_candidates) ? $rewritten_candidates : $candidate_list;
+    }
+
+    private function escape_html_attribute(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
     }
 
     private function replace_local_css_asset_paths(string $css, string $asset_base_url): string

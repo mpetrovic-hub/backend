@@ -503,9 +503,9 @@ return [
 
 `{{KIWI_PRIMARY_CTA_HREF}}` is a render-time placeholder resolved by centralized backend flow logic.
 Landing-page folders should not encode provider-specific CTA payload assembly directly in HTML.
-By default, `./asset.ext` references in `index.html` and `styles.css` resolve under `https://backend.kiwimobile.de/wp-content/uploads/assets/` at render time. When `asset_base_url` is configured, it overrides that shared media folder; `styles.css` remains local to the landing-page folder.
+By default, `./asset.ext` references in `index.html` and `styles.css` resolve under `https://backend.kiwimobile.de/wp-content/uploads/assets/` at render time. This includes direct `src`/`href` attributes, CSS `url(...)` values, and local candidates in `srcset`/`imagesrcset`. When `asset_base_url` is configured, it overrides that shared media folder; `styles.css` remains local to the landing-page folder.
 
-The above-the-fold hero should be treated as the LCP image: preload it with `rel="preload" as="image"` and `fetchpriority="high"`, keep the visible `<img>` on the same high-priority asset path, and set explicit `width`/`height` attributes. When responsive hero variants exist, expose the small/common mobile candidates through matching `imagesrcset`/`imagesizes` on the preload and `srcset`/`sizes` on the `<img>`. Because filesystem asset rewriting only targets direct `src`/`href` references, responsive candidate URLs in `srcset` and `imagesrcset` must be absolute URLs under the effective asset base.
+The above-the-fold hero should be treated as the LCP image: preload it with `rel="preload" as="image"` and `fetchpriority="high"`, keep the visible `<img>` on the same high-priority asset path, and set explicit `width`/`height` attributes. When responsive hero variants exist, expose the small/common mobile candidates through matching `imagesrcset`/`imagesizes` on the preload and `srcset`/`sizes` on the `<img>`.
 
 ---
 

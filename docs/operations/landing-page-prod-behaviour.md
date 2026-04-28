@@ -48,9 +48,9 @@ At runtime, the router:
 4. Builds primary CTA centrally (provider adapter), then injects `{{KIWI_PRIMARY_CTA_HREF}}` in HTML.
 5. Renders filesystem HTML and wires `styles.css`.
 
-For filesystem HTML and CSS, local media references such as `./hero.png` are rewritten at render time to `https://backend.kiwimobile.de/wp-content/uploads/assets/hero.png` by default. If `asset_base_url` is set in `integration.php`, those local asset references resolve under that configured base URL instead. When readable, `styles.css` is inlined into the rendered HTML and its external stylesheet link is suppressed; if it cannot be read, the router falls back to the external stylesheet URL from the landing-page folder.
+For filesystem HTML and CSS, local media references such as `./hero.png` are rewritten at render time to `https://backend.kiwimobile.de/wp-content/uploads/assets/hero.png` by default. This applies to direct HTML `src`/`href` attributes, CSS `url(...)` values, and local responsive candidates in `srcset`/`imagesrcset`. If `asset_base_url` is set in `integration.php`, those local asset references resolve under that configured base URL instead. When readable, `styles.css` is inlined into the rendered HTML and its external stylesheet link is suppressed; if it cannot be read, the router falls back to the external stylesheet URL from the landing-page folder.
 
-Responsive hero candidates in `srcset` and `imagesrcset` are not rewritten by the filesystem renderer. Use absolute URLs under the effective asset base for those candidate lists, and keep the preload candidates in sync with the visible hero `<img>` candidates so the browser does not fetch a duplicate LCP image.
+Keep the preload candidates in sync with the visible hero `<img>` candidates so the browser does not fetch a duplicate LCP image. External, protocol-relative, `data:`, and root-relative `/...` candidates keep their original browser semantics; only `./...` candidates are rewritten to the effective asset base.
 
 Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`) for fraud-linkage snapshots.
 
