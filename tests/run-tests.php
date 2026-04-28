@@ -4378,7 +4378,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository upserts by landing
     kiwi_assert_same(2, (int) ($second_click['cta_click_count'] ?? 0), 'Expected cta click count to increment on each click event.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service flags unknown links and fast MO deltas', function (): void {
+kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service records unknown links without soft-flagging and flags fast MO deltas', function (): void {
     $config = new Kiwi_Test_Config(
         100,
         0,
@@ -4435,11 +4435,61 @@ kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service flags unknown li
         'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
     ]);
 
-    kiwi_assert_true(in_array('unknown_link', $unknown['reasons'] ?? [], true), 'Expected missing attribution/engagement linkage to be flagged as unknown_link.');
-    kiwi_assert_true(($unknown['has_soft_flag'] ?? false) === true, 'Expected unknown link evaluation to be soft-flagged.');
+    kiwi_assert_true(in_array('unknown_link', $unknown['link_reasons'] ?? [], true), 'Expected missing attribution/engagement linkage to be recorded as unknown_link.');
+    kiwi_assert_true(!in_array('unknown_link', $unknown['reasons'] ?? [], true), 'Expected unknown_link not to be treated as a soft-flag reason.');
+    kiwi_assert_true(($unknown['has_soft_flag'] ?? false) === false, 'Expected unknown link evaluation not to be soft-flagged.');
     kiwi_assert_true(in_array('mo_too_fast_after_load<1s', $fast['reasons'] ?? [], true), 'Expected sub-1s MO delta to be flagged as suspicious.');
     kiwi_assert_true(($fast['linked'] ?? false) === true, 'Expected evaluator to treat matched attribution + engagement rows as linked.');
     kiwi_assert_same('aff-fast-1', (string) ($fast['click_id'] ?? ''), 'Expected evaluator to expose resolved click_id from linked attribution.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service does not soft-flag unknown engagement links', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [],
+        180,
+        3,
+        6,
+        'block',
+        true,
+        true,
+        1
+    );
+    $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $click_repository = new Kiwi_Test_Click_Attribution_Repository();
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
+        $config,
+        $click_repository,
+        $engagement_repository
+    );
+    $service = new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, $fraud_repository, $evaluator);
+
+    $result = $service->capture_inbound_mo([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_unknown_link',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'source_event_key' => 'event-unknown-link-1',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'subscriber_reference' => 'enc-unknown-link-1',
+        'session_ref' => 'sess-unknown-link-1',
+        'transaction_id' => 'txn_unknown_link_1',
+    ]);
+
+    $first_row = $fraud_repository->rows[0] ?? [];
+    $engagement = $result['engagement'] ?? [];
+
+    kiwi_assert_true(($result['has_soft_flag'] ?? false) === false, 'Expected unknown engagement link not to set monitor soft-flag.');
+    kiwi_assert_true(($result['should_block'] ?? false) === false, 'Expected block mode not to block unknown engagement link by itself.');
+    kiwi_assert_same(0, (int) ($first_row['is_soft_flag'] ?? 0), 'Expected persisted fraud row not to be soft-flagged for unknown link only.');
+    kiwi_assert_same('', (string) ($first_row['soft_flag_reason'] ?? ''), 'Expected persisted soft_flag_reason to stay empty for unknown link only.');
+    kiwi_assert_true(in_array('unknown_link', $engagement['link_reasons'] ?? [], true), 'Expected unknown link audit reason to remain available in engagement metadata.');
 });
 
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service merges engagement reasons and enables block mode when configured', function (): void {
@@ -4777,7 +4827,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when fraud monit
         'has_soft_flag' => true,
         'soft_flagged_identity_types' => ['session'],
         'engagement' => [],
-        'engagement_soft_flag_reasons' => ['unknown_link'],
+        'engagement_soft_flag_reasons' => ['missing_cta_click'],
         'should_block' => true,
     ]);
     $service = new Kiwi_Nth_Fr_One_Off_Service(

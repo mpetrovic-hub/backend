@@ -40,8 +40,10 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
         $threshold_1h = max(1, $this->config->get_premium_sms_fraud_threshold_1h());
         $threshold_24h = max(1, $this->config->get_premium_sms_fraud_threshold_24h());
         $engagement_evaluation = $this->evaluate_engagement($signal_context);
-        $engagement_reasons = array_values(array_unique(array_filter(array_map('strval', $engagement_evaluation['reasons'] ?? []))));
-        $has_engagement_soft_flag = !empty($engagement_reasons);
+        $has_engagement_soft_flag = !empty($engagement_evaluation['has_soft_flag']);
+        $engagement_reasons = $has_engagement_soft_flag
+            ? array_values(array_unique(array_filter(array_map('strval', $engagement_evaluation['reasons'] ?? []))))
+            : [];
         $engagement_mode = $this->config->get_premium_sms_fraud_mo_engagement_mode();
         $pid = $this->resolve_pid((string) ($signal_context['pid'] ?? ''), $engagement_evaluation);
         $click_id = $this->resolve_click_id((string) ($signal_context['click_id'] ?? ($signal_context['clickid'] ?? '')), $engagement_evaluation);
@@ -163,6 +165,7 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'linked' => false,
                 'has_soft_flag' => false,
                 'reasons' => [],
+                'link_reasons' => [],
                 'pid' => '',
                 'click_id' => '',
                 'attribution' => [],

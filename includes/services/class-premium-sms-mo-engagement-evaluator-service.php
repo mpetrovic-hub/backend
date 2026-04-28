@@ -39,11 +39,12 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
         );
         $engagement = $this->resolve_engagement_row($attribution);
         $reasons = [];
+        $link_reasons = [];
         $pid = $this->resolve_pid($attribution, $engagement);
         $click_id = $this->resolve_click_id($attribution, $engagement);
 
         if (!is_array($attribution) || !is_array($engagement)) {
-            $reasons[] = 'unknown_link';
+            $link_reasons[] = 'unknown_link';
         }
 
         $page_loaded_at = is_array($engagement)
@@ -77,11 +78,13 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
         }
 
         $reasons = array_values(array_unique($reasons));
+        $link_reasons = array_values(array_unique($link_reasons));
 
         return [
             'linked' => is_array($attribution) && is_array($engagement),
             'has_soft_flag' => !empty($reasons),
             'reasons' => $reasons,
+            'link_reasons' => $link_reasons,
             'pid' => $pid,
             'click_id' => $click_id,
             'attribution' => is_array($attribution) ? $attribution : [],
