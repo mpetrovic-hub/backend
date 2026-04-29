@@ -20,9 +20,9 @@
 }
 
 .download-icon {
-  width: 140px;
-  height: 140px;
-  margin: 0 auto 16px;
+  width: 168px;
+  height: 168px;
+  margin: 0 auto 19px;
   border: 9px solid #ffffff;
   border-radius: 50%;
   box-sizing: border-box;
@@ -31,27 +31,38 @@
 
 .download-icon__arrow {
   position: absolute;
-  top: 22px;
+  top: 26px;
   left: 50%;
-  transform: translateX(-50%);
-  font-size: 78px;
+  transform: translate(-50%, 0);
+  font-size: 94px;
   line-height: 1;
   font-weight: 700;
+  animation: lp5-arrow-bounce 1.6s ease-in-out infinite;
 }
 
 .download-icon__bar {
   position: absolute;
-  bottom: 29px;
+  bottom: 35px;
   left: 50%;
   transform: translateX(-50%);
-  width: 58px;
+  width: 70px;
   height: 8px;
   background: #ffffff;
   border-radius: 2px;
 }
 
+@keyframes lp5-arrow-bounce {
+  0%,
+  100% {
+    transform: translate(-50%, 0);
+  }
+  50% {
+    transform: translate(-50%, -4px);
+  }
+}
+
 .lp5-title {
-  margin: 0 0 14px;
+  margin: 0 0 24px;
   font-size: 48px;
   line-height: 1.1;
   font-weight: 700;
@@ -60,19 +71,21 @@
 }
 
 .intro {
-  margin: 0 0 20px;
+  margin: 0 0 37px;
   color: rgba(255, 255, 255, 0.9);
   font-size: 14px;
   line-height: 1.4;
 }
 
 .cta {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   max-width: 338px;
   margin: 0 auto 22px;
   height: 40px;
-  line-height: 40px;
   border: 0;
   border-radius: 999px;
   text-decoration: none;
@@ -82,11 +95,49 @@
   font-weight: 700;
   letter-spacing: 0.01em;
   box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.28), 0 8px 20px rgba(0, 0, 0, 0.32);
+  transform-origin: center;
+  animation: lp5-cta-wobble-pause 2.6s ease-in-out infinite;
 }
 
 .cta:focus-visible,
 .cta:hover {
   filter: brightness(1.05);
+}
+
+.cta__primary {
+  display: block;
+  line-height: 1;
+}
+
+.cta__secondary {
+  color: #ffe3b6;
+  display: block;
+  line-height: 1;
+}
+
+@keyframes lp5-cta-wobble-pause {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  4% {
+    transform: translate3d(-1px, 1px, 0) rotate(-0.5deg);
+  }
+  8% {
+    transform: translate3d(1px, -1px, 0) rotate(0.5deg);
+  }
+  12% {
+    transform: translate3d(-1px, -1px, 0) rotate(-0.4deg);
+  }
+  16% {
+    transform: translate3d(1px, 1px, 0) rotate(0.4deg);
+  }
+  20% {
+    transform: translate3d(-1px, 0, 0) rotate(-0.3deg);
+  }
+  23.08%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
 }
 
 .additional-image {  
@@ -126,20 +177,21 @@
   }
 
   .download-icon {
-    width: 116px;
-    height: 116px;
+    width: 139px;
+    height: 139px;
     border-width: 7px;
-    margin-bottom: 14px;
+    margin-top: 14px;
+    margin-bottom: 37px;
   }
 
   .download-icon__arrow {
-    top: 10px;
-    font-size: 64px;
+    top: 12px;
+    font-size: 77px;
   }
 
   .download-icon__bar {
-    bottom: 23px;
-    width: 49px;
+    bottom: 28px;
+    width: 59px;
     height: 7px;
   }
 
@@ -150,7 +202,6 @@
   .cta {
     max-width: 320px;
     height: 48px;
-    line-height: 16px;
     font-size: clamp(15px, 4.4vw, 18px); /* (min, default, max) */
   }
 }

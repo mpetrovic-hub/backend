@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-04-29:
+- [No Changes] No medium-impact or higher commits landed in repository history on 2026-04-29.
+
 2026-04-28:
 - [Asset Rewrite] Extended filesystem landing-page rendering to rewrite local `./...` candidates in `srcset` and `imagesrcset` through the effective asset base URL while preserving non-local candidates, with regression coverage for router and gallery preview paths. Updated LP3/LP4 hero markup and docs to align responsive preload and image candidate handling with the renderer behavior.
 - [Fraud Signals] Changed Premium SMS MO engagement evaluation so `unknown_link` is recorded as link-audit context and no longer treated as an engagement soft-flag reason. Updated fraud monitor/shortcode behavior and tests so flagged views exclude unknown-link-only rows while keeping genuine soft-flag reasons visible.
