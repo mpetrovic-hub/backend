@@ -8,9 +8,14 @@ body {
 .lp-container {
   max-width: 440px;
   margin: 0 auto;
-  padding: 4%;
-  background: url('https://kiwimobile.de/wp-content/uploads/2025/05/Joyplay_background_fullscreen_vertical.png') no-repeat center -25px;
+  padding: 2%;
+  background: #1f1f1f;
   text-align: center;
+}
+
+.logo {
+  width: 80%;
+  height: auto;  
 }
 
 .hero {
