@@ -1,7 +1,7 @@
 .lp6-body {
   margin: 0;
   min-height: 100vh;
-  background: #dedede;
+  background: #fdfdfd;
   color: #19354f;
   font-family: "Avenir Next", "Montserrat", "Segoe UI", sans-serif;
 }
@@ -23,31 +23,55 @@
   margin: 0 auto;
 }
 
-.lp6-steps {
-  margin: 44px 0 28px;
-  color: #1e3d58;
-  font-size: clamp(20px, 5.8vw, 35px);
+h1 {
+  font-family: rival-sans, sans-serif;
+  margin: 44px 0 28px;  
+  font-size: clamp(17px, 3.8vw, 35px);
+  /* font-weight: 600; */
+  color: #314242;
+  text-shadow: 1px 1px 4px #e8ffff;
   line-height: 1.28;
+  max-width: 360px;
 }
 
-.cta {
+.cta {  
+  background: linear-gradient(0deg, rgba(24,154,13,1) 0%, rgba(133,201,127,1) 50%, rgba(24,154,13,1) 100%);  
+  font-size: 24px;
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: .023rem;
+  text-shadow: 0px 1px 6px #4f4f4f;
+  width: 90%;
+  line-height: 32px;
+  color: white;
+  border-radius: 2px;
+  border: 1.5px solid white;
+  background-size: 400% 400%;
+
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
+  
   max-width: 360px;
   min-height: 52px;
   margin: 0 auto 28px;
-  border: 0;
-  border-radius: 8px;
-  background: linear-gradient(180deg, #9fabad 0%, #889597 100%);
-  color: #d8d8d8;
-  font-size: clamp(22px, 6vw, 44px);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-decoration: none;
-  text-transform: uppercase;
-  box-shadow: 0 8px 22px rgba(16, 36, 53, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  animation: pulsateGlow 2s infinite; 
+  
+  /* letter-spacing: 0.02em; */
+  
+  /* box-shadow: 0 8px 22px rgba(16, 36, 53, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.22); */
+}
+
+@keyframes pulsateGlow {
+  0% {
+        box-shadow: 0 0 3px 0px rgba(255, 255, 255, 0.1), 0 0 0px 0px rgba(24, 154, 13, 0.1); /* 0 0 1px 1px rgba(24, 154, 13, 0.3); */
+    }
+    50% {
+        box-shadow: 0 0 13px 4px rgba(255, 255, 255, 0.4), 0 0 0px 16px rgba(24, 154, 13, 0.6); /* 0 0 1px 20px  rgba(24, 154, 13, 0.4); */
+    }
+    100% {
+        box-shadow: 0 0 13px 4px rgba(24, 154, 13, 0.1), 0 0 0px 16px rgba(24, 154, 13, 0.1); /*, 0 0 1px 20px rgba(24, 154, 13, 0.3); */
+    }
 }
 
 .cta:hover,
@@ -57,8 +81,8 @@
 
 .price {
   margin: 0 0 14px;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 400;
   color: #1f3f58;
 }
 

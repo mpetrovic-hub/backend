@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-04-30:
+- [LP2 Refresh] Updated `lp2-fr` landing-page content and presentation by switching hero/logo assets, tightening layout styling, and aligning premium-SMS disclosure/contact details with current FR copy. Follow-up integration updates normalized host routing defaults for LP2/LP6 to use the shared `your.joy-play.com` hostname.
+
 2026-04-29:
 - [No Changes] No medium-impact or higher commits landed in repository history on 2026-04-29.
 
