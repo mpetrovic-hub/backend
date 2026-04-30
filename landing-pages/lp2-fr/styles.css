@@ -15,7 +15,8 @@ body {
 
 .logo {
   width: 80%;
-  height: auto;  
+  height: auto;
+  box-shadow: 0 0 28px rgba(0, 0, 0, 0.35);
 }
 
 .hero {
