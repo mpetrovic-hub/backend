@@ -3,6 +3,7 @@ body {
   min-height: 100vh;
   background: #fdfdfd;
   color: #19354f;
+  color: #314242;  
   font-family: "Avenir Next", "Montserrat", "Segoe UI", sans-serif;
 }
 
@@ -17,22 +18,22 @@ body {
 
 .hero {
   display: block;
-  width: 100%;
+  width: 70%;
   max-width: 420px;
   height: auto;
-  margin: 0 auto;
+  margin: 4% auto 23% auto;
   box-shadow: 0 0 28px rgba(40, 214, 204, 0.35);
 }
 
 h1 {
   font-family: rival-sans, sans-serif;
-  margin: 44px 0 28px;  
+  margin: 44px 0px 14% 0px;  
   font-size: clamp(17px, 3.8vw, 35px);
-  /* font-weight: 600; */
-  color: #314242;
+  font-weight: 400;
+  /* color: #314242; */
   text-shadow: 1px 1px 4px #e8ffff;
   line-height: 1.28;
-  max-width: 360px;
+  /* max-width: 360px; */
 }
 
 .cta {  
