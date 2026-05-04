@@ -1,7 +1,7 @@
 ---
 name: Codex Task
 about: Aufgabe für Codex Overnight anlegen
-title: ''
+title: "[Codex] "
 labels: codex-candidate
 assignees: ''
 
