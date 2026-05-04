@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'key' => 'lp4-fr-img-preload-test',
+    'key' => 'lp5-fr_v2',
     'country' => 'FR',
     'flow' => 'nth-fr-one-off',
     'provider' => 'nth',
@@ -11,17 +11,16 @@ return [
     'service_type' => 'premium_sms',
     'business_number' => '84072',
     'keyword' => 'Jplay*',
-    'title' => 'LP4 France One-off Image Preload Test',
+    'title' => 'LP5_v2 France One-off',
     'active' => true,
 
-    'backend_path' => '/lp/fr/myjoyplay4-img-preload-test',
+    'backend_path' => '/lp/fr/myjoyplay5v2',
     'dedicated_path' => '/',
-    'hostnames' => [],
-    'asset_base_url' => 'https://backend.kiwimobile.de/wp-content/uploads/assets/',
+    'hostnames' => [ 'your.joy-play.com'],
     'service_key' => 'nth_fr_one_off_jplay',
     'shortcode' => '84072',
-    'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
+    'price_label' => 'Activer en envoyant JPLAY au 84072. 4,50 EUR / SMS + prix d\'un SMS',
     'kpi_cta_steps' => [
-        'cta1' => 'class="cta"',
+        'cta1' => 'class="cta"', //defines the selector for the cta1 KPI
     ],
 ];

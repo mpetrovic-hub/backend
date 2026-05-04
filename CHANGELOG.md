@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-03:
+- [LP6 Polish] Refined the `lp6-fr` landing-page presentation by emphasizing key SMS action words in the hero heading and tightening hero/image spacing. Also adjusted LP6 typography and visual balance to improve above-the-fold clarity.
+
 2026-05-02:
 - [No Changes] No medium-impact or higher commits landed in repository history on 2026-05-02.
 
