@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'key' => 'lp5-fr_v2',
+    'key' => 'lp5-fr-v2',
     'country' => 'FR',
     'flow' => 'nth-fr-one-off',
     'provider' => 'nth',
@@ -11,7 +11,7 @@ return [
     'service_type' => 'premium_sms',
     'business_number' => '84072',
     'keyword' => 'Jplay*',
-    'title' => 'LP5_v2 France One-off',
+    'title' => 'LP5v2 France One-off',
     'active' => true,
 
     'backend_path' => '/lp/fr/myjoyplay5v2',
