@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-04:
+- [LP5 Variant] Introduced the new `lp5-fr_v2` landing-page variant by replacing the previous LP4 preload-test assets with dedicated LP5 v2 HTML/CSS/integration files. Follow-up commits normalized the variant directory naming to `lp5-fr-v2` and refined its stylesheet presentation.
+
 2026-05-03:
 - [LP6 Polish] Refined the `lp6-fr` landing-page presentation by emphasizing key SMS action words in the hero heading and tightening hero/image spacing. Also adjusted LP6 typography and visual balance to improve above-the-fold clarity.
 
