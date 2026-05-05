@@ -17,7 +17,7 @@ jobs:
       - name: Pick next Codex issue
         id: pick
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
         run: |
           ISSUE_JSON=$(gh issue list \
             --repo "$GITHUB_REPOSITORY" \
@@ -46,7 +46,7 @@ jobs:
       - name: Mark issue as dispatched
         if: steps.pick.outputs.found == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pick.outputs.issue_number }}
         run: |
           gh issue edit "$ISSUE_NUMBER" \
@@ -57,7 +57,7 @@ jobs:
       - name: Ask Codex to work on the issue
         if: steps.pick.outputs.found == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pick.outputs.issue_number }}
           ISSUE_TITLE: ${{ steps.pick.outputs.issue_title }}
         run: |
