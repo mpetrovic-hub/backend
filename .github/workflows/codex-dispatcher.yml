@@ -64,28 +64,15 @@ jobs:
           cat > /tmp/codex-request.md <<'EOF'
           @codex
 
-          Bitte bearbeite dieses Issue als Codex-Overnight-Task.
+          Bitte bearbeite dieses Issue ausschließlich im Planner-Mode.
 
-          Regeln:
-          - Arbeite auf einem separaten Branch.
-          - Niemals direkt nach main pushen.
-          - Erstelle am Ende einen Pull Request.
-          - Halte die Änderung minimal.
-          - Folge exakt dem Issue-Text und den Akzeptanzkriterien.
-          - Wenn unklar ist, ob etwas gelöscht oder geändert werden darf, stoppe und kommentiere deine Analyse statt Code zu ändern.
+          Lies und befolge:
+          `codex-control/prompts/planner.md`
 
-          Workflow:
-          1. Analysiere das Issue und den relevanten Code.
-          2. Erstelle zuerst einen kurzen Plan als Kommentar.
-          3. Implementiere nur, wenn die Nutzung eindeutig geklärt ist.
-          4. Führe sinnvolle Checks/Tests aus, soweit im Repo möglich.
-          5. Erstelle einen PR mit Summary, Tests und Risiken.
-
-          Für diesen ersten Testballon:
-          - Wenn `templates/landing-pages` noch aktiv verwendet wird: nichts löschen, Fundstellen dokumentieren.
-          - Wenn der Ordner nicht verwendet wird: Ordner und ausschließlich tote Referenzen entfernen.
-          EOF
-
-          gh issue comment "$ISSUE_NUMBER" \
-            --repo "$GITHUB_REPOSITORY" \
-            --body-file /tmp/codex-request.md
+          Zusätzliche harte Regeln:
+          - Keine Codeänderungen.
+          - Kein Branch.
+          - Kein Pull Request.
+          - Keine Commits.
+          - Nichts löschen.
+          - Antworte nur mit einem Planner Report als Kommentar in diesem Issue.
