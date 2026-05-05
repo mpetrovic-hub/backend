@@ -54,14 +54,13 @@ jobs:
             --remove-label "codex-ready" \
             --add-label "codex-dispatched"
 
-      - name: Ask Codex to work on the issue
+      - name: Ask Codex to plan the issue
         if: steps.pick.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pick.outputs.issue_number }}
-          ISSUE_TITLE: ${{ steps.pick.outputs.issue_title }}
         run: |
-          cat > /tmp/codex-request.md <<'EOF'
+          cat > /tmp/codex-request.md <<'CODEX_REQUEST'
           @codex
 
           Bitte bearbeite dieses Issue ausschließlich im Planner-Mode.
@@ -76,3 +75,11 @@ jobs:
           - Keine Commits.
           - Nichts löschen.
           - Antworte nur mit einem Planner Report als Kommentar in diesem Issue.
+          CODEX_REQUEST
+
+          echo "Posting Codex planner request to issue #$ISSUE_NUMBER"
+          cat /tmp/codex-request.md
+
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file /tmp/codex-request.md
