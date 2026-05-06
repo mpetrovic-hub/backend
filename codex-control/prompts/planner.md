@@ -10,6 +10,24 @@ Analysiere das Issue und den relevanten Repository-Code. Entscheide, ob der Task
 
 Du implementierst in diesem Modus nichts.
 
+## Pflichtlektüre vor der Analyse
+
+Lies vor jeder Analyse zuerst diese Dateien, falls sie existieren:
+
+1. `AGENTS.md`
+2. `README.md`
+3. `codex-control/README.md`
+4. `codex-control/STATE.json`
+5. `CHANGELOG.md`
+
+Behandle `AGENTS.md` als verbindliche Projektanweisung.
+
+Nutze `README.md` als allgemeinen Projektkontext. Wenn `README.md` fehlt, unklar oder offensichtlich veraltet ist, erwähne das im Planner Report.
+
+Nutze `codex-control/README.md` und `codex-control/STATE.json`, um den Codex-Overnight-Workflow, aktuelle Sicherheitsregeln und erlaubte Aktionen zu verstehen.
+
+Wenn eine dieser Dateien nicht existiert oder nicht gelesen werden kann, fahre fort, aber dokumentiere das kurz im Planner Report unter `Suchstrategie` oder `Risiken`.
+
 ## Harte Regeln
 
 - Keine Codeänderungen.
