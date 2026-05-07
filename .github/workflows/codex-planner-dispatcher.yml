@@ -63,46 +63,17 @@ jobs:
           cat > /tmp/codex-request.md <<'CODEX_REQUEST'
           @codex
 
-          Bitte bearbeite dieses Issue ausschließlich im Planner-Mode.
-
-          Lies vor der Analyse zuerst, falls vorhanden:
-
-          1. `AGENTS.md`
-          2. `README.md`
-          3. `external/codex-control/README.md`
-          4. `external/codex-control/STATE.json`
-          5. `external/codex-control/prompts/planner.md`
-
-          Falls `external/codex-control/prompts/planner.md` nicht vorhanden oder nicht lesbar ist, versuche zuerst:
-
-          `git submodule update --init --recursive`
-
-          Falls die Datei danach weiterhin nicht lesbar ist:
-          - Erstelle keine Datei.
-          - Erstelle keinen Branch.
-          - Erstelle keinen Pull Request.
-          - Mache keinen Commit.
-          - Ändere keinen Code.
-          - Kommentiere nur im aktuellen Issue exakt:
-            "codex-control prompt nicht lesbar"
-
-          Befolge `external/codex-control/prompts/planner.md` als verbindliche Planner-Anweisung.
-
-          Zusätzliche harte Regeln für diesen Dispatch:
-          - Keine Codeänderungen.
-          - Keine Datei erstellen.
-          - Keine Datei bearbeiten.
-          - Keine Datei löschen.
-          - Kein Branch.
-          - Kein Pull Request.
-          - Keine Commits.
-          - Nicht nach `main` pushen.
-          - Antworte nur mit einem Planner Report als Kommentar in diesem Issue.
-          CODEX_REQUEST
-
-          echo "Posting Codex planner request to issue #$ISSUE_NUMBER"
-          cat /tmp/codex-request.md
-
-          gh issue comment "$ISSUE_NUMBER" \
-            --repo "$GITHUB_REPOSITORY" \
-            --body-file /tmp/codex-request.md
+          Bitte teste nur den Zugriff auf den zentralen Planner-Prompt.
+          
+          Lies:
+          `external/codex-control/prompts/planner.md`
+          
+          Antworte nur im Issue:
+          - Datei lesbar: ja/nein
+          - erste Überschrift der Datei
+          - ob `external/codex-control` bereits vorhanden war
+          
+          Keine Codeänderungen.
+          Kein Branch.
+          Kein Pull Request.
+          Kein Commit.
