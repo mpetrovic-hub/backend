@@ -1,4 +1,4 @@
-name: Codex Dispatcher
+name: Codex Planner Dispatcher
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Pick next Codex issue
+      - name: Pick next Codex planner issue
         id: pick
         env:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
@@ -32,7 +32,7 @@ jobs:
           ISSUE_URL=$(echo "$ISSUE_JSON" | jq -r '.[0].url // empty')
 
           if [ -z "$ISSUE_NUMBER" ]; then
-            echo "No ready Codex issue found."
+            echo "No ready Codex planner issue found."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -43,7 +43,7 @@ jobs:
           echo "issue_title=$ISSUE_TITLE" >> "$GITHUB_OUTPUT"
           echo "issue_url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Mark issue as dispatched
+      - name: Mark issue as planner dispatched
         if: steps.pick.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
@@ -60,55 +60,45 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pick.outputs.issue_number }}
         run: |
-          PROMPT_URL="https://raw.githubusercontent.com/mpetrovic-hub/codex-control/main/prompts/planner.md"
-
-          echo "Validating central planner prompt:"
-          echo "$PROMPT_URL"
-
-          mkdir -p /tmp/codex-prompts
-          curl -fsSL "$PROMPT_URL" -o /tmp/codex-prompts/planner.md
-
-          PROMPT_FIRST_LINE=$(head -n 1 /tmp/codex-prompts/planner.md | tr -d '\r')
-
-          {
-            cat <<'CODEX_HEADER'
+          cat > /tmp/codex-request.md <<'CODEX_REQUEST'
           @codex
 
           Bitte bearbeite dieses Issue ausschließlich im Planner-Mode.
 
-          Verwende den zentralen Planner-Prompt unter dieser Raw-URL:
-          CODEX_HEADER
+          Lies vor der Analyse zuerst, falls vorhanden:
 
-            printf '%s\n\n' "$PROMPT_URL"
+          1. `AGENTS.md`
+          2. `README.md`
+          3. `external/codex-control/README.md`
+          4. `external/codex-control/STATE.json`
+          5. `external/codex-control/prompts/planner.md`
 
-            cat <<'CODEX_META'
-          Dispatcher-Prüfung:
-          - Die Raw-URL wurde vom Dispatcher vor dem Kommentar erfolgreich geladen.
-          CODEX_META
+          Falls `external/codex-control/prompts/planner.md` nicht vorhanden oder nicht lesbar ist, versuche zuerst:
 
-            printf -- '- Erste Zeile des Prompts: %s\n\n' "$PROMPT_FIRST_LINE"
+          `git submodule update --init --recursive`
 
-            cat <<'CODEX_FOOTER'
-          Anweisung:
-          1. Lies zuerst den Planner-Prompt aus der oben genannten Raw-URL.
-          2. Befolge diesen Prompt als verbindliche Planner-Anweisung.
-          3. Lies danach das aktuelle Issue und den relevanten Repository-Code.
-          4. Schreibe ausschließlich einen Planner Report als Kommentar in dieses Issue.
+          Falls die Datei danach weiterhin nicht lesbar ist:
+          - Erstelle keine Datei.
+          - Erstelle keinen Branch.
+          - Erstelle keinen Pull Request.
+          - Mache keinen Commit.
+          - Ändere keinen Code.
+          - Kommentiere nur im aktuellen Issue exakt:
+            "codex-control prompt nicht lesbar"
 
-          Falls du die Raw-URL nicht lesen kannst, stoppe und kommentiere exakt:
-
-          "codex-control prompt nicht lesbar"
+          Befolge `external/codex-control/prompts/planner.md` als verbindliche Planner-Anweisung.
 
           Zusätzliche harte Regeln für diesen Dispatch:
           - Keine Codeänderungen.
+          - Keine Datei erstellen.
+          - Keine Datei bearbeiten.
+          - Keine Datei löschen.
           - Kein Branch.
           - Kein Pull Request.
           - Keine Commits.
-          - Nichts löschen.
-          - Nicht nach main pushen.
+          - Nicht nach `main` pushen.
           - Antworte nur mit einem Planner Report als Kommentar in diesem Issue.
-          CODEX_FOOTER
-          } > /tmp/codex-request.md
+          CODEX_REQUEST
 
           echo "Posting Codex planner request to issue #$ISSUE_NUMBER"
           cat /tmp/codex-request.md
