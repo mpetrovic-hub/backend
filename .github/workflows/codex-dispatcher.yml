@@ -60,22 +60,55 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pick.outputs.issue_number }}
         run: |
-          cat > /tmp/codex-request.md <<'CODEX_REQUEST'
+          PROMPT_URL="https://raw.githubusercontent.com/mpetrovic-hub/codex-control/main/prompts/planner.md"
+
+          echo "Validating central planner prompt:"
+          echo "$PROMPT_URL"
+
+          mkdir -p /tmp/codex-prompts
+          curl -fsSL "$PROMPT_URL" -o /tmp/codex-prompts/planner.md
+
+          PROMPT_FIRST_LINE=$(head -n 1 /tmp/codex-prompts/planner.md | tr -d '\r')
+
+          {
+            cat <<'CODEX_HEADER'
           @codex
 
           Bitte bearbeite dieses Issue ausschließlich im Planner-Mode.
 
-          Lies und befolge:
-          `codex-control/prompts/planner.md`
+          Verwende den zentralen Planner-Prompt unter dieser Raw-URL:
+          CODEX_HEADER
 
-          Zusätzliche harte Regeln:
+            printf '%s\n\n' "$PROMPT_URL"
+
+            cat <<'CODEX_META'
+          Dispatcher-Prüfung:
+          - Die Raw-URL wurde vom Dispatcher vor dem Kommentar erfolgreich geladen.
+          CODEX_META
+
+            printf -- '- Erste Zeile des Prompts: %s\n\n' "$PROMPT_FIRST_LINE"
+
+            cat <<'CODEX_FOOTER'
+          Anweisung:
+          1. Lies zuerst den Planner-Prompt aus der oben genannten Raw-URL.
+          2. Befolge diesen Prompt als verbindliche Planner-Anweisung.
+          3. Lies danach das aktuelle Issue und den relevanten Repository-Code.
+          4. Schreibe ausschließlich einen Planner Report als Kommentar in dieses Issue.
+
+          Falls du die Raw-URL nicht lesen kannst, stoppe und kommentiere exakt:
+
+          "codex-control prompt nicht lesbar"
+
+          Zusätzliche harte Regeln für diesen Dispatch:
           - Keine Codeänderungen.
           - Kein Branch.
           - Kein Pull Request.
           - Keine Commits.
           - Nichts löschen.
+          - Nicht nach main pushen.
           - Antworte nur mit einem Planner Report als Kommentar in diesem Issue.
-          CODEX_REQUEST
+          CODEX_FOOTER
+          } > /tmp/codex-request.md
 
           echo "Posting Codex planner request to issue #$ISSUE_NUMBER"
           cat /tmp/codex-request.md
