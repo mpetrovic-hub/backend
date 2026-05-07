@@ -77,3 +77,11 @@ jobs:
           Kein Branch.
           Kein Pull Request.
           Kein Commit.
+          CODEX_REQUEST
+
+          echo "Posting Codex planner request to issue #$ISSUE_NUMBER"
+          cat /tmp/codex-request.md
+
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file /tmp/codex-request.md
