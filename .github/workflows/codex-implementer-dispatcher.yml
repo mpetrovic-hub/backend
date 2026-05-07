@@ -63,16 +63,17 @@ jobs:
 
           Bitte bearbeite dieses Issue jetzt im Implementer-Mode.
 
-          Lies und befolge:
-          `codex-control/prompts/implementer.md`
+          Lies und befolge als verbindliche Anweisung:
+          `external/codex-control/prompts/implementer.md`
 
-          Zusätzliche harte Regeln:
-          - Arbeite auf einem separaten Branch.
-          - Niemals direkt nach `main` pushen.
-          - Erstelle am Ende einen Pull Request gegen `main`.
-          - Folge dem Issue und dem neuesten Codex Planner Report im Issue.
-          - Halte die Änderung minimal.
-          - Wenn der Planner Report unklar ist oder menschliche Entscheidung verlangt, implementiere nichts und kommentiere die Blockade.
+          Falls diese Datei nicht lesbar ist:
+          - ändere nichts
+          - erstelle keine Datei
+          - erstelle keinen Branch
+          - erstelle keinen Pull Request
+          - mache keinen Commit
+          - kommentiere nur im aktuellen Issue exakt:
+            "codex-control implementer prompt nicht lesbar"
           CODEX_REQUEST
 
           echo "Posting Codex implementer request to issue #$ISSUE_NUMBER"
