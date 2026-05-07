@@ -1,0 +1,91 @@
+name: Codex Reviewer Dispatcher
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Pick next review-ready Codex PR
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
+        run: |
+          PR_JSON=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --label "codex-review-ready" \
+            --json number,title,url,headRefName,baseRefName \
+            --limit 1)
+
+          PR_NUMBER=$(echo "$PR_JSON" | jq -r '.[0].number // empty')
+          PR_TITLE=$(echo "$PR_JSON" | jq -r '.[0].title // empty')
+          PR_URL=$(echo "$PR_JSON" | jq -r '.[0].url // empty')
+          PR_HEAD=$(echo "$PR_JSON" | jq -r '.[0].headRefName // empty')
+          PR_BASE=$(echo "$PR_JSON" | jq -r '.[0].baseRefName // empty')
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No review-ready Codex PR found."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found PR #$PR_NUMBER: $PR_TITLE"
+          echo "Head: $PR_HEAD"
+          echo "Base: $PR_BASE"
+          echo "URL: $PR_URL"
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_title=$PR_TITLE" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "pr_head=$PR_HEAD" >> "$GITHUB_OUTPUT"
+          echo "pr_base=$PR_BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Mark PR as review dispatched
+        if: steps.pick.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
+          PR_NUMBER: ${{ steps.pick.outputs.pr_number }}
+        run: |
+          gh pr edit "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --remove-label "codex-review-ready" \
+            --add-label "codex-review-dispatched"
+
+      - name: Ask Codex to review the PR
+        if: steps.pick.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
+          PR_NUMBER: ${{ steps.pick.outputs.pr_number }}
+        run: |
+          cat > /tmp/codex-review-request.md <<'CODEX_REQUEST'
+          @codex review
+
+          Bitte reviewe diesen Pull Request im Codex-Overnight Reviewer-Mode.
+
+          Lies und befolge als verbindliche Anweisung:
+          `external/codex-control/prompts/reviewer.md`
+
+          Falls diese Datei nicht lesbar ist:
+          - ändere nichts
+          - erstelle keine Datei
+          - pushe keine Änderungen
+          - mache keinen Commit
+          - kommentiere nur im aktuellen Pull Request exakt:
+            "codex-control reviewer prompt nicht lesbar"
+          CODEX_REQUEST
+
+          echo "Posting Codex reviewer request to PR #$PR_NUMBER"
+          cat /tmp/codex-review-request.md
+
+          gh pr comment "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file /tmp/codex-review-request.md
