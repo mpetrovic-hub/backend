@@ -112,6 +112,11 @@ function current_time($type)
     return time();
 }
 
+function rest_url($path = ''): string
+{
+    return 'https://backend.example.test/wp-json/' . ltrim((string) $path, '/');
+}
+
 function wp_generate_uuid4()
 {
     static $counter = 0;
@@ -302,6 +307,7 @@ require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-rep
 require_once __DIR__ . '/../includes/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-kpi-summary-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
@@ -2197,6 +2203,84 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
     }
 }
 
+class Kiwi_Test_Landing_Handoff_Event_Repository extends Kiwi_Landing_Handoff_Event_Repository
+{
+    public $rows = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function insert_if_new(array $event): array
+    {
+        $landing_key = trim((string) ($event['landing_key'] ?? ''));
+        $session_token = trim((string) ($event['session_token'] ?? ''));
+        $handoff_id = preg_replace('/[^A-Za-z0-9._:-]/', '', trim((string) ($event['handoff_id'] ?? '')));
+        $handoff_id = is_string($handoff_id) ? substr($handoff_id, 0, 100) : '';
+        $event_type = strtolower(trim((string) ($event['event_type'] ?? '')));
+
+        if ($landing_key === '' || $session_token === '' || $handoff_id === '' || !in_array($event_type, [
+            'sms_handoff_attempted',
+            'sms_handoff_hidden',
+            'sms_handoff_returned',
+            'sms_handoff_no_hide',
+        ], true)) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        foreach ($this->rows as $row) {
+            if (($row['landing_key'] ?? '') === $landing_key
+                && ($row['session_token'] ?? '') === $session_token
+                && ($row['handoff_id'] ?? '') === $handoff_id
+                && ($row['event_type'] ?? '') === $event_type
+            ) {
+                return [
+                    'inserted' => false,
+                    'row' => $row,
+                ];
+            }
+        }
+
+        $id = $this->next_id++;
+        $row = [
+            'id' => $id,
+            'created_at' => '2026-04-01 12:00:00',
+            'landing_key' => $landing_key,
+            'service_key' => (string) ($event['service_key'] ?? ''),
+            'provider_key' => (string) ($event['provider_key'] ?? ''),
+            'flow_key' => (string) ($event['flow_key'] ?? ''),
+            'pid' => (string) ($event['pid'] ?? ''),
+            'click_id' => (string) ($event['click_id'] ?? ''),
+            'session_token' => $session_token,
+            'handoff_id' => $handoff_id,
+            'event_type' => $event_type,
+            'href_scheme' => (string) ($event['href_scheme'] ?? ''),
+            'sms_recipient' => (string) ($event['sms_recipient'] ?? ''),
+            'sms_body_present' => !empty($event['sms_body_present']) ? 1 : 0,
+            'sms_body_has_transaction' => !empty($event['sms_body_has_transaction']) ? 1 : 0,
+            'elapsed_ms' => max(0, (int) ($event['elapsed_ms'] ?? 0)),
+            'visibility_state' => (string) ($event['visibility_state'] ?? ''),
+            'user_agent' => (string) ($event['user_agent'] ?? ''),
+            'raw_context' => $event['raw_context'] ?? [],
+        ];
+        $this->rows[$id] = $row;
+
+        return [
+            'inserted' => true,
+            'row' => $row,
+        ];
+    }
+
+    public function get_recent(array $filters = [], int $limit = 100): array
+    {
+        return array_slice(array_values($this->rows), 0, max(1, min(500, $limit)));
+    }
+}
+
 class Kiwi_Test_Tracking_Capture_Service extends Kiwi_Tracking_Capture_Service
 {
     public $cookies = [];
@@ -3837,6 +3921,113 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected engagement-only events not to mutate KPI CTA counters.');
 });
 
+kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idempotently', function (): void {
+    $repository = new Kiwi_Test_Landing_Handoff_Event_Repository();
+
+    $first = $repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'pid' => 'pid-1',
+        'click_id' => 'click-1',
+        'session_token' => 'sess-handoff-1',
+        'handoff_id' => 'hof_abc123',
+        'event_type' => 'sms_handoff_attempted',
+        'href_scheme' => 'sms',
+        'sms_recipient' => '84072',
+        'sms_body_present' => true,
+        'sms_body_has_transaction' => true,
+        'elapsed_ms' => 15,
+        'visibility_state' => 'visible',
+        'user_agent' => 'Android Test UA',
+    ]);
+    $duplicate = $repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-handoff-1',
+        'handoff_id' => 'hof_abc123',
+        'event_type' => 'sms_handoff_attempted',
+    ]);
+
+    kiwi_assert_true(($first['inserted'] ?? false) === true, 'Expected first handoff event to be inserted.');
+    kiwi_assert_true(($duplicate['inserted'] ?? true) === false, 'Expected duplicate handoff event identity not to insert again.');
+    kiwi_assert_same(1, count($repository->rows), 'Expected only one handoff row after duplicate insert.');
+    kiwi_assert_same('84072', (string) ($first['row']['sms_recipient'] ?? ''), 'Expected handoff storage to persist SMS recipient.');
+    kiwi_assert_same(1, (int) ($first['row']['sms_body_has_transaction'] ?? 0), 'Expected handoff storage to persist transaction-token presence.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without changing KPI counters', function (): void {
+    $_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 Android SmsDiag';
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $handoff_repository = new Kiwi_Test_Landing_Handoff_Event_Repository();
+    $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes(
+        $config,
+        $service,
+        null,
+        null,
+        $handoff_repository
+    );
+
+    $attempt = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-handoff-2',
+        'event_type' => 'sms_handoff_attempted',
+        'handoff_id' => 'hof_xyz789',
+        'href_scheme' => 'sms',
+        'sms_recipient' => '84072',
+        'sms_body_present' => 1,
+        'sms_body_has_transaction' => 1,
+        'elapsed_ms' => 0,
+        'visibility_state' => 'visible',
+        'pid' => 'pid-handoff',
+        'clickid' => 'click-handoff',
+    ]));
+    $hidden = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-handoff-2',
+        'event_type' => 'sms_handoff_hidden',
+        'handoff_id' => 'hof_xyz789',
+        'href_scheme' => 'sms',
+        'sms_recipient' => '84072',
+        'sms_body_present' => 1,
+        'sms_body_has_transaction' => 1,
+        'elapsed_ms' => 120,
+        'visibility_state' => 'hidden',
+    ]));
+    $invalid = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-handoff-2',
+        'event_type' => 'sms_handoff_unknown',
+        'handoff_id' => 'hof_xyz789',
+    ]));
+
+    kiwi_assert_true(($attempt->data['handoff_recorded'] ?? false), 'Expected attempted handoff event to be recorded.');
+    kiwi_assert_true(($hidden->data['handoff_recorded'] ?? false), 'Expected hidden handoff event to be recorded.');
+    kiwi_assert_same(2, count($handoff_repository->rows), 'Expected two distinct handoff event types for one handoff id.');
+    kiwi_assert_same('pid-handoff', (string) ($handoff_repository->rows[1]['pid'] ?? ''), 'Expected handoff events to persist pid context.');
+    kiwi_assert_same('click-handoff', (string) ($handoff_repository->rows[1]['click_id'] ?? ''), 'Expected handoff events to persist clickid context.');
+    kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected handoff-only events not to mutate KPI CTA counters.');
+    kiwi_assert_same(400, $invalid->status, 'Expected unknown handoff event types to be rejected.');
+
+    unset($_SERVER['HTTP_USER_AGENT']);
+});
+
 kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing summary rows with percentage rates', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -3927,6 +4118,37 @@ kiwi_run_test('Kiwi_Landing_Page_Router accepts integration kpi_cta_steps using 
 
     kiwi_assert_same('.cta', $steps['cta1'] ?? '', 'Expected class=\"cta\" shorthand to normalize into .cta selector.');
     kiwi_assert_same('.mobile_number_input', $steps['cta2'] ?? '', 'Expected direct CSS selectors to remain unchanged.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router injects same-origin SMS handoff telemetry', function (): void {
+    $router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Config(),
+        new Kiwi_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+    $endpoint_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_kpi_event_endpoint');
+    $endpoint_method->setAccessible(true);
+    $inject_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'inject_kpi_tracker_script');
+    $inject_method->setAccessible(true);
+
+    $endpoint = $endpoint_method->invoke($router);
+    $html = '<!doctype html><html><body><a class="cta" href="sms:84072?body=JPLAY%20txn_demo_12345678">CTA</a></body></html>';
+    $output = $inject_method->invoke($router, $html, [
+        'kpi_cta_steps' => [
+            'cta1' => 'class="cta"',
+        ],
+    ], 'lp2-fr', 'sess-router-1');
+
+    kiwi_assert_same('/wp-json/kiwi-backend/v1/landing-kpi/event', $endpoint, 'Expected injected telemetry endpoint to stay same-origin even when rest_url returns an absolute backend URL.');
+    kiwi_assert_true(strpos($output, 'backend.example.test') === false, 'Expected injected telemetry config not to expose an absolute backend host.');
+    kiwi_assert_contains('sms_handoff_attempted', $output, 'Expected injected tracker to include attempted SMS handoff event.');
+    kiwi_assert_contains('sms_handoff_hidden', $output, 'Expected injected tracker to include hidden SMS handoff event.');
+    kiwi_assert_contains('sms_handoff_returned', $output, 'Expected injected tracker to include returned SMS handoff event.');
+    kiwi_assert_contains('sms_handoff_no_hide', $output, 'Expected injected tracker to include no-hide SMS handoff event.');
+    kiwi_assert_contains("scheme!=='sms'&&scheme!=='smsto'", $output, 'Expected injected tracker to recognize both sms and smsto schemes.');
+    kiwi_assert_contains('fetch(cfg.endpoint', $output, 'Expected injected tracker to prefer fetch delivery.');
+    kiwi_assert_contains('sendBeacon', $output, 'Expected injected tracker to retain sendBeacon only as a fallback path.');
+    kiwi_assert_contains('sendStep(step,selector)', $output, 'Expected injected tracker to keep CTA step binding behavior.');
 });
 
 kiwi_run_test('Kiwi_Landing_Primary_Cta_Resolver builds NTH sms CTA with transaction_id suffix', function (): void {
@@ -5579,6 +5801,21 @@ kiwi_run_test('Kiwi_Plugin runs schema migrations once and persists schema versi
         $schema_version,
         $GLOBALS['kiwi_test_options'][$schema_option] ?? '',
         'Expected schema migrations to persist the installed schema version.'
+    );
+});
+
+kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository list', function (): void {
+    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
+    $method = new ReflectionMethod(Kiwi_Plugin::class, 'build_schema_repositories');
+    $method->setAccessible(true);
+    $repositories = $method->invoke($plugin);
+    $classes = array_map(static function ($repository): string {
+        return is_object($repository) ? get_class($repository) : '';
+    }, is_array($repositories) ? $repositories : []);
+
+    kiwi_assert_true(
+        in_array(Kiwi_Landing_Handoff_Event_Repository::class, $classes, true),
+        'Expected schema migrations to include the landing handoff event repository.'
     );
 });
 

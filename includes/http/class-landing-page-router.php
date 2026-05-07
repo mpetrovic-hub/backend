@@ -255,8 +255,9 @@ class Kiwi_Landing_Page_Router
             . "function wasSent(key){try{return window.sessionStorage.getItem(storagePrefix+key)==='1';}catch(e){return false;}}"
             . "function markSent(key){try{window.sessionStorage.setItem(storagePrefix+key,'1');}catch(e){}}"
             . "function dispatch(payload){var normalized=payload&&typeof payload==='object'?payload:{};if(pid){normalized.pid=pid;}if(clickId){normalized.click_id=clickId;}var body=JSON.stringify(normalized);var delivered=false;"
-            . "try{if(typeof navigator!=='undefined'&&navigator.sendBeacon){delivered=navigator.sendBeacon(cfg.endpoint,new Blob([body],{type:'application/json'}));}}catch(e){}"
-            . "if(!delivered&&typeof fetch==='function'){fetch(cfg.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',keepalive:true,body:body}).catch(function(){});}}"
+            . "function beacon(){try{if(typeof navigator!=='undefined'&&navigator.sendBeacon){delivered=navigator.sendBeacon(cfg.endpoint,new Blob([body],{type:'application/json'}));}}catch(e){}}"
+            . "try{if(typeof fetch==='function'){fetch(cfg.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',keepalive:true,body:body}).catch(function(){beacon();});return;}}catch(e){}"
+            . "beacon();}"
             . "function sendStep(step,eventValue){if(!step||wasSent('step_'+step)){return;}"
             . "dispatch({landing_key:cfg.landingKey,session_token:cfg.sessionToken,step:step,event_value:eventValue||''});"
             . "markSent('step_'+step);}"
@@ -264,10 +265,16 @@ class Kiwi_Landing_Page_Router
             . "if(onceKey&&wasSent('eng_'+onceKey)){return;}"
             . "dispatch({landing_key:cfg.landingKey,session_token:cfg.sessionToken,event_type:eventType,event_value:eventValue||''});"
             . "if(onceKey){markSent('eng_'+onceKey);}}"
+            . "function nowMs(){return(new Date()).getTime();}"
+            . "function makeHandoffId(){return'hof_'+nowMs().toString(36)+'_'+Math.random().toString(36).slice(2,10);}"
+            . "function decodeValue(value){try{return decodeURIComponent(String(value||'').replace(/\\+/g,'%20'));}catch(e){return String(value||'');}}"
+            . "function parseSmsHref(href){href=String(href||'');var colon=href.indexOf(':');if(colon<1){return null;}var scheme=href.slice(0,colon).toLowerCase();if(scheme!=='sms'&&scheme!=='smsto'){return null;}var rest=href.slice(colon+1).replace(/^\\/\\//,'');var queryIndex=rest.indexOf('?');var target=queryIndex>=0?rest.slice(0,queryIndex):rest;target=target.split(';')[0];var query=queryIndex>=0?rest.slice(queryIndex+1):'';var body='';if(query){var pairs=query.split('&');for(var i=0;i<pairs.length;i++){var parts=pairs[i].split('=');if(parts[0]&&parts[0].toLowerCase()==='body'){body=decodeValue(parts.slice(1).join('='));break;}}}return{href_scheme:scheme,sms_recipient:decodeValue(target),sms_body_present:body!=='',sms_body_has_transaction:/\\btxn_[A-Za-z0-9_-]{8,120}\\b/.test(body)};}"
+            . "function sendHandoff(eventType,state,elapsed){dispatch({landing_key:cfg.landingKey,session_token:cfg.sessionToken,event_type:eventType,event_value:state.details.href_scheme+':'+state.details.sms_recipient,handoff_id:state.id,href_scheme:state.details.href_scheme,sms_recipient:state.details.sms_recipient,sms_body_present:state.details.sms_body_present?1:0,sms_body_has_transaction:state.details.sms_body_has_transaction?1:0,elapsed_ms:Math.max(0,Math.round(elapsed||0)),visibility_state:(typeof document!=='undefined'&&document.visibilityState)||''});}"
+            . "function trackSmsHandoff(node){var href=node&&node.getAttribute?node.getAttribute('href'):'';var details=parseSmsHref(href);if(!details){return;}var state={id:makeHandoffId(),details:details,startedAt:nowMs(),hidden:false,returned:false};var noHideTimer=null;var cleanupTimer=null;function elapsed(){return Math.max(0,nowMs()-state.startedAt);}function cleanup(){try{document.removeEventListener('visibilitychange',onVisibility);}catch(e){}try{window.removeEventListener('pagehide',onPageHide);}catch(e){}try{window.removeEventListener('pageshow',onPageShow);}catch(e){}try{window.removeEventListener('focus',onFocus);}catch(e){}if(noHideTimer){clearTimeout(noHideTimer);}if(cleanupTimer){clearTimeout(cleanupTimer);}}function markHidden(){if(state.hidden){return;}state.hidden=true;sendHandoff('sms_handoff_hidden',state,elapsed());}function markReturned(){if(!state.hidden||state.returned){return;}state.returned=true;sendHandoff('sms_handoff_returned',state,elapsed());cleanup();}function onVisibility(){if(document.visibilityState==='hidden'){markHidden();}else{markReturned();}}function onPageHide(){markHidden();}function onPageShow(){markReturned();}function onFocus(){markReturned();}sendHandoff('sms_handoff_attempted',state,0);try{document.addEventListener('visibilitychange',onVisibility);}catch(e){}try{window.addEventListener('pagehide',onPageHide);}catch(e){}try{window.addEventListener('pageshow',onPageShow);}catch(e){}try{window.addEventListener('focus',onFocus);}catch(e){}noHideTimer=setTimeout(function(){if(!state.hidden){sendHandoff('sms_handoff_no_hide',state,elapsed());cleanup();}},3000);cleanupTimer=setTimeout(function(){cleanup();},120000);}"
             . "function bind(step,selector){if(!selector){return;}var nodes=[];"
             . "try{nodes=document.querySelectorAll(selector);}catch(e){return;}"
             . "if(!nodes||!nodes.length){return;}"
-            . "for(var i=0;i<nodes.length;i++){nodes[i].addEventListener('click',function(){sendStep(step,selector);sendEngagement('cta_click',step+':'+selector,'');},{passive:true});}}"
+            . "for(var i=0;i<nodes.length;i++){nodes[i].addEventListener('click',function(){sendStep(step,selector);sendEngagement('cta_click',step+':'+selector,'');trackSmsHandoff(this);},{passive:true});}}"
             . "for(var step in cfg.steps){if(Object.prototype.hasOwnProperty.call(cfg.steps,step)){bind(step,cfg.steps[step]);}}"
             . "function trackPageLoaded(){sendEngagement('page_loaded','','page_loaded');}"
             . "if(typeof document!=='undefined'&&document.readyState==='complete'){trackPageLoaded();}"
@@ -284,7 +291,14 @@ class Kiwi_Landing_Page_Router
     private function resolve_kpi_event_endpoint(): string
     {
         if (function_exists('rest_url')) {
-            return (string) rest_url('kiwi-backend/v1/landing-kpi/event');
+            $endpoint = (string) rest_url('kiwi-backend/v1/landing-kpi/event');
+            $path = parse_url($endpoint, PHP_URL_PATH);
+
+            if (is_string($path) && trim($path) !== '') {
+                $query = parse_url($endpoint, PHP_URL_QUERY);
+
+                return $path . (is_string($query) && $query !== '' ? '?' . $query : '');
+            }
         }
 
         return '/wp-json/kiwi-backend/v1/landing-kpi/event';

@@ -54,6 +54,8 @@ Keep the preload candidates in sync with the visible hero `<img>` candidates so 
 
 Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`) for fraud-linkage snapshots.
 
+For click-to-SMS CTAs, the same endpoint also records handoff telemetry for `sms:`/`smsto:` links. These events are diagnostic signals only: they indicate that a browser attempted an SMS handoff, hid the page, returned, or did not hide after the click. They do not prove that the SMS was sent and they do not increment KPI summary counters.
+
 For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic.
 
 ## Multi-domain exposure via proxy/CNAME
@@ -107,6 +109,10 @@ The landing-page system supports a generic KPI funnel for optimization analysis.
   - incremented in the central landing-page router when a landing page is rendered
 - `cta1`, `cta2`, `cta3`
   - incremented through the KPI event endpoint into one summary row per landing page
+- SMS handoff events
+  - stored separately for `sms:`/`smsto:` CTA diagnostics
+  - supported events: `sms_handoff_attempted`, `sms_handoff_hidden`, `sms_handoff_returned`, `sms_handoff_no_hide`
+  - do not mutate `wp_kiwi_landing_kpi_summary`
 - `conv`
   - incremented once on first confirmed conversion match in attribution resolver
   - duplicate callbacks do not increment `conv` again once conversion was already confirmed
@@ -117,6 +123,10 @@ Storage model:
   - one row per `landing_key`
   - counters: `clicks`, `cta1`, `cta2`, `cta3`, `conv`
   - precomputed rates: `cta1_cr`, `cta2_cr`, `cta3_cr`, `conv_cr`
+
+- `wp_kiwi_landing_handoff_events`
+  - one row per landing/session/handoff/event type
+  - records SMS handoff diagnostics, including scheme, recipient, body presence, transaction-token presence, elapsed time, visibility state, and source snapshots
 
 ### Per-landing selector mapping in `integration.php`
 
@@ -140,6 +150,8 @@ Notes:
 
 - `POST /wp-json/kiwi-backend/v1/landing-kpi/event`
   - increments CTA summary counters (`cta1`/`cta2`/`cta3`)
+  - records engagement events (`page_loaded`, `cta_click`)
+  - records SMS handoff diagnostics without changing summary counters
 - `GET /wp-json/kiwi-backend/v1/landing-kpi/report`
   - returns per-landing KPI rows with counts and rates
   - supports optional filters:
@@ -164,6 +176,10 @@ Notes:
 - `wp_kiwi_premium_sms_landing_engagements`
   - landing-session engagement evidence (`page_loaded_at`, first/last CTA click, click count)
   - source snapshots (`pid`, `click_id`)
+
+- `wp_kiwi_landing_handoff_events`
+  - click-to-SMS handoff evidence (`sms_handoff_*`)
+  - source snapshots (`pid`, `click_id`) and handoff details (`sms`, `smsto`, recipient/body metadata)
 
 - `wp_kiwi_premium_sms_fraud_signals`
   - MO fraud snapshots per identity (`subscriber`/`session`)

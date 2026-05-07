@@ -10,17 +10,20 @@ class Kiwi_Landing_Kpi_Rest_Routes
     private $kpi_service;
     private $landing_engagement_repository;
     private $click_attribution_repository;
+    private $handoff_event_repository;
 
     public function __construct(
         Kiwi_Config $config,
         Kiwi_Landing_Kpi_Service $kpi_service,
         ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null,
-        ?Kiwi_Click_Attribution_Repository $click_attribution_repository = null
+        ?Kiwi_Click_Attribution_Repository $click_attribution_repository = null,
+        ?Kiwi_Landing_Handoff_Event_Repository $handoff_event_repository = null
     ) {
         $this->config = $config;
         $this->kpi_service = $kpi_service;
         $this->landing_engagement_repository = $landing_engagement_repository;
         $this->click_attribution_repository = $click_attribution_repository;
+        $this->handoff_event_repository = $handoff_event_repository;
     }
 
     public function register(): void
@@ -74,6 +77,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
         $landing = $this->config->get_landing_page($landing_key) ?? [];
         $incremented = false;
         $engagement_recorded = false;
+        $handoff_recorded = false;
 
         if ($has_valid_step) {
             $incremented = $this->kpi_service->increment_step($landing_key, $step, [
@@ -83,7 +87,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
             ]);
         }
 
-        if ($has_valid_event_type) {
+        if ($this->is_landing_engagement_event_type($event_type)) {
             $engagement_recorded = $this->capture_landing_engagement_event(
                 $landing_key,
                 $event_type,
@@ -92,10 +96,20 @@ class Kiwi_Landing_Kpi_Rest_Routes
             );
         }
 
+        if ($this->is_handoff_event_type($event_type)) {
+            $handoff_recorded = $this->capture_handoff_event(
+                $landing_key,
+                $event_type,
+                $params,
+                is_array($landing) ? $landing : []
+            );
+        }
+
         return new WP_REST_Response([
-            'success' => $incremented || $engagement_recorded,
+            'success' => $incremented || $engagement_recorded || $handoff_recorded,
             'incremented' => $incremented,
             'engagement_recorded' => $engagement_recorded,
+            'handoff_recorded' => $handoff_recorded,
             'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
         ], 200);
     }
@@ -151,7 +165,23 @@ class Kiwi_Landing_Kpi_Rest_Routes
 
     private function is_valid_event_type(string $event_type): bool
     {
+        return $this->is_landing_engagement_event_type($event_type)
+            || $this->is_handoff_event_type($event_type);
+    }
+
+    private function is_landing_engagement_event_type(string $event_type): bool
+    {
         return in_array($event_type, ['page_loaded', 'cta_click'], true);
+    }
+
+    private function is_handoff_event_type(string $event_type): bool
+    {
+        return in_array($event_type, [
+            'sms_handoff_attempted',
+            'sms_handoff_hidden',
+            'sms_handoff_returned',
+            'sms_handoff_no_hide',
+        ], true);
     }
 
     private function sanitize_event_value(string $value): string
@@ -186,6 +216,47 @@ class Kiwi_Landing_Kpi_Rest_Routes
         ], $event_type);
 
         return !empty($record);
+    }
+
+    private function capture_handoff_event(
+        string $landing_key,
+        string $event_type,
+        array $params,
+        array $landing
+    ): bool {
+        if (!$this->handoff_event_repository instanceof Kiwi_Landing_Handoff_Event_Repository) {
+            return false;
+        }
+
+        $session_token = trim((string) ($params['session_token'] ?? ''));
+
+        if ($session_token === '') {
+            return false;
+        }
+
+        $result = $this->handoff_event_repository->insert_if_new([
+            'landing_key' => $landing_key,
+            'session_token' => $session_token,
+            'service_key' => (string) ($landing['service_key'] ?? ''),
+            'provider_key' => (string) ($landing['provider'] ?? ''),
+            'flow_key' => (string) ($landing['flow'] ?? ''),
+            'pid' => $this->resolve_pid_for_engagement($params, $landing, $session_token),
+            'click_id' => $this->resolve_click_id_for_engagement($params, $landing, $session_token),
+            'handoff_id' => (string) ($params['handoff_id'] ?? ''),
+            'event_type' => $event_type,
+            'href_scheme' => (string) ($params['href_scheme'] ?? ''),
+            'sms_recipient' => (string) ($params['sms_recipient'] ?? ''),
+            'sms_body_present' => !empty($params['sms_body_present']),
+            'sms_body_has_transaction' => !empty($params['sms_body_has_transaction']),
+            'elapsed_ms' => max(0, (int) ($params['elapsed_ms'] ?? 0)),
+            'visibility_state' => (string) ($params['visibility_state'] ?? ''),
+            'user_agent' => $this->server_value('HTTP_USER_AGENT'),
+            'raw_context' => [
+                'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
+            ],
+        ]);
+
+        return is_array($result['row'] ?? null);
     }
 
     private function resolve_pid_for_engagement(array $params, array $landing, string $session_token): string
@@ -294,6 +365,11 @@ class Kiwi_Landing_Kpi_Rest_Routes
         $click_id = is_string($click_id) ? $click_id : '';
 
         return substr($click_id, 0, 191);
+    }
+
+    private function server_value(string $key): string
+    {
+        return isset($_SERVER[$key]) ? trim((string) $_SERVER[$key]) : '';
     }
 
 }

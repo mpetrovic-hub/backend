@@ -2,6 +2,10 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-07:
+- [Control Submodule] Replaced the in-repo `codex-control` directory with an `external/codex-control` submodule and updated prompt content through subsequent same-day commits. This keeps prompt governance versioned at the integration boundary while preserving repository wiring via `.gitmodules`.
+- [Review Workflow] Added a dedicated `codex-reviewer-dispatcher` GitHub Actions workflow and refined planner/implementer dispatcher instructions, naming, and prompt-posting behavior. These changes standardize multi-role Codex orchestration in CI-facing automation flows.
+
 2026-05-04:
 - [LP5 Variant] Introduced the new `lp5-fr_v2` landing-page variant by replacing the previous LP4 preload-test assets with dedicated LP5 v2 HTML/CSS/integration files. Follow-up commits normalized the variant directory naming to `lp5-fr-v2` and refined its stylesheet presentation.
 

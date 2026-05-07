@@ -79,6 +79,7 @@ require_once __DIR__ . '/repositories/class-nth-flow-transaction-repository.php'
 require_once __DIR__ . '/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/repositories/class-sales-repository.php';
 require_once __DIR__ . '/repositories/class-landing-kpi-summary-repository.php';
+require_once __DIR__ . '/repositories/class-landing-handoff-event-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-fraud-signal-repository.php';
 

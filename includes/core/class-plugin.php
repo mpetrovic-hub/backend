@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-04-21-4';
+    private const DB_SCHEMA_VERSION = '2026-05-07-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -165,6 +165,7 @@ class Kiwi_Plugin
 
         $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
         $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+        $landing_handoff_event_repository = new Kiwi_Landing_Handoff_Event_Repository();
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
             $config,
@@ -174,7 +175,8 @@ class Kiwi_Plugin
             $config,
             $landing_kpi_service,
             $landing_engagement_repository,
-            $click_attribution_repository
+            $click_attribution_repository,
+            $landing_handoff_event_repository
         );
         $landing_kpi_rest_routes->register();
     }
@@ -674,29 +676,31 @@ TEXT;
 
     protected function run_schema_migrations(): void
     {
-        $operator_lookup_repository = new Kiwi_Dimoco_Callback_Operator_Lookup_Repository();
-        $refund_repository = new Kiwi_Dimoco_Callback_Refund_Repository();
-        $blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
-        $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
-        $nth_event_repository = new Kiwi_Nth_Event_Repository();
-        $nth_flow_transaction_repository = new Kiwi_Nth_Flow_Transaction_Repository();
-        $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
-        $sales_repository = new Kiwi_Sales_Repository();
-        $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
-        $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
-        $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
+        foreach ($this->build_schema_repositories() as $repository) {
+            if (!is_object($repository) || !method_exists($repository, 'create_table')) {
+                continue;
+            }
 
-        $operator_lookup_repository->create_table();
-        $refund_repository->create_table();
-        $blacklist_repository->create_table();
-        $landing_page_session_repository->create_table();
-        $nth_event_repository->create_table();
-        $nth_flow_transaction_repository->create_table();
-        $click_attribution_repository->create_table();
-        $sales_repository->create_table();
-        $landing_kpi_summary_repository->create_table();
-        $landing_engagement_repository->create_table();
-        $premium_sms_fraud_signal_repository->create_table();
+            $repository->create_table();
+        }
+    }
+
+    protected function build_schema_repositories(): array
+    {
+        return [
+            new Kiwi_Dimoco_Callback_Operator_Lookup_Repository(),
+            new Kiwi_Dimoco_Callback_Refund_Repository(),
+            new Kiwi_Dimoco_Callback_Blacklist_Repository(),
+            new Kiwi_Landing_Page_Session_Repository(),
+            new Kiwi_Nth_Event_Repository(),
+            new Kiwi_Nth_Flow_Transaction_Repository(),
+            new Kiwi_Click_Attribution_Repository(),
+            new Kiwi_Sales_Repository(),
+            new Kiwi_Landing_Kpi_Summary_Repository(),
+            new Kiwi_Landing_Handoff_Event_Repository(),
+            new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
+            new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
+        ];
     }
 
     protected function get_click_attribution_cleanup_limit(): int
