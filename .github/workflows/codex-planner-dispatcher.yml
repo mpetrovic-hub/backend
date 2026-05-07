@@ -63,20 +63,19 @@ jobs:
           cat > /tmp/codex-request.md <<'CODEX_REQUEST'
           @codex
 
-          Bitte teste nur den Zugriff auf den zentralen Planner-Prompt.
-          
-          Lies:
+          Bitte bearbeite dieses Issue ausschließlich im Planner-Mode.
+
+          Lies und befolge als verbindliche Anweisung:
           `external/codex-control/prompts/planner.md`
-          
-          Antworte nur im Issue:
-          - Datei lesbar: ja/nein
-          - erste Überschrift der Datei
-          - ob `external/codex-control` bereits vorhanden war
-          
-          Keine Codeänderungen.
-          Kein Branch.
-          Kein Pull Request.
-          Kein Commit.
+
+          Falls diese Datei nicht lesbar ist:
+          - ändere nichts
+          - erstelle keine Datei
+          - erstelle keinen Branch
+          - erstelle keinen Pull Request
+          - mache keinen Commit
+          - kommentiere nur im aktuellen Issue exakt:
+            "codex-control prompt nicht lesbar"
           CODEX_REQUEST
 
           echo "Posting Codex planner request to issue #$ISSUE_NUMBER"
