@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-07-1';
+    private const DB_SCHEMA_VERSION = '2026-05-07-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -166,6 +166,7 @@ class Kiwi_Plugin
         $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
         $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
         $landing_handoff_event_repository = new Kiwi_Landing_Handoff_Event_Repository();
+        $sms_body_variant_repository = new Kiwi_Sms_Body_Variant_Repository();
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
             $config,
@@ -176,7 +177,8 @@ class Kiwi_Plugin
             $landing_kpi_service,
             $landing_engagement_repository,
             $click_attribution_repository,
-            $landing_handoff_event_repository
+            $landing_handoff_event_repository,
+            $sms_body_variant_repository
         );
         $landing_kpi_rest_routes->register();
     }
@@ -235,8 +237,13 @@ class Kiwi_Plugin
             $config,
             new Kiwi_Landing_Kpi_Summary_Repository()
         );
+        $sms_body_variant_repository = new Kiwi_Sms_Body_Variant_Repository();
+        $sms_body_variant_service = new Kiwi_Sms_Body_Variant_Service(
+            $config,
+            $sms_body_variant_repository
+        );
         $primary_cta_resolver = new Kiwi_Landing_Primary_Cta_Resolver([
-            new Kiwi_Nth_Primary_Cta_Adapter(),
+            new Kiwi_Nth_Primary_Cta_Adapter($sms_body_variant_service),
         ]);
         $router = new Kiwi_Landing_Page_Router(
             $config,
@@ -403,6 +410,11 @@ TEXT;
         $sales_repository = new Kiwi_Sales_Repository();
         $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
+        $sms_body_variant_repository = new Kiwi_Sms_Body_Variant_Repository();
+        $sms_body_variant_service = new Kiwi_Sms_Body_Variant_Service(
+            $config,
+            $sms_body_variant_repository
+        );
         $affiliate_postback_dispatcher = new Kiwi_Affiliate_Postback_Dispatcher($config);
         $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
             $config,
@@ -424,7 +436,8 @@ TEXT;
             $click_attribution_repository,
             $affiliate_postback_dispatcher,
             $landing_kpi_service,
-            $sales_repository
+            $sales_repository,
+            $sms_body_variant_repository
         );
         $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
             $config,
@@ -434,7 +447,8 @@ TEXT;
             $nth_flow_transaction_repository,
             $sales_recorder,
             $conversion_attribution_resolver,
-            $premium_sms_fraud_monitor_service
+            $premium_sms_fraud_monitor_service,
+            $sms_body_variant_service
         );
 
         return [
@@ -446,6 +460,8 @@ TEXT;
             'sales_recorder' => $sales_recorder,
             'sales_repository' => $sales_repository,
             'click_attribution_repository' => $click_attribution_repository,
+            'sms_body_variant_repository' => $sms_body_variant_repository,
+            'sms_body_variant_service' => $sms_body_variant_service,
             'landing_engagement_repository' => $landing_engagement_repository,
             'affiliate_postback_dispatcher' => $affiliate_postback_dispatcher,
             'landing_kpi_service' => $landing_kpi_service,
@@ -698,6 +714,7 @@ TEXT;
             new Kiwi_Sales_Repository(),
             new Kiwi_Landing_Kpi_Summary_Repository(),
             new Kiwi_Landing_Handoff_Event_Repository(),
+            new Kiwi_Sms_Body_Variant_Repository(),
             new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
             new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
         ];

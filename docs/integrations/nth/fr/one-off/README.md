@@ -348,9 +348,13 @@ For this flow, NTH accepts keyword suffixes (configured as `Jplay*`), for exampl
 
 ```text
 JPLAY txn_abcd1234
+JPLAY abcd1234
+JPLAY ArcadeHeroabcd1234
 ```
 
 The callback parser accepts both whitespace and `+` separators in MO content when extracting internal transaction identifiers (for example `JPLAY+txn_abcd1234`).
+
+When the SMS-body variant experiment is enabled, the visible suffix can be a lookup alias rather than the internal id itself. Direct `txn_...` parsing remains the first path; if no direct token exists, the NTH service resolves the visible token through `wp_kiwi_sms_body_variant_assignments` back to the unchanged internal `transaction_id`.
 
 The full MO content is forwarded to backend callback handling and can be used to recover internal correlation identifiers.
 
@@ -394,6 +398,7 @@ Outbound affiliate postbacks are handled by shared attribution capability after 
 - callbacks are normalized to internal conversion semantics first
 - only confirmed successful terminal conversions are eligible for postback dispatch
 - attribution rows carry an internal server-generated `transaction_id` captured at landing entry
+- optional SMS-body variants can render a less technical visible token while storing a one-to-one lookup alias for that internal `transaction_id`
 - NTH outbound `reference` values are derived from that `transaction_id` (with a uniqueness suffix) when a pending attribution row is found
 - if no transaction id can be resolved from attribution or MO content, the fallback NTH flow reference still uses a generated `txn_...` root (instead of provider-only prefixes) to keep shared sales correlation consistent
 - successful one-off sales persist this correlation root into `wp_kiwi_sales.transaction_id`

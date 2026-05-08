@@ -38,6 +38,7 @@ require_once __DIR__ . '/providers/class-routed-operator-lookup-provider.php';
  */
 require_once __DIR__ . '/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/providers/nth/class-nth-premium-sms-normalizer.php';
+require_once __DIR__ . '/repositories/class-sms-body-variant-repository.php';
 
 /**
  * Services
@@ -64,6 +65,7 @@ require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/services/class-premium-sms-mo-engagement-evaluator-service.php';
 require_once __DIR__ . '/services/class-premium-sms-fraud-monitor-service.php';
+require_once __DIR__ . '/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/services/class-nth-fr-one-off-service.php';
 

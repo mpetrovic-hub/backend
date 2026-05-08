@@ -6,6 +6,13 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Nth_Primary_Cta_Adapter implements Kiwi_Landing_Primary_Cta_Adapter_Interface
 {
+    private $sms_body_variant_service;
+
+    public function __construct(?Kiwi_Sms_Body_Variant_Service $sms_body_variant_service = null)
+    {
+        $this->sms_body_variant_service = $sms_body_variant_service;
+    }
+
     public function supports(array $landing_page, array $service): bool
     {
         $provider = strtolower(trim((string) ($landing_page['provider'] ?? '')));
@@ -32,7 +39,21 @@ class Kiwi_Nth_Primary_Cta_Adapter implements Kiwi_Landing_Primary_Cta_Adapter_I
         $transaction_id = trim((string) (($attribution['transaction_id'] ?? '')));
         $body = $keyword;
 
-        if ($transaction_id !== '') {
+        if ($transaction_id !== '' && $this->sms_body_variant_service instanceof Kiwi_Sms_Body_Variant_Service) {
+            $variant = $this->sms_body_variant_service->build_variant_body(
+                $keyword,
+                $shortcode,
+                $landing_page,
+                $service,
+                $attribution
+            );
+
+            if (is_array($variant) && trim((string) ($variant['body'] ?? '')) !== '') {
+                $body = trim((string) ($variant['body'] ?? ''));
+            } else {
+                $body .= ' ' . $transaction_id;
+            }
+        } elseif ($transaction_id !== '') {
             $body .= ' ' . $transaction_id;
         }
 

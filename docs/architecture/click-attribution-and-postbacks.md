@@ -32,6 +32,11 @@ This capability is shared infrastructure. Provider callback payload formats rema
   - enforces confirmed-only postback dispatch
   - enforces idempotent postback behavior
 
+- `Kiwi_Sms_Body_Variant_Service`
+  - assigns visible SMS-body variants for enabled click-to-SMS landings
+  - keeps the internal `transaction_id` stable while rendering alternate customer-facing tokens
+  - resolves assigned visible tokens back to the internal transaction id for MO correlation
+
 - `Kiwi_Affiliate_Postback_Dispatcher`
   - builds outbound postback URLs from templates
   - URL-encodes values
@@ -75,6 +80,17 @@ No provider-specific callback shape should leak into shared attribution code.
 - handoff identity (`handoff_id`, event type) and SMS metadata (`sms`/`smsto`, recipient, body/transaction-token presence)
 - browser transition hints (`elapsed_ms`, `visibility_state`) and source context snapshots (`pid`, `click_id`)
 
+`wp_kiwi_sms_body_variant_assignments` stores visible SMS-body experiment assignments, including:
+
+- context (`service_key`, `provider_key`, `flow_key`, `landing_key`, `session_token`)
+- internal `transaction_id`, visible token, variant key, seed, and rendered SMS body
+- one-time markers for CTA1, handoff, and conversion events
+
+`wp_kiwi_sms_body_variant_summary` stores aggregated experiment metrics by landing/service/variant/seed, including:
+
+- counters (`assignments`, `cta1`, `handoff_attempted`, `handoff_hidden`, `handoff_no_hide`, `handoff_returned`, `conv`)
+- rates (`cta1_cr`, `handoff_hidden_cr`, `conv_cr`, `conv_per_cta1_cr`, `conv_per_hidden_cr`)
+
 `wp_kiwi_premium_sms_fraud_signals` stores per-MO fraud snapshots, including:
 
 - volume metrics (`count_1h`, `count_24h`, `count_total`)
@@ -91,8 +107,9 @@ The shared attribution layer now feeds downstream fraud-monitoring context:
 
 1. Landing entry capture stores `click_id` (required) and optional `pid` in `wp_kiwi_click_attributions`.
 2. Landing KPI engagement events (`page_loaded`, `cta_click`) resolve and persist `pid`/`click_id` into `wp_kiwi_premium_sms_landing_engagements`.
-3. Landing handoff events (`sms_handoff_*`) preserve click-to-SMS transition evidence for operations analysis without altering KPI counters.
-4. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id` into `wp_kiwi_premium_sms_fraud_signals`.
+3. SMS-body variant assignment stores the visible token shown in the user SMS app while preserving the internal `transaction_id`.
+4. Landing handoff events (`sms_handoff_*`) preserve click-to-SMS transition evidence for operations analysis without altering KPI counters.
+5. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id` into `wp_kiwi_premium_sms_fraud_signals`.
 
 This keeps provider payload parsing at the boundary while giving the shared fraud capability stable traffic-source dimensions.
 
@@ -134,6 +151,7 @@ Cookie retention note:
 - failed postbacks are retained in audit fields for retry visibility
 - expired temporary rows are cleaned in bounded batches
 - each attribution row gets an internal `transaction_id` so provider callbacks can be correlated through stable server-side references
+- visible SMS-body tokens are lookup aliases only; they must resolve back to the unchanged internal `transaction_id`
 
 ## Tracking-first S2S Postback Contract
 
@@ -185,6 +203,7 @@ This section describes the operational S2S tracking contract used to move from l
 - NTH callback normalization and confirmation logic remain in NTH service/normalizer
 - NTH resolves pending attribution rows by service/reference and reuses the shared `transaction_id` as the provider reference root
 - NTH MO adapter may extract `transaction_id` from keyword-suffixed MO content (for example `JPLAY txn_xxx`) at the provider boundary
+- when the FR SMS-body variant experiment is active, NTH MO handling first keeps direct `txn_...` parsing, then resolves assigned visible tokens such as `JPLAY abc...` or `JPLAY ArcadeHeroabc...` through `wp_kiwi_sms_body_variant_assignments`
 - NTH service passes normalized conversion signals into `Kiwi_Conversion_Attribution_Resolver`
 - resolver may enrich the matched sale row with shared attribution metadata (for example `pid`) without leaking provider callback fields into sales writes
 

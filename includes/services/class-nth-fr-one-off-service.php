@@ -14,6 +14,7 @@ class Kiwi_Nth_Fr_One_Off_Service
     private $sales_recorder;
     private $conversion_attribution_resolver;
     private $premium_sms_fraud_monitor_service;
+    private $sms_body_variant_service;
 
     public function __construct(
         Kiwi_Config $config,
@@ -23,7 +24,8 @@ class Kiwi_Nth_Fr_One_Off_Service
         Kiwi_Nth_Flow_Transaction_Repository $flow_transaction_repository,
         Kiwi_Shared_Sales_Recorder $sales_recorder,
         ?Kiwi_Conversion_Attribution_Resolver $conversion_attribution_resolver = null,
-        ?Kiwi_Premium_Sms_Fraud_Monitor_Service $premium_sms_fraud_monitor_service = null
+        ?Kiwi_Premium_Sms_Fraud_Monitor_Service $premium_sms_fraud_monitor_service = null,
+        ?Kiwi_Sms_Body_Variant_Service $sms_body_variant_service = null
     ) {
         $this->config = $config;
         $this->normalizer = $normalizer;
@@ -33,6 +35,7 @@ class Kiwi_Nth_Fr_One_Off_Service
         $this->sales_recorder = $sales_recorder;
         $this->conversion_attribution_resolver = $conversion_attribution_resolver;
         $this->premium_sms_fraud_monitor_service = $premium_sms_fraud_monitor_service;
+        $this->sms_body_variant_service = $sms_body_variant_service;
     }
 
     public function handle_inbound_mo(string $service_key, array $payload): array
@@ -622,7 +625,22 @@ class Kiwi_Nth_Fr_One_Off_Service
             return (string) ($matches[1] ?? '');
         }
 
-        return '';
+        return $this->resolve_sms_body_variant_transaction_id($parts);
+    }
+
+    private function resolve_sms_body_variant_transaction_id(array $message_parts): string
+    {
+        if (!$this->sms_body_variant_service instanceof Kiwi_Sms_Body_Variant_Service) {
+            return '';
+        }
+
+        $visible_token = trim((string) ($message_parts[1] ?? ''));
+
+        if ($visible_token === '') {
+            return '';
+        }
+
+        return $this->sms_body_variant_service->resolve_transaction_id_from_visible_token($visible_token);
     }
 
     private function normalize_keyword_seed(string $keyword): string

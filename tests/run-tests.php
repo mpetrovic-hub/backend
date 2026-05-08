@@ -308,6 +308,7 @@ require_once __DIR__ . '/../includes/repositories/class-click-attribution-reposi
 require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-kpi-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-sms-body-variant-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
@@ -327,6 +328,7 @@ require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver
 require_once __DIR__ . '/../includes/services/class-landing-kpi-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-page-variant-agent.php';
+require_once __DIR__ . '/../includes/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
@@ -2281,6 +2283,212 @@ class Kiwi_Test_Landing_Handoff_Event_Repository extends Kiwi_Landing_Handoff_Ev
     }
 }
 
+class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Repository
+{
+    public $assignments = [];
+    public $summary = [];
+    public $create_table_called = 0;
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+        $this->create_table_called++;
+    }
+
+    public function insert_if_new(array $assignment): array
+    {
+        $transaction_id = trim((string) ($assignment['transaction_id'] ?? ''));
+        $visible_token = trim((string) ($assignment['visible_token'] ?? ''));
+        $variant_key = trim((string) ($assignment['variant_key'] ?? ''));
+
+        if ($transaction_id === '' || $visible_token === '' || $variant_key === '') {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        $existing = $this->find_by_transaction_id($transaction_id);
+
+        if (is_array($existing)) {
+            return [
+                'inserted' => false,
+                'row' => $existing,
+            ];
+        }
+
+        if (is_array($this->find_by_visible_token($visible_token))) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        $id = $this->next_id++;
+        $row = [
+            'id' => $id,
+            'created_at' => '2026-04-01 12:00:00',
+            'updated_at' => '2026-04-01 12:00:00',
+            'landing_key' => (string) ($assignment['landing_key'] ?? ''),
+            'service_key' => (string) ($assignment['service_key'] ?? ''),
+            'provider_key' => (string) ($assignment['provider_key'] ?? ''),
+            'flow_key' => (string) ($assignment['flow_key'] ?? ''),
+            'country' => (string) ($assignment['country'] ?? ''),
+            'keyword' => (string) ($assignment['keyword'] ?? ''),
+            'shortcode' => (string) ($assignment['shortcode'] ?? ''),
+            'pid' => (string) ($assignment['pid'] ?? ''),
+            'click_id' => (string) ($assignment['click_id'] ?? ''),
+            'session_token' => (string) ($assignment['session_token'] ?? ''),
+            'transaction_id' => $transaction_id,
+            'visible_token' => $visible_token,
+            'variant_key' => $variant_key,
+            'seed' => (string) ($assignment['seed'] ?? ''),
+            'sms_body' => (string) ($assignment['sms_body'] ?? ''),
+            'cta1_recorded_at' => '',
+            'handoff_attempted_at' => '',
+            'handoff_hidden_at' => '',
+            'handoff_no_hide_at' => '',
+            'handoff_returned_at' => '',
+            'conv_recorded_at' => '',
+        ];
+        $this->assignments[$id] = $row;
+        $this->increment_summary($row, 'assignments');
+
+        return [
+            'inserted' => true,
+            'row' => $row,
+        ];
+    }
+
+    public function find_by_transaction_id(string $transaction_id): ?array
+    {
+        foreach ($this->assignments as $row) {
+            if ((string) ($row['transaction_id'] ?? '') === $transaction_id) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    public function find_by_visible_token(string $visible_token): ?array
+    {
+        foreach ($this->assignments as $row) {
+            if ((string) ($row['visible_token'] ?? '') === $visible_token) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    public function find_latest_by_landing_session(string $landing_key, string $session_token): ?array
+    {
+        $matches = [];
+
+        foreach ($this->assignments as $row) {
+            if ((string) ($row['landing_key'] ?? '') === $landing_key
+                && (string) ($row['session_token'] ?? '') === $session_token
+            ) {
+                $matches[] = $row;
+            }
+        }
+
+        if (empty($matches)) {
+            return null;
+        }
+
+        usort($matches, static function (array $left, array $right): int {
+            return (int) ($right['id'] ?? 0) <=> (int) ($left['id'] ?? 0);
+        });
+
+        return $matches[0];
+    }
+
+    public function mark_event_by_landing_session(string $landing_key, string $session_token, string $event_key): bool
+    {
+        $assignment = $this->find_latest_by_landing_session($landing_key, $session_token);
+
+        if (!is_array($assignment)) {
+            return false;
+        }
+
+        return $this->mark_event_by_transaction_id((string) ($assignment['transaction_id'] ?? ''), $event_key);
+    }
+
+    public function mark_event_by_transaction_id(string $transaction_id, string $event_key): bool
+    {
+        $field_map = [
+            'cta1' => ['field' => 'cta1_recorded_at', 'counter' => 'cta1'],
+            'sms_handoff_attempted' => ['field' => 'handoff_attempted_at', 'counter' => 'handoff_attempted'],
+            'sms_handoff_hidden' => ['field' => 'handoff_hidden_at', 'counter' => 'handoff_hidden'],
+            'sms_handoff_no_hide' => ['field' => 'handoff_no_hide_at', 'counter' => 'handoff_no_hide'],
+            'sms_handoff_returned' => ['field' => 'handoff_returned_at', 'counter' => 'handoff_returned'],
+            'conv' => ['field' => 'conv_recorded_at', 'counter' => 'conv'],
+        ];
+
+        if (!isset($field_map[$event_key])) {
+            return false;
+        }
+
+        foreach ($this->assignments as $id => $row) {
+            if ((string) ($row['transaction_id'] ?? '') !== $transaction_id) {
+                continue;
+            }
+
+            $field = $field_map[$event_key]['field'];
+
+            if ((string) ($row[$field] ?? '') !== '') {
+                return false;
+            }
+
+            $this->assignments[$id][$field] = '2026-04-01 12:00:00';
+            $this->increment_summary($this->assignments[$id], $field_map[$event_key]['counter']);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    public function get_summary_rows(array $filters = []): array
+    {
+        return array_values($this->summary);
+    }
+
+    private function increment_summary(array $assignment, string $counter): void
+    {
+        $key = implode('|', [
+            (string) ($assignment['landing_key'] ?? ''),
+            (string) ($assignment['service_key'] ?? ''),
+            (string) ($assignment['variant_key'] ?? ''),
+            (string) ($assignment['seed'] ?? ''),
+        ]);
+
+        if (!isset($this->summary[$key])) {
+            $this->summary[$key] = [
+                'landing_key' => (string) ($assignment['landing_key'] ?? ''),
+                'service_key' => (string) ($assignment['service_key'] ?? ''),
+                'provider_key' => (string) ($assignment['provider_key'] ?? ''),
+                'flow_key' => (string) ($assignment['flow_key'] ?? ''),
+                'variant_key' => (string) ($assignment['variant_key'] ?? ''),
+                'seed' => (string) ($assignment['seed'] ?? ''),
+                'assignments' => 0,
+                'cta1' => 0,
+                'handoff_attempted' => 0,
+                'handoff_hidden' => 0,
+                'handoff_no_hide' => 0,
+                'handoff_returned' => 0,
+                'conv' => 0,
+            ];
+        }
+
+        if (array_key_exists($counter, $this->summary[$key])) {
+            $this->summary[$key][$counter]++;
+        }
+    }
+}
+
 class Kiwi_Test_Tracking_Capture_Service extends Kiwi_Tracking_Capture_Service
 {
     public $cookies = [];
@@ -3462,6 +3670,78 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver can resolve confirmed conver
     kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback for transaction_id-based confirmed conversion handling.');
 });
 
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant conversion once', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config());
+    $kpi_summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $kpi_service = new Kiwi_Landing_Kpi_Service(
+        new Kiwi_Test_Config(
+            100,
+            0,
+            0,
+            [],
+            [],
+            [],
+            [
+                'lp2-fr' => [
+                    'service_key' => 'nth_fr_one_off_jplay',
+                    'provider' => 'nth',
+                    'flow' => 'one-off',
+                ],
+            ]
+        ),
+        $kpi_summary_repository
+    );
+    $resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $repository,
+        $dispatcher,
+        $kpi_service,
+        null,
+        $variant_repository
+    );
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKVARCONV123456',
+        'transaction_id' => 'txn_variant_conv_123',
+        'click_id' => 'aff:variant:conv',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
+        'flow_key' => 'one-off',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+    $variant_repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-variant-conv',
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+        'visible_token' => 'variant_conv_123',
+        'variant_key' => 'bare_id',
+        'sms_body' => 'JPLAY variant_conv_123',
+    ]);
+
+    $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+    ]);
+    $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+    ]);
+    $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
+
+    kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected SMS body variant conversion counter to increment once across duplicate confirmed callbacks.');
+});
+
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends sub7 from persisted sales operator_name', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $sales_repository = new Kiwi_Test_Sales_Repository();
@@ -3956,6 +4236,93 @@ kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idemp
     kiwi_assert_same(1, (int) ($first['row']['sms_body_has_transaction'] ?? 0), 'Expected handoff storage to persist transaction-token presence.');
 });
 
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository stores assignments and summary idempotently', function (): void {
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+
+    $first = $repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-variant-1',
+        'transaction_id' => 'txn_variant_12345678',
+        'visible_token' => 'ArcadeHerovariant_12345678',
+        'variant_key' => 'game_word',
+        'seed' => 'ArcadeHero',
+        'sms_body' => 'JPLAY ArcadeHerovariant_12345678',
+    ]);
+    $duplicate = $repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'transaction_id' => 'txn_variant_12345678',
+        'visible_token' => 'ArcadeHerovariant_12345678',
+        'variant_key' => 'game_word',
+        'sms_body' => 'JPLAY ArcadeHerovariant_12345678',
+    ]);
+    $visible_conflict = $repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'transaction_id' => 'txn_variant_other_123',
+        'visible_token' => 'ArcadeHerovariant_12345678',
+        'variant_key' => 'game_word',
+        'sms_body' => 'JPLAY ArcadeHerovariant_12345678',
+    ]);
+    $repository->mark_event_by_transaction_id('txn_variant_12345678', 'cta1');
+    $repository->mark_event_by_transaction_id('txn_variant_12345678', 'cta1');
+
+    $summary = $repository->get_summary_rows()[0] ?? [];
+
+    kiwi_assert_true(($first['inserted'] ?? false), 'Expected first SMS body assignment to insert.');
+    kiwi_assert_true(($duplicate['inserted'] ?? true) === false, 'Expected duplicate transaction assignment not to insert.');
+    kiwi_assert_true(($visible_conflict['row'] ?? null) === null, 'Expected visible-token uniqueness to reject conflicting assignments.');
+    kiwi_assert_same(1, count($repository->assignments), 'Expected one assignment row after duplicate/conflict attempts.');
+    kiwi_assert_same(1, (int) ($summary['assignments'] ?? 0), 'Expected assignment summary counter to increment once.');
+    kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected CTA1 summary counter to be idempotent per assignment.');
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', function (): void {
+    $config = new Kiwi_Test_Config();
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+
+    $landing = [
+        'key' => 'lp2-fr',
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $nth_service = [
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $attribution = [
+        'transaction_id' => 'txn_abcdef1234567890',
+        'session_ref' => 'sess-variant-2',
+        'click_id' => 'click-variant',
+        'pid' => 'pid-variant',
+    ];
+
+    $first = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution);
+    $second = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution);
+    $variant_key = (string) ($first['assignment']['variant_key'] ?? '');
+    $seed = (string) ($first['assignment']['seed'] ?? '');
+
+    kiwi_assert_same('txn_abcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'as_is_txn_prefix'), 'Expected as-is variant to keep txn_ prefix.');
+    kiwi_assert_same('abcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'bare_id'), 'Expected bare variant to remove txn_ prefix.');
+    kiwi_assert_same('ArcadeHeroabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'game_word', 'ArcadeHero'), 'Expected game-word variant to prepend deterministic seed.');
+    kiwi_assert_same('ActiverJeuxabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'cta_phrase', 'ActiverJeux'), 'Expected CTA phrase variant to prepend deterministic seed.');
+    kiwi_assert_true(in_array($variant_key, ['as_is_txn_prefix', 'bare_id', 'game_word', 'cta_phrase'], true), 'Expected service to assign one of the four configured variants.');
+    kiwi_assert_true($variant_key === 'game_word' || $variant_key === 'cta_phrase' || $seed === '', 'Expected non-speaking variants to have no seed.');
+    kiwi_assert_same((string) ($first['body'] ?? ''), (string) ($second['body'] ?? ''), 'Expected repeated body resolution for one transaction to stay stable.');
+    kiwi_assert_same(1, count($repository->assignments), 'Expected service to create one idempotent assignment.');
+});
+
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without changing KPI counters', function (): void {
     $_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 Android SmsDiag';
     $config = new Kiwi_Test_Config(
@@ -4026,6 +4393,81 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
     kiwi_assert_same(400, $invalid->status, 'Expected unknown handoff event types to be rejected.');
 
     unset($_SERVER['HTTP_USER_AGENT']);
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes updates SMS body variant metrics alongside KPI events', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $handoff_repository = new Kiwi_Test_Landing_Handoff_Event_Repository();
+    $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $variant_repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-variant-rest',
+        'transaction_id' => 'txn_variant_rest_123',
+        'visible_token' => 'variant_rest_123',
+        'variant_key' => 'bare_id',
+        'sms_body' => 'JPLAY variant_rest_123',
+    ]);
+    $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes(
+        $config,
+        $service,
+        null,
+        null,
+        $handoff_repository,
+        $variant_repository
+    );
+
+    $cta_a = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-variant-rest',
+        'step' => 'cta1',
+    ]));
+    $cta_b = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-variant-rest',
+        'step' => 'cta1',
+    ]));
+    $handoff = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-variant-rest',
+        'event_type' => 'sms_handoff_hidden',
+        'handoff_id' => 'hof_variant_rest',
+        'href_scheme' => 'sms',
+        'sms_recipient' => '84072',
+        'sms_body_present' => 1,
+        'sms_body_has_transaction' => 0,
+        'elapsed_ms' => 150,
+        'visibility_state' => 'hidden',
+    ]));
+    $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
+
+    kiwi_assert_true(($cta_a->data['sms_body_variant_recorded'] ?? false), 'Expected first CTA1 event to mark variant CTA1.');
+    kiwi_assert_true(($cta_b->data['incremented'] ?? false), 'Expected global KPI CTA1 counter to keep incrementing on repeated CTA clicks.');
+    kiwi_assert_true(($handoff->data['sms_body_variant_recorded'] ?? false), 'Expected handoff event to mark variant handoff metrics.');
+    kiwi_assert_same(2, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected global KPI CTA1 counter to remain unchanged in behavior.');
+    kiwi_assert_same(1, (int) ($variant_summary['cta1'] ?? 0), 'Expected variant CTA1 metric to be idempotent per assignment.');
+    kiwi_assert_same(1, (int) ($variant_summary['handoff_hidden'] ?? 0), 'Expected variant handoff hidden metric to increment.');
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing summary rows with percentage rates', function (): void {
@@ -4173,6 +4615,57 @@ kiwi_run_test('Kiwi_Landing_Primary_Cta_Resolver builds NTH sms CTA with transac
         'sms:84072?body=JPLAY%20txn_demo_12345678',
         $href,
         'Expected NTH CTA resolution to append transaction_id to the MO body.'
+    );
+});
+
+kiwi_run_test('Kiwi_Landing_Primary_Cta_Resolver can render assigned SMS body variants', function (): void {
+    $config = new Kiwi_Test_Config();
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-cta-variant',
+        'transaction_id' => 'txn_cta_variant_12345678',
+        'visible_token' => 'Arcadecta_variant_12345678',
+        'variant_key' => 'game_word',
+        'seed' => 'Arcade',
+        'sms_body' => 'JPLAY Arcadecta_variant_12345678',
+    ]);
+    $resolver = new Kiwi_Landing_Primary_Cta_Resolver([
+        new Kiwi_Nth_Primary_Cta_Adapter(new Kiwi_Sms_Body_Variant_Service($config, $repository)),
+    ]);
+
+    $href = $resolver->resolve(
+        [
+            'key' => 'lp2-fr',
+            'country' => 'FR',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'shortcode' => '84072',
+            'keyword' => 'JPLAY*',
+        ],
+        [
+            'country' => 'FR',
+            'provider' => 'nth',
+            'flow' => 'one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        [
+            'transaction_id' => 'txn_cta_variant_12345678',
+            'session_ref' => 'sess-cta-variant',
+        ]
+    );
+
+    kiwi_assert_same(
+        'sms:84072?body=JPLAY%20Arcadecta_variant_12345678',
+        $href,
+        'Expected NTH CTA resolution to use the assigned visible SMS token without changing the sms: scheme.'
     );
 });
 
@@ -5285,6 +5778,82 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
     );
 });
 
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service resolves assigned visible SMS body tokens', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY*',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $variant_repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-mo-visible-token',
+        'transaction_id' => 'txn_visible_token_12345678',
+        'visible_token' => 'ArcadeHerovisible_token_12345678',
+        'variant_key' => 'game_word',
+        'seed' => 'ArcadeHero',
+        'sms_body' => 'JPLAY ArcadeHerovisible_token_12345678',
+    ]);
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-visible-token</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        new Kiwi_Test_Nth_Event_Repository(),
+        new Kiwi_Test_Nth_Flow_Transaction_Repository(),
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        null,
+        new Kiwi_Sms_Body_Variant_Service($config, $variant_repository)
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-visible-token-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY+ArcadeHerovisible_token_12345678',
+        'keyword' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-visible-token-1',
+    ]);
+
+    kiwi_assert_same(1, count($client->calls), 'Expected MO with assigned visible token to continue MT submission flow.');
+    kiwi_assert_true(
+        strpos((string) ($client->calls[0]['transaction']['flow_reference'] ?? ''), 'txn_visible_token_12345678-') === 0,
+        'Expected assigned visible token to resolve back to the internal transaction_id.'
+    );
+});
+
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service prefers MO sessionId over request_id for MT session binding', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -5816,6 +6385,10 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
     kiwi_assert_true(
         in_array(Kiwi_Landing_Handoff_Event_Repository::class, $classes, true),
         'Expected schema migrations to include the landing handoff event repository.'
+    );
+    kiwi_assert_true(
+        in_array(Kiwi_Sms_Body_Variant_Repository::class, $classes, true),
+        'Expected schema migrations to include the SMS body variant repository.'
     );
 });
 

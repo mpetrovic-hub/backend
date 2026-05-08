@@ -56,7 +56,7 @@ Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI ev
 
 For click-to-SMS CTAs, the same endpoint also records handoff telemetry for `sms:`/`smsto:` links. These events are diagnostic signals only: they indicate that a browser attempted an SMS handoff, hid the page, returned, or did not hide after the click. They do not prove that the SMS was sent and they do not increment KPI summary counters.
 
-For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic.
+For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic. The FR SMS-body variant experiment can instead render a stable visible token while keeping the internal `txn_...` correlation id unchanged server-side.
 
 ## Multi-domain exposure via proxy/CNAME
 
@@ -113,6 +113,10 @@ The landing-page system supports a generic KPI funnel for optimization analysis.
   - stored separately for `sms:`/`smsto:` CTA diagnostics
   - supported events: `sms_handoff_attempted`, `sms_handoff_hidden`, `sms_handoff_returned`, `sms_handoff_no_hide`
   - do not mutate `wp_kiwi_landing_kpi_summary`
+- SMS body variant events
+  - stored separately for the visible SMS-body experiment
+  - assignment, CTA1, handoff, and conversion counters are aggregated by landing/service/variant/seed
+  - do not mutate `wp_kiwi_landing_kpi_summary`
 - `conv`
   - incremented once on first confirmed conversion match in attribution resolver
   - duplicate callbacks do not increment `conv` again once conversion was already confirmed
@@ -127,6 +131,15 @@ Storage model:
 - `wp_kiwi_landing_handoff_events`
   - one row per landing/session/handoff/event type
   - records SMS handoff diagnostics, including scheme, recipient, body presence, transaction-token presence, elapsed time, visibility state, and source snapshots
+
+- `wp_kiwi_sms_body_variant_assignments`
+  - one row per internal `transaction_id`
+  - stores the visible token rendered in the SMS body, variant key, seed, landing/session/source context, and one-time event markers
+
+- `wp_kiwi_sms_body_variant_summary`
+  - one row per `landing_key`, `service_key`, `variant_key`, and `seed`
+  - counters: `assignments`, `cta1`, `handoff_attempted`, `handoff_hidden`, `handoff_no_hide`, `handoff_returned`, `conv`
+  - precomputed rates: `cta1_cr`, `handoff_hidden_cr`, `conv_cr`, `conv_per_cta1_cr`, `conv_per_hidden_cr`
 
 ### Per-landing selector mapping in `integration.php`
 
@@ -181,6 +194,13 @@ Notes:
   - click-to-SMS handoff evidence (`sms_handoff_*`)
   - source snapshots (`pid`, `click_id`) and handoff details (`sms`, `smsto`, recipient/body metadata)
 
+- `wp_kiwi_sms_body_variant_assignments`
+  - visible SMS token assignments for the FR click-to-SMS experiment
+  - maps non-`txn_` visible tokens back to the internal `transaction_id`
+
+- `wp_kiwi_sms_body_variant_summary`
+  - aggregated SMS body variant metrics for SQL-based experiment analysis
+
 - `wp_kiwi_premium_sms_fraud_signals`
   - MO fraud snapshots per identity (`subscriber`/`session`)
   - per-service volume counts, soft-flag reasons, source snapshots (`pid`, `click_id`)
@@ -204,6 +224,10 @@ Notes:
 - `KIWI_CLICK_ATTRIBUTION_CLICK_ID_KEYS`
 - `KIWI_CLICK_ATTRIBUTION_TTL_SECONDS`
 - `KIWI_CLICK_ATTRIBUTION_CLEANUP_LIMIT`
+- `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED`
+  - enables the SMS-body variant experiment (default: `true`)
+- `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
+  - country allowlist for the experiment (default: `['FR']`)
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
 - `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`

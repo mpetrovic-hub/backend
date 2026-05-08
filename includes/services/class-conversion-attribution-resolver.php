@@ -10,17 +10,20 @@ class Kiwi_Conversion_Attribution_Resolver
     private $dispatcher;
     private $landing_kpi_service;
     private $sales_repository;
+    private $sms_body_variant_repository;
 
     public function __construct(
         Kiwi_Click_Attribution_Repository $repository,
         Kiwi_Affiliate_Postback_Dispatcher $dispatcher,
         ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null,
-        ?Kiwi_Sales_Repository $sales_repository = null
+        ?Kiwi_Sales_Repository $sales_repository = null,
+        ?Kiwi_Sms_Body_Variant_Repository $sms_body_variant_repository = null
     ) {
         $this->repository = $repository;
         $this->dispatcher = $dispatcher;
         $this->landing_kpi_service = $landing_kpi_service;
         $this->sales_repository = $sales_repository;
+        $this->sms_body_variant_repository = $sms_body_variant_repository;
     }
 
     public function attach_provider_references(array $binding): ?array
@@ -252,6 +255,13 @@ class Kiwi_Conversion_Attribution_Resolver
     {
         if (!$is_first_confirmed) {
             return;
+        }
+
+        if ($this->sms_body_variant_repository instanceof Kiwi_Sms_Body_Variant_Repository) {
+            $this->sms_body_variant_repository->mark_event_by_transaction_id(
+                (string) ($attribution_row['transaction_id'] ?? ''),
+                'conv'
+            );
         }
 
         if (!$this->landing_kpi_service instanceof Kiwi_Landing_Kpi_Service) {

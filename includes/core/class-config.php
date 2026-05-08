@@ -250,6 +250,43 @@ class Kiwi_Config
         return $landing_pages[$key] ?? null;
     }
 
+    public function is_sms_body_variant_experiment_enabled(): bool
+    {
+        return !defined('KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED')
+            || (bool) KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED;
+    }
+
+    public function get_sms_body_variant_experiment_countries(): array
+    {
+        $countries = defined('KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES')
+            ? KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES
+            : ['FR'];
+
+        if (is_string($countries)) {
+            $countries = preg_split('/[\s,]+/', $countries);
+        }
+
+        if (!is_array($countries)) {
+            $countries = ['FR'];
+        }
+
+        $normalized = [];
+
+        foreach ($countries as $country) {
+            $country = strtoupper(trim((string) $country));
+            $country = preg_replace('/[^A-Z0-9]/', '', $country);
+            $country = is_string($country) ? $country : '';
+
+            if ($country !== '') {
+                $normalized[] = $country;
+            }
+        }
+
+        $normalized = array_values(array_unique($normalized));
+
+        return !empty($normalized) ? $normalized : ['FR'];
+    }
+
     public function get_landing_page_registry_errors(): array
     {
         $this->get_landing_pages();
