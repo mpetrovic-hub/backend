@@ -52,7 +52,7 @@ jobs:
             --remove-label "codex-implement-ready" \
             --add-label "codex-implement-dispatched"
 
-      - name: Ask Codex to implement the issue
+      - name: Ask Codex to produce an implementation patch
         if: steps.pick.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
@@ -60,34 +60,49 @@ jobs:
         run: |
           cat > /tmp/codex-request.md <<CODEX_REQUEST
           @codex
-          
-          Bitte bearbeite dieses Issue jetzt im Implementer-Mode.
-          
+
+          Bitte bearbeite dieses Issue jetzt im Implementer-Patch-Mode.
+
           Aktuelles Issue:
           - Issue-Nummer: #$ISSUE_NUMBER
           - Task-ID: issue-$ISSUE_NUMBER
-          
+
           Lies und befolge als verbindliche Anweisung:
           \`external/codex-control/prompts/implementer.md\`
-          
-          Falls diese Datei nicht lesbar ist:
+
+          Wichtig für diesen Dispatch:
+          - Erstelle keinen Pull Request.
+          - Erwarte kein Git-Remote \`origin\`.
+          - Pushe nichts nach GitHub.
+          - Wenn du Code änderst, liefere das Ergebnis als unified diff / Patch im Issue-Kommentar.
+          - Der Patch muss später von einer GitHub Action oder manuell angewendet werden können.
+          - Verwende im Patch-Kontext die Issue-Bindung #$ISSUE_NUMBER.
+          - Wenn der Planner Report unklar ist oder menschliche Entscheidung verlangt, implementiere nichts und kommentiere die Blockade.
+
+          Falls \`external/codex-control/prompts/implementer.md\` nicht lesbar ist:
           - ändere nichts
           - erstelle keine Datei
           - erstelle keinen Branch
-          - erstelle keinen Pull Request
           - mache keinen Commit
           - kommentiere nur im aktuellen Issue exakt:
             "codex-control implementer prompt nicht lesbar"
-          
-          Wichtig:
-          Branch-Muster:
-          \`codex/issue-$ISSUE_NUMBER-<kurzer-slug>\`
-          
-          PR-Verknüpfung:
-          \`Refs #$ISSUE_NUMBER\`
+
+          Erwartetes Ergebnis:
+          Kommentiere im Issue einen Abschnitt mit exakt dieser Überschrift:
+
+          ## Codex Implementer Patch Report
+
+          Der Report muss enthalten:
+          - Issue: #$ISSUE_NUMBER
+          - Task-ID: issue-$ISSUE_NUMBER
+          - Summary
+          - Patch als unified diff in einem \`\`\`diff Codeblock
+          - Tests / Checks
+          - Risiken
+          - Hinweise für die spätere PR-Erstellung
           CODEX_REQUEST
 
-          echo "Posting Codex implementer request to issue #$ISSUE_NUMBER"
+          echo "Posting Codex implementer patch request to issue #$ISSUE_NUMBER"
           cat /tmp/codex-request.md
 
           gh issue comment "$ISSUE_NUMBER" \
