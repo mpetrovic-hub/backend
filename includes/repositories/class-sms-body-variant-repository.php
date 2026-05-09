@@ -438,24 +438,11 @@ class Kiwi_Sms_Body_Variant_Repository
             return false;
         }
 
-        $expressions = $this->counter_expressions($counter);
-
-        $update_result = $wpdb->query(
+        $increment_result = $wpdb->query(
             $wpdb->prepare(
                 "UPDATE {$table_name}
                  SET updated_at = %s,
-                     assignments = {$expressions['assignments']},
-                     cta1 = {$expressions['cta1']},
-                     handoff_attempted = {$expressions['handoff_attempted']},
-                     handoff_hidden = {$expressions['handoff_hidden']},
-                     handoff_no_hide = {$expressions['handoff_no_hide']},
-                     handoff_returned = {$expressions['handoff_returned']},
-                     conv = {$expressions['conv']},
-                     cta1_cr = CASE WHEN {$expressions['assignments']} > 0 THEN ROUND(({$expressions['cta1']} / {$expressions['assignments']}) * 100, 2) ELSE 0 END,
-                     handoff_hidden_cr = CASE WHEN {$expressions['handoff_attempted']} > 0 THEN ROUND(({$expressions['handoff_hidden']} / {$expressions['handoff_attempted']}) * 100, 2) ELSE 0 END,
-                     conv_cr = CASE WHEN {$expressions['assignments']} > 0 THEN ROUND(({$expressions['conv']} / {$expressions['assignments']}) * 100, 2) ELSE 0 END,
-                     conv_per_cta1_cr = CASE WHEN {$expressions['cta1']} > 0 THEN ROUND(({$expressions['conv']} / {$expressions['cta1']}) * 100, 2) ELSE 0 END,
-                     conv_per_hidden_cr = CASE WHEN {$expressions['handoff_hidden']} > 0 THEN ROUND(({$expressions['conv']} / {$expressions['handoff_hidden']}) * 100, 2) ELSE 0 END
+                     {$counter} = {$counter} + 1
                  WHERE landing_key = %s
                    AND service_key = %s
                    AND variant_key = %s
@@ -468,29 +455,32 @@ class Kiwi_Sms_Body_Variant_Repository
             )
         );
 
-        return $update_result !== false;
-    }
-
-    private function counter_expressions(string $counter): array
-    {
-        $counters = [
-            'assignments',
-            'cta1',
-            'handoff_attempted',
-            'handoff_hidden',
-            'handoff_no_hide',
-            'handoff_returned',
-            'conv',
-        ];
-        $expressions = [];
-
-        foreach ($counters as $candidate) {
-            $expressions[$candidate] = $counter === $candidate
-                ? '(' . $candidate . ' + 1)'
-                : $candidate;
+        if ($increment_result === false) {
+            return false;
         }
 
-        return $expressions;
+        $rate_result = $wpdb->query(
+            $wpdb->prepare(
+                "UPDATE {$table_name}
+                 SET updated_at = %s,
+                     cta1_cr = CASE WHEN assignments > 0 THEN ROUND((cta1 / assignments) * 100, 2) ELSE 0 END,
+                     handoff_hidden_cr = CASE WHEN handoff_attempted > 0 THEN ROUND((handoff_hidden / handoff_attempted) * 100, 2) ELSE 0 END,
+                     conv_cr = CASE WHEN assignments > 0 THEN ROUND((conv / assignments) * 100, 2) ELSE 0 END,
+                     conv_per_cta1_cr = CASE WHEN cta1 > 0 THEN ROUND((conv / cta1) * 100, 2) ELSE 0 END,
+                     conv_per_hidden_cr = CASE WHEN handoff_hidden > 0 THEN ROUND((conv / handoff_hidden) * 100, 2) ELSE 0 END
+                 WHERE landing_key = %s
+                   AND service_key = %s
+                   AND variant_key = %s
+                   AND seed = %s",
+                $now,
+                $landing_key,
+                $service_key,
+                $variant_key,
+                $seed
+            )
+        );
+
+        return $rate_result !== false;
     }
 
     private function field_for_event_key(string $event_key): string

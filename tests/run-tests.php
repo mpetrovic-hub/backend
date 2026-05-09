@@ -10,6 +10,10 @@ if (!defined('DAY_IN_SECONDS')) {
     define('DAY_IN_SECONDS', 86400);
 }
 
+if (!defined('ARRAY_A')) {
+    define('ARRAY_A', 'ARRAY_A');
+}
+
 $GLOBALS['kiwi_test_hooks'] = [];
 $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
@@ -2489,6 +2493,246 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
     }
 }
 
+class Kiwi_Test_Wpdb_Sms_Body_Variant
+{
+    public $prefix = 'wp_';
+    public $tables = [];
+
+    public function prepare($query, ...$args)
+    {
+        if (count($args) === 1 && is_array($args[0])) {
+            $args = $args[0];
+        }
+
+        return [
+            'query' => (string) $query,
+            'args' => $args,
+        ];
+    }
+
+    public function insert(string $table, array $data, array $formats = [])
+    {
+        if (!isset($this->tables[$table])) {
+            $this->tables[$table] = [];
+        }
+
+        $id = count($this->tables[$table]) + 1;
+        $this->tables[$table][$id] = array_merge(['id' => $id], $data);
+
+        return 1;
+    }
+
+    public function get_row($statement, $output = null)
+    {
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
+        $rows = $this->tables[$assignment_table] ?? [];
+
+        if (strpos($query, 'transaction_id = %s') !== false) {
+            $transaction_id = (string) ($args[0] ?? '');
+
+            foreach ($rows as $row) {
+                if ((string) ($row['transaction_id'] ?? '') === $transaction_id) {
+                    return $row;
+                }
+            }
+        }
+
+        if (strpos($query, 'visible_token = %s') !== false) {
+            $visible_token = (string) ($args[0] ?? '');
+
+            foreach ($rows as $row) {
+                if ((string) ($row['visible_token'] ?? '') === $visible_token) {
+                    return $row;
+                }
+            }
+        }
+
+        if (strpos($query, 'landing_key = %s') !== false && strpos($query, 'session_token = %s') !== false) {
+            $landing_key = (string) ($args[0] ?? '');
+            $session_token = (string) ($args[1] ?? '');
+            $matches = [];
+
+            foreach ($rows as $row) {
+                if ((string) ($row['landing_key'] ?? '') === $landing_key
+                    && (string) ($row['session_token'] ?? '') === $session_token
+                ) {
+                    $matches[] = $row;
+                }
+            }
+
+            usort($matches, static function (array $left, array $right): int {
+                return (int) ($right['id'] ?? 0) <=> (int) ($left['id'] ?? 0);
+            });
+
+            return $matches[0] ?? null;
+        }
+
+        return null;
+    }
+
+    public function get_results($statement, $output = null): array
+    {
+        $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
+
+        return array_values($this->tables[$summary_table] ?? []);
+    }
+
+    public function query($statement)
+    {
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
+        $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
+
+        if (stripos($query, "UPDATE {$assignment_table}") !== false
+            && preg_match('/SET\s+updated_at\s*=\s*%s,\s*([a-z0-9_]+)\s*=\s*%s/i', $query, $matches) === 1
+        ) {
+            $field = (string) ($matches[1] ?? '');
+            $transaction_id = (string) ($args[2] ?? '');
+
+            foreach ($this->tables[$assignment_table] ?? [] as $id => $row) {
+                if ((string) ($row['transaction_id'] ?? '') !== $transaction_id) {
+                    continue;
+                }
+
+                if ((string) ($row[$field] ?? '') !== '') {
+                    return 0;
+                }
+
+                $this->tables[$assignment_table][$id]['updated_at'] = (string) ($args[0] ?? '');
+                $this->tables[$assignment_table][$id][$field] = (string) ($args[1] ?? '');
+
+                return 1;
+            }
+
+            return 0;
+        }
+
+        if (stripos($query, "INSERT INTO {$summary_table}") !== false) {
+            $row_id = $this->find_summary_row_id(
+                (string) ($args[2] ?? ''),
+                (string) ($args[3] ?? ''),
+                (string) ($args[6] ?? ''),
+                (string) ($args[7] ?? '')
+            );
+
+            if ($row_id === null) {
+                $row_id = count($this->tables[$summary_table] ?? []) + 1;
+                $this->tables[$summary_table][$row_id] = [
+                    'id' => $row_id,
+                    'created_at' => (string) ($args[0] ?? ''),
+                    'updated_at' => (string) ($args[1] ?? ''),
+                    'landing_key' => (string) ($args[2] ?? ''),
+                    'service_key' => (string) ($args[3] ?? ''),
+                    'provider_key' => (string) ($args[4] ?? ''),
+                    'flow_key' => (string) ($args[5] ?? ''),
+                    'variant_key' => (string) ($args[6] ?? ''),
+                    'seed' => (string) ($args[7] ?? ''),
+                    'assignments' => 0,
+                    'cta1' => 0,
+                    'handoff_attempted' => 0,
+                    'handoff_hidden' => 0,
+                    'handoff_no_hide' => 0,
+                    'handoff_returned' => 0,
+                    'conv' => 0,
+                    'cta1_cr' => 0.0,
+                    'handoff_hidden_cr' => 0.0,
+                    'conv_cr' => 0.0,
+                    'conv_per_cta1_cr' => 0.0,
+                    'conv_per_hidden_cr' => 0.0,
+                ];
+            } else {
+                $this->tables[$summary_table][$row_id]['updated_at'] = (string) ($args[1] ?? '');
+            }
+
+            return 1;
+        }
+
+        if (preg_match('/SET\s+updated_at\s*=\s*%s,\s*([a-z0-9_]+)\s*=\s*\1\s*\+\s*1/i', $query, $matches) === 1) {
+            $counter = (string) ($matches[1] ?? '');
+            $row_id = $this->find_summary_row_id(
+                (string) ($args[1] ?? ''),
+                (string) ($args[2] ?? ''),
+                (string) ($args[3] ?? ''),
+                (string) ($args[4] ?? '')
+            );
+
+            if ($row_id === null || !array_key_exists($counter, $this->tables[$summary_table][$row_id])) {
+                return 0;
+            }
+
+            $this->tables[$summary_table][$row_id]['updated_at'] = (string) ($args[0] ?? '');
+            $this->tables[$summary_table][$row_id][$counter] = (int) $this->tables[$summary_table][$row_id][$counter] + 1;
+
+            return 1;
+        }
+
+        if (strpos($query, 'cta1_cr = CASE WHEN assignments > 0') !== false) {
+            $row_id = $this->find_summary_row_id(
+                (string) ($args[1] ?? ''),
+                (string) ($args[2] ?? ''),
+                (string) ($args[3] ?? ''),
+                (string) ($args[4] ?? '')
+            );
+
+            if ($row_id === null) {
+                return 0;
+            }
+
+            $this->tables[$summary_table][$row_id]['updated_at'] = (string) ($args[0] ?? '');
+            $this->recalculate_summary_rates($summary_table, $row_id);
+
+            return 1;
+        }
+
+        return false;
+    }
+
+    private function find_summary_row_id(string $landing_key, string $service_key, string $variant_key, string $seed): ?int
+    {
+        $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
+
+        foreach ($this->tables[$summary_table] ?? [] as $id => $row) {
+            if ((string) ($row['landing_key'] ?? '') === $landing_key
+                && (string) ($row['service_key'] ?? '') === $service_key
+                && (string) ($row['variant_key'] ?? '') === $variant_key
+                && (string) ($row['seed'] ?? '') === $seed
+            ) {
+                return (int) $id;
+            }
+        }
+
+        return null;
+    }
+
+    private function recalculate_summary_rates(string $summary_table, int $row_id): void
+    {
+        $row = $this->tables[$summary_table][$row_id] ?? [];
+        $assignments = (int) ($row['assignments'] ?? 0);
+        $cta1 = (int) ($row['cta1'] ?? 0);
+        $handoff_attempted = (int) ($row['handoff_attempted'] ?? 0);
+        $handoff_hidden = (int) ($row['handoff_hidden'] ?? 0);
+        $conv = (int) ($row['conv'] ?? 0);
+
+        $this->tables[$summary_table][$row_id]['cta1_cr'] = $this->rate($cta1, $assignments);
+        $this->tables[$summary_table][$row_id]['handoff_hidden_cr'] = $this->rate($handoff_hidden, $handoff_attempted);
+        $this->tables[$summary_table][$row_id]['conv_cr'] = $this->rate($conv, $assignments);
+        $this->tables[$summary_table][$row_id]['conv_per_cta1_cr'] = $this->rate($conv, $cta1);
+        $this->tables[$summary_table][$row_id]['conv_per_hidden_cr'] = $this->rate($conv, $handoff_hidden);
+    }
+
+    private function rate(int $numerator, int $denominator): float
+    {
+        if ($denominator <= 0) {
+            return 0.0;
+        }
+
+        return round(($numerator / $denominator) * 100, 2);
+    }
+}
+
 class Kiwi_Test_Tracking_Capture_Service extends Kiwi_Tracking_Capture_Service
 {
     public $cookies = [];
@@ -4281,6 +4525,58 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository stores assignments and summary i
     kiwi_assert_same(1, count($repository->assignments), 'Expected one assignment row after duplicate/conflict attempts.');
     kiwi_assert_same(1, (int) ($summary['assignments'] ?? 0), 'Expected assignment summary counter to increment once.');
     kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected CTA1 summary counter to be idempotent per assignment.');
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recalculates summary rates from persisted counters', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $insert = $repository->insert_if_new([
+            'landing_key' => 'lp2-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider_key' => 'nth',
+            'flow_key' => 'nth-fr-one-off',
+            'country' => 'FR',
+            'keyword' => 'JPLAY',
+            'shortcode' => '84072',
+            'session_token' => 'sess-rate-regression',
+            'transaction_id' => 'txn_rate_regression_12345678',
+            'visible_token' => 'rate_regression_12345678',
+            'variant_key' => 'bare_id',
+            'sms_body' => 'JPLAY rate_regression_12345678',
+        ]);
+
+        $repository->mark_event_by_transaction_id('txn_rate_regression_12345678', 'cta1');
+        $repository->mark_event_by_transaction_id('txn_rate_regression_12345678', 'sms_handoff_attempted');
+        $repository->mark_event_by_transaction_id('txn_rate_regression_12345678', 'sms_handoff_hidden');
+        $repository->mark_event_by_transaction_id('txn_rate_regression_12345678', 'conv');
+
+        $rows = $repository->get_summary_rows();
+        $summary = $rows[0] ?? [];
+
+        kiwi_assert_true(($insert['inserted'] ?? false), 'Expected actual repository assignment insert to succeed with test wpdb.');
+        kiwi_assert_same(1, (int) ($summary['assignments'] ?? 0), 'Expected persisted assignments counter to be 1.');
+        kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected persisted CTA1 counter to be 1.');
+        kiwi_assert_same(1, (int) ($summary['handoff_attempted'] ?? 0), 'Expected persisted attempted handoff counter to be 1.');
+        kiwi_assert_same(1, (int) ($summary['handoff_hidden'] ?? 0), 'Expected persisted hidden handoff counter to be 1.');
+        kiwi_assert_same(1, (int) ($summary['conv'] ?? 0), 'Expected persisted conversion counter to be 1.');
+        kiwi_assert_same(100.0, (float) ($summary['cta1_cr'] ?? 0), 'Expected cta1_cr to be calculated from persisted counters without double-counting.');
+        kiwi_assert_same(100.0, (float) ($summary['handoff_hidden_cr'] ?? 0), 'Expected handoff_hidden_cr to be calculated from persisted counters without double-counting.');
+        kiwi_assert_same(100.0, (float) ($summary['conv_cr'] ?? 0), 'Expected conv_cr to be calculated from persisted counters without double-counting.');
+        kiwi_assert_same(100.0, (float) ($summary['conv_per_cta1_cr'] ?? 0), 'Expected conv_per_cta1_cr to be calculated from persisted counters without double-counting.');
+        kiwi_assert_same(100.0, (float) ($summary['conv_per_hidden_cr'] ?? 0), 'Expected conv_per_hidden_cr to be calculated from persisted counters without double-counting.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
 });
 
 kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', function (): void {

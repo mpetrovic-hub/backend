@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-08:
+- [SMS Variants] Added the FR click-to-SMS SMS-body variant experiment with stable visible-token assignment mapped back to internal `transaction_id`, including new assignment/summary persistence and adapter/service wiring. Extended KPI and conversion attribution handling plus docs so assignment, handoff, and conversion events are recorded and analyzable by variant.
+
 2026-05-07:
 - [Control Submodule] Replaced the in-repo `codex-control` directory with an `external/codex-control` submodule and updated prompt content through subsequent same-day commits. This keeps prompt governance versioned at the integration boundary while preserving repository wiring via `.gitmodules`.
 - [Review Workflow] Added a dedicated `codex-reviewer-dispatcher` GitHub Actions workflow and refined planner/implementer dispatcher instructions, naming, and prompt-posting behavior. These changes standardize multi-role Codex orchestration in CI-facing automation flows.
