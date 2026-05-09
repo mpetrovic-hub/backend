@@ -66,14 +66,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
           PR_NUMBER: ${{ steps.pick.outputs.pr_number }}
         run: |
-          cat > /tmp/codex-review-request.md <<'CODEX_REQUEST'
+          cat > /tmp/codex-review-request.md <<CODEX_REQUEST
           @codex review
-
+          
           Bitte reviewe diesen Pull Request im Codex-Overnight Reviewer-Mode.
-
+          
+          Aktueller Pull Request:
+          - PR-Nummer: #$PR_NUMBER
+          
           Lies und befolge als verbindliche Anweisung:
-          `external/codex-control/prompts/reviewer.md`
-
+          \`external/codex-control/prompts/reviewer.md\`
+          
           Falls diese Datei nicht lesbar ist:
           - ändere nichts
           - erstelle keine Datei

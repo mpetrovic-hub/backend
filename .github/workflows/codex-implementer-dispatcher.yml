@@ -58,14 +58,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_CODEX_DISPATCH_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pick.outputs.issue_number }}
         run: |
-          cat > /tmp/codex-request.md <<'CODEX_REQUEST'
+          cat > /tmp/codex-request.md <<CODEX_REQUEST
           @codex
-
+          
           Bitte bearbeite dieses Issue jetzt im Implementer-Mode.
-
+          
+          Aktuelles Issue:
+          - Issue-Nummer: #$ISSUE_NUMBER
+          - Task-ID: issue-$ISSUE_NUMBER
+          
           Lies und befolge als verbindliche Anweisung:
-          `external/codex-control/prompts/implementer.md`
-
+          \`external/codex-control/prompts/implementer.md\`
+          
           Falls diese Datei nicht lesbar ist:
           - ändere nichts
           - erstelle keine Datei
@@ -74,6 +78,13 @@ jobs:
           - mache keinen Commit
           - kommentiere nur im aktuellen Issue exakt:
             "codex-control implementer prompt nicht lesbar"
+          
+          Wichtig:
+          Branch-Muster:
+          \`codex/issue-$ISSUE_NUMBER-<kurzer-slug>\`
+          
+          PR-Verknüpfung:
+          \`Refs #$ISSUE_NUMBER\`
           CODEX_REQUEST
 
           echo "Posting Codex implementer request to issue #$ISSUE_NUMBER"
