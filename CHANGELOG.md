@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-09:
+- [Rate Accuracy] Fixed SMS-body variant summary updates so event increments no longer distort derived conversion-rate fields during the same write. Added repository regression coverage with a `wpdb`-backed test double to verify persisted counters and recalculated rates remain consistent.
+
 2026-05-08:
 - [SMS Variants] Added the FR click-to-SMS SMS-body variant experiment with stable visible-token assignment mapped back to internal `transaction_id`, including new assignment/summary persistence and adapter/service wiring. Extended KPI and conversion attribution handling plus docs so assignment, handoff, and conversion events are recorded and analyzable by variant.
 

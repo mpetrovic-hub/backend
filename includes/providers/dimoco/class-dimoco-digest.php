@@ -20,10 +20,6 @@ class Kiwi_Dimoco_Digest
 
         $digest = hash_hmac('sha256', $payload, $password);
 
-        // Debug logging - remove in production
-        error_log('DIMOCO DIGEST INPUT: ' . $payload);
-        error_log('DIMOCO DIGEST OUTPUT: ' . $digest);
-
         return $digest;
     }
 }

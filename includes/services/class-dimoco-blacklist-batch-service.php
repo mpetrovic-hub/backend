@@ -108,10 +108,6 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
             $lookup_request_id = (string) ($lookup_result['request_id'] ?? '');
             $lookup_messages   = [];
 
-            error_log('KIWI BLACKLIST BATCH: starting operator lookup for ' . $msisdn);
-            error_log('KIWI BLACKLIST BATCH: lookup result = ' . wp_json_encode($lookup_result));
-            error_log('KIWI BLACKLIST BATCH: lookup request_id = ' . $lookup_request_id);
-
             if (!empty($lookup_result['messages']) && is_array($lookup_result['messages'])) {
                 $lookup_messages = $lookup_result['messages'];
             }
@@ -195,12 +191,8 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                         'lookup_timeout_seconds'=> $timeout_seconds,
                     ],
                 ];
-                error_log('KIWI BLACKLIST BATCH: timeout reached for request_id ' . $lookup_request_id);
                 continue;
             }
-
-            error_log('KIWI BLACKLIST BATCH: operator found via callback = ' . $operator);
-            error_log('KIWI BLACKLIST BATCH: sending add-blocklist for ' . $msisdn);
 
             $raw_result = $this->client->add_blocklist(
                 $service_key,
@@ -255,8 +247,6 @@ class Kiwi_Dimoco_Blacklist_Batch_Service
                     break;
                 }
             }
-
-            error_log('KIWI BLACKLIST BATCH: polling callback for request_id: ' . $lookup_request_id);
 
             if ($poll_interval_microseconds > 0) {
                 usleep($poll_interval_microseconds);
