@@ -169,30 +169,48 @@ This section describes the operational S2S tracking contract used to move from l
 
 ### Full S2S URL template example
 
-`https://offers-kiwimobile.affise.com/postback?clickid={clickid}&click_id={click_id}&sale_reference={sale_reference}&service_key={service_key}&provider_key={provider_key}&operator_name={operator_name}&sub7={sub7}&secure={secure}&hash={hash}&goal=sale`
+`https://offers-kiwimobile.affise.com/postback?clickid={clickid}&secure={secure}&goal=sale&status=1`
 
 ### Placeholder mapping (source of truth)
 
 - `clickid` / `click_id`
-  - affiliate click identifier captured at landing entry
-- `sale_reference`
-  - internal sale/correlation reference resolved during conversion handling
-- `service_key`
-  - internal service identifier from normalized conversion context
-- `provider_key`
-  - provider identifier from normalized conversion context
-- `operator_name`
-  - resolved operator label when available
-- `sub7`
-  - alias of `operator_name` for affiliate reporting dimensions
-- `secure` / `hash`
-  - signature/checksum generated from configured signature algorithm/base/secret
+  - mandatory affiliate click identifier captured at landing entry
+- `secure`
+  - mandatory hash password generated on offer or advertiser level
+- `goal`
+  - conversion goal number or goal value; use `sale` for successful sale postbacks
+- `status`
+  - optional conversion status; `1` approved, `2` pending, `3` declined, `5` hold
+- `sum`
+  - optional conversion revenue
+- `ip`
+  - optional visitor IP address, subject to Affise/GDPR handling
+- `referrer`
+  - optional referrer or additional traffic/deeplink information
+- `comment`
+  - optional comment
+- `fbclid`
+  - optional Facebook click ID
+- `device_type`
+  - optional device type, for example `mobile`, `tablet`, or `desktop`
+- `aimp_id`
+  - optional Affise impression ID
+- `promo_code`
+  - optional promo code
+- `user_id`
+  - optional user ID
+- `custom_field1` through `custom_field15`
+  - optional additional Affise parameters
+- `action_id`
+  - optional unique conversion ID in the advertiser system
+  - not part of the default sale postback template
+  - use only when the integration intentionally wants Affise conversion uniqueness based on `action_id`, `goal`, and offer instead of click ID
 
 ### Dispatch behavior rules
 
 - all substituted values are URL-encoded before request dispatch
-- if signature exists and template has neither `{secure}` nor `{hash}`, dispatcher appends configured signature parameter automatically
-- if `operator_name` exists and template has no `sub7` parameter, dispatcher appends `sub7=<operator_name>` automatically
+- dispatcher emits only parameters present in the configured Affise postback template
+- Affise sale postback templates must include `secure={secure}`
 - successful dispatch is transport-level HTTP `2xx`
 - idempotency boundary is `postback_sent_at`: once set, duplicate callback deliveries must not emit another postback
 

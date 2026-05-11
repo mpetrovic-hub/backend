@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-10:
+- [Logging Cleanup] Removed temporary DIMOCO/NTH debug `error_log` instrumentation from callback handling, digest generation, client request/response paths, and blacklist batch polling to reduce production log noise while keeping behavior intact. Deleted obsolete debug-only callback/patch artifacts that were no longer part of the active integration path.
+
 2026-05-09:
 - [Rate Accuracy] Fixed SMS-body variant summary updates so event increments no longer distort derived conversion-rate fields during the same write. Added repository regression coverage with a `wpdb`-backed test double to verify persisted counters and recalculated rates remain consistent.
 
