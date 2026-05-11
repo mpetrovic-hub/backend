@@ -62,7 +62,7 @@ No provider-specific callback shape should leak into shared attribution code.
 
 `wp_kiwi_click_attributions` stores:
 
-- capture data (`tracking_token`, `transaction_id`, `click_id`, landing/provider/service context)
+- capture data (`tracking_token`, `transaction_id`, `click_id`, landing/provider/service context, optional traffic-source fields `pid`, `tksource`, `tkzone`)
 - correlation references (`session_ref`, `transaction_ref`, `message_ref`, `external_ref`, `sale_reference`)
 - conversion status (`captured`, `bound`, `confirmed`, postback states)
 - outbound postback audit (`postback_sent_at`, response code/body, attempts, errors)
@@ -72,13 +72,13 @@ No provider-specific callback shape should leak into shared attribution code.
 
 - context (`service_key`, `provider_key`, `flow_key`, `landing_key`, `session_token`)
 - engagement timestamps (`page_loaded_at`, `first_cta_click_at`, `last_cta_click_at`) and click count
-- source context snapshots (`pid`, `click_id`)
+- source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
 `wp_kiwi_landing_handoff_events` stores click-to-SMS handoff diagnostics, including:
 
 - context (`service_key`, `provider_key`, `flow_key`, `landing_key`, `session_token`)
 - handoff identity (`handoff_id`, event type) and SMS metadata (`sms`/`smsto`, recipient, body/transaction-token presence)
-- browser transition hints (`elapsed_ms`, `visibility_state`) and source context snapshots (`pid`, `click_id`)
+- browser transition hints (`elapsed_ms`, `visibility_state`) and source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
 `wp_kiwi_sms_body_variant_assignments` stores visible SMS-body experiment assignments, including:
 
@@ -95,7 +95,7 @@ No provider-specific callback shape should leak into shared attribution code.
 
 - volume metrics (`count_1h`, `count_24h`, `count_total`)
 - soft-flag outcome and reason
-- source context snapshots (`pid`, `click_id`)
+- source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
 `wp_kiwi_sales` can be enriched from attribution context on confirmed conversion, including:
 
@@ -105,11 +105,11 @@ No provider-specific callback shape should leak into shared attribution code.
 
 The shared attribution layer now feeds downstream fraud-monitoring context:
 
-1. Landing entry capture stores `click_id` (required) and optional `pid` in `wp_kiwi_click_attributions`.
-2. Landing KPI engagement events (`page_loaded`, `cta_click`) resolve and persist `pid`/`click_id` into `wp_kiwi_premium_sms_landing_engagements`.
+1. Landing entry capture stores `click_id` (required) and optional `pid`, `tksource`, and `tkzone` in `wp_kiwi_click_attributions`.
+2. Landing KPI engagement events (`page_loaded`, `cta_click`) resolve and persist `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_landing_engagements`.
 3. SMS-body variant assignment stores the visible token shown in the user SMS app while preserving the internal `transaction_id`.
 4. Landing handoff events (`sms_handoff_*`) preserve click-to-SMS transition evidence for operations analysis without altering KPI counters.
-5. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id` into `wp_kiwi_premium_sms_fraud_signals`.
+5. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_fraud_signals`.
 
 This keeps provider payload parsing at the boundary while giving the shared fraud capability stable traffic-source dimensions.
 

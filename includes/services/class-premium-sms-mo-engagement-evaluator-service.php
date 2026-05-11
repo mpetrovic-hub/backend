@@ -42,6 +42,8 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
         $link_reasons = [];
         $pid = $this->resolve_pid($attribution, $engagement);
         $click_id = $this->resolve_click_id($attribution, $engagement);
+        $tksource = $this->resolve_source_value('tksource', $attribution, $engagement);
+        $tkzone = $this->resolve_source_value('tkzone', $attribution, $engagement);
 
         if (!is_array($attribution) || !is_array($engagement)) {
             $link_reasons[] = 'unknown_link';
@@ -87,6 +89,8 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
             'link_reasons' => $link_reasons,
             'pid' => $pid,
             'click_id' => $click_id,
+            'tksource' => $tksource,
+            'tkzone' => $tkzone,
             'attribution' => is_array($attribution) ? $attribution : [],
             'engagement' => is_array($engagement) ? $engagement : [],
             'metrics' => [
@@ -100,6 +104,8 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
                 'require_cta_click' => $require_cta_click,
                 'pid' => $pid,
                 'click_id' => $click_id,
+                'tksource' => $tksource,
+                'tkzone' => $tkzone,
             ],
         ];
     }
@@ -349,5 +355,87 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
         $click_id = is_string($click_id) ? $click_id : '';
 
         return substr($click_id, 0, 191);
+    }
+
+    private function resolve_source_value(string $field, ?array $attribution, ?array $engagement): string
+    {
+        $field = strtolower($field);
+        if (!in_array($field, ['tksource', 'tkzone'], true)) {
+            return '';
+        }
+
+        if (is_array($engagement)) {
+            $engagement_value = $this->sanitize_source_value((string) ($engagement[$field] ?? ''));
+
+            if ($engagement_value !== '') {
+                return $engagement_value;
+            }
+        }
+
+        if (!is_array($attribution)) {
+            return '';
+        }
+
+        $attribution_value = $this->sanitize_source_value((string) ($attribution[$field] ?? ''));
+
+        if ($attribution_value !== '') {
+            return $attribution_value;
+        }
+
+        return $this->resolve_source_value_from_raw_context($field, $attribution['raw_context'] ?? null);
+    }
+
+    private function resolve_source_value_from_raw_context(string $field, $raw_context): string
+    {
+        if (is_array($raw_context)) {
+            return $this->resolve_source_value_from_query_params($field, $raw_context['query_params'] ?? []);
+        }
+
+        if (!is_string($raw_context) || trim($raw_context) === '') {
+            return '';
+        }
+
+        $decoded = json_decode($raw_context, true);
+
+        if (!is_array($decoded)) {
+            return '';
+        }
+
+        return $this->resolve_source_value_from_query_params($field, $decoded['query_params'] ?? []);
+    }
+
+    private function resolve_source_value_from_query_params(string $field, $query_params): string
+    {
+        if (!is_array($query_params)) {
+            return '';
+        }
+
+        foreach ($query_params as $key => $value) {
+            if (strtolower((string) $key) !== $field || is_array($value)) {
+                continue;
+            }
+
+            $source_value = $this->sanitize_source_value((string) $value);
+
+            if ($source_value !== '') {
+                return $source_value;
+            }
+        }
+
+        return '';
+    }
+
+    private function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 }

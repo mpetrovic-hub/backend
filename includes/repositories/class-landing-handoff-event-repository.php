@@ -29,6 +29,8 @@ class Kiwi_Landing_Handoff_Event_Repository
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             pid VARCHAR(191) NOT NULL DEFAULT '',
             click_id VARCHAR(191) NOT NULL DEFAULT '',
+            tksource VARCHAR(191) NOT NULL DEFAULT '',
+            tkzone VARCHAR(191) NOT NULL DEFAULT '',
             session_token VARCHAR(150) NOT NULL DEFAULT '',
             handoff_id VARCHAR(100) NOT NULL DEFAULT '',
             event_type VARCHAR(50) NOT NULL DEFAULT '',
@@ -48,6 +50,8 @@ class Kiwi_Landing_Handoff_Event_Repository
             KEY flow_key (flow_key),
             KEY pid (pid),
             KEY click_id (click_id),
+            KEY tksource (tksource),
+            KEY tkzone (tkzone),
             KEY handoff_id (handoff_id),
             KEY event_type (event_type),
             KEY created_at (created_at)
@@ -92,6 +96,8 @@ class Kiwi_Landing_Handoff_Event_Repository
                 'flow_key' => trim((string) ($event['flow_key'] ?? '')),
                 'pid' => $this->sanitize_pid((string) ($event['pid'] ?? '')),
                 'click_id' => $this->sanitize_click_id((string) ($event['click_id'] ?? '')),
+                'tksource' => $this->sanitize_source_value((string) ($event['tksource'] ?? '')),
+                'tkzone' => $this->sanitize_source_value((string) ($event['tkzone'] ?? '')),
                 'session_token' => $session_token,
                 'handoff_id' => $handoff_id,
                 'event_type' => $event_type,
@@ -105,6 +111,8 @@ class Kiwi_Landing_Handoff_Event_Repository
                 'raw_context' => isset($event['raw_context']) ? wp_json_encode($event['raw_context']) : '',
             ],
             [
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -170,6 +178,18 @@ class Kiwi_Landing_Handoff_Event_Repository
         if ($click_id !== '') {
             $where_sql[] = 'click_id = %s';
             $params[] = $click_id;
+        }
+
+        $tksource = $this->sanitize_source_value((string) ($filters['tksource'] ?? ''));
+        if ($tksource !== '') {
+            $where_sql[] = 'tksource = %s';
+            $params[] = $tksource;
+        }
+
+        $tkzone = $this->sanitize_source_value((string) ($filters['tkzone'] ?? ''));
+        if ($tkzone !== '') {
+            $where_sql[] = 'tkzone = %s';
+            $params[] = $tkzone;
         }
 
         $params[] = $limit;
@@ -308,6 +328,20 @@ class Kiwi_Landing_Handoff_Event_Repository
         $click_id = is_string($click_id) ? $click_id : '';
 
         return substr($click_id, 0, 191);
+    }
+
+    private function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 
     private function current_time_mysql(): string

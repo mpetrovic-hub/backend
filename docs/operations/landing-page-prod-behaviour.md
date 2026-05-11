@@ -52,7 +52,7 @@ For filesystem HTML and CSS, local media references such as `./hero.png` are rew
 
 Keep the preload candidates in sync with the visible hero `<img>` candidates so the browser does not fetch a duplicate LCP image. External, protocol-relative, `data:`, and root-relative `/...` candidates keep their original browser semantics; only `./...` candidates are rewritten to the effective asset base.
 
-Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`) for fraud-linkage snapshots.
+Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`, `tksource`, `tkzone`) for fraud-linkage snapshots.
 
 For click-to-SMS CTAs, the same endpoint also records handoff telemetry for `sms:`/`smsto:` links. These events are diagnostic signals only: they indicate that a browser attempted an SMS handoff, hid the page, returned, or did not hide after the click. They do not prove that the SMS was sent and they do not increment KPI summary counters.
 
@@ -188,11 +188,11 @@ Notes:
 
 - `wp_kiwi_premium_sms_landing_engagements`
   - landing-session engagement evidence (`page_loaded_at`, first/last CTA click, click count)
-  - source snapshots (`pid`, `click_id`)
+  - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
 - `wp_kiwi_landing_handoff_events`
   - click-to-SMS handoff evidence (`sms_handoff_*`)
-  - source snapshots (`pid`, `click_id`) and handoff details (`sms`, `smsto`, recipient/body metadata)
+  - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`) and handoff details (`sms`, `smsto`, recipient/body metadata)
 
 - `wp_kiwi_sms_body_variant_assignments`
   - visible SMS token assignments for the FR click-to-SMS experiment
@@ -203,7 +203,7 @@ Notes:
 
 - `wp_kiwi_premium_sms_fraud_signals`
   - MO fraud snapshots per identity (`subscriber`/`session`)
-  - per-service volume counts, soft-flag reasons, source snapshots (`pid`, `click_id`)
+  - per-service volume counts, soft-flag reasons, source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
 ## Configuration switches
 
@@ -251,7 +251,7 @@ When validating a landing-page flow in production or staging, verify:
 6. Affiliate postback is sent once for confirmed conversions and retried only when `postback_sent_at` is empty.
 7. `backend_path` routes resolve correctly on every public hostname that proxies to the backend runtime.
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
-9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
+9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
 10. If the gallery is auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
 
 ## Troubleshooting quick map
