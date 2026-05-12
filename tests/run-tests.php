@@ -1513,6 +1513,8 @@ class Kiwi_Test_Premium_Sms_Fraud_Signal_Repository extends Kiwi_Premium_Sms_Fra
             'flow_key' => (string) ($data['flow_key'] ?? ''),
             'pid' => (string) ($data['pid'] ?? ''),
             'click_id' => (string) ($data['click_id'] ?? ''),
+            'tksource' => (string) ($data['tksource'] ?? ''),
+            'tkzone' => (string) ($data['tkzone'] ?? ''),
             'country' => (string) ($data['country'] ?? ''),
             'source_event_key' => $source_event_key,
             'identity_type' => $identity_type,
@@ -1630,6 +1632,18 @@ class Kiwi_Test_Premium_Sms_Fraud_Signal_Repository extends Kiwi_Premium_Sms_Fra
         if (trim((string) ($filters['click_id'] ?? '')) !== '') {
             $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
                 return (string) ($row['click_id'] ?? '') === (string) $filters['click_id'];
+            }));
+        }
+
+        if (trim((string) ($filters['tksource'] ?? '')) !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
+                return (string) ($row['tksource'] ?? '') === (string) $filters['tksource'];
+            }));
+        }
+
+        if (trim((string) ($filters['tkzone'] ?? '')) !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
+                return (string) ($row['tkzone'] ?? '') === (string) $filters['tkzone'];
             }));
         }
 
@@ -1856,6 +1870,12 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
             $incoming_pid = trim((string) ($data['pid'] ?? ''));
             if ($incoming_pid === '' && array_key_exists('pid', $row)) {
                 unset($data['pid']);
+            }
+            foreach (['tksource', 'tkzone'] as $source_field) {
+                $incoming_value = trim((string) ($data[$source_field] ?? ''));
+                if ($incoming_value === '' && array_key_exists($source_field, $row)) {
+                    unset($data[$source_field]);
+                }
             }
             $this->rows[$id] = array_merge($row, $data, [
                 'id' => $id,
@@ -2108,6 +2128,8 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
                 'flow_key' => (string) ($context['flow_key'] ?? ''),
                 'pid' => (string) ($context['pid'] ?? ''),
                 'click_id' => (string) ($context['click_id'] ?? ''),
+                'tksource' => (string) ($context['tksource'] ?? ''),
+                'tkzone' => (string) ($context['tkzone'] ?? ''),
                 'landing_key' => $landing_key,
                 'session_token' => $session_token,
                 'page_loaded_at' => '',
@@ -2125,6 +2147,8 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
         $row['flow_key'] = (string) ($row['flow_key'] !== '' ? $row['flow_key'] : (string) ($context['flow_key'] ?? ''));
         $row['pid'] = (string) ($row['pid'] !== '' ? $row['pid'] : (string) ($context['pid'] ?? ''));
         $row['click_id'] = (string) ($row['click_id'] !== '' ? $row['click_id'] : (string) ($context['click_id'] ?? ''));
+        $row['tksource'] = (string) ($row['tksource'] !== '' ? $row['tksource'] : (string) ($context['tksource'] ?? ''));
+        $row['tkzone'] = (string) ($row['tkzone'] !== '' ? $row['tkzone'] : (string) ($context['tkzone'] ?? ''));
         $row['last_event_at'] = $occurred_at;
 
         if ($event_type === 'page_loaded') {
@@ -2169,6 +2193,8 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
         $provider_key = trim((string) ($filters['provider_key'] ?? ''));
         $pid = trim((string) ($filters['pid'] ?? ''));
         $click_id = trim((string) ($filters['click_id'] ?? ''));
+        $tksource = trim((string) ($filters['tksource'] ?? ''));
+        $tkzone = trim((string) ($filters['tkzone'] ?? ''));
 
         if ($service_key !== '') {
             $rows = array_values(array_filter($rows, static function (array $row) use ($service_key): bool {
@@ -2191,6 +2217,18 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
         if ($click_id !== '') {
             $rows = array_values(array_filter($rows, static function (array $row) use ($click_id): bool {
                 return (string) ($row['click_id'] ?? '') === $click_id;
+            }));
+        }
+
+        if ($tksource !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($tksource): bool {
+                return (string) ($row['tksource'] ?? '') === $tksource;
+            }));
+        }
+
+        if ($tkzone !== '') {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($tkzone): bool {
+                return (string) ($row['tkzone'] ?? '') === $tkzone;
             }));
         }
 
@@ -2261,6 +2299,8 @@ class Kiwi_Test_Landing_Handoff_Event_Repository extends Kiwi_Landing_Handoff_Ev
             'flow_key' => (string) ($event['flow_key'] ?? ''),
             'pid' => (string) ($event['pid'] ?? ''),
             'click_id' => (string) ($event['click_id'] ?? ''),
+            'tksource' => (string) ($event['tksource'] ?? ''),
+            'tkzone' => (string) ($event['tkzone'] ?? ''),
             'session_token' => $session_token,
             'handoff_id' => $handoff_id,
             'event_type' => $event_type,
@@ -2283,7 +2323,21 @@ class Kiwi_Test_Landing_Handoff_Event_Repository extends Kiwi_Landing_Handoff_Ev
 
     public function get_recent(array $filters = [], int $limit = 100): array
     {
-        return array_slice(array_values($this->rows), 0, max(1, min(500, $limit)));
+        $rows = array_values($this->rows);
+
+        foreach (['landing_key', 'service_key', 'provider_key', 'flow_key', 'event_type', 'handoff_id', 'pid', 'click_id', 'tksource', 'tkzone'] as $field) {
+            $value = trim((string) ($filters[$field] ?? ''));
+
+            if ($value === '') {
+                continue;
+            }
+
+            $rows = array_values(array_filter($rows, static function (array $row) use ($field, $value): bool {
+                return (string) ($row[$field] ?? '') === $value;
+            }));
+        }
+
+        return array_slice($rows, 0, max(1, min(500, $limit)));
     }
 }
 
@@ -3757,12 +3811,16 @@ kiwi_run_test('Kiwi_Tracking_Capture_Service captures clickid and persists serve
         [
             'clickid' => 'abc:123',
             'pid' => ' partner<>_A:1 + ',
+            'tksource' => ' Propeller<>Ads ',
+            'tkzone' => ' zone<>123:abc ',
         ]
     );
 
     kiwi_assert_true(is_array($record), 'Expected click attribution capture to create a persisted record.');
     kiwi_assert_same('abc:123', $record['click_id'] ?? '', 'Expected captured clickid to be persisted in server-side storage.');
     kiwi_assert_same('partner_A:1', $record['pid'] ?? '', 'Expected capture to sanitize and persist pid as first-class attribution field.');
+    kiwi_assert_same('PropellerAds', $record['tksource'] ?? '', 'Expected capture to sanitize and persist tksource as first-class attribution field.');
+    kiwi_assert_same('zone123:abc', $record['tkzone'] ?? '', 'Expected capture to sanitize and persist tkzone as first-class attribution field.');
     kiwi_assert_true(trim((string) ($record['transaction_id'] ?? '')) !== '', 'Expected capture to assign a server-side transaction_id.');
     kiwi_assert_same(1, count($repository->rows), 'Expected one server-side attribution record after first capture.');
     kiwi_assert_true(!empty($service->cookies[0] ?? ''), 'Expected capture to set an opaque tracking-token cookie.');
@@ -3788,6 +3846,31 @@ kiwi_run_test('Kiwi_Tracking_Capture_Service captures clickid and persists serve
     kiwi_assert_same('xyz:789', $saved['click_id'] ?? '', 'Expected repeated capture to refresh stored clickid value for the active tracking token.');
     kiwi_assert_same($initial_transaction_id, $saved['transaction_id'] ?? '', 'Expected repeated capture for one tracking token to keep the same transaction_id.');
     kiwi_assert_same('partner_A:1', $saved['pid'] ?? '', 'Expected repeated capture without pid input to keep the previously captured pid value.');
+    kiwi_assert_same('PropellerAds', $saved['tksource'] ?? '', 'Expected repeated capture without tksource input to keep the previously captured tksource value.');
+    kiwi_assert_same('zone123:abc', $saved['tkzone'] ?? '', 'Expected repeated capture without tkzone input to keep the previously captured tkzone value.');
+
+    $service->capture_from_request(
+        [
+            'key' => 'lp2-fr',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        'landing-session-1',
+        [
+            'clickid' => 'new-click:123',
+            'pid' => 'new_partner',
+            'tksource' => 'NewSource',
+            'tkzone' => 'new-zone-9',
+        ]
+    );
+
+    kiwi_assert_same(1, count($repository->rows), 'Expected repeated capture with new source context to reuse the same attribution row.');
+    $refreshed = array_values($repository->rows)[0];
+    kiwi_assert_same('new-click:123', $refreshed['click_id'] ?? '', 'Expected repeated capture to refresh clickid when a new click arrives.');
+    kiwi_assert_same('new_partner', $refreshed['pid'] ?? '', 'Expected repeated capture with non-empty pid input to refresh the stored pid value.');
+    kiwi_assert_same('NewSource', $refreshed['tksource'] ?? '', 'Expected repeated capture with non-empty tksource input to refresh the stored tksource value.');
+    kiwi_assert_same('new-zone-9', $refreshed['tkzone'] ?? '', 'Expected repeated capture with non-empty tkzone input to refresh the stored tkzone value.');
 });
 
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver matches confirmed conversions and dispatches one idempotent postback', function (): void {
@@ -4418,6 +4501,8 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
         'event_type' => 'page_loaded',
         'pid' => 'affpid_42',
         'clickid' => 'aff-click-42',
+        'tksource' => 'PropellerAds',
+        'tkzone' => '10766952',
     ]));
     $cta_click_a = $routes->handle_event(new WP_REST_Request([], [
         'landing_key' => 'lp2-fr',
@@ -4442,7 +4527,57 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
     kiwi_assert_same(2, (int) ($row['cta_click_count'] ?? 0), 'Expected cta_click count to increment for repeated click events.');
     kiwi_assert_same('affpid_42', (string) ($row['pid'] ?? ''), 'Expected landing engagement storage to persist pid from KPI event payload.');
     kiwi_assert_same('aff-click-42', (string) ($row['click_id'] ?? ''), 'Expected landing engagement storage to persist clickid from KPI event payload.');
+    kiwi_assert_same('PropellerAds', (string) ($row['tksource'] ?? ''), 'Expected landing engagement storage to persist tksource from KPI event payload.');
+    kiwi_assert_same('10766952', (string) ($row['tkzone'] ?? ''), 'Expected landing engagement storage to persist tkzone from KPI event payload.');
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected engagement-only events not to mutate KPI CTA counters.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes resolves traffic source fields from attribution fallback', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $click_repository = new Kiwi_Test_Click_Attribution_Repository();
+    $click_repository->upsert_capture([
+        'tracking_token' => 'TOKSOURCEFALLBACK1',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
+        'session_ref' => 'sess-source-fallback',
+        'transaction_id' => 'txn_source_fallback_1',
+        'click_id' => 'click-source-fallback',
+        'pid' => 'pid-source-fallback',
+        'tksource' => 'PropellerAds',
+        'tkzone' => '10766952',
+        'expires_at' => '2026-04-03 12:00:00',
+    ]);
+    $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $service, $engagement_repository, $click_repository);
+
+    $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-source-fallback',
+        'event_type' => 'page_loaded',
+    ]));
+
+    $row = $engagement_repository->get_by_landing_session('lp2-fr', 'sess-source-fallback');
+
+    kiwi_assert_same('pid-source-fallback', (string) ($row['pid'] ?? ''), 'Expected engagement fallback to resolve pid from attribution.');
+    kiwi_assert_same('click-source-fallback', (string) ($row['click_id'] ?? ''), 'Expected engagement fallback to resolve click_id from attribution.');
+    kiwi_assert_same('PropellerAds', (string) ($row['tksource'] ?? ''), 'Expected engagement fallback to resolve tksource from attribution.');
+    kiwi_assert_same('10766952', (string) ($row['tkzone'] ?? ''), 'Expected engagement fallback to resolve tkzone from attribution.');
 });
 
 kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idempotently', function (): void {
@@ -4455,6 +4590,8 @@ kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idemp
         'flow_key' => 'nth-fr-one-off',
         'pid' => 'pid-1',
         'click_id' => 'click-1',
+        'tksource' => 'source-1',
+        'tkzone' => 'zone-1',
         'session_token' => 'sess-handoff-1',
         'handoff_id' => 'hof_abc123',
         'event_type' => 'sms_handoff_attempted',
@@ -4478,6 +4615,8 @@ kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idemp
     kiwi_assert_same(1, count($repository->rows), 'Expected only one handoff row after duplicate insert.');
     kiwi_assert_same('84072', (string) ($first['row']['sms_recipient'] ?? ''), 'Expected handoff storage to persist SMS recipient.');
     kiwi_assert_same(1, (int) ($first['row']['sms_body_has_transaction'] ?? 0), 'Expected handoff storage to persist transaction-token presence.');
+    kiwi_assert_same('source-1', (string) ($first['row']['tksource'] ?? ''), 'Expected handoff storage to persist tksource context.');
+    kiwi_assert_same('zone-1', (string) ($first['row']['tkzone'] ?? ''), 'Expected handoff storage to persist tkzone context.');
 });
 
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository stores assignments and summary idempotently', function (): void {
@@ -4660,6 +4799,8 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
         'visibility_state' => 'visible',
         'pid' => 'pid-handoff',
         'clickid' => 'click-handoff',
+        'tksource' => 'source-handoff',
+        'tkzone' => 'zone-handoff',
     ]));
     $hidden = $routes->handle_event(new WP_REST_Request([], [
         'landing_key' => 'lp2-fr',
@@ -4685,6 +4826,8 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
     kiwi_assert_same(2, count($handoff_repository->rows), 'Expected two distinct handoff event types for one handoff id.');
     kiwi_assert_same('pid-handoff', (string) ($handoff_repository->rows[1]['pid'] ?? ''), 'Expected handoff events to persist pid context.');
     kiwi_assert_same('click-handoff', (string) ($handoff_repository->rows[1]['click_id'] ?? ''), 'Expected handoff events to persist clickid context.');
+    kiwi_assert_same('source-handoff', (string) ($handoff_repository->rows[1]['tksource'] ?? ''), 'Expected handoff events to persist tksource context.');
+    kiwi_assert_same('zone-handoff', (string) ($handoff_repository->rows[1]['tkzone'] ?? ''), 'Expected handoff events to persist tkzone context.');
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected handoff-only events not to mutate KPI CTA counters.');
     kiwi_assert_same(400, $invalid->status, 'Expected unknown handoff event types to be rejected.');
 
@@ -5427,6 +5570,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service records unknown 
         'session_ref' => 'sess-fast-1',
         'transaction_id' => 'txn_fast_12345678',
         'click_id' => 'aff-fast-1',
+        'tksource' => 'source-fast',
+        'tkzone' => 'zone-fast',
         'expires_at' => '2026-04-03 12:00:00',
     ]);
     $engagement_repository->upsert_event([
@@ -5452,6 +5597,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service records unknown 
     kiwi_assert_true(in_array('mo_too_fast_after_load<1s', $fast['reasons'] ?? [], true), 'Expected sub-1s MO delta to be flagged as suspicious.');
     kiwi_assert_true(($fast['linked'] ?? false) === true, 'Expected evaluator to treat matched attribution + engagement rows as linked.');
     kiwi_assert_same('aff-fast-1', (string) ($fast['click_id'] ?? ''), 'Expected evaluator to expose resolved click_id from linked attribution.');
+    kiwi_assert_same('source-fast', (string) ($fast['tksource'] ?? ''), 'Expected evaluator to expose resolved tksource from linked attribution.');
+    kiwi_assert_same('zone-fast', (string) ($fast['tkzone'] ?? ''), 'Expected evaluator to expose resolved tkzone from linked attribution.');
 });
 
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service does not soft-flag unknown engagement links', function (): void {
@@ -5538,6 +5685,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service merges engagement reasons 
         'transaction_id' => 'txn_block_12345678',
         'click_id' => 'aff-click-block-1',
         'pid' => 'affiliate_p42',
+        'tksource' => 'source-block',
+        'tkzone' => 'zone-block',
         'expires_at' => '2026-04-03 12:00:00',
     ]);
     $engagement_repository->upsert_event([
@@ -5571,6 +5720,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service merges engagement reasons 
     kiwi_assert_true(($result['should_block'] ?? false) === true, 'Expected block mode to request blocking when engagement reasons are present.');
     kiwi_assert_same('affiliate_p42', (string) ($first_row['pid'] ?? ''), 'Expected fraud signal rows to snapshot pid from linked attribution context.');
     kiwi_assert_same('aff-click-block-1', (string) ($first_row['click_id'] ?? ''), 'Expected fraud signal rows to snapshot click_id from linked attribution context.');
+    kiwi_assert_same('source-block', (string) ($first_row['tksource'] ?? ''), 'Expected fraud signal rows to snapshot tksource from linked attribution context.');
+    kiwi_assert_same('zone-block', (string) ($first_row['tkzone'] ?? ''), 'Expected fraud signal rows to snapshot tkzone from linked attribution context.');
     kiwi_assert_contains('mo_too_fast_after_load<1s', (string) ($first_row['soft_flag_reason'] ?? ''), 'Expected persisted soft_flag_reason to include engagement rule trigger.');
 });
 
@@ -5624,6 +5775,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities an
         'occurred_at' => '2026-04-01 11:20:00',
         'pid' => 'pid-direct-a',
         'click_id' => 'click-direct-a',
+        'tksource' => 'source-direct-a',
+        'tkzone' => 'zone-direct-a',
         'subscriber_reference' => 'enc-123',
         'session_ref' => 'session-abc',
     ]);
@@ -5634,6 +5787,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities an
     kiwi_assert_same(4, count($repository->rows), 'Expected seed rows plus both new identity rows to be persisted.');
     kiwi_assert_same('pid-direct-a', (string) ($repository->rows[2]['pid'] ?? ''), 'Expected fraud signal rows to include pid from inbound signal context.');
     kiwi_assert_same('click-direct-a', (string) ($repository->rows[2]['click_id'] ?? ''), 'Expected fraud signal rows to include click_id from inbound signal context.');
+    kiwi_assert_same('source-direct-a', (string) ($repository->rows[2]['tksource'] ?? ''), 'Expected fraud signal rows to include tksource from inbound signal context.');
+    kiwi_assert_same('zone-direct-a', (string) ($repository->rows[2]['tkzone'] ?? ''), 'Expected fraud signal rows to include tkzone from inbound signal context.');
 });
 
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service skips empty identities and records available identity safely', function (): void {
@@ -8267,6 +8422,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag col
         'flow_key' => 'nth-fr-one-off',
         'pid' => 'pid-fast',
         'click_id' => 'click-fast',
+        'tksource' => 'source-fast',
+        'tkzone' => 'zone-fast',
     ], 'page_loaded', '2026-04-01 12:00:00');
     $engagement_repository->upsert_event([
         'landing_key' => 'lp5-fr',
@@ -8303,11 +8460,15 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag col
     kiwi_assert_contains('Landing Engagement Signals', $output, 'Expected engagement section title to render.');
     kiwi_assert_contains('<th>PID</th>', $output, 'Expected engagement table to include PID column.');
     kiwi_assert_contains('<th>Click ID</th>', $output, 'Expected engagement table to include Click ID column.');
+    kiwi_assert_contains('<th>TK Source</th>', $output, 'Expected engagement table to include TK Source column.');
+    kiwi_assert_contains('<th>TK Zone</th>', $output, 'Expected engagement table to include TK Zone column.');
     kiwi_assert_contains('<th>Delta (Load->First CTA)</th>', $output, 'Expected engagement table to include load-to-first-CTA delta column.');
     kiwi_assert_contains('<th>Soft Flag</th>', $output, 'Expected engagement table to include soft-flag column.');
     kiwi_assert_contains('<th>Reason</th>', $output, 'Expected engagement table to include reason column.');
     kiwi_assert_contains('pid-fast', $output, 'Expected engagement rows to render persisted pid values.');
     kiwi_assert_contains('click-fast', $output, 'Expected engagement rows to render persisted click_id values.');
+    kiwi_assert_contains('source-fast', $output, 'Expected engagement rows to render persisted tksource values.');
+    kiwi_assert_contains('zone-fast', $output, 'Expected engagement rows to render persisted tkzone values.');
     kiwi_assert_contains('0s', $output, 'Expected engagement table to render computed delta in seconds when both timestamps are present.');
     kiwi_assert_contains('fast_click', $output, 'Expected engagement soft-flag reason fast_click to be rendered.');
     kiwi_assert_contains('sess-fast-flagged', $output, 'Expected flagged engagement row to be present.');
@@ -8322,6 +8483,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'kiwi_fraud_service_key' => 'svc_a',
         'kiwi_fraud_provider_key' => 'nth',
         'kiwi_fraud_pid' => 'pid-a',
+        'kiwi_fraud_tksource' => 'source-a',
+        'kiwi_fraud_tkzone' => 'zone-a',
         'kiwi_fraud_flow_key' => 'flow-a',
         'kiwi_fraud_identity_type' => 'session',
         'kiwi_fraud_flagged_only' => '1',
@@ -8336,6 +8499,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'flow_key' => 'flow-a',
         'pid' => 'pid-a',
         'click_id' => 'click-a',
+        'tksource' => 'source-a',
+        'tkzone' => 'zone-a',
         'source_event_key' => 'row-1',
         'identity_type' => 'session',
         'identity_value' => 'session-flagged-1',
@@ -8352,6 +8517,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'flow_key' => 'flow-a',
         'pid' => 'pid-a',
         'click_id' => 'click-a',
+        'tksource' => 'source-a',
+        'tkzone' => 'zone-a',
         'source_event_key' => 'row-2',
         'identity_type' => 'session',
         'identity_value' => 'session-not-flagged',
@@ -8368,6 +8535,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'flow_key' => 'flow-b',
         'pid' => 'pid-b',
         'click_id' => 'click-b',
+        'tksource' => 'source-b',
+        'tkzone' => 'zone-b',
         'source_event_key' => 'row-3',
         'identity_type' => 'session',
         'identity_value' => 'session-other-service',
@@ -8384,6 +8553,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'flow_key' => 'flow-a',
         'pid' => 'pid-other',
         'click_id' => 'click-other',
+        'tksource' => 'source-other',
+        'tkzone' => 'zone-other',
         'source_event_key' => 'row-4',
         'identity_type' => 'session',
         'identity_value' => 'session-other-pid',
@@ -8400,6 +8571,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'flow_key' => 'flow-a',
         'pid' => 'pid-a',
         'click_id' => 'click-a',
+        'tksource' => 'source-a',
+        'tkzone' => 'zone-a',
         'source_event_key' => 'row-legacy-unknown-link',
         'identity_type' => 'session',
         'identity_value' => 'session-legacy-unknown-link',
@@ -8417,7 +8590,11 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
     kiwi_assert_contains('Premium SMS Fraud Monitor', $output, 'Expected fraud shortcode title to render.');
     kiwi_assert_contains('<th>PID</th>', $output, 'Expected shortcode tables to render a PID column.');
     kiwi_assert_contains('<th>Click ID</th>', $output, 'Expected shortcode tables to render a Click ID column.');
+    kiwi_assert_contains('<th>TK Source</th>', $output, 'Expected shortcode tables to render a TK Source column.');
+    kiwi_assert_contains('<th>TK Zone</th>', $output, 'Expected shortcode tables to render a TK Zone column.');
     kiwi_assert_contains('click-a', $output, 'Expected filtered fraud rows to render click_id values.');
+    kiwi_assert_contains('source-a', $output, 'Expected filtered fraud rows to render tksource values.');
+    kiwi_assert_contains('zone-a', $output, 'Expected filtered fraud rows to render tkzone values.');
     kiwi_assert_contains('session-flagged-1', $output, 'Expected filtered flagged row to be rendered.');
     kiwi_assert_true(strpos($output, 'session-not-flagged') === false, 'Expected flagged_only filter to remove non-flagged rows.');
     kiwi_assert_true(strpos($output, 'session-other-service') === false, 'Expected service_key filter to remove rows from other services.');

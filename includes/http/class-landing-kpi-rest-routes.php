@@ -231,6 +231,8 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'flow_key' => (string) ($landing['flow'] ?? ''),
             'pid' => $this->resolve_pid_for_engagement($params, $landing, $session_token),
             'click_id' => $this->resolve_click_id_for_engagement($params, $landing, $session_token),
+            'tksource' => $this->resolve_source_value_for_engagement('tksource', $params, $landing, $session_token),
+            'tkzone' => $this->resolve_source_value_for_engagement('tkzone', $params, $landing, $session_token),
         ], $event_type);
 
         return !empty($record);
@@ -260,6 +262,8 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'flow_key' => (string) ($landing['flow'] ?? ''),
             'pid' => $this->resolve_pid_for_engagement($params, $landing, $session_token),
             'click_id' => $this->resolve_click_id_for_engagement($params, $landing, $session_token),
+            'tksource' => $this->resolve_source_value_for_engagement('tksource', $params, $landing, $session_token),
+            'tkzone' => $this->resolve_source_value_for_engagement('tkzone', $params, $landing, $session_token),
             'handoff_id' => (string) ($params['handoff_id'] ?? ''),
             'event_type' => $event_type,
             'href_scheme' => (string) ($params['href_scheme'] ?? ''),
@@ -402,6 +406,59 @@ class Kiwi_Landing_Kpi_Rest_Routes
         $click_id = is_string($click_id) ? $click_id : '';
 
         return substr($click_id, 0, 191);
+    }
+
+    private function resolve_source_value_for_engagement(
+        string $field,
+        array $params,
+        array $landing,
+        string $session_token
+    ): string {
+        $field = strtolower($field);
+        if (!in_array($field, ['tksource', 'tkzone'], true)) {
+            return '';
+        }
+
+        $source_value = $this->sanitize_source_value((string) ($params[$field] ?? ''));
+
+        if ($source_value !== '') {
+            return $source_value;
+        }
+
+        if (!$this->click_attribution_repository instanceof Kiwi_Click_Attribution_Repository) {
+            return '';
+        }
+
+        $service_key = trim((string) ($landing['service_key'] ?? ''));
+
+        if ($service_key === '' || $session_token === '') {
+            return '';
+        }
+
+        $attribution = $this->click_attribution_repository->find_unique_pending_by_service_reference(
+            $service_key,
+            $session_token
+        );
+
+        if (!is_array($attribution)) {
+            return '';
+        }
+
+        return $this->sanitize_source_value((string) ($attribution[$field] ?? ''));
+    }
+
+    private function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 
     private function server_value(string $key): string

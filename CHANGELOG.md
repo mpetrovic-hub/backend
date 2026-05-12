@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-11:
+- [Traffic Source Tracking] Added optional `tksource` and `tkzone` source snapshots alongside existing `pid`/`click_id` tracking for click attribution, landing engagement, SMS handoff diagnostics, and premium-SMS fraud analysis. The fields remain out of KPI summary, SMS-body variant, sales, and aggregator communication tables.
+
 2026-05-10:
 - [Logging Cleanup] Removed temporary DIMOCO/NTH debug `error_log` instrumentation from callback handling, digest generation, client request/response paths, and blacklist batch polling to reduce production log noise while keeping behavior intact. Deleted obsolete debug-only callback/patch artifacts that were no longer part of the active integration path.
 

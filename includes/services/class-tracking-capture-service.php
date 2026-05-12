@@ -19,6 +19,8 @@ class Kiwi_Tracking_Capture_Service
     {
         $click_id = $this->resolve_click_id($query_params);
         $pid = $this->resolve_pid($query_params);
+        $tksource = $this->resolve_source_param($query_params, 'tksource');
+        $tkzone = $this->resolve_source_param($query_params, 'tkzone');
 
         if ($click_id === '') {
             return null;
@@ -39,6 +41,8 @@ class Kiwi_Tracking_Capture_Service
             'flow_key' => trim((string) ($landing_page['flow'] ?? '')),
             'service_key' => $service_key,
             'pid' => $pid,
+            'tksource' => $tksource,
+            'tkzone' => $tkzone,
             'session_ref' => $this->resolve_optional_reference(
                 $query_params,
                 ['session_ref', 'sessionid', 'session_id', 'sid'],
@@ -183,14 +187,7 @@ class Kiwi_Tracking_Capture_Service
                 continue;
             }
 
-            $pid = trim((string) $value);
-
-            if ($pid === '') {
-                continue;
-            }
-
-            $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
-            $pid = is_string($pid) ? $pid : '';
+            $pid = $this->sanitize_source_value((string) $value);
 
             if ($pid === '') {
                 continue;
@@ -200,5 +197,38 @@ class Kiwi_Tracking_Capture_Service
         }
 
         return '';
+    }
+
+    private function resolve_source_param(array $query_params, string $param_name): string
+    {
+        $param_name = strtolower($param_name);
+
+        foreach ($query_params as $key => $value) {
+            if (strtolower((string) $key) !== $param_name || is_array($value)) {
+                continue;
+            }
+
+            $source_value = $this->sanitize_source_value((string) $value);
+
+            if ($source_value !== '') {
+                return $source_value;
+            }
+        }
+
+        return '';
+    }
+
+    private function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 }
