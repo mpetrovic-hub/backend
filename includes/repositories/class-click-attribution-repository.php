@@ -33,6 +33,8 @@ class Kiwi_Click_Attribution_Repository
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             service_key VARCHAR(100) NOT NULL DEFAULT '',
             pid VARCHAR(191) NOT NULL DEFAULT '',
+            tksource VARCHAR(191) NOT NULL DEFAULT '',
+            tkzone VARCHAR(191) NOT NULL DEFAULT '',
             session_ref VARCHAR(150) NOT NULL DEFAULT '',
             transaction_ref VARCHAR(150) NOT NULL DEFAULT '',
             message_ref VARCHAR(150) NOT NULL DEFAULT '',
@@ -54,6 +56,8 @@ class Kiwi_Click_Attribution_Repository
             KEY provider_key (provider_key),
             KEY service_key (service_key),
             KEY pid (pid),
+            KEY tksource (tksource),
+            KEY tkzone (tkzone),
             KEY session_ref (session_ref),
             KEY transaction_ref (transaction_ref),
             KEY message_ref (message_ref),
@@ -91,7 +95,18 @@ class Kiwi_Click_Attribution_Repository
                 'landing_page_key' => (string) ($data['landing_page_key'] ?? ($existing['landing_page_key'] ?? '')),
                 'flow_key' => (string) ($data['flow_key'] ?? ($existing['flow_key'] ?? '')),
                 'service_key' => (string) ($data['service_key'] ?? ($existing['service_key'] ?? '')),
-                'pid' => $this->sanitize_pid((string) ($data['pid'] ?? ($existing['pid'] ?? ''))),
+                'pid' => $this->prefer_non_empty(
+                    $this->sanitize_pid((string) ($data['pid'] ?? '')),
+                    $this->sanitize_pid((string) ($existing['pid'] ?? ''))
+                ),
+                'tksource' => $this->prefer_non_empty(
+                    $this->sanitize_source_value((string) ($data['tksource'] ?? '')),
+                    $this->sanitize_source_value((string) ($existing['tksource'] ?? ''))
+                ),
+                'tkzone' => $this->prefer_non_empty(
+                    $this->sanitize_source_value((string) ($data['tkzone'] ?? '')),
+                    $this->sanitize_source_value((string) ($existing['tkzone'] ?? ''))
+                ),
                 'session_ref' => (string) ($data['session_ref'] ?? ($existing['session_ref'] ?? '')),
                 'external_ref' => (string) ($data['external_ref'] ?? ($existing['external_ref'] ?? '')),
                 'raw_context' => $data['raw_context'] ?? null,
@@ -117,6 +132,8 @@ class Kiwi_Click_Attribution_Repository
                 'flow_key' => (string) ($data['flow_key'] ?? ''),
                 'service_key' => (string) ($data['service_key'] ?? ''),
                 'pid' => $this->sanitize_pid((string) ($data['pid'] ?? '')),
+                'tksource' => $this->sanitize_source_value((string) ($data['tksource'] ?? '')),
+                'tkzone' => $this->sanitize_source_value((string) ($data['tkzone'] ?? '')),
                 'session_ref' => (string) ($data['session_ref'] ?? ''),
                 'transaction_ref' => (string) ($data['transaction_ref'] ?? ''),
                 'message_ref' => (string) ($data['message_ref'] ?? ''),
@@ -126,6 +143,8 @@ class Kiwi_Click_Attribution_Repository
                 'raw_context' => isset($data['raw_context']) ? wp_json_encode($data['raw_context']) : '',
             ],
             [
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -422,6 +441,8 @@ class Kiwi_Click_Attribution_Repository
             'flow_key' => '%s',
             'service_key' => '%s',
             'pid' => '%s',
+            'tksource' => '%s',
+            'tkzone' => '%s',
             'session_ref' => '%s',
             'transaction_ref' => '%s',
             'message_ref' => '%s',
@@ -446,6 +467,10 @@ class Kiwi_Click_Attribution_Repository
             $value = $fields[$key];
             if ($key === 'raw_context' && $value !== null && !is_string($value)) {
                 $value = wp_json_encode($value);
+            }
+
+            if (in_array($key, ['tksource', 'tkzone'], true)) {
+                $value = $this->sanitize_source_value((string) $value);
             }
 
             $set_fields[$key] = $value;
@@ -572,5 +597,24 @@ class Kiwi_Click_Attribution_Repository
         $pid = is_string($pid) ? $pid : '';
 
         return substr($pid, 0, 191);
+    }
+
+    private function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
+    }
+
+    private function prefer_non_empty(string $existing, string $candidate): string
+    {
+        return $existing !== '' ? $existing : $candidate;
     }
 }

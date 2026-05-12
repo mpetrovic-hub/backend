@@ -28,6 +28,8 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             pid VARCHAR(191) NOT NULL DEFAULT '',
             click_id VARCHAR(191) NOT NULL DEFAULT '',
+            tksource VARCHAR(191) NOT NULL DEFAULT '',
+            tkzone VARCHAR(191) NOT NULL DEFAULT '',
             country VARCHAR(10) NOT NULL DEFAULT '',
             source_event_key VARCHAR(191) NOT NULL DEFAULT '',
             identity_type VARCHAR(20) NOT NULL DEFAULT '',
@@ -46,6 +48,8 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
             KEY flow_key (flow_key),
             KEY pid (pid),
             KEY click_id (click_id),
+            KEY tksource (tksource),
+            KEY tkzone (tkzone),
             KEY identity_lookup (service_key, identity_type, identity_value),
             KEY occurred_at (occurred_at),
             KEY is_soft_flag (is_soft_flag)
@@ -87,6 +91,8 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
                 'flow_key' => (string) ($data['flow_key'] ?? ''),
                 'pid' => $this->sanitize_pid((string) ($data['pid'] ?? '')),
                 'click_id' => $this->sanitize_click_id((string) ($data['click_id'] ?? '')),
+                'tksource' => $this->sanitize_source_value((string) ($data['tksource'] ?? '')),
+                'tkzone' => $this->sanitize_source_value((string) ($data['tkzone'] ?? '')),
                 'country' => (string) ($data['country'] ?? ''),
                 'source_event_key' => $source_event_key,
                 'identity_type' => $identity_type,
@@ -100,6 +106,8 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
                 'meta_json' => isset($data['meta_json']) ? wp_json_encode($data['meta_json']) : '',
             ],
             [
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -218,6 +226,18 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
         if ($click_id !== '') {
             $where_sql[] = 'click_id = %s';
             $params[] = $click_id;
+        }
+
+        $tksource = $this->sanitize_source_value((string) ($filters['tksource'] ?? ''));
+        if ($tksource !== '') {
+            $where_sql[] = 'tksource = %s';
+            $params[] = $tksource;
+        }
+
+        $tkzone = $this->sanitize_source_value((string) ($filters['tkzone'] ?? ''));
+        if ($tkzone !== '') {
+            $where_sql[] = 'tkzone = %s';
+            $params[] = $tkzone;
         }
 
         $identity_type = trim((string) ($filters['identity_type'] ?? ''));
@@ -393,6 +413,20 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
         $click_id = is_string($click_id) ? $click_id : '';
 
         return substr($click_id, 0, 191);
+    }
+
+    protected function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 
     protected function current_time_mysql(): string

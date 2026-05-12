@@ -79,6 +79,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Provider</th>';
             $output .= '<th>PID</th>';
             $output .= '<th>Click ID</th>';
+            $output .= '<th>TK Source</th>';
+            $output .= '<th>TK Zone</th>';
             $output .= '<th>Identity Type</th>';
             $output .= '<th>Identity</th>';
             $output .= '<th>1h</th>';
@@ -99,6 +101,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['pid'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['click_id'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['tksource'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['tkzone'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_type'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['identity_value'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['count_1h'] ?? '0')) . '</td>';
@@ -125,6 +129,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Provider</th>';
             $output .= '<th>PID</th>';
             $output .= '<th>Click ID</th>';
+            $output .= '<th>TK Source</th>';
+            $output .= '<th>TK Zone</th>';
             $output .= '<th>Landing</th>';
             $output .= '<th>Session</th>';
             $output .= '<th>Page Loaded</th>';
@@ -149,6 +155,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['provider_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['pid'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['click_id'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['tksource'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['tkzone'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['landing_key'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['session_token'] ?? '')) . '</td>';
                 $output .= '<td>' . esc_html((string) ($row['page_loaded_at'] ?? '')) . '</td>';
@@ -234,6 +242,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $service_key = (string) ($filters['service_key'] ?? '');
         $provider_key = (string) ($filters['provider_key'] ?? '');
         $pid = (string) ($filters['pid'] ?? '');
+        $tksource = (string) ($filters['tksource'] ?? '');
+        $tkzone = (string) ($filters['tkzone'] ?? '');
         $identity_type = (string) ($filters['identity_type'] ?? '');
         $flagged_only = !empty($filters['flagged_only']);
         $limit = (int) ($filters['limit'] ?? 100);
@@ -274,6 +284,14 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $output .= '<input id="kiwi_fraud_pid" class="kiwi-input kiwi-width-small" type="text" name="kiwi_fraud_pid" value="' . esc_attr($pid) . '">';
         $output .= '</div>';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
+        $output .= '<label class="kiwi-field-label" for="kiwi_fraud_tksource">TK Source</label>';
+        $output .= '<input id="kiwi_fraud_tksource" class="kiwi-input kiwi-width-small" type="text" name="kiwi_fraud_tksource" value="' . esc_attr($tksource) . '">';
+        $output .= '</div>';
+        $output .= '<div class="kiwi-field kiwi-field--compact">';
+        $output .= '<label class="kiwi-field-label" for="kiwi_fraud_tkzone">TK Zone</label>';
+        $output .= '<input id="kiwi_fraud_tkzone" class="kiwi-input kiwi-width-small" type="text" name="kiwi_fraud_tkzone" value="' . esc_attr($tkzone) . '">';
+        $output .= '</div>';
+        $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_fraud_identity_type">Identity Type</label>';
         $output .= '<select id="kiwi_fraud_identity_type" class="kiwi-select kiwi-width-small" name="kiwi_fraud_identity_type">';
         $output .= '<option value="">all</option>';
@@ -312,6 +330,12 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $pid = isset($_GET['kiwi_fraud_pid'])
             ? $this->sanitize_pid_from_request(wp_unslash((string) $_GET['kiwi_fraud_pid']))
             : '';
+        $tksource = isset($_GET['kiwi_fraud_tksource'])
+            ? $this->sanitize_source_value_from_request(wp_unslash((string) $_GET['kiwi_fraud_tksource']))
+            : '';
+        $tkzone = isset($_GET['kiwi_fraud_tkzone'])
+            ? $this->sanitize_source_value_from_request(wp_unslash((string) $_GET['kiwi_fraud_tkzone']))
+            : '';
         $identity_type = isset($_GET['kiwi_fraud_identity_type'])
             ? strtolower(sanitize_text_field(wp_unslash((string) $_GET['kiwi_fraud_identity_type'])))
             : '';
@@ -328,6 +352,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             'provider_key' => $provider_key,
             'flow_key' => $flow_key,
             'pid' => $pid,
+            'tksource' => $tksource,
+            'tkzone' => $tkzone,
             'identity_type' => $identity_type,
             'flagged_only' => isset($_GET['kiwi_fraud_flagged_only']) && wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1',
             'limit' => max(1, min(500, $limit)),
@@ -448,6 +474,8 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             'provider_key' => (string) ($filters['provider_key'] ?? ''),
             'flow_key' => (string) ($filters['flow_key'] ?? ''),
             'pid' => (string) ($filters['pid'] ?? ''),
+            'tksource' => (string) ($filters['tksource'] ?? ''),
+            'tkzone' => (string) ($filters['tkzone'] ?? ''),
         ], (int) ($filters['limit'] ?? 100));
 
         if (empty($filters['flagged_only'])) {
@@ -535,5 +563,19 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $pid = is_string($pid) ? $pid : '';
 
         return substr($pid, 0, 191);
+    }
+
+    private function sanitize_source_value_from_request(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 }

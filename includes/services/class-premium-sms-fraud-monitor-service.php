@@ -47,6 +47,8 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
         $engagement_mode = $this->config->get_premium_sms_fraud_mo_engagement_mode();
         $pid = $this->resolve_pid((string) ($signal_context['pid'] ?? ''), $engagement_evaluation);
         $click_id = $this->resolve_click_id((string) ($signal_context['click_id'] ?? ($signal_context['clickid'] ?? '')), $engagement_evaluation);
+        $tksource = $this->resolve_source_value('tksource', (string) ($signal_context['tksource'] ?? ''), $engagement_evaluation);
+        $tkzone = $this->resolve_source_value('tkzone', (string) ($signal_context['tkzone'] ?? ''), $engagement_evaluation);
 
         $identity_candidates = [
             'subscriber' => trim((string) ($signal_context['subscriber_reference'] ?? '')),
@@ -86,6 +88,8 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'flow_key' => $flow_key,
                 'pid' => $pid,
                 'click_id' => $click_id,
+                'tksource' => $tksource,
+                'tkzone' => $tkzone,
                 'country' => $country,
                 'source_event_key' => $source_event_key,
                 'identity_type' => $identity_type,
@@ -129,6 +133,8 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             'should_block' => $engagement_mode === 'block' && $has_engagement_soft_flag,
             'pid' => $pid,
             'click_id' => $click_id,
+            'tksource' => $tksource,
+            'tkzone' => $tkzone,
         ];
     }
 
@@ -168,6 +174,8 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                 'link_reasons' => [],
                 'pid' => '',
                 'click_id' => '',
+                'tksource' => '',
+                'tkzone' => '',
                 'attribution' => [],
                 'engagement' => [],
                 'metrics' => [],
@@ -231,5 +239,35 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
         $click_id = is_string($click_id) ? $click_id : '';
 
         return substr($click_id, 0, 191);
+    }
+
+    private function resolve_source_value(string $field, string $signal_value, array $engagement_evaluation): string
+    {
+        $field = strtolower($field);
+        if (!in_array($field, ['tksource', 'tkzone'], true)) {
+            return '';
+        }
+
+        $signal_value = $this->sanitize_source_value($signal_value);
+
+        if ($signal_value !== '') {
+            return $signal_value;
+        }
+
+        return $this->sanitize_source_value((string) ($engagement_evaluation[$field] ?? ''));
+    }
+
+    private function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 }

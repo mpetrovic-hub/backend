@@ -29,6 +29,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             pid VARCHAR(191) NOT NULL DEFAULT '',
             click_id VARCHAR(191) NOT NULL DEFAULT '',
+            tksource VARCHAR(191) NOT NULL DEFAULT '',
+            tkzone VARCHAR(191) NOT NULL DEFAULT '',
             landing_key VARCHAR(100) NOT NULL DEFAULT '',
             session_token VARCHAR(150) NOT NULL DEFAULT '',
             page_loaded_at DATETIME NULL,
@@ -43,6 +45,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             KEY flow_key (flow_key),
             KEY pid (pid),
             KEY click_id (click_id),
+            KEY tksource (tksource),
+            KEY tkzone (tkzone),
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
@@ -73,6 +77,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'flow_key' => trim((string) ($context['flow_key'] ?? '')),
                 'pid' => $this->sanitize_pid((string) ($context['pid'] ?? '')),
                 'click_id' => $this->sanitize_click_id((string) ($context['click_id'] ?? '')),
+                'tksource' => $this->sanitize_source_value((string) ($context['tksource'] ?? '')),
+                'tkzone' => $this->sanitize_source_value((string) ($context['tkzone'] ?? '')),
                 'landing_key' => $landing_key,
                 'session_token' => $session_token,
                 'page_loaded_at' => null,
@@ -117,6 +123,14 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'click_id' => $this->prefer_non_empty(
                 trim((string) ($row['click_id'] ?? '')),
                 $this->sanitize_click_id((string) ($context['click_id'] ?? ''))
+            ),
+            'tksource' => $this->prefer_non_empty(
+                trim((string) ($row['tksource'] ?? '')),
+                $this->sanitize_source_value((string) ($context['tksource'] ?? ''))
+            ),
+            'tkzone' => $this->prefer_non_empty(
+                trim((string) ($row['tkzone'] ?? '')),
+                $this->sanitize_source_value((string) ($context['tkzone'] ?? ''))
             ),
         ];
 
@@ -207,6 +221,18 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             $params[] = $click_id;
         }
 
+        $tksource = $this->sanitize_source_value((string) ($filters['tksource'] ?? ''));
+        if ($tksource !== '') {
+            $where_sql[] = 'tksource = %s';
+            $params[] = $tksource;
+        }
+
+        $tkzone = $this->sanitize_source_value((string) ($filters['tkzone'] ?? ''));
+        if ($tkzone !== '') {
+            $where_sql[] = 'tkzone = %s';
+            $params[] = $tkzone;
+        }
+
         $landing_key = trim((string) ($filters['landing_key'] ?? ''));
         if ($landing_key !== '') {
             $where_sql[] = 'landing_key = %s';
@@ -249,6 +275,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'flow_key' => (string) ($data['flow_key'] ?? ''),
                 'pid' => $this->sanitize_pid((string) ($data['pid'] ?? '')),
                 'click_id' => $this->sanitize_click_id((string) ($data['click_id'] ?? '')),
+                'tksource' => $this->sanitize_source_value((string) ($data['tksource'] ?? '')),
+                'tkzone' => $this->sanitize_source_value((string) ($data['tkzone'] ?? '')),
                 'landing_key' => (string) ($data['landing_key'] ?? ''),
                 'session_token' => (string) ($data['session_token'] ?? ''),
                 'page_loaded_at' => $this->normalize_nullable_datetime($data['page_loaded_at'] ?? null),
@@ -258,6 +286,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'last_event_at' => (string) ($data['last_event_at'] ?? $this->current_time_mysql()),
             ],
             [
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -295,6 +325,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'flow_key' => '%s',
             'pid' => '%s',
             'click_id' => '%s',
+            'tksource' => '%s',
+            'tkzone' => '%s',
             'page_loaded_at' => '%s',
             'first_cta_click_at' => '%s',
             'last_cta_click_at' => '%s',
@@ -323,6 +355,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
             if ($field === 'click_id') {
                 $value = $this->sanitize_click_id((string) $value);
+            }
+
+            if (in_array($field, ['tksource', 'tkzone'], true)) {
+                $value = $this->sanitize_source_value((string) $value);
             }
 
             $fields[$field] = $value;
@@ -425,5 +461,19 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
         $click_id = is_string($click_id) ? $click_id : '';
 
         return substr($click_id, 0, 191);
+    }
+
+    private function sanitize_source_value(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, 191);
     }
 }
