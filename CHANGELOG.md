@@ -2,6 +2,12 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-12:
+- [No Changes] No medium-impact or higher commits landed in repository history on 2026-05-12.
+
+2026-05-11:
+- [Affise Params] Updated the click-attribution/postback architecture contract to use the real Affise sale template (`clickid`, `secure`, `goal`, `status`) and documented supported optional parameters with `action_id` uniqueness guidance. Clarified dispatcher behavior so only template-declared parameters are emitted and `secure={secure}` is required in Affise sale templates.
+
 2026-05-10:
 - [Logging Cleanup] Removed temporary DIMOCO/NTH debug `error_log` instrumentation from callback handling, digest generation, client request/response paths, and blacklist batch polling to reduce production log noise while keeping behavior intact. Deleted obsolete debug-only callback/patch artifacts that were no longer part of the active integration path.
 
