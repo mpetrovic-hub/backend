@@ -6843,6 +6843,27 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
     );
 });
 
+kiwi_run_test('Kiwi_Plugin bumps schema version for traffic source attribution columns', function (): void {
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
+    $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
+
+    $GLOBALS['kiwi_test_options'] = [
+        $schema_option => '2026-05-07-2',
+    ];
+
+    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->ensure_click_attribution_table();
+
+    kiwi_assert_same('2026-05-12-1', $schema_version, 'Expected schema version to be bumped for tksource/tkzone column migrations.');
+    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-traffic-source schema version to rerun dbDelta migrations.');
+    kiwi_assert_same(
+        $schema_version,
+        $GLOBALS['kiwi_test_options'][$schema_option] ?? '',
+        'Expected schema migration rerun to persist the bumped schema version.'
+    );
+});
+
 kiwi_run_test('Kiwi_Plugin skips schema migrations when installed version already matches', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
