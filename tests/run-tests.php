@@ -3848,6 +3848,29 @@ kiwi_run_test('Kiwi_Tracking_Capture_Service captures clickid and persists serve
     kiwi_assert_same('partner_A:1', $saved['pid'] ?? '', 'Expected repeated capture without pid input to keep the previously captured pid value.');
     kiwi_assert_same('PropellerAds', $saved['tksource'] ?? '', 'Expected repeated capture without tksource input to keep the previously captured tksource value.');
     kiwi_assert_same('zone123:abc', $saved['tkzone'] ?? '', 'Expected repeated capture without tkzone input to keep the previously captured tkzone value.');
+
+    $service->capture_from_request(
+        [
+            'key' => 'lp2-fr',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        'landing-session-1',
+        [
+            'clickid' => 'new-click:123',
+            'pid' => 'new_partner',
+            'tksource' => 'NewSource',
+            'tkzone' => 'new-zone-9',
+        ]
+    );
+
+    kiwi_assert_same(1, count($repository->rows), 'Expected repeated capture with new source context to reuse the same attribution row.');
+    $refreshed = array_values($repository->rows)[0];
+    kiwi_assert_same('new-click:123', $refreshed['click_id'] ?? '', 'Expected repeated capture to refresh clickid when a new click arrives.');
+    kiwi_assert_same('new_partner', $refreshed['pid'] ?? '', 'Expected repeated capture with non-empty pid input to refresh the stored pid value.');
+    kiwi_assert_same('NewSource', $refreshed['tksource'] ?? '', 'Expected repeated capture with non-empty tksource input to refresh the stored tksource value.');
+    kiwi_assert_same('new-zone-9', $refreshed['tkzone'] ?? '', 'Expected repeated capture with non-empty tkzone input to refresh the stored tkzone value.');
 });
 
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver matches confirmed conversions and dispatches one idempotent postback', function (): void {

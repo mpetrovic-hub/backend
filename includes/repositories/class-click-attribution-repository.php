@@ -96,16 +96,16 @@ class Kiwi_Click_Attribution_Repository
                 'flow_key' => (string) ($data['flow_key'] ?? ($existing['flow_key'] ?? '')),
                 'service_key' => (string) ($data['service_key'] ?? ($existing['service_key'] ?? '')),
                 'pid' => $this->prefer_non_empty(
-                    $this->sanitize_pid((string) ($existing['pid'] ?? '')),
-                    $this->sanitize_pid((string) ($data['pid'] ?? ''))
+                    $this->sanitize_pid((string) ($data['pid'] ?? '')),
+                    $this->sanitize_pid((string) ($existing['pid'] ?? ''))
                 ),
                 'tksource' => $this->prefer_non_empty(
-                    $this->sanitize_source_value((string) ($existing['tksource'] ?? '')),
-                    $this->sanitize_source_value((string) ($data['tksource'] ?? ''))
+                    $this->sanitize_source_value((string) ($data['tksource'] ?? '')),
+                    $this->sanitize_source_value((string) ($existing['tksource'] ?? ''))
                 ),
                 'tkzone' => $this->prefer_non_empty(
-                    $this->sanitize_source_value((string) ($existing['tkzone'] ?? '')),
-                    $this->sanitize_source_value((string) ($data['tkzone'] ?? ''))
+                    $this->sanitize_source_value((string) ($data['tkzone'] ?? '')),
+                    $this->sanitize_source_value((string) ($existing['tkzone'] ?? ''))
                 ),
                 'session_ref' => (string) ($data['session_ref'] ?? ($existing['session_ref'] ?? '')),
                 'external_ref' => (string) ($data['external_ref'] ?? ($existing['external_ref'] ?? '')),
