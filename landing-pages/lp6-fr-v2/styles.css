@@ -116,14 +116,14 @@ h1 {
 
 .cookie-popup {
   position: fixed;
-  right: 14px;
+  right: 12px;
   bottom: 16px;
-  left: 14px;
+  left: 12px;
   z-index: 20;
-  width: calc(100% - 28px);
+  width: calc(100% - 24px);
   max-width: 400px;
   margin: 0 auto;
-  padding: 24px 26px 28px;
+  padding: 24px 22px 24px;
   box-sizing: border-box;
   border-radius: 28px;
   background: #202123;
@@ -138,29 +138,29 @@ h1 {
 }
 
 .cookie-popup__title {
-  margin: 0 0 22px;
-  font-size: clamp(28px, 7.2vw, 42px);
+  margin: 0 0 18px;
+  font-size: 20px;
   font-weight: 400;
-  line-height: 1.12;
+  line-height: 1.18;
 }
 
 .cookie-popup__message {
   display: grid;
-  grid-template-columns: 74px 1fr;
+  grid-template-columns: 52px 1fr;
   align-items: start;
-  column-gap: 14px;
+  column-gap: 12px;
 }
 
 .cookie-popup__icon {
   display: block;
-  width: 64px;
-  height: 64px;
+  width: 40px;
+  height: 40px;
   margin-top: 2px;
 }
 
 .cookie-popup__message p {
   margin: 0;
-  font-size: clamp(22px, 5.3vw, 33px);
+  font-size: 17px;
   font-weight: 400;
   line-height: 1.28;
 }
@@ -170,14 +170,14 @@ h1 {
 }
 
 .cookie-popup__selection {
-  padding-top: 28px;
+  padding-top: 24px;
 }
 
 .cookie-popup__actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 18px;
-  margin-top: 64px;
+  margin-top: 34px;
   text-align: center;
 }
 
@@ -188,7 +188,7 @@ h1 {
   background: transparent;
   color: #ffffff;
   font: inherit;
-  font-size: clamp(26px, 6vw, 40px);
+  font-size: 21px;
   font-weight: 700;
   line-height: 1.1;
   cursor: pointer;
@@ -201,15 +201,15 @@ h1 {
 
 @media (max-width: 360px) {
   .cookie-popup {
-    padding: 22px 22px 26px;
+    padding: 22px 20px 24px;
   }
 
   .cookie-popup__message {
-    grid-template-columns: 68px 1fr;
+    grid-template-columns: 48px 1fr;
     column-gap: 10px;
   }
 
   .cookie-popup__actions {
-    margin-top: 50px;
+    margin-top: 30px;
   }
 }
