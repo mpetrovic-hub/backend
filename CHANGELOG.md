@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-13:
+- [LP6 V2] Added the `lp6-fr-v2` France one-off Premium SMS landing-page variant with dedicated markup, NTH integration metadata, responsive hero assets, CTA tracking, service disclosures, and cookie popup behavior. Follow-up styling tightened the cookie popup sizing, typography, spacing, and mobile layout.
+
 2026-05-11:
 - [Affise Params] Updated the click-attribution/postback architecture contract to use the real Affise sale template (`clickid`, `secure`, `goal`, `status`) and documented supported optional parameters with `action_id` uniqueness guidance. Clarified dispatcher behavior so only template-declared parameters are emitted and `secure={secure}` is required in Affise sale templates.
 
