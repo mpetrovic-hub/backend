@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="fr">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MyJoyplay FR 6</title>
+  <!-- lp6-fr-v2 -->
+  <link rel="preload" as="image" href="./FR-All_MyJoyplay_DownloadBlueBox_LP_420x356.webp"
+    imagesrcset="./FR-All_MyJoyplay_DownloadBlueBox_LP_360x339.webp 360w, ./FR-All_MyJoyplay_DownloadBlueBox_LP_420x356.webp 420w"
+    imagesizes="(max-width: 420px) 90vw, 420px" fetchpriority="high">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+
+<body>
+  <main class="lp-container">
+    <img class="hero" src="./FR-All_MyJoyplay_DownloadBlueBox_LP_420x356.webp"
+      srcset="./FR-All_MyJoyplay_DownloadBlueBox_LP_360x339.webp 360w, ./FR-All_MyJoyplay_DownloadBlueBox_LP_420x356.webp 420w"
+      sizes="(max-width: 480px) 92vw, 400px" alt="Download ready" width="420" height="356" fetchpriority="high">
+    <h1>1. Cliquez sur le <strong>bouton</strong><br>2. <strong>Envoyez le SMS</strong> pour accéder immédiatement</h1>
+    <a class="cta" href="{{KIWI_PRIMARY_CTA_HREF}}">CONTINUER ET ACHETER</a>
+    <p class="price">4,50 EUR / SMS + prix d'un SMS</p>
+    <img class="additional-image" src="./smsplus_tr_100x34.webp" alt="sms plus logo" width="100" height="34">
+    <p class="disclaimer">
+      Un portail mobile pour des jeux HTML5 populaires - aucun telechargement requis, les utilisateurs peuvent jouer
+      directement dans leur navigateur. Apres l'achat de MyJoyplay, l'utilisateur a la possibilite de jouer a tous les
+      jeux en ligne en illimite pendant 30 jours. Le prix du service est de 4,50 EUR. Il s'agit de frais uniques.
+      L'activation du service : veuillez envoyer un SMS avec le texte JPLAY au 84072. En activant le service, vous
+      confirmez que vous avez lu le reglement et que vous acceptez de recevoir gratuitement des informations de
+      commercialisation et de publicite du fournisseur de service. Les frais ne comprennent pas l'utilisation de
+      l'Internet mobile. Aide : +33 1 71 25 55 55 du lundi au vendredi de 9h00 a 17h00 ou envoyez un e-mail a
+      <a href="mailto:plainte.84072@allopass.com" style="color: #ff6b6b;">plainte.84072@allopass.com</a>.
+      Fournisseur de services kiwi mobile GmbH, Kokkolastr. 5, 40882 Ratingen, Allemagne.
+    </p>
+    <a href="https://mcontentfr.joy-play.com/termsandconditions/" class="terms">TERMES ET CONDITIONS</a>
+  </main>
+  <aside class="cookie-popup" data-cookie-popup aria-label="Notification cookies">
+    <p class="cookie-popup__title">Nous utilisons des cookies pour afficher 84072.</p>
+    <div class="cookie-popup__message">
+      <img class="cookie-popup__icon" src="./fr_cookie_64x64.webp" alt="" width="64" height="64">
+      <div>
+        <p>Les cookies <strong>n&rsquo;ont aucun effet</strong> sur ton forfait mobile.</p>
+        <p class="cookie-popup__selection">Enregistrer la s&eacute;lection</p>
+      </div>
+    </div>
+    <div class="cookie-popup__actions">
+      <button class="cookie-popup__button" type="button">Annuler</button>
+      <button class="cookie-popup__button" type="button" data-cookie-send>Envoyer</button>
+    </div>
+  </aside>
+  <script>
+    (function () {
+      var popup = document.querySelector('[data-cookie-popup]');
+      var sendButton = document.querySelector('[data-cookie-send]');
+
+      if (!popup || !sendButton) {
+        return;
+      }
+
+      sendButton.addEventListener('click', function () {
+        popup.hidden = true;
+      });
+    }());
+  </script>
+</body>
+
+</html>
