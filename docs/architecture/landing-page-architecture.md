@@ -315,11 +315,12 @@ This keeps landing pages easy to edit without duplicating business logic into ea
 
 During migration, existing request resolution may still rely on legacy mapping from `wp-config.php`.
 
-The preferred migration approach is:
+The preferred migration approach is now in Phase 1 retirement:
 
 1. resolve via filesystem registry first
-2. fall back to legacy config only for unmigrated pages
-3. remove legacy fallback after parity is verified
+2. keep legacy config fallback disabled by default
+3. allow fallback only through the explicit temporary rollback switch `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true`
+4. remove legacy fallback after staging proves no runtime-only routes still depend on it
 
 No new landing-page definitions should be introduced into `wp-config.php`.
 
@@ -441,8 +442,10 @@ Use a staged migration:
 1. introduce filesystem registry and loader
 2. migrate one or more known landing pages into `/landing-pages`
 3. wire existing resolution logic to prefer filesystem entries
-4. keep legacy config fallback only while unmigrated pages still exist
-5. remove legacy definitions after parity is verified
+4. disable legacy config fallback by default
+5. use `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true` only as a temporary rollback switch if staging finds an unmigrated route
+6. remove legacy definitions after parity is verified
+7. remove the legacy template-loading path in a later Phase 2 PR once staging has confirmed no fallback usage
 
 ### Migration rule
 

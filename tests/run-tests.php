@@ -684,7 +684,7 @@ class Kiwi_Test_Runtime_Config extends Kiwi_Config
         string $landing_pages_root,
         array $legacy_landing_pages = [],
         bool $filesystem_enabled = true,
-        bool $legacy_fallback_enabled = true,
+        bool $legacy_fallback_enabled = false,
         bool $debug = false,
         array $nth_services = []
     ) {
@@ -3164,7 +3164,7 @@ kiwi_run_test('Kiwi_Landing_Page_Registry validates documentation linkage safety
     }
 });
 
-kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and legacy fallback for unmigrated keys only', function (): void {
+kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and disables legacy fallback by default', function (): void {
     $project_root = kiwi_create_temp_directory('kiwi_lp_fallback');
 
     try {
@@ -3184,9 +3184,7 @@ kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and legacy fal
                     'backend_path' => '/legacy/only',
                 ],
             ],
-            true,
-            true,
-            false
+            true
         );
 
         $landing_pages = $config->get_landing_pages();
@@ -3197,9 +3195,50 @@ kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and legacy fal
             'Expected filesystem landing pages to override same-key legacy entries.'
         );
         kiwi_assert_same(
+            false,
+            isset($landing_pages['legacy-only-fr']),
+            'Expected legacy-only landing pages to stay disabled unless the rollback fallback is explicit.'
+        );
+    } finally {
+        kiwi_remove_directory($project_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Config allows explicit legacy fallback as a rollback switch', function (): void {
+    $project_root = kiwi_create_temp_directory('kiwi_lp_fallback_on');
+
+    try {
+        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
+            'flow' => 'filesystem-flow',
+        ]);
+
+        $config = new Kiwi_Test_Runtime_Config(
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
+            [
+                'lp2-fr' => [
+                    'flow' => 'legacy-flow',
+                    'backend_path' => '/legacy/lp2-fr',
+                ],
+                'legacy-only-fr' => [
+                    'flow' => 'legacy-only-flow',
+                    'backend_path' => '/legacy/only',
+                ],
+            ],
+            true,
+            true
+        );
+
+        $landing_pages = $config->get_landing_pages();
+
+        kiwi_assert_same(
+            'filesystem-flow',
+            $landing_pages['lp2-fr']['flow'] ?? '',
+            'Expected filesystem landing pages to remain primary when rollback fallback is explicit.'
+        );
+        kiwi_assert_same(
             'legacy-only-flow',
             $landing_pages['legacy-only-fr']['flow'] ?? '',
-            'Expected legacy fallback to remain available for unmigrated landing pages.'
+            'Expected explicit rollback fallback to restore unmigrated legacy landing pages.'
         );
     } finally {
         kiwi_remove_directory($project_root);
@@ -3624,6 +3663,48 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     kiwi_assert_same('lp2-fr', $public_host_path_match['landing_key'], 'Expected backend path matching to be host-agnostic for proxied public domains.');
     kiwi_assert_same('lp2-fr', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing variants without legacy fallback', function (): void {
+    $config = new Kiwi_Test_Runtime_Config(
+        __DIR__ . '/../landing-pages',
+        [],
+        true,
+        false,
+        false
+    );
+    $router = new Kiwi_Landing_Page_Router(
+        $config,
+        new Kiwi_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+
+    $expected_routes = [
+        'lp4-fr' => '/lp/fr/myjoyplay4',
+        'lp5-fr' => '/lp/fr/myjoyplay5',
+        'lp5-fr-v2' => '/lp/fr/myjoyplay5v2',
+        'lp6-fr' => '/lp/fr/myjoyplay6',
+        'lp6-fr-v2' => '/lp/fr/myjoyplay6v2',
+    ];
+
+    foreach ($expected_routes as $landing_key => $backend_path) {
+        $match = $router->resolve_request('landing-public.example.test', $backend_path);
+
+        kiwi_assert_same(
+            $landing_key,
+            $match['landing_key'] ?? '',
+            'Expected active filesystem landing route ' . $backend_path . ' to resolve without legacy fallback.'
+        );
+        kiwi_assert_same(
+            'filesystem',
+            $match['landing_page']['render_mode'] ?? '',
+            'Expected active landing route ' . $backend_path . ' to use filesystem rendering.'
+        );
+    }
+
+    $dedicated_host_match = $router->resolve_request('frlp2.joy-play.com', '/');
+
+    kiwi_assert_same('lp5-fr', $dedicated_host_match['landing_key'] ?? '', 'Expected lp5-fr dedicated host routing to resolve without legacy fallback.');
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Router inlines readable filesystem styles and removes stylesheet link', function (): void {
@@ -5108,33 +5189,37 @@ kiwi_run_test('Kiwi_Landing_Primary_Cta_Resolver can render assigned SMS body va
     );
 });
 
-kiwi_run_test('Generic landing page template renders shared assets and config-driven CTA content', function (): void {
+kiwi_run_test('Kiwi_Landing_Page_Router derives config-driven CTA and price content for rendering', function (): void {
     $landing_page = [
         'page_title' => 'Joyplay',
         'asset_base_url' => 'https://assets.example.test/joyplay',
         'background_image_path' => 'background.png',
         'hero_image_path' => 'hero.png',
-        'cta_href' => 'sms:84072?body=JPLAY',
         'cta_label' => 'CONTINUER ET PAYER',
         'terms_url' => 'https://example.test/terms',
         'terms_label' => 'TERMES ET CONDITIONS',
         'short_description' => 'Short copy',
         'long_description' => 'Long copy',
-        'keyword' => 'JPLAY',
-        'shortcode' => '84072',
-        'price_label' => '4,50 EUR / SMS + prix d\'un SMS',
         'disclaimer_html' => 'Disclaimer',
     ];
-    $click_to_sms_uri = '#';
+    $service = [
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'landing_price_label' => '4,50 EUR / SMS + prix d\'un SMS',
+    ];
+    $router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Config(),
+        new Kiwi_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+    $method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'build_render_landing_page');
+    $render_landing_page = $method->invoke($router, $landing_page, $service);
 
-    ob_start();
-    include __DIR__ . '/../templates/landing-pages/generic-offer.php';
-    $output = (string) ob_get_clean();
-
-    kiwi_assert_true(strpos($output, 'https://assets.example.test/joyplay/background.png') !== false, 'Expected the generic landing template to expand the shared background asset URL.');
-    kiwi_assert_true(strpos($output, 'https://assets.example.test/joyplay/hero.png') !== false, 'Expected the generic landing template to expand the shared hero asset URL.');
-    kiwi_assert_true(strpos($output, 'sms:84072?body=JPLAY') !== false, 'Expected the generic landing template to render the configured CTA href.');
-    kiwi_assert_true(strpos($output, 'Activer en envoyant JPLAY au 84072') !== false, 'Expected the generic landing template to derive FR click-to-SMS price text from config.');
+    kiwi_assert_same('sms:84072?body=JPLAY', $render_landing_page['cta_href'] ?? '', 'Expected render data to derive the click-to-SMS CTA href from service config.');
+    kiwi_assert_same('JPLAY', $render_landing_page['keyword'] ?? '', 'Expected render data to inherit the keyword from service config.');
+    kiwi_assert_same('84072', $render_landing_page['shortcode'] ?? '', 'Expected render data to inherit the shortcode from service config.');
+    kiwi_assert_contains('Activer en envoyant JPLAY au 84072', $render_landing_page['price_info'] ?? '', 'Expected render data to derive FR click-to-SMS price text from config.');
+    kiwi_assert_contains('4,50 EUR / SMS + prix d\'un SMS', $render_landing_page['price_info'] ?? '', 'Expected render data to preserve the configured price label.');
 });
 
 kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer normalizes alias-heavy MO payloads', function (): void {

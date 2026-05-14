@@ -216,7 +216,8 @@ Notes:
   - enable filesystem discovery (default: `true`)
 
 - `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED`
-  - allow legacy `KIWI_LANDING_PAGES` fallback when key is missing in filesystem registry (default: `true`)
+  - allow legacy `KIWI_LANDING_PAGES` fallback when key is missing in filesystem registry (default: `false`)
+  - set to `true` only as a temporary rollback/migration switch while investigating a missing filesystem route
 
 ### Attribution and postbacks
 
@@ -271,17 +272,39 @@ When validating a landing-page flow in production or staging, verify:
   - dedupe in events is expected
   - conversion path can re-attempt postback only while `postback_sent_at` is empty
 
-## Appendix: legacy migration steps
+## Appendix: legacy retirement and rollback
 
-Use only if migrating remaining legacy `KIWI_LANDING_PAGES` entries.
+The legacy `KIWI_LANDING_PAGES` fallback is in retirement. Phase 1 keeps the code path available but disables it by default. Phase 2 should remove the legacy template loading path and `templates/landing-pages` code only after staging confirms there are no remaining runtime-only legacy routes.
+
+### Staging verification before Phase 2
+
+1. Open active filesystem landing routes including `lp4-fr`, `lp5-fr`, `lp5-fr-v2`, `lp6-fr`, and `lp6-fr-v2` through their backend paths.
+2. Verify any public hostname plus backend-path routing used in production.
+3. Confirm CTA output, SMS target/body, price disclosure, and local asset rendering.
+4. Check WordPress debug logs for missing landing keys, missing templates, warnings, or errors.
+5. Confirm no required route depends on `KIWI_LANDING_PAGES` or `templates/landing-pages/<template>.php`.
+
+### Temporary rollback
+
+If staging or production shows an unmigrated legacy-only route, temporarily define:
+
+```php
+define('KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED', true);
+```
+
+Use this only to restore service while the route is migrated into a filesystem folder. Remove the flag again after the filesystem route is verified.
+
+### Migrating a discovered legacy route
+
+Use only if a remaining legacy `KIWI_LANDING_PAGES` entry is found.
 
 1. Create filesystem folder `landing-pages/lp<version>-<country>/`.
 2. Add `index.html`, `styles.css`, `integration.php`.
 3. Set routing metadata in `integration.php` (`backend_path`, optional `hostnames`/`dedicated_path`).
-4. Deploy with `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true`.
+4. Temporarily deploy with `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true` only if rollback coverage is needed during migration.
 5. Verify parity.
 6. Remove migrated key from `KIWI_LANDING_PAGES`.
 7. Repeat until no legacy keys remain.
-8. Disable legacy fallback when fully migrated.
+8. Remove the temporary fallback flag so default-off behavior is restored.
 
 In debug mode (`KIWI_DEBUG=true`), invalid landing pages fail loudly. In production, invalid entries are skipped and logged.
