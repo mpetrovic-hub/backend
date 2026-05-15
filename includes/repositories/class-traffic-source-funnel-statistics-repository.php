@@ -235,9 +235,21 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
                 s.transaction_id AS successful_transaction_id,
                 s.completed_at AS sale_completed_at
             FROM {$sales_table} s
-            INNER JOIN {$click_attribution_table} ca
+            INNER JOIN (
+                SELECT *
+                FROM (
+                    SELECT
+                        ca.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ca.transaction_id
+                            ORDER BY ca.conversion_confirmed_at DESC, ca.updated_at DESC, ca.id DESC
+                        ) AS kiwi_attribution_rank
+                    FROM {$click_attribution_table} ca
+                    WHERE ca.transaction_id <> ''
+                ) ranked_ca
+                WHERE ranked_ca.kiwi_attribution_rank = 1
+            ) ca
               ON ca.transaction_id = s.transaction_id
-             AND ca.transaction_id <> ''
             WHERE s.status = 'completed'
               AND s.created_at >= '{$default_from}'";
     }
