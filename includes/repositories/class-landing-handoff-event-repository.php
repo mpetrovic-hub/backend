@@ -40,6 +40,13 @@ class Kiwi_Landing_Handoff_Event_Repository
             sms_body_has_transaction TINYINT(1) NOT NULL DEFAULT 0,
             elapsed_ms INT UNSIGNED NOT NULL DEFAULT 0,
             visibility_state VARCHAR(50) NOT NULL DEFAULT '',
+            ua_ch_supported TINYINT(1) NOT NULL DEFAULT 0,
+            ua_ch_mobile TINYINT(1) NOT NULL DEFAULT 0,
+            ua_ch_platform VARCHAR(50) NOT NULL DEFAULT '',
+            ua_ch_platform_version VARCHAR(50) NOT NULL DEFAULT '',
+            ua_ch_model VARCHAR(191) NOT NULL DEFAULT '',
+            ua_ch_brands TEXT NULL,
+            ua_ch_full_version_list TEXT NULL,
             user_agent TEXT NULL,
             raw_context LONGTEXT NULL,
             PRIMARY KEY (id),
@@ -107,6 +114,13 @@ class Kiwi_Landing_Handoff_Event_Repository
                 'sms_body_has_transaction' => !empty($event['sms_body_has_transaction']) ? 1 : 0,
                 'elapsed_ms' => max(0, (int) ($event['elapsed_ms'] ?? 0)),
                 'visibility_state' => $this->sanitize_visibility_state((string) ($event['visibility_state'] ?? '')),
+                'ua_ch_supported' => !empty($event['ua_ch_supported']) ? 1 : 0,
+                'ua_ch_mobile' => !empty($event['ua_ch_mobile']) ? 1 : 0,
+                'ua_ch_platform' => $this->sanitize_client_hint_token((string) ($event['ua_ch_platform'] ?? ''), 50),
+                'ua_ch_platform_version' => $this->sanitize_client_hint_token((string) ($event['ua_ch_platform_version'] ?? ''), 50),
+                'ua_ch_model' => $this->sanitize_client_hint_text((string) ($event['ua_ch_model'] ?? ''), 191),
+                'ua_ch_brands' => $this->sanitize_client_hint_text((string) ($event['ua_ch_brands'] ?? ''), 1000),
+                'ua_ch_full_version_list' => $this->sanitize_client_hint_text((string) ($event['ua_ch_full_version_list'] ?? ''), 1000),
                 'user_agent' => substr(trim((string) ($event['user_agent'] ?? '')), 0, 1000),
                 'raw_context' => isset($event['raw_context']) ? wp_json_encode($event['raw_context']) : '',
             ],
@@ -128,6 +142,13 @@ class Kiwi_Landing_Handoff_Event_Repository
                 '%d',
                 '%d',
                 '%d',
+                '%s',
+                '%d',
+                '%d',
+                '%s',
+                '%s',
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -300,6 +321,34 @@ class Kiwi_Landing_Handoff_Event_Repository
         $value = is_string($value) ? $value : '';
 
         return substr($value, 0, 50);
+    }
+
+    private function sanitize_client_hint_token(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:+ -]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, max(1, $max_length));
+    }
+
+    private function sanitize_client_hint_text(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^\P{C}\r\n\t]/u', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, max(1, $max_length));
     }
 
     private function sanitize_pid(string $pid): string

@@ -2310,6 +2310,13 @@ class Kiwi_Test_Landing_Handoff_Event_Repository extends Kiwi_Landing_Handoff_Ev
             'sms_body_has_transaction' => !empty($event['sms_body_has_transaction']) ? 1 : 0,
             'elapsed_ms' => max(0, (int) ($event['elapsed_ms'] ?? 0)),
             'visibility_state' => (string) ($event['visibility_state'] ?? ''),
+            'ua_ch_supported' => !empty($event['ua_ch_supported']) ? 1 : 0,
+            'ua_ch_mobile' => !empty($event['ua_ch_mobile']) ? 1 : 0,
+            'ua_ch_platform' => (string) ($event['ua_ch_platform'] ?? ''),
+            'ua_ch_platform_version' => (string) ($event['ua_ch_platform_version'] ?? ''),
+            'ua_ch_model' => (string) ($event['ua_ch_model'] ?? ''),
+            'ua_ch_brands' => (string) ($event['ua_ch_brands'] ?? ''),
+            'ua_ch_full_version_list' => (string) ($event['ua_ch_full_version_list'] ?? ''),
             'user_agent' => (string) ($event['user_agent'] ?? ''),
             'raw_context' => $event['raw_context'] ?? [],
         ];
@@ -3045,6 +3052,7 @@ kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', 
     kiwi_assert_same('FR', $config->get_nth_service('nth_fr_one_off_jplay')['country'], 'Expected NTH service config to be returned by key.');
     kiwi_assert_same('/lp/fr/myjoyplay', $config->get_landing_page('lp2-fr')['backend_path'], 'Expected landing page config to be returned by key.');
     kiwi_assert_same(240, $config->get_nth_submit_timeout(), 'Expected the configured NTH timeout to be returned.');
+    kiwi_assert_true($config->is_landing_handoff_ua_client_hints_enabled(), 'Expected landing handoff UA Client Hints telemetry to default to enabled.');
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Registry discovers folder landing pages and parses metadata', function (): void {
@@ -4682,6 +4690,13 @@ kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idemp
         'sms_body_has_transaction' => true,
         'elapsed_ms' => 15,
         'visibility_state' => 'visible',
+        'ua_ch_supported' => 1,
+        'ua_ch_mobile' => 1,
+        'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '16.0.0',
+        'ua_ch_model' => 'SM-S921B',
+        'ua_ch_brands' => 'Chromium 147, Google Chrome 147',
+        'ua_ch_full_version_list' => 'Google Chrome 147.0.7727.138',
         'user_agent' => 'Android Test UA',
     ]);
     $duplicate = $repository->insert_if_new([
@@ -4698,6 +4713,13 @@ kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idemp
     kiwi_assert_same(1, (int) ($first['row']['sms_body_has_transaction'] ?? 0), 'Expected handoff storage to persist transaction-token presence.');
     kiwi_assert_same('source-1', (string) ($first['row']['tksource'] ?? ''), 'Expected handoff storage to persist tksource context.');
     kiwi_assert_same('zone-1', (string) ($first['row']['tkzone'] ?? ''), 'Expected handoff storage to persist tkzone context.');
+    kiwi_assert_same(1, (int) ($first['row']['ua_ch_supported'] ?? 0), 'Expected handoff storage to persist UA Client Hints support.');
+    kiwi_assert_same(1, (int) ($first['row']['ua_ch_mobile'] ?? 0), 'Expected handoff storage to persist UA Client Hints mobile flag.');
+    kiwi_assert_same('Android', (string) ($first['row']['ua_ch_platform'] ?? ''), 'Expected handoff storage to persist UA Client Hints platform.');
+    kiwi_assert_same('16.0.0', (string) ($first['row']['ua_ch_platform_version'] ?? ''), 'Expected handoff storage to persist UA Client Hints platform version.');
+    kiwi_assert_same('SM-S921B', (string) ($first['row']['ua_ch_model'] ?? ''), 'Expected handoff storage to persist UA Client Hints model.');
+    kiwi_assert_same('Chromium 147, Google Chrome 147', (string) ($first['row']['ua_ch_brands'] ?? ''), 'Expected handoff storage to persist UA Client Hints brands.');
+    kiwi_assert_same('Google Chrome 147.0.7727.138', (string) ($first['row']['ua_ch_full_version_list'] ?? ''), 'Expected handoff storage to persist UA Client Hints full version list.');
 });
 
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository stores assignments and summary idempotently', function (): void {
@@ -4882,6 +4904,13 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
         'clickid' => 'click-handoff',
         'tksource' => 'source-handoff',
         'tkzone' => 'zone-handoff',
+        'ua_ch_supported' => 1,
+        'ua_ch_mobile' => 1,
+        'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '15.0.0',
+        'ua_ch_model' => 'Pixel 8',
+        'ua_ch_brands' => 'Chromium 147, Google Chrome 147',
+        'ua_ch_full_version_list' => 'Google Chrome 147.0.7727.138',
     ]));
     $hidden = $routes->handle_event(new WP_REST_Request([], [
         'landing_key' => 'lp2-fr',
@@ -4909,6 +4938,10 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
     kiwi_assert_same('click-handoff', (string) ($handoff_repository->rows[1]['click_id'] ?? ''), 'Expected handoff events to persist clickid context.');
     kiwi_assert_same('source-handoff', (string) ($handoff_repository->rows[1]['tksource'] ?? ''), 'Expected handoff events to persist tksource context.');
     kiwi_assert_same('zone-handoff', (string) ($handoff_repository->rows[1]['tkzone'] ?? ''), 'Expected handoff events to persist tkzone context.');
+    kiwi_assert_same(1, (int) ($handoff_repository->rows[1]['ua_ch_supported'] ?? 0), 'Expected handoff events to persist UA Client Hints support.');
+    kiwi_assert_same('Pixel 8', (string) ($handoff_repository->rows[1]['ua_ch_model'] ?? ''), 'Expected handoff events to persist UA Client Hints model from REST payload.');
+    kiwi_assert_same('Google Chrome 147.0.7727.138', (string) ($handoff_repository->rows[1]['ua_ch_full_version_list'] ?? ''), 'Expected handoff events to persist UA Client Hints full version list from REST payload.');
+    kiwi_assert_same('Pixel 8', (string) ($handoff_repository->rows[1]['raw_context']['ua_client_hints']['ua_ch_model'] ?? ''), 'Expected handoff raw context to include a compact UA Client Hints snapshot.');
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected handoff-only events not to mutate KPI CTA counters.');
     kiwi_assert_same(400, $invalid->status, 'Expected unknown handoff event types to be rejected.');
 
@@ -5107,6 +5140,11 @@ kiwi_run_test('Kiwi_Landing_Page_Router injects same-origin SMS handoff telemetr
     kiwi_assert_contains('sms_handoff_hidden', $output, 'Expected injected tracker to include hidden SMS handoff event.');
     kiwi_assert_contains('sms_handoff_returned', $output, 'Expected injected tracker to include returned SMS handoff event.');
     kiwi_assert_contains('sms_handoff_no_hide', $output, 'Expected injected tracker to include no-hide SMS handoff event.');
+    kiwi_assert_contains('uaClientHintsEnabled', $output, 'Expected injected tracker config to expose the UA Client Hints switch.');
+    kiwi_assert_contains('navigator.userAgentData', $output, 'Expected injected tracker to detect UA Client Hints support.');
+    kiwi_assert_contains('getHighEntropyValues', $output, 'Expected injected tracker to request high-entropy UA Client Hints.');
+    kiwi_assert_contains('ua_ch_model', $output, 'Expected injected tracker to send UA Client Hints model when available.');
+    kiwi_assert_contains("addEventListener('pointerdown'", $output, 'Expected injected tracker to prewarm UA Client Hints on pointer interaction.');
     kiwi_assert_contains("scheme!=='sms'&&scheme!=='smsto'", $output, 'Expected injected tracker to recognize both sms and smsto schemes.');
     kiwi_assert_contains('fetch(cfg.endpoint', $output, 'Expected injected tracker to prefer fetch delivery.');
     kiwi_assert_contains('sendBeacon', $output, 'Expected injected tracker to retain sendBeacon only as a fallback path.');
@@ -6928,7 +6966,7 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
     );
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for traffic source attribution columns', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for handoff UA Client Hints columns', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -6940,8 +6978,8 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for traffic source attribution c
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-12-1', $schema_version, 'Expected schema version to be bumped for tksource/tkzone column migrations.');
-    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-traffic-source schema version to rerun dbDelta migrations.');
+    kiwi_assert_same('2026-05-15-1', $schema_version, 'Expected schema version to be bumped for handoff UA Client Hints column migrations.');
+    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-UA-Client-Hints schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
         $GLOBALS['kiwi_test_options'][$schema_option] ?? '',
@@ -8884,4 +8922,14 @@ kiwi_run_test('Kiwi frontend auth keeps existing HLR submit flow behavior after 
 
     $_POST = [];
     $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Config allows disabling landing handoff UA Client Hints telemetry by constant', function (): void {
+    if (!defined('KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED')) {
+        define('KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED', false);
+    }
+
+    $config = new Kiwi_Test_Config();
+
+    kiwi_assert_true(!$config->is_landing_handoff_ua_client_hints_enabled(), 'Expected landing handoff UA Client Hints telemetry to be disabled by constant.');
 });

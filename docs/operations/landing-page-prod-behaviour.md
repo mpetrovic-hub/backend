@@ -56,6 +56,8 @@ Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI ev
 
 For click-to-SMS CTAs, the same endpoint also records handoff telemetry for `sms:`/`smsto:` links. These events are diagnostic signals only: they indicate that a browser attempted an SMS handoff, hid the page, returned, or did not hide after the click. They do not prove that the SMS was sent and they do not increment KPI summary counters.
 
+When `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED` is enabled, the handoff tracker also collects best-effort User-Agent Client Hints only during CTA/handoff interaction. This can add mobile/platform/model/browser-brand hints to `sms_handoff_*` events without collecting them for every page load.
+
 For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic. The FR SMS-body variant experiment can instead render a stable visible token while keeping the internal `txn_...` correlation id unchanged server-side.
 
 ## Multi-domain exposure via proxy/CNAME
@@ -130,7 +132,7 @@ Storage model:
 
 - `wp_kiwi_landing_handoff_events`
   - one row per landing/session/handoff/event type
-  - records SMS handoff diagnostics, including scheme, recipient, body presence, transaction-token presence, elapsed time, visibility state, and source snapshots
+  - records SMS handoff diagnostics, including scheme, recipient, body presence, transaction-token presence, elapsed time, visibility state, source snapshots, and optional UA Client Hints
 
 - `wp_kiwi_sms_body_variant_assignments`
   - one row per internal `transaction_id`
@@ -192,7 +194,7 @@ Notes:
 
 - `wp_kiwi_landing_handoff_events`
   - click-to-SMS handoff evidence (`sms_handoff_*`)
-  - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`) and handoff details (`sms`, `smsto`, recipient/body metadata)
+  - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`), handoff details (`sms`, `smsto`, recipient/body metadata), and optional UA Client Hints (`platform`, `platformVersion`, `model`, browser brands)
 
 - `wp_kiwi_sms_body_variant_assignments`
   - visible SMS token assignments for the FR click-to-SMS experiment
@@ -229,6 +231,8 @@ Notes:
   - enables the SMS-body variant experiment (default: `true`)
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
   - country allowlist for the experiment (default: `['FR']`)
+- `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED`
+  - enables best-effort UA Client Hints collection for SMS handoff events only (default: `true`)
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
 - `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`

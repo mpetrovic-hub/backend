@@ -272,13 +272,55 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'sms_body_has_transaction' => !empty($params['sms_body_has_transaction']),
             'elapsed_ms' => max(0, (int) ($params['elapsed_ms'] ?? 0)),
             'visibility_state' => (string) ($params['visibility_state'] ?? ''),
+            'ua_ch_supported' => !empty($params['ua_ch_supported']),
+            'ua_ch_mobile' => !empty($params['ua_ch_mobile']),
+            'ua_ch_platform' => (string) ($params['ua_ch_platform'] ?? ''),
+            'ua_ch_platform_version' => (string) ($params['ua_ch_platform_version'] ?? ''),
+            'ua_ch_model' => (string) ($params['ua_ch_model'] ?? ''),
+            'ua_ch_brands' => (string) ($params['ua_ch_brands'] ?? ''),
+            'ua_ch_full_version_list' => (string) ($params['ua_ch_full_version_list'] ?? ''),
             'user_agent' => $this->server_value('HTTP_USER_AGENT'),
             'raw_context' => [
                 'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
+                'ua_client_hints' => $this->sanitize_ua_client_hints_context($params),
             ],
         ]);
 
         return is_array($result['row'] ?? null);
+    }
+
+    private function sanitize_ua_client_hints_context(array $params): array
+    {
+        $context = [];
+
+        foreach ([
+            'ua_ch_supported',
+            'ua_ch_mobile',
+            'ua_ch_platform',
+            'ua_ch_platform_version',
+            'ua_ch_model',
+            'ua_ch_brands',
+            'ua_ch_full_version_list',
+        ] as $key) {
+            if (!array_key_exists($key, $params)) {
+                continue;
+            }
+
+            $value = $params[$key];
+
+            if (is_bool($value) || is_int($value) || is_float($value)) {
+                $context[$key] = $value;
+                continue;
+            }
+
+            if (is_array($value) || is_object($value)) {
+                continue;
+            }
+
+            $context[$key] = substr(trim((string) $value), 0, 1000);
+        }
+
+        return $context;
     }
 
     private function mark_sms_body_variant_event(string $landing_key, string $event_key, array $params): bool

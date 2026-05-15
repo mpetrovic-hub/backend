@@ -256,6 +256,12 @@ class Kiwi_Config
             || (bool) KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED;
     }
 
+    public function is_landing_handoff_ua_client_hints_enabled(): bool
+    {
+        return !defined('KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED')
+            || (bool) KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED;
+    }
+
     public function get_sms_body_variant_experiment_countries(): array
     {
         $countries = defined('KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES')
