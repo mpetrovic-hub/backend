@@ -181,13 +181,29 @@ h1 {
 }
 
 .cookie-popup__checkbox {
+  appearance: none;
+  -webkit-appearance: none;
   flex: 0 0 auto;
   width: 20px;
   height: 20px;
+  margin: 0;
   box-sizing: border-box;
   border: 2.7px solid #050505;
   border-radius: 4px;
   background: transparent;
+  position: relative;
+}
+
+.cookie-popup__checkbox:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 6px;
+  height: 11px;
+  border: solid #050505;
+  border-width: 0 3px 3px 0;
+  transform: rotate(45deg);
 }
 
 .cookie-popup__actions {
