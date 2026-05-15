@@ -198,7 +198,7 @@ class Kiwi_Config
      * Dedicated landing page configuration.
      *
      * Filesystem entries are the primary source of truth.
-     * Legacy wp-config landing pages can still be used as migration fallback.
+     * Legacy wp-config landing pages are an explicit rollback/migration fallback.
      */
     public function get_landing_pages(): array
     {
@@ -309,8 +309,8 @@ class Kiwi_Config
 
     protected function is_landing_pages_legacy_fallback_enabled(): bool
     {
-        return !defined('KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED')
-            || (bool) KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED;
+        return defined('KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED')
+            && (bool) KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED;
     }
 
     protected function get_landing_pages_root_path(): string
