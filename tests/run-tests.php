@@ -799,6 +799,14 @@ class Kiwi_Test_Attribution_Config extends Kiwi_Test_Config
     }
 }
 
+class Kiwi_Test_Ua_Client_Hints_Disabled_Config extends Kiwi_Test_Config
+{
+    public function is_landing_handoff_ua_client_hints_enabled(): bool
+    {
+        return false;
+    }
+}
+
 class Kiwi_Test_Nth_Service extends Kiwi_Nth_Fr_One_Off_Service
 {
     public $mo_calls = [];
@@ -4946,6 +4954,59 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
     kiwi_assert_same(400, $invalid->status, 'Expected unknown handoff event types to be rejected.');
 
     unset($_SERVER['HTTP_USER_AGENT']);
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes ignores UA Client Hints when disabled server-side', function (): void {
+    $config = new Kiwi_Test_Ua_Client_Hints_Disabled_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $handoff_repository = new Kiwi_Test_Landing_Handoff_Event_Repository();
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes(
+        $config,
+        new Kiwi_Landing_Kpi_Service($config, $summary_repository),
+        null,
+        null,
+        $handoff_repository
+    );
+
+    $response = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-handoff-disabled-ua-ch',
+        'event_type' => 'sms_handoff_attempted',
+        'handoff_id' => 'hof_disabled_ua_ch',
+        'href_scheme' => 'sms',
+        'sms_recipient' => '84072',
+        'sms_body_present' => 1,
+        'sms_body_has_transaction' => 1,
+        'ua_ch_supported' => 1,
+        'ua_ch_mobile' => 1,
+        'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '16.0.0',
+        'ua_ch_model' => 'SM-S921B',
+        'ua_ch_brands' => 'Chromium 147, Google Chrome 147',
+        'ua_ch_full_version_list' => 'Google Chrome 147.0.7727.138',
+    ]));
+
+    kiwi_assert_true(($response->data['handoff_recorded'] ?? false), 'Expected handoff event to record when UA Client Hints are disabled.');
+    kiwi_assert_same(1, count($handoff_repository->rows), 'Expected one handoff row to be stored.');
+    kiwi_assert_same(0, (int) ($handoff_repository->rows[1]['ua_ch_supported'] ?? 1), 'Expected server-side disabled switch to clear UA Client Hints support.');
+    kiwi_assert_same(0, (int) ($handoff_repository->rows[1]['ua_ch_mobile'] ?? 1), 'Expected server-side disabled switch to clear UA Client Hints mobile flag.');
+    kiwi_assert_same('', (string) ($handoff_repository->rows[1]['ua_ch_platform'] ?? 'unexpected'), 'Expected server-side disabled switch to clear UA Client Hints platform.');
+    kiwi_assert_same('', (string) ($handoff_repository->rows[1]['ua_ch_model'] ?? 'unexpected'), 'Expected server-side disabled switch to clear UA Client Hints model.');
+    kiwi_assert_same([], $handoff_repository->rows[1]['raw_context']['ua_client_hints'] ?? ['unexpected'], 'Expected raw UA Client Hints context to stay empty when disabled.');
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes updates SMS body variant metrics alongside KPI events', function (): void {

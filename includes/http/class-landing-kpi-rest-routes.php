@@ -254,6 +254,11 @@ class Kiwi_Landing_Kpi_Rest_Routes
             return false;
         }
 
+        $ua_client_hints_enabled = $this->config->is_landing_handoff_ua_client_hints_enabled();
+        $ua_client_hints = $ua_client_hints_enabled
+            ? $this->sanitize_ua_client_hints_context($params)
+            : [];
+
         $result = $this->handoff_event_repository->insert_if_new([
             'landing_key' => $landing_key,
             'session_token' => $session_token,
@@ -272,17 +277,17 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'sms_body_has_transaction' => !empty($params['sms_body_has_transaction']),
             'elapsed_ms' => max(0, (int) ($params['elapsed_ms'] ?? 0)),
             'visibility_state' => (string) ($params['visibility_state'] ?? ''),
-            'ua_ch_supported' => !empty($params['ua_ch_supported']),
-            'ua_ch_mobile' => !empty($params['ua_ch_mobile']),
-            'ua_ch_platform' => (string) ($params['ua_ch_platform'] ?? ''),
-            'ua_ch_platform_version' => (string) ($params['ua_ch_platform_version'] ?? ''),
-            'ua_ch_model' => (string) ($params['ua_ch_model'] ?? ''),
-            'ua_ch_brands' => (string) ($params['ua_ch_brands'] ?? ''),
-            'ua_ch_full_version_list' => (string) ($params['ua_ch_full_version_list'] ?? ''),
+            'ua_ch_supported' => $ua_client_hints_enabled && !empty($params['ua_ch_supported']),
+            'ua_ch_mobile' => $ua_client_hints_enabled && !empty($params['ua_ch_mobile']),
+            'ua_ch_platform' => $ua_client_hints_enabled ? (string) ($params['ua_ch_platform'] ?? '') : '',
+            'ua_ch_platform_version' => $ua_client_hints_enabled ? (string) ($params['ua_ch_platform_version'] ?? '') : '',
+            'ua_ch_model' => $ua_client_hints_enabled ? (string) ($params['ua_ch_model'] ?? '') : '',
+            'ua_ch_brands' => $ua_client_hints_enabled ? (string) ($params['ua_ch_brands'] ?? '') : '',
+            'ua_ch_full_version_list' => $ua_client_hints_enabled ? (string) ($params['ua_ch_full_version_list'] ?? '') : '',
             'user_agent' => $this->server_value('HTTP_USER_AGENT'),
             'raw_context' => [
                 'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
-                'ua_client_hints' => $this->sanitize_ua_client_hints_context($params),
+                'ua_client_hints' => $ua_client_hints,
             ],
         ]);
 
