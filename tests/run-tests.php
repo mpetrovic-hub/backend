@@ -7017,6 +7017,31 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository create_table surfaces view migration errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Traffic_Source_Statistics();
+    $wpdb->prefix = 'abc_';
+    $wpdb->last_error = 'CREATE VIEW command denied';
+
+    $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
+
+    $thrown = false;
+    try {
+        $repository->create_table();
+    } catch (RuntimeException $exception) {
+        $thrown = true;
+        kiwi_assert_contains('abc_kiwi_v_load_to_cta_by_tksource_tkzone', $exception->getMessage(), 'Expected migration failure to identify the managed view name.');
+        kiwi_assert_contains('CREATE VIEW command denied', $exception->getMessage(), 'Expected migration failure to include the database error for diagnosis.');
+    }
+
+    kiwi_assert_true($thrown, 'Expected create_table to throw when managed view creation fails.');
+    kiwi_assert_contains('CREATE VIEW command denied', $repository->get_last_error(), 'Expected repository to preserve database error details for migration diagnostics.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository filters before aggregation and caps limit', function (): void {
     global $wpdb;
 

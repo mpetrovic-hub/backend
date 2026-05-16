@@ -12,7 +12,17 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
 
     public function create_table(): void
     {
-        $this->create_view();
+        if ($this->create_view()) {
+            return;
+        }
+
+        throw new RuntimeException(
+            sprintf(
+                "Failed to create traffic-source funnel statistics view '%s': %s",
+                $this->get_view_name(),
+                $this->get_last_error() !== '' ? $this->get_last_error() : 'unknown database error'
+            )
+        );
     }
 
     public function create_view(): bool
