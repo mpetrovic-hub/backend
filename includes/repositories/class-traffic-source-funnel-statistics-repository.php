@@ -16,13 +16,13 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
             return;
         }
 
-        throw new RuntimeException(
-            sprintf(
-                "Failed to create traffic-source funnel statistics view '%s': %s",
-                $this->get_view_name(),
-                $this->get_last_error() !== '' ? $this->get_last_error() : 'unknown database error'
-            )
+        $error_message = sprintf(
+            "Failed to create traffic-source funnel statistics view '%s': %s",
+            $this->get_view_name(),
+            $this->get_last_error() !== '' ? $this->get_last_error() : 'unknown database error'
         );
+
+        error_log($error_message);
     }
 
     public function create_view(): bool
