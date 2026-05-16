@@ -315,12 +315,14 @@ require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-re
 require_once __DIR__ . '/../includes/repositories/class-sms-body-variant-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-traffic-source-funnel-statistics-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-refunder-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-premium-sms-fraud-shortcode.php';
+require_once __DIR__ . '/../includes/shortcodes/class-statistics-shortcode.php';
 require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
 require_once __DIR__ . '/../includes/services/class-affiliate-postback-dispatcher.php';
 require_once __DIR__ . '/../includes/services/class-conversion-attribution-resolver.php';
@@ -914,6 +916,7 @@ class Kiwi_Test_Dimoco_Provider extends Kiwi_Dimoco_Operator_Lookup_Provider
 class Kiwi_Test_Plugin extends Kiwi_Plugin
 {
     public $exported_rows;
+    public $exported_statistics_rows;
     public $hlr_async_export_rows = [];
     public $hlr_async_export_request_ids = [];
     public $hlr_async_export_rows_by_msisdn = [];
@@ -922,6 +925,11 @@ class Kiwi_Test_Plugin extends Kiwi_Plugin
     protected function export_hlr_rows(array $rows): void
     {
         $this->exported_rows = $rows;
+    }
+
+    protected function export_statistics_rows(array $rows): void
+    {
+        $this->exported_statistics_rows = $rows;
     }
 
     protected function load_hlr_async_export_rows(array $request_ids): array
@@ -2356,6 +2364,34 @@ class Kiwi_Test_Landing_Handoff_Event_Repository extends Kiwi_Landing_Handoff_Ev
     }
 }
 
+class Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository extends Kiwi_Traffic_Source_Funnel_Statistics_Repository
+{
+    public $rows = [];
+    public $calls = [];
+    public $error = '';
+    public $view_name = 'wp_kiwi_v_load_to_cta_by_tksource_tkzone';
+
+    public function get_rows(array $filters = [], int $limit = 100): array
+    {
+        $this->calls[] = [
+            'filters' => $filters,
+            'limit' => $limit,
+        ];
+
+        return $this->rows;
+    }
+
+    public function get_last_error(): string
+    {
+        return $this->error;
+    }
+
+    public function get_view_name(): string
+    {
+        return $this->view_name;
+    }
+}
+
 class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Repository
 {
     public $assignments = [];
@@ -2799,6 +2835,50 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         }
 
         return round(($numerator / $denominator) * 100, 2);
+    }
+}
+
+class Kiwi_Test_Wpdb_Traffic_Source_Statistics
+{
+    public $prefix = 'wp_';
+    public $last_error = '';
+    public $queries = [];
+    public $prepared_statements = [];
+    public $result_rows = [];
+
+    public function prepare($query, ...$args)
+    {
+        if (count($args) === 1 && is_array($args[0])) {
+            $args = $args[0];
+        }
+
+        $statement = [
+            'query' => (string) $query,
+            'args' => $args,
+        ];
+        $this->prepared_statements[] = $statement;
+
+        return $statement;
+    }
+
+    public function query($statement)
+    {
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $this->queries[] = $query;
+
+        return 1;
+    }
+
+    public function get_results($statement, $output = null): array
+    {
+        $this->prepared_statements[] = is_array($statement)
+            ? $statement
+            : [
+                'query' => (string) $statement,
+                'args' => [],
+            ];
+
+        return $this->result_rows;
     }
 }
 
@@ -6915,6 +6995,148 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service retries attribution postback on dupli
     kiwi_assert_same(2, count($postback_dispatcher->calls), 'Expected no additional postback dispatch after successful retry.');
 });
 
+kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-managed prefixed view', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Traffic_Source_Statistics();
+    $wpdb->prefix = 'abc_';
+
+    $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
+    $created = $repository->create_view();
+
+    kiwi_assert_true($created, 'Expected traffic-source statistics view setup to succeed without database errors.');
+    kiwi_assert_contains('CREATE OR REPLACE VIEW abc_kiwi_v_load_to_cta_by_tksource_tkzone AS', $wpdb->queries[0] ?? '', 'Expected setup to replace the managed statistics view non-destructively.');
+    kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed landing engagement table.');
+    kiwi_assert_contains('abc_kiwi_click_attributions', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed click-attribution table.');
+    kiwi_assert_contains('abc_kiwi_sales', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed sales table.');
+    kiwi_assert_contains('PARTITION BY ca.transaction_id', $wpdb->queries[0] ?? '', 'Expected view SQL to deduplicate attribution rows before joining completed sales.');
+    kiwi_assert_contains('ranked_ca.kiwi_attribution_rank = 1', $wpdb->queries[0] ?? '', 'Expected view SQL to pick one canonical attribution row per transaction_id.');
+    kiwi_assert_true(strpos($wpdb->queries[0] ?? '', 'wp_kiwi_') === false, 'Expected view SQL not to hardcode wp_ table prefixes.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository create_table tolerates view migration errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Traffic_Source_Statistics();
+    $wpdb->prefix = 'abc_';
+    $wpdb->last_error = 'CREATE VIEW command denied';
+
+    $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
+
+    $repository->create_table();
+
+    kiwi_assert_contains('CREATE VIEW command denied', $repository->get_last_error(), 'Expected repository to preserve database error details for migration diagnostics.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository filters before aggregation and caps limit', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Traffic_Source_Statistics();
+    $wpdb->prefix = 'abc_';
+    $wpdb->result_rows = [
+        [
+            'service_key' => 'svc_a',
+            'tksource' => 'src_a',
+            'tkzone' => '(empty)',
+            'sessions' => 2,
+            'loaded_sessions' => 2,
+            'cta_sessions' => 1,
+            'cta_click_events' => 3,
+            'median_seconds_load_to_cta' => '2.00',
+            'successful_sales' => 1,
+            'successful_sales_amount_minor' => 450,
+        ],
+    ];
+
+    $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
+    $rows = $repository->get_rows([
+        'from' => '2026-05-13 00:00:00',
+        'to' => '2026-05-14 00:00:00',
+        'service_key' => 'svc_a',
+        'tksource' => 'src_a',
+    ], 999);
+    $statement = $wpdb->prepared_statements[count($wpdb->prepared_statements) - 1] ?? [];
+    $query = (string) ($statement['query'] ?? '');
+
+    kiwi_assert_same($wpdb->result_rows, $rows, 'Expected repository to return database rows when the view is readable.');
+    kiwi_assert_contains('FROM abc_kiwi_v_load_to_cta_by_tksource_tkzone', $query, 'Expected statistics query to read from the managed view.');
+    kiwi_assert_contains('WHERE metric_at >= %s AND metric_at <= %s AND service_key = %s AND tksource = %s', $query, 'Expected filters to be applied inside the filtered CTE before aggregation.');
+    kiwi_assert_contains('median_seconds_load_to_cta', $query, 'Expected query to calculate and expose the median field.');
+    kiwi_assert_same(
+        ['2026-05-13 00:00:00', '2026-05-14 00:00:00', 'svc_a', 'src_a', 500],
+        $statement['args'] ?? [],
+        'Expected repository query args to include filters and cap the limit to 500.'
+    );
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and empty source labels', function (): void {
+    $_GET = [
+        'kiwi_stats_from' => '2026-05-13 00:00:00',
+        'kiwi_stats_service_key' => 'svc_a',
+        'kiwi_stats_tksource' => 'src_a',
+        'kiwi_stats_limit' => '50',
+    ];
+
+    $repository = new Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository();
+    $repository->rows = [
+        [
+            'service_key' => 'svc_a',
+            'tksource' => 'src_a',
+            'tkzone' => '(empty)',
+            'sessions' => 4,
+            'loaded_sessions' => 3,
+            'cta_sessions' => 2,
+            'cta_click_events' => 5,
+            'cta_session_cr' => '66.67',
+            'avg_seconds_load_to_cta' => '2.50',
+            'median_seconds_load_to_cta' => '2.00',
+            'min_seconds_load_to_cta' => '1',
+            'max_seconds_load_to_cta' => '4',
+            'successful_sales' => 1,
+            'successful_sales_amount_minor' => 450,
+            'sales_per_session_cr' => '25.00',
+            'sales_per_cta_session_cr' => '50.00',
+            'successful_sale_ids' => '7',
+            'successful_transaction_ids' => 'txn-7',
+        ],
+    ];
+    $shortcode = new Kiwi_Statistics_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('Traffic Source Funnel Statistics', $output, 'Expected statistics shortcode shell to render.');
+    kiwi_assert_contains('<th>Median Load->CTA s</th>', $output, 'Expected statistics table to render median column.');
+    kiwi_assert_contains('<th>Successful Sales</th>', $output, 'Expected statistics table to render sales column.');
+    kiwi_assert_contains('(empty)', $output, 'Expected normalized empty source labels to remain readable.');
+    kiwi_assert_contains('txn-7', $output, 'Expected compact transaction drilldown references to render.');
+    kiwi_assert_same('2026-05-13 00:00:00', $repository->calls[0]['filters']['from'] ?? '', 'Expected shortcode to pass from filter to repository.');
+    kiwi_assert_same('svc_a', $repository->calls[0]['filters']['service_key'] ?? '', 'Expected shortcode to pass service_key filter to repository.');
+    kiwi_assert_same('src_a', $repository->calls[0]['filters']['tksource'] ?? '', 'Expected shortcode to pass tksource filter to repository.');
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Statistics_Shortcode shows an admin error when the statistics view is unreadable', function (): void {
+    $_GET = [];
+
+    $repository = new Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository();
+    $repository->error = 'view command denied';
+    $repository->view_name = 'wp_kiwi_v_load_to_cta_by_tksource_tkzone';
+    $shortcode = new Kiwi_Statistics_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('Statistics view wp_kiwi_v_load_to_cta_by_tksource_tkzone is not readable', $output, 'Expected clear admin error when the managed view cannot be read.');
+    kiwi_assert_contains('view command denied', $output, 'Expected database read error details to be shown without credentials.');
+});
+
 kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles', function (): void {
     $GLOBALS['kiwi_test_hooks'] = [];
     $GLOBALS['kiwi_test_styles'] = [];
@@ -6938,6 +7160,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'ensure_click_attribution_table',
             'ensure_sales_table',
             'cleanup_expired_click_attributions',
+            'maybe_export_statistics',
             'maybe_export_hlr_results',
             'maybe_run_dimoco_test',
             'maybe_run_refund_batch_test',
@@ -7025,6 +7248,10 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
         in_array(Kiwi_Sms_Body_Variant_Repository::class, $classes, true),
         'Expected schema migrations to include the SMS body variant repository.'
     );
+    kiwi_assert_true(
+        in_array(Kiwi_Traffic_Source_Funnel_Statistics_Repository::class, $classes, true),
+        'Expected schema migrations to include the traffic-source funnel statistics view repository.'
+    );
 });
 
 kiwi_run_test('Kiwi_Plugin bumps schema version for handoff UA Client Hints columns', function (): void {
@@ -7039,7 +7266,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for handoff UA Client Hints colu
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-15-1', $schema_version, 'Expected schema version to be bumped for handoff UA Client Hints column migrations.');
+    kiwi_assert_same('2026-05-15-2', $schema_version, 'Expected schema version to be bumped for traffic-source statistics view migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-UA-Client-Hints schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
