@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-16:
+- [No Changes] No medium-impact or higher commits landed in repository history on 2026-05-16.
+
 2026-05-15:
 - [Legacy Fallback] Disabled legacy `KIWI_LANDING_PAGES` fallback by default so active landing routes resolve from filesystem entries unless the rollback switch is explicitly enabled. Updated production behavior docs and regression coverage for active filesystem routes and explicit legacy rollback.
 - [UA Hints] Added optional UA Client Hints telemetry for click-to-SMS handoff events, including schema migration coverage, REST sanitization, tracker injection, and a server-side disable switch. Follow-up coverage ensures disabled telemetry clears stored UA hint fields and raw context.
