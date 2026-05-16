@@ -7010,6 +7010,8 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed landing engagement table.');
     kiwi_assert_contains('abc_kiwi_click_attributions', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed click-attribution table.');
     kiwi_assert_contains('abc_kiwi_sales', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed sales table.');
+    kiwi_assert_contains('s.completed_at AS metric_at', $wpdb->queries[0] ?? '', 'Expected completed sale metrics to be timestamped by completion time.');
+    kiwi_assert_contains("AND s.completed_at >= '2026-05-12 20:00:00'", $wpdb->queries[0] ?? '', 'Expected completed sale cutoff to align with completion timestamps.');
     kiwi_assert_contains('PARTITION BY ca.transaction_id', $wpdb->queries[0] ?? '', 'Expected view SQL to deduplicate attribution rows before joining completed sales.');
     kiwi_assert_contains('ranked_ca.kiwi_attribution_rank = 1', $wpdb->queries[0] ?? '', 'Expected view SQL to pick one canonical attribution row per transaction_id.');
     kiwi_assert_true(strpos($wpdb->queries[0] ?? '', 'wp_kiwi_') === false, 'Expected view SQL not to hardcode wp_ table prefixes.');

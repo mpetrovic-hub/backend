@@ -225,7 +225,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
             WHERE e.created_at >= '{$default_from}'
             UNION ALL
             SELECT
-                s.created_at AS metric_at,
+                s.completed_at AS metric_at,
                 COALESCE(NULLIF(ca.service_key, ''), '(empty)') AS service_key,
                 COALESCE(NULLIF(ca.tksource, ''), '(empty)') AS tksource,
                 COALESCE(NULLIF(ca.tkzone, ''), '(empty)') AS tkzone,
@@ -255,7 +255,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
             ) ca
               ON ca.transaction_id = s.transaction_id
             WHERE s.status = 'completed'
-              AND s.created_at >= '{$default_from}'";
+              AND s.completed_at >= '{$default_from}'";
     }
 
     private function has_database_error(): bool
