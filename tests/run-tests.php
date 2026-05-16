@@ -7006,14 +7006,13 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     $created = $repository->create_view();
 
     kiwi_assert_true($created, 'Expected traffic-source statistics view setup to succeed without database errors.');
-    kiwi_assert_contains('DROP VIEW IF EXISTS abc_kiwi_v_load_to_cta_by_tksource_tkzone', $wpdb->queries[0] ?? '', 'Expected setup to replace the managed statistics view.');
-    kiwi_assert_contains('CREATE VIEW abc_kiwi_v_load_to_cta_by_tksource_tkzone AS', $wpdb->queries[1] ?? '', 'Expected setup to create the prefixed statistics view.');
-    kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[1] ?? '', 'Expected view SQL to read the prefixed landing engagement table.');
-    kiwi_assert_contains('abc_kiwi_click_attributions', $wpdb->queries[1] ?? '', 'Expected view SQL to read the prefixed click-attribution table.');
-    kiwi_assert_contains('abc_kiwi_sales', $wpdb->queries[1] ?? '', 'Expected view SQL to read the prefixed sales table.');
-    kiwi_assert_contains('PARTITION BY ca.transaction_id', $wpdb->queries[1] ?? '', 'Expected view SQL to deduplicate attribution rows before joining completed sales.');
-    kiwi_assert_contains('ranked_ca.kiwi_attribution_rank = 1', $wpdb->queries[1] ?? '', 'Expected view SQL to pick one canonical attribution row per transaction_id.');
-    kiwi_assert_true(strpos($wpdb->queries[1] ?? '', 'wp_kiwi_') === false, 'Expected view SQL not to hardcode wp_ table prefixes.');
+    kiwi_assert_contains('CREATE OR REPLACE VIEW abc_kiwi_v_load_to_cta_by_tksource_tkzone AS', $wpdb->queries[0] ?? '', 'Expected setup to replace the managed statistics view non-destructively.');
+    kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed landing engagement table.');
+    kiwi_assert_contains('abc_kiwi_click_attributions', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed click-attribution table.');
+    kiwi_assert_contains('abc_kiwi_sales', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed sales table.');
+    kiwi_assert_contains('PARTITION BY ca.transaction_id', $wpdb->queries[0] ?? '', 'Expected view SQL to deduplicate attribution rows before joining completed sales.');
+    kiwi_assert_contains('ranked_ca.kiwi_attribution_rank = 1', $wpdb->queries[0] ?? '', 'Expected view SQL to pick one canonical attribution row per transaction_id.');
+    kiwi_assert_true(strpos($wpdb->queries[0] ?? '', 'wp_kiwi_') === false, 'Expected view SQL not to hardcode wp_ table prefixes.');
 
     $wpdb = $previous_wpdb;
 });

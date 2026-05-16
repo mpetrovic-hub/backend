@@ -22,12 +22,6 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
         $this->last_error = '';
         $view_name = $this->get_view_name();
 
-        $wpdb->query("DROP VIEW IF EXISTS {$view_name}");
-
-        if ($this->has_database_error()) {
-            return false;
-        }
-
         $wpdb->query($this->build_create_view_sql());
 
         return !$this->has_database_error();
@@ -197,7 +191,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $default_from = self::DEFAULT_FROM;
 
-        return "CREATE VIEW {$view_name} AS
+        return "CREATE OR REPLACE VIEW {$view_name} AS
             SELECT
                 e.created_at AS metric_at,
                 COALESCE(NULLIF(e.service_key, ''), '(empty)') AS service_key,
