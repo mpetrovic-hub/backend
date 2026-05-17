@@ -65,4 +65,37 @@ class Kiwi_Csv_Exporter
         fclose($output);
         exit;
     }
+
+    public function export_columns(array $rows, array $columns, string $filename): void
+    {
+        if (headers_sent()) {
+            return;
+        }
+
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+
+        $output = fopen('php://output', 'w');
+
+        if ($output === false) {
+            return;
+        }
+
+        fputcsv($output, array_values($columns), ';');
+
+        foreach ($rows as $row) {
+            $csv_row = [];
+
+            foreach (array_keys($columns) as $field) {
+                $csv_row[] = $row[$field] ?? '';
+            }
+
+            fputcsv($output, $csv_row, ';');
+        }
+
+        fclose($output);
+        exit;
+    }
 }

@@ -84,6 +84,7 @@ require_once __DIR__ . '/repositories/class-landing-kpi-summary-repository.php';
 require_once __DIR__ . '/repositories/class-landing-handoff-event-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/repositories/class-traffic-source-funnel-statistics-repository.php';
 
 /**
  * Exporters
@@ -98,6 +99,7 @@ require_once __DIR__ . '/shortcodes/class-dimoco-refunder-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-dimoco-blacklister-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-landing-pages-gallery-shortcode.php';
 require_once __DIR__ . '/shortcodes/class-premium-sms-fraud-shortcode.php';
+require_once __DIR__ . '/shortcodes/class-statistics-shortcode.php';
 
 /**
  * HTTP / REST
