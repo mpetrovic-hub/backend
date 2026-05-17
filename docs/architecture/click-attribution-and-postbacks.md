@@ -114,6 +114,18 @@ The shared attribution layer now feeds downstream fraud-monitoring context:
 
 This keeps provider payload parsing at the boundary while giving the shared fraud capability stable traffic-source dimensions.
 
+## Traffic-Source Funnel Statistics
+
+The shared statistics report is exposed through the protected `[kiwi_statistics]` shortcode. It reads from the plugin-managed `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view instead of relying on a manually created phpMyAdmin view.
+
+The view is deliberately built from normalized internal tables only:
+
+- `wp_kiwi_premium_sms_landing_engagements` for sessions, load events, CTA sessions, click counts, and load-to-CTA deltas
+- `wp_kiwi_click_attributions` for `transaction_id`, `service_key`, `tksource`, and `tkzone` correlation
+- `wp_kiwi_sales` for completed sales and amount totals
+
+The repository applies `from`, optional `to`, `service_key`, and `tksource` filters before grouping by `service_key`, `tksource`, and `tkzone`. The default lower bound is `2026-05-12 20:00:00`, because traffic-source fields were not reliable before that point. Median load-to-CTA uses database window functions; if the view or median query cannot be read on a target MySQL/MariaDB version, the shortcode shows an admin-facing error instead of failing the page.
+
 ## Retention and Cleanup
 
 Attribution rows are intentionally temporary and use explicit expiry.

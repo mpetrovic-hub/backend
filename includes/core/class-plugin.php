@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-15-1';
+    private const DB_SCHEMA_VERSION = '2026-05-15-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -47,6 +47,7 @@ class Kiwi_Plugin
         add_action('init', [$this, 'ensure_click_attribution_table']);
         add_action('init', [$this, 'ensure_sales_table']);
         add_action('init', [$this, 'cleanup_expired_click_attributions']);
+        add_action('init', [$this, 'maybe_export_statistics']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
         add_action('init', [$this, 'maybe_run_refund_batch_test']);
@@ -130,6 +131,12 @@ class Kiwi_Plugin
             $runtime['premium_sms_landing_engagement_repository']
         );
         $premium_sms_fraud_shortcode->register();
+
+        $statistics_shortcode = new Kiwi_Statistics_Shortcode(
+            $runtime['traffic_source_funnel_statistics_repository'],
+            $this->frontend_auth_gate
+        );
+        $statistics_shortcode->register();
     }
 
     public function handle_frontend_auth(): void
@@ -288,6 +295,32 @@ class Kiwi_Plugin
         $this->export_hlr_rows($rows);
     }
 
+    public function maybe_export_statistics(): void
+    {
+        if (!isset($_GET['kiwi_statistics_export'])) {
+            return;
+        }
+
+        if (!$this->frontend_auth_gate->can_access_tools()) {
+            $this->frontend_auth_gate->render_login_required_and_exit(
+                'Please sign in to export Statistics results.'
+            );
+        }
+
+        $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
+        $shortcode = new Kiwi_Statistics_Shortcode($repository, $this->frontend_auth_gate);
+        $filters = $shortcode->read_filters_from_request();
+        $rows = $repository->get_rows($filters, (int) ($filters['limit'] ?? 100));
+
+        if ($repository->get_last_error() !== '') {
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'Statistics view ' . $repository->get_view_name() . ' is not readable.';
+            exit;
+        }
+
+        $this->export_statistics_rows($rows);
+    }
+
     public function maybe_run_dimoco_test(): void
     {
         if (!isset($_GET['kiwi_dimoco_test'])) {
@@ -363,6 +396,7 @@ TEXT;
         $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
         $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
         $premium_sms_landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+        $traffic_source_funnel_statistics_repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
 
         $operator_lookup_service = new Kiwi_Operator_Lookup_Service(
             $routed_operator_lookup_provider,
@@ -397,6 +431,7 @@ TEXT;
             'operator_lookup_batch_service' => $operator_lookup_batch_service,
             'premium_sms_fraud_signal_repository' => $premium_sms_fraud_signal_repository,
             'premium_sms_landing_engagement_repository' => $premium_sms_landing_engagement_repository,
+            'traffic_source_funnel_statistics_repository' => $traffic_source_funnel_statistics_repository,
         ];
     }
 
@@ -477,6 +512,16 @@ TEXT;
     {
         $exporter = new Kiwi_Csv_Exporter();
         $exporter->export($rows);
+    }
+
+    protected function export_statistics_rows(array $rows): void
+    {
+        $exporter = new Kiwi_Csv_Exporter();
+        $exporter->export_columns(
+            $rows,
+            Kiwi_Statistics_Shortcode::EXPORT_COLUMNS,
+            'kiwi-statistics.csv'
+        );
     }
 
     protected function load_hlr_async_export_rows(array $request_ids): array
@@ -717,6 +762,7 @@ TEXT;
             new Kiwi_Sms_Body_Variant_Repository(),
             new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
             new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
+            new Kiwi_Traffic_Source_Funnel_Statistics_Repository(),
         ];
     }
 

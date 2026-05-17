@@ -207,6 +207,11 @@ Notes:
   - MO fraud snapshots per identity (`subscriber`/`session`)
   - per-service volume counts, soft-flag reasons, source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
+- `wp_kiwi_v_load_to_cta_by_tksource_tkzone`
+  - plugin-managed view for the `[kiwi_statistics]` traffic-source funnel report
+  - normalizes landing engagement and completed-sale facts by `service_key`, `tksource`, and `tkzone`
+  - uses `2026-05-12 20:00:00` as the default lower bound for reliable `tksource`/`tkzone` data
+
 ## Configuration switches
 
 ### Landing-page loading
@@ -257,7 +262,8 @@ When validating a landing-page flow in production or staging, verify:
 7. `backend_path` routes resolve correctly on every public hostname that proxies to the backend runtime.
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
-10. If the gallery is auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
+10. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, and shows completed sales/rates where attribution has a matching `transaction_id`.
+11. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
 
 ## Troubleshooting quick map
 
