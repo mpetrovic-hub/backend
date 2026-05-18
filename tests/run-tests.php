@@ -2838,6 +2838,135 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
     }
 }
 
+class Kiwi_Test_Wpdb_Landing_Handoff_Event
+{
+    public $prefix = 'wp_';
+    public $insert_id = 0;
+    public $tables = [];
+    public $queries = [];
+    public $insert_calls = 0;
+
+    public function prepare($query, ...$args)
+    {
+        if (count($args) === 1 && is_array($args[0])) {
+            $args = $args[0];
+        }
+
+        return [
+            'query' => (string) $query,
+            'args' => $args,
+        ];
+    }
+
+    public function insert(string $table, array $data, array $formats = [])
+    {
+        $this->insert_calls++;
+
+        return false;
+    }
+
+    public function query($statement)
+    {
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $this->queries[] = $query;
+
+        $table = $this->prefix . 'kiwi_landing_handoff_events';
+
+        if (stripos($query, "INSERT INTO `{$table}`") === false) {
+            return 0;
+        }
+
+        $columns = [
+            'created_at',
+            'landing_key',
+            'service_key',
+            'provider_key',
+            'flow_key',
+            'pid',
+            'click_id',
+            'tksource',
+            'tkzone',
+            'session_token',
+            'handoff_id',
+            'event_type',
+            'href_scheme',
+            'sms_recipient',
+            'sms_body_present',
+            'sms_body_has_transaction',
+            'elapsed_ms',
+            'visibility_state',
+            'ua_ch_supported',
+            'ua_ch_mobile',
+            'ua_ch_platform',
+            'ua_ch_platform_version',
+            'ua_ch_model',
+            'ua_ch_brands',
+            'ua_ch_full_version_list',
+            'user_agent',
+            'raw_context',
+        ];
+        $row = [];
+
+        foreach ($columns as $index => $column) {
+            $row[$column] = $args[$index] ?? null;
+        }
+
+        if (!isset($this->tables[$table])) {
+            $this->tables[$table] = [];
+        }
+
+        foreach ($this->tables[$table] as $id => $existing) {
+            if ((string) ($existing['landing_key'] ?? '') === (string) ($row['landing_key'] ?? '')
+                && (string) ($existing['session_token'] ?? '') === (string) ($row['session_token'] ?? '')
+                && (string) ($existing['handoff_id'] ?? '') === (string) ($row['handoff_id'] ?? '')
+                && (string) ($existing['event_type'] ?? '') === (string) ($row['event_type'] ?? '')
+            ) {
+                $this->insert_id = (int) $id;
+
+                return 0;
+            }
+        }
+
+        $id = count($this->tables[$table]) + 1;
+        $row['id'] = $id;
+        $this->tables[$table][$id] = $row;
+        $this->insert_id = $id;
+
+        return 1;
+    }
+
+    public function get_row($statement, $output = null)
+    {
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $table = $this->prefix . 'kiwi_landing_handoff_events';
+        $rows = $this->tables[$table] ?? [];
+
+        if (strpos($query, 'WHERE id = %d') !== false) {
+            return $rows[(int) ($args[0] ?? 0)] ?? null;
+        }
+
+        if (strpos($query, 'landing_key = %s') !== false
+            && strpos($query, 'session_token = %s') !== false
+            && strpos($query, 'handoff_id = %s') !== false
+            && strpos($query, 'event_type = %s') !== false
+        ) {
+            foreach ($rows as $row) {
+                if ((string) ($row['landing_key'] ?? '') === (string) ($args[0] ?? '')
+                    && (string) ($row['session_token'] ?? '') === (string) ($args[1] ?? '')
+                    && (string) ($row['handoff_id'] ?? '') === (string) ($args[2] ?? '')
+                    && (string) ($row['event_type'] ?? '') === (string) ($args[3] ?? '')
+                ) {
+                    return $row;
+                }
+            }
+        }
+
+        return null;
+    }
+}
+
 class Kiwi_Test_Wpdb_Traffic_Source_Statistics
 {
     public $prefix = 'wp_';
@@ -4808,6 +4937,62 @@ kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository stores handoff events idemp
     kiwi_assert_same('SM-S921B', (string) ($first['row']['ua_ch_model'] ?? ''), 'Expected handoff storage to persist UA Client Hints model.');
     kiwi_assert_same('Chromium 147, Google Chrome 147', (string) ($first['row']['ua_ch_brands'] ?? ''), 'Expected handoff storage to persist UA Client Hints brands.');
     kiwi_assert_same('Google Chrome 147.0.7727.138', (string) ($first['row']['ua_ch_full_version_list'] ?? ''), 'Expected handoff storage to persist UA Client Hints full version list.');
+});
+
+kiwi_run_test('Kiwi_Landing_Handoff_Event_Repository handles duplicate DB inserts without wpdb insert errors', function (): void {
+    global $wpdb;
+
+    $had_wpdb = array_key_exists('wpdb', $GLOBALS);
+    $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Handoff_Event();
+
+    try {
+        $repository = new Kiwi_Landing_Handoff_Event_Repository();
+        $event = [
+            'landing_key' => 'lp3-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider_key' => 'nth',
+            'flow_key' => 'nth-fr-one-off',
+            'pid' => '106',
+            'click_id' => 'click-db-dup',
+            'tksource' => 'PropellerAds',
+            'tkzone' => 'zone_10766952',
+            'session_token' => 'sess-db-dup',
+            'handoff_id' => 'hof_duplicate_hidden',
+            'event_type' => 'sms_handoff_hidden',
+            'href_scheme' => 'sms',
+            'sms_recipient' => '84072',
+            'sms_body_present' => true,
+            'sms_body_has_transaction' => true,
+            'elapsed_ms' => 36,
+            'visibility_state' => 'visible',
+            'ua_ch_supported' => true,
+            'ua_ch_mobile' => true,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_platform_version' => '9.0.0',
+            'ua_ch_model' => 'SM-G955F',
+            'ua_ch_brands' => 'Android WebView 138',
+            'ua_ch_full_version_list' => 'Android WebView 138.0.7204.179',
+            'user_agent' => 'Android WebView Test UA',
+        ];
+
+        $first = $repository->insert_if_new($event);
+        $duplicate = $repository->insert_if_new($event);
+        $table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+
+        kiwi_assert_true(($first['inserted'] ?? false) === true, 'Expected first DB-backed handoff event to insert.');
+        kiwi_assert_true(($duplicate['inserted'] ?? true) === false, 'Expected duplicate DB-backed handoff event to be returned as idempotent.');
+        kiwi_assert_same((int) ($first['row']['id'] ?? 0), (int) ($duplicate['row']['id'] ?? -1), 'Expected duplicate DB-backed handoff event to resolve the stored row.');
+        kiwi_assert_same(1, count($wpdb->tables[$table] ?? []), 'Expected duplicate DB-backed handoff event to keep a single row.');
+        kiwi_assert_same(0, (int) $wpdb->insert_calls, 'Expected handoff repository to avoid wpdb::insert duplicate-key errors.');
+        kiwi_assert_contains('ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)', implode("\n", $wpdb->queries), 'Expected handoff repository to use duplicate-safe insert SQL.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
 });
 
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository stores assignments and summary idempotently', function (): void {

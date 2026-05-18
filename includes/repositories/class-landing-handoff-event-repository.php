@@ -82,78 +82,76 @@ class Kiwi_Landing_Handoff_Event_Repository
             ];
         }
 
-        $existing = $this->find_existing($landing_key, $session_token, $handoff_id, $event_type);
-
-        if (is_array($existing)) {
-            return [
-                'inserted' => false,
-                'row' => $existing,
-            ];
-        }
-
         global $wpdb;
 
-        $result = $wpdb->insert(
+        $row = [
+            'created_at' => $this->current_time_mysql(),
+            'landing_key' => $landing_key,
+            'service_key' => trim((string) ($event['service_key'] ?? '')),
+            'provider_key' => trim((string) ($event['provider_key'] ?? '')),
+            'flow_key' => trim((string) ($event['flow_key'] ?? '')),
+            'pid' => $this->sanitize_pid((string) ($event['pid'] ?? '')),
+            'click_id' => $this->sanitize_click_id((string) ($event['click_id'] ?? '')),
+            'tksource' => $this->sanitize_source_value((string) ($event['tksource'] ?? '')),
+            'tkzone' => $this->sanitize_source_value((string) ($event['tkzone'] ?? '')),
+            'session_token' => $session_token,
+            'handoff_id' => $handoff_id,
+            'event_type' => $event_type,
+            'href_scheme' => $this->sanitize_scheme((string) ($event['href_scheme'] ?? '')),
+            'sms_recipient' => $this->sanitize_sms_recipient((string) ($event['sms_recipient'] ?? '')),
+            'sms_body_present' => !empty($event['sms_body_present']) ? 1 : 0,
+            'sms_body_has_transaction' => !empty($event['sms_body_has_transaction']) ? 1 : 0,
+            'elapsed_ms' => max(0, (int) ($event['elapsed_ms'] ?? 0)),
+            'visibility_state' => $this->sanitize_visibility_state((string) ($event['visibility_state'] ?? '')),
+            'ua_ch_supported' => !empty($event['ua_ch_supported']) ? 1 : 0,
+            'ua_ch_mobile' => !empty($event['ua_ch_mobile']) ? 1 : 0,
+            'ua_ch_platform' => $this->sanitize_client_hint_token((string) ($event['ua_ch_platform'] ?? ''), 50),
+            'ua_ch_platform_version' => $this->sanitize_client_hint_token((string) ($event['ua_ch_platform_version'] ?? ''), 50),
+            'ua_ch_model' => $this->sanitize_client_hint_text((string) ($event['ua_ch_model'] ?? ''), 191),
+            'ua_ch_brands' => $this->sanitize_client_hint_text((string) ($event['ua_ch_brands'] ?? ''), 1000),
+            'ua_ch_full_version_list' => $this->sanitize_client_hint_text((string) ($event['ua_ch_full_version_list'] ?? ''), 1000),
+            'user_agent' => substr(trim((string) ($event['user_agent'] ?? '')), 0, 1000),
+            'raw_context' => isset($event['raw_context']) ? wp_json_encode($event['raw_context']) : '',
+        ];
+        $formats = [
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%d',
+            '%d',
+            '%d',
+            '%s',
+            '%d',
+            '%d',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+        ];
+        $columns = array_map(static function (string $column): string {
+            return '`' . $column . '`';
+        }, array_keys($row));
+        $sql = sprintf(
+            'INSERT INTO `%s` (%s) VALUES (%s) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)',
             $this->get_table_name(),
-            [
-                'created_at' => $this->current_time_mysql(),
-                'landing_key' => $landing_key,
-                'service_key' => trim((string) ($event['service_key'] ?? '')),
-                'provider_key' => trim((string) ($event['provider_key'] ?? '')),
-                'flow_key' => trim((string) ($event['flow_key'] ?? '')),
-                'pid' => $this->sanitize_pid((string) ($event['pid'] ?? '')),
-                'click_id' => $this->sanitize_click_id((string) ($event['click_id'] ?? '')),
-                'tksource' => $this->sanitize_source_value((string) ($event['tksource'] ?? '')),
-                'tkzone' => $this->sanitize_source_value((string) ($event['tkzone'] ?? '')),
-                'session_token' => $session_token,
-                'handoff_id' => $handoff_id,
-                'event_type' => $event_type,
-                'href_scheme' => $this->sanitize_scheme((string) ($event['href_scheme'] ?? '')),
-                'sms_recipient' => $this->sanitize_sms_recipient((string) ($event['sms_recipient'] ?? '')),
-                'sms_body_present' => !empty($event['sms_body_present']) ? 1 : 0,
-                'sms_body_has_transaction' => !empty($event['sms_body_has_transaction']) ? 1 : 0,
-                'elapsed_ms' => max(0, (int) ($event['elapsed_ms'] ?? 0)),
-                'visibility_state' => $this->sanitize_visibility_state((string) ($event['visibility_state'] ?? '')),
-                'ua_ch_supported' => !empty($event['ua_ch_supported']) ? 1 : 0,
-                'ua_ch_mobile' => !empty($event['ua_ch_mobile']) ? 1 : 0,
-                'ua_ch_platform' => $this->sanitize_client_hint_token((string) ($event['ua_ch_platform'] ?? ''), 50),
-                'ua_ch_platform_version' => $this->sanitize_client_hint_token((string) ($event['ua_ch_platform_version'] ?? ''), 50),
-                'ua_ch_model' => $this->sanitize_client_hint_text((string) ($event['ua_ch_model'] ?? ''), 191),
-                'ua_ch_brands' => $this->sanitize_client_hint_text((string) ($event['ua_ch_brands'] ?? ''), 1000),
-                'ua_ch_full_version_list' => $this->sanitize_client_hint_text((string) ($event['ua_ch_full_version_list'] ?? ''), 1000),
-                'user_agent' => substr(trim((string) ($event['user_agent'] ?? '')), 0, 1000),
-                'raw_context' => isset($event['raw_context']) ? wp_json_encode($event['raw_context']) : '',
-            ],
-            [
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%d',
-                '%d',
-                '%d',
-                '%s',
-                '%d',
-                '%d',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-                '%s',
-            ]
+            implode(', ', $columns),
+            implode(', ', $formats)
         );
+        $result = $wpdb->query($wpdb->prepare($sql, array_values($row)));
 
         if ($result === false) {
             $existing_after_failure = $this->find_existing($landing_key, $session_token, $handoff_id, $event_type);
@@ -164,9 +162,13 @@ class Kiwi_Landing_Handoff_Event_Repository
             ];
         }
 
+        $stored_row = (int) ($wpdb->insert_id ?? 0) > 0
+            ? $this->get_by_id((int) $wpdb->insert_id)
+            : $this->find_existing($landing_key, $session_token, $handoff_id, $event_type);
+
         return [
-            'inserted' => true,
-            'row' => $this->get_by_id((int) $wpdb->insert_id),
+            'inserted' => (int) $result === 1,
+            'row' => $stored_row,
         ];
     }
 
