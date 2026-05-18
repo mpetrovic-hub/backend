@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-18:
+- [Handoff Dedupe] Fixed landing handoff event persistence to use duplicate-safe inserts that return the stored row instead of surfacing duplicate-key `wpdb::insert` errors. Added DB-backed regression coverage for duplicate handoff events while preserving a single stored row.
+
 2026-05-17:
 - [Statistics] Added a protected `[kiwi_statistics]` traffic-source funnel report backed by a plugin-managed `kiwi_v_load_to_cta_by_tksource_tkzone` view, with timeframe/source filters, median Load-to-CTA metrics, completed-sales rates, CSV export, tests, and operations/architecture documentation.
 
