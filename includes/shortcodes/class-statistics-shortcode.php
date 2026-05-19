@@ -253,8 +253,14 @@ class Kiwi_Statistics_Shortcode
             return '';
         }
 
-        if (preg_match('/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?$/', $value, $matches) === 1) {
-            return $matches[1] . 'T' . $matches[2] . ':' . ($matches[3] ?? '00');
+        $wall_clock_datetime = $this->format_wall_clock_datetime_local($value);
+
+        if ($wall_clock_datetime !== null) {
+            return $wall_clock_datetime;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/', $value) === 1) {
+            return '';
         }
 
         $timestamp = strtotime($value);
@@ -264,6 +270,26 @@ class Kiwi_Statistics_Shortcode
         }
 
         return gmdate('Y-m-d\TH:i:s', $timestamp);
+    }
+
+    private function format_wall_clock_datetime_local(string $value): ?string
+    {
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/', $value, $matches) !== 1) {
+            return null;
+        }
+
+        $year = (int) $matches[1];
+        $month = (int) $matches[2];
+        $day = (int) $matches[3];
+        $hour = (int) $matches[4];
+        $minute = (int) $matches[5];
+        $second = isset($matches[6]) ? (int) $matches[6] : 0;
+
+        if (!checkdate($month, $day, $year) || $hour > 23 || $minute > 59 || $second > 59) {
+            return null;
+        }
+
+        return sprintf('%04d-%02d-%02dT%02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second);
     }
 
     private function get_column_class(string $field): string

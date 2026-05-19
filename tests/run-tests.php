@@ -7330,6 +7330,18 @@ kiwi_run_test('Kiwi statistics datetime filters preserve timezone-less wall-cloc
         kiwi_assert_same('2026-05-13 00:00:30', $filters['from'] ?? '', 'Expected timezone-less MySQL from filter to keep wall-clock seconds in Europe/Berlin.');
         kiwi_assert_same('2026-05-13 00:00:45', $filters['to'] ?? '', 'Expected timezone-less datetime-local to filter to keep wall-clock seconds in Europe/Berlin.');
 
+        $malformed_filters = $repository->normalize_filters([
+            'from' => '2026-13-99T25:61',
+            'to' => '2026-02-31 12:00:00',
+        ]);
+
+        kiwi_assert_same(
+            Kiwi_Traffic_Source_Funnel_Statistics_Repository::DEFAULT_FROM,
+            $malformed_filters['from'] ?? '',
+            'Expected malformed datetime-local from filter to fall back instead of reaching SQL as a datetime literal.'
+        );
+        kiwi_assert_same('', $malformed_filters['to'] ?? '', 'Expected malformed optional datetime-local to filter to be rejected.');
+
         $_GET = [
             'kiwi_stats_from' => '2026-05-13 00:00:30',
             'kiwi_stats_to' => '2026-05-13 00:00:45',
