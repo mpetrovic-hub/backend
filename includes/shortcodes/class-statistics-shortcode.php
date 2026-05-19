@@ -178,11 +178,11 @@ class Kiwi_Statistics_Shortcode
         $output .= '<div class="kiwi-form-row kiwi-form-row-inline">';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_from">From</label>';
-        $output .= '<input id="kiwi_stats_from" class="kiwi-input kiwi-width-small" type="datetime-local" name="kiwi_stats_from" value="' . esc_attr($this->format_datetime_local((string) ($filters['from'] ?? ''))) . '">';
+        $output .= '<input id="kiwi_stats_from" class="kiwi-input kiwi-width-small" type="datetime-local" step="1" name="kiwi_stats_from" value="' . esc_attr($this->format_datetime_local((string) ($filters['from'] ?? ''))) . '">';
         $output .= '</div>';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_to">To</label>';
-        $output .= '<input id="kiwi_stats_to" class="kiwi-input kiwi-width-small" type="datetime-local" name="kiwi_stats_to" value="' . esc_attr($this->format_datetime_local((string) ($filters['to'] ?? ''))) . '">';
+        $output .= '<input id="kiwi_stats_to" class="kiwi-input kiwi-width-small" type="datetime-local" step="1" name="kiwi_stats_to" value="' . esc_attr($this->format_datetime_local((string) ($filters['to'] ?? ''))) . '">';
         $output .= '</div>';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_service_key">Service Key</label>';
@@ -259,7 +259,7 @@ class Kiwi_Statistics_Shortcode
             return '';
         }
 
-        return gmdate('Y-m-d\TH:i', $timestamp);
+        return gmdate('Y-m-d\TH:i:s', $timestamp);
     }
 
     private function get_column_class(string $field): string

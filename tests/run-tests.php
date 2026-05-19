@@ -7318,8 +7318,8 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository exposes distinct
 
 kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and empty source labels', function (): void {
     $_GET = [
-        'kiwi_stats_from' => '2026-05-13T00:00',
-        'kiwi_stats_to' => '2026-05-14T00:00',
+        'kiwi_stats_from' => '2026-05-13T00:00:30',
+        'kiwi_stats_to' => '2026-05-14T00:00:45',
         'kiwi_stats_service_key' => 'svc_a',
         'kiwi_stats_tksource' => 'src_a',
         'kiwi_stats_limit' => '50',
@@ -7356,8 +7356,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and emp
     $output = $shortcode->render();
 
     kiwi_assert_contains('Traffic Source Funnel Statistics', $output, 'Expected statistics shortcode shell to render.');
-    kiwi_assert_contains('type="datetime-local" name="kiwi_stats_from" value="2026-05-13T00:00"', $output, 'Expected From filter to render as native datetime-local input.');
-    kiwi_assert_contains('type="datetime-local" name="kiwi_stats_to" value="2026-05-14T00:00"', $output, 'Expected To filter to render as native datetime-local input.');
+    kiwi_assert_contains('type="datetime-local" step="1" name="kiwi_stats_from" value="2026-05-13T00:00:30"', $output, 'Expected From filter to render as native seconds-capable datetime-local input.');
+    kiwi_assert_contains('type="datetime-local" step="1" name="kiwi_stats_to" value="2026-05-14T00:00:45"', $output, 'Expected To filter to render as native seconds-capable datetime-local input.');
     kiwi_assert_contains('<select id="kiwi_stats_service_key" class="kiwi-select kiwi-width-small" name="kiwi_stats_service_key">', $output, 'Expected Service Key filter to render as a select.');
     kiwi_assert_contains('<option value="">all</option><option value="svc_a" selected="selected">svc_a</option><option value="svc_b">svc_b</option>', $output, 'Expected Service Key select to include all plus dynamic selected options.');
     kiwi_assert_contains('<select id="kiwi_stats_tksource" class="kiwi-select kiwi-width-small" name="kiwi_stats_tksource">', $output, 'Expected TK Source filter to render as a select.');
@@ -7368,11 +7368,11 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and emp
     kiwi_assert_contains('title="Successful Sales">Successful Sales</th>', $output, 'Expected statistics table to render sales column.');
     kiwi_assert_contains('(empty)', $output, 'Expected normalized empty source labels to remain readable.');
     kiwi_assert_contains('txn-7-long-reference', $output, 'Expected compact transaction drilldown references to render.');
-    kiwi_assert_same('2026-05-13 00:00:00', $repository->calls[0]['filters']['from'] ?? '', 'Expected shortcode to pass from filter to repository.');
-    kiwi_assert_same('2026-05-14 00:00:00', $repository->calls[0]['filters']['to'] ?? '', 'Expected shortcode to pass to filter to repository.');
+    kiwi_assert_same('2026-05-13 00:00:30', $repository->calls[0]['filters']['from'] ?? '', 'Expected shortcode to preserve seconds in from filter.');
+    kiwi_assert_same('2026-05-14 00:00:45', $repository->calls[0]['filters']['to'] ?? '', 'Expected shortcode to preserve seconds in to filter.');
     kiwi_assert_same('svc_a', $repository->calls[0]['filters']['service_key'] ?? '', 'Expected shortcode to pass service_key filter to repository.');
     kiwi_assert_same('src_a', $repository->calls[0]['filters']['tksource'] ?? '', 'Expected shortcode to pass tksource filter to repository.');
-    kiwi_assert_contains('kiwi_stats_from=2026-05-13+00%3A00%3A00', $output, 'Expected CSV export URL to preserve normalized from filter.');
+    kiwi_assert_contains('kiwi_stats_from=2026-05-13+00%3A00%3A30', $output, 'Expected CSV export URL to preserve normalized from filter seconds.');
     kiwi_assert_contains('kiwi_stats_service_key=svc_a', $output, 'Expected CSV export URL to preserve service filter.');
     kiwi_assert_contains('kiwi_stats_tksource=src_a', $output, 'Expected CSV export URL to preserve TK source filter.');
 
