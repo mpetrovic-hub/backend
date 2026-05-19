@@ -2368,6 +2368,10 @@ class Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository extends Kiwi_Traffic
 {
     public $rows = [];
     public $calls = [];
+    public $filter_options = [
+        'service_keys' => [],
+        'tksources' => [],
+    ];
     public $error = '';
     public $view_name = 'wp_kiwi_v_load_to_cta_by_tksource_tkzone';
 
@@ -2379,6 +2383,11 @@ class Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository extends Kiwi_Traffic
         ];
 
         return $this->rows;
+    }
+
+    public function get_filter_options(array $filters = []): array
+    {
+        return $this->filter_options;
     }
 
     public function get_last_error(): string
@@ -2974,6 +2983,7 @@ class Kiwi_Test_Wpdb_Traffic_Source_Statistics
     public $queries = [];
     public $prepared_statements = [];
     public $result_rows = [];
+    public $result_rows_queue = [];
 
     public function prepare($query, ...$args)
     {
@@ -3006,6 +3016,10 @@ class Kiwi_Test_Wpdb_Traffic_Source_Statistics
                 'query' => (string) $statement,
                 'args' => [],
             ];
+
+        if (!empty($this->result_rows_queue)) {
+            return array_shift($this->result_rows_queue);
+        }
 
         return $this->result_rows;
     }
@@ -7265,15 +7279,57 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository filters before a
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository exposes distinct filter options', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Traffic_Source_Statistics();
+    $wpdb->prefix = 'abc_';
+    $wpdb->result_rows_queue = [
+        [
+            ['service_key' => 'svc_b'],
+            ['service_key' => 'svc_a'],
+            ['service_key' => 'svc_a'],
+        ],
+        [
+            ['tksource' => 'src_b'],
+            ['tksource' => 'src_a'],
+        ],
+    ];
+
+    $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
+    $options = $repository->get_filter_options([
+        'from' => '2026-05-13T00:00',
+        'to' => '2026-05-14T00:00',
+    ]);
+
+    kiwi_assert_same(['svc_a', 'svc_b'], $options['service_keys'] ?? [], 'Expected service filter options to be distinct and sorted.');
+    kiwi_assert_same(['src_a', 'src_b'], $options['tksources'] ?? [], 'Expected TK source filter options to be distinct and sorted.');
+    kiwi_assert_contains('SELECT DISTINCT service_key', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected service options to query distinct service keys from the statistics view.');
+    kiwi_assert_contains('SELECT DISTINCT tksource', (string) ($wpdb->prepared_statements[2]['query'] ?? ''), 'Expected TK source options to query distinct TK sources from the statistics view.');
+    kiwi_assert_same(
+        ['2026-05-13 00:00:00', '2026-05-14 00:00:00'],
+        $wpdb->prepared_statements[0]['args'] ?? [],
+        'Expected options query to reuse normalized date filters.'
+    );
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and empty source labels', function (): void {
     $_GET = [
-        'kiwi_stats_from' => '2026-05-13 00:00:00',
+        'kiwi_stats_from' => '2026-05-13T00:00',
+        'kiwi_stats_to' => '2026-05-14T00:00',
         'kiwi_stats_service_key' => 'svc_a',
         'kiwi_stats_tksource' => 'src_a',
         'kiwi_stats_limit' => '50',
     ];
 
     $repository = new Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository();
+    $repository->filter_options = [
+        'service_keys' => ['svc_a', 'svc_b'],
+        'tksources' => ['src_a', 'src_b'],
+    ];
     $repository->rows = [
         [
             'service_key' => 'svc_a',
@@ -7293,20 +7349,32 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and emp
             'sales_per_session_cr' => '25.00',
             'sales_per_cta_session_cr' => '50.00',
             'successful_sale_ids' => '7',
-            'successful_transaction_ids' => 'txn-7',
+            'successful_transaction_ids' => 'txn-7-long-reference',
         ],
     ];
     $shortcode = new Kiwi_Statistics_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
     $output = $shortcode->render();
 
     kiwi_assert_contains('Traffic Source Funnel Statistics', $output, 'Expected statistics shortcode shell to render.');
-    kiwi_assert_contains('<th>Median Load->CTA s</th>', $output, 'Expected statistics table to render median column.');
-    kiwi_assert_contains('<th>Successful Sales</th>', $output, 'Expected statistics table to render sales column.');
+    kiwi_assert_contains('type="datetime-local" name="kiwi_stats_from" value="2026-05-13T00:00"', $output, 'Expected From filter to render as native datetime-local input.');
+    kiwi_assert_contains('type="datetime-local" name="kiwi_stats_to" value="2026-05-14T00:00"', $output, 'Expected To filter to render as native datetime-local input.');
+    kiwi_assert_contains('<select id="kiwi_stats_service_key" class="kiwi-select kiwi-width-small" name="kiwi_stats_service_key">', $output, 'Expected Service Key filter to render as a select.');
+    kiwi_assert_contains('<option value="">all</option><option value="svc_a" selected="selected">svc_a</option><option value="svc_b">svc_b</option>', $output, 'Expected Service Key select to include all plus dynamic selected options.');
+    kiwi_assert_contains('<select id="kiwi_stats_tksource" class="kiwi-select kiwi-width-small" name="kiwi_stats_tksource">', $output, 'Expected TK Source filter to render as a select.');
+    kiwi_assert_contains('<option value="">all</option><option value="src_a" selected="selected">src_a</option><option value="src_b">src_b</option>', $output, 'Expected TK Source select to include all plus dynamic selected options.');
+    kiwi_assert_contains('kiwi-table kiwi-table--statistics', $output, 'Expected statistics table modifier for compact scrolling layout.');
+    kiwi_assert_contains('class="kiwi-statistics-col kiwi-statistics-col--successful-transaction-ids" title="txn-7-long-reference"', $output, 'Expected long transaction cells to keep the full value available via title.');
+    kiwi_assert_contains('title="Median Load->CTA s">Median Load->CTA s</th>', $output, 'Expected statistics table to render median column.');
+    kiwi_assert_contains('title="Successful Sales">Successful Sales</th>', $output, 'Expected statistics table to render sales column.');
     kiwi_assert_contains('(empty)', $output, 'Expected normalized empty source labels to remain readable.');
-    kiwi_assert_contains('txn-7', $output, 'Expected compact transaction drilldown references to render.');
+    kiwi_assert_contains('txn-7-long-reference', $output, 'Expected compact transaction drilldown references to render.');
     kiwi_assert_same('2026-05-13 00:00:00', $repository->calls[0]['filters']['from'] ?? '', 'Expected shortcode to pass from filter to repository.');
+    kiwi_assert_same('2026-05-14 00:00:00', $repository->calls[0]['filters']['to'] ?? '', 'Expected shortcode to pass to filter to repository.');
     kiwi_assert_same('svc_a', $repository->calls[0]['filters']['service_key'] ?? '', 'Expected shortcode to pass service_key filter to repository.');
     kiwi_assert_same('src_a', $repository->calls[0]['filters']['tksource'] ?? '', 'Expected shortcode to pass tksource filter to repository.');
+    kiwi_assert_contains('kiwi_stats_from=2026-05-13+00%3A00%3A00', $output, 'Expected CSV export URL to preserve normalized from filter.');
+    kiwi_assert_contains('kiwi_stats_service_key=svc_a', $output, 'Expected CSV export URL to preserve service filter.');
+    kiwi_assert_contains('kiwi_stats_tksource=src_a', $output, 'Expected CSV export URL to preserve TK source filter.');
 
     $_GET = [];
 });

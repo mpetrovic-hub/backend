@@ -163,6 +163,14 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
         return is_array($rows) ? $rows : [];
     }
 
+    public function get_filter_options(array $filters = []): array
+    {
+        return [
+            'service_keys' => $this->get_distinct_filter_values('service_key', $filters),
+            'tksources' => $this->get_distinct_filter_values('tksource', $filters),
+        ];
+    }
+
     public function get_last_error(): string
     {
         return $this->last_error;
@@ -189,6 +197,57 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
             'tksource' => $this->normalize_filter_value((string) ($filters['tksource'] ?? '')),
             'limit' => max(1, min(500, (int) ($filters['limit'] ?? 100))),
         ];
+    }
+
+    private function get_distinct_filter_values(string $field, array $filters): array
+    {
+        global $wpdb;
+
+        if (!in_array($field, ['service_key', 'tksource'], true)) {
+            return [];
+        }
+
+        $this->last_error = '';
+        $where_sql = ['metric_at >= %s'];
+        $params = [$this->normalize_datetime((string) ($filters['from'] ?? self::DEFAULT_FROM), self::DEFAULT_FROM)];
+
+        $to = $this->normalize_optional_datetime((string) ($filters['to'] ?? ''));
+        if ($to !== '') {
+            $where_sql[] = 'metric_at <= %s';
+            $params[] = $to;
+        }
+
+        $view_name = $this->get_view_name();
+        $where_clause = implode(' AND ', $where_sql);
+        $sql = "SELECT DISTINCT {$field}
+                FROM {$view_name}
+                WHERE {$where_clause}
+                  AND {$field} <> ''
+                ORDER BY {$field} ASC";
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare($sql, ...$params),
+            ARRAY_A
+        );
+
+        if ($this->has_database_error() || !is_array($rows)) {
+            return [];
+        }
+
+        $values = [];
+
+        foreach ($rows as $row) {
+            $value = $this->normalize_filter_value((string) ($row[$field] ?? ''));
+
+            if ($value !== '') {
+                $values[] = $value;
+            }
+        }
+
+        $values = array_values(array_unique($values));
+        sort($values, SORT_STRING);
+
+        return $values;
     }
 
     private function build_create_view_sql(): string

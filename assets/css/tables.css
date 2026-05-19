@@ -49,6 +49,54 @@
     border-bottom: 0;
 }
 
+.kiwi-table--statistics {
+    min-width: 1680px;
+    table-layout: fixed;
+    font-size: 0.72rem;
+}
+
+.kiwi-table--statistics th,
+.kiwi-table--statistics td {
+    padding: 0.46rem 0.52rem;
+    white-space: nowrap;
+}
+
+.kiwi-table--statistics td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+}
+
+.kiwi-table--statistics .kiwi-statistics-col--service-key,
+.kiwi-table--statistics .kiwi-statistics-col--tksource,
+.kiwi-table--statistics .kiwi-statistics-col--tkzone {
+    width: 140px;
+}
+
+.kiwi-table--statistics .kiwi-statistics-col--successful-sale-ids,
+.kiwi-table--statistics .kiwi-statistics-col--successful-transaction-ids {
+    width: 190px;
+}
+
+.kiwi-table--statistics .kiwi-statistics-col--cta-session-cr,
+.kiwi-table--statistics .kiwi-statistics-col--avg-seconds-load-to-cta,
+.kiwi-table--statistics .kiwi-statistics-col--median-seconds-load-to-cta,
+.kiwi-table--statistics .kiwi-statistics-col--min-seconds-load-to-cta,
+.kiwi-table--statistics .kiwi-statistics-col--max-seconds-load-to-cta,
+.kiwi-table--statistics .kiwi-statistics-col--sales-per-session-cr,
+.kiwi-table--statistics .kiwi-statistics-col--sales-per-cta-session-cr {
+    width: 96px;
+}
+
+.kiwi-table--statistics .kiwi-statistics-col--sessions,
+.kiwi-table--statistics .kiwi-statistics-col--loaded-sessions,
+.kiwi-table--statistics .kiwi-statistics-col--cta-sessions,
+.kiwi-table--statistics .kiwi-statistics-col--cta-click-events,
+.kiwi-table--statistics .kiwi-statistics-col--successful-sales,
+.kiwi-table--statistics .kiwi-statistics-col--successful-sales-amount-minor {
+    width: 88px;
+}
+
 .kiwi-status--pending {
     color: #e4c479;
     font-weight: 700;
