@@ -2,6 +2,10 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-19:
+- [Statistics UI] Improved the protected statistics report with compact table styling, selectable service/source filters, and datetime-local controls that preserve wall-clock seconds. Added repository support and regression coverage for filter options, malformed datetime rejection, and datetime normalization.
+- [Submodule Removal] Removed the `external/codex-control` submodule and cleared the repository submodule metadata from `.gitmodules`. This returns the control repository linkage to a non-submodule state while keeping the backend tree free of the nested dependency.
+
 2026-05-18:
 - [Handoff Dedupe] Fixed landing handoff event persistence to use duplicate-safe inserts that return the stored row instead of surfacing duplicate-key `wpdb::insert` errors. Added DB-backed regression coverage for duplicate handoff events while preserving a single stored row.
 
