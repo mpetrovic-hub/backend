@@ -2,7 +2,7 @@
 name: Codex Task
 about: Aufgabe für Codex Overnight anlegen
 title: "[Codex] "
-labels: codex-candidate
+labels: 0 - codex-candidate
 assignees: ''
 
 ---
@@ -36,3 +36,9 @@ Relevante Dateien, technische Hinweise, bekannte Risiken.
 ## Manuelle Tests
 
 - [ ]
+
+## Empfohlene Issue Projekt-custom-fields:
+Codex Mode: Trivial, Critical, Skip
+Priority: Critical, High, Medium, Low
+Risk: High, Medium, Low
+Size: L, M, S, XS
