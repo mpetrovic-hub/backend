@@ -7316,6 +7316,44 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository exposes distinct
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi statistics datetime filters preserve timezone-less wall-clock seconds', function (): void {
+    $previous_timezone = date_default_timezone_get();
+    date_default_timezone_set('Europe/Berlin');
+
+    try {
+        $repository = new Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository();
+        $filters = $repository->normalize_filters([
+            'from' => '2026-05-13 00:00:30',
+            'to' => '2026-05-13T00:00:45',
+        ]);
+
+        kiwi_assert_same('2026-05-13 00:00:30', $filters['from'] ?? '', 'Expected timezone-less MySQL from filter to keep wall-clock seconds in Europe/Berlin.');
+        kiwi_assert_same('2026-05-13 00:00:45', $filters['to'] ?? '', 'Expected timezone-less datetime-local to filter to keep wall-clock seconds in Europe/Berlin.');
+
+        $_GET = [
+            'kiwi_stats_from' => '2026-05-13 00:00:30',
+            'kiwi_stats_to' => '2026-05-13 00:00:45',
+        ];
+        $repository->rows = [
+            [
+                'service_key' => 'svc_a',
+                'tksource' => 'src_a',
+                'tkzone' => 'zone_a',
+            ],
+        ];
+
+        $shortcode = new Kiwi_Statistics_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
+        $output = $shortcode->render();
+
+        kiwi_assert_contains('name="kiwi_stats_from" value="2026-05-13T00:00:30"', $output, 'Expected datetime-local from value not to shift to UTC while rendering.');
+        kiwi_assert_contains('name="kiwi_stats_to" value="2026-05-13T00:00:45"', $output, 'Expected datetime-local to value not to shift to UTC while rendering.');
+        kiwi_assert_true(strpos($output, '2026-05-12T22:00:30') === false, 'Expected statistics filter rendering not to shift Europe/Berlin wall-clock time to UTC.');
+    } finally {
+        $_GET = [];
+        date_default_timezone_set($previous_timezone);
+    }
+});
+
 kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and empty source labels', function (): void {
     $_GET = [
         'kiwi_stats_from' => '2026-05-13T00:00:30',

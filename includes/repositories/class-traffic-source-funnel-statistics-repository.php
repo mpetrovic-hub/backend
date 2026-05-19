@@ -340,8 +340,12 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
             return $fallback;
         }
 
-        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $value) === 1) {
-            return $value;
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})$/', $value, $matches) === 1) {
+            return $matches[1] . ' 00:00:00';
+        }
+
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?$/', $value, $matches) === 1) {
+            return $matches[1] . ' ' . $matches[2] . ':' . ($matches[3] ?? '00');
         }
 
         $timestamp = strtotime($value);

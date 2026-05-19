@@ -253,6 +253,10 @@ class Kiwi_Statistics_Shortcode
             return '';
         }
 
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?$/', $value, $matches) === 1) {
+            return $matches[1] . 'T' . $matches[2] . ':' . ($matches[3] ?? '00');
+        }
+
         $timestamp = strtotime($value);
 
         if ($timestamp === false) {
