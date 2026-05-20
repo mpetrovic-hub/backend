@@ -37,6 +37,14 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             first_cta_click_at DATETIME NULL,
             last_cta_click_at DATETIME NULL,
             cta_click_count INT UNSIGNED NOT NULL DEFAULT 0,
+            ua_ch_supported TINYINT(1) NOT NULL DEFAULT 0,
+            ua_ch_mobile TINYINT(1) NOT NULL DEFAULT 0,
+            ua_ch_platform VARCHAR(50) NOT NULL DEFAULT '',
+            ua_ch_platform_version VARCHAR(50) NOT NULL DEFAULT '',
+            ua_ch_model VARCHAR(191) NOT NULL DEFAULT '',
+            ua_ch_brands TEXT NULL,
+            ua_ch_full_version_list TEXT NULL,
+            user_agent TEXT NULL,
             last_event_at DATETIME NOT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY landing_session (landing_key, session_token),
@@ -87,6 +95,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'cta_click_count' => 0,
                 'last_event_at' => $occurred_at,
             ];
+            $initial_row = array_merge($initial_row, $this->normalize_ua_context($context));
 
             if ($event_type === 'page_loaded') {
                 $initial_row['page_loaded_at'] = $occurred_at;
@@ -133,6 +142,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 $this->sanitize_source_value((string) ($context['tkzone'] ?? ''))
             ),
         ];
+        $update_data = array_merge($update_data, $this->build_ua_update_data($row, $context));
 
         if ($event_type === 'page_loaded') {
             $existing_loaded_at = trim((string) ($row['page_loaded_at'] ?? ''));
@@ -283,6 +293,14 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'first_cta_click_at' => $this->normalize_nullable_datetime($data['first_cta_click_at'] ?? null),
                 'last_cta_click_at' => $this->normalize_nullable_datetime($data['last_cta_click_at'] ?? null),
                 'cta_click_count' => max(0, (int) ($data['cta_click_count'] ?? 0)),
+                'ua_ch_supported' => !empty($data['ua_ch_supported']) ? 1 : 0,
+                'ua_ch_mobile' => !empty($data['ua_ch_mobile']) ? 1 : 0,
+                'ua_ch_platform' => $this->sanitize_client_hint_token((string) ($data['ua_ch_platform'] ?? ''), 50),
+                'ua_ch_platform_version' => $this->sanitize_client_hint_token((string) ($data['ua_ch_platform_version'] ?? ''), 50),
+                'ua_ch_model' => $this->sanitize_client_hint_text((string) ($data['ua_ch_model'] ?? ''), 191),
+                'ua_ch_brands' => $this->sanitize_client_hint_text((string) ($data['ua_ch_brands'] ?? ''), 1000),
+                'ua_ch_full_version_list' => $this->sanitize_client_hint_text((string) ($data['ua_ch_full_version_list'] ?? ''), 1000),
+                'user_agent' => $this->sanitize_client_hint_text((string) ($data['user_agent'] ?? ''), 1000),
                 'last_event_at' => (string) ($data['last_event_at'] ?? $this->current_time_mysql()),
             ],
             [
@@ -301,6 +319,14 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 '%s',
                 '%s',
                 '%d',
+                '%d',
+                '%d',
+                '%s',
+                '%s',
+                '%s',
+                '%s',
+                '%s',
+                '%s',
                 '%s',
             ]
         );
@@ -331,6 +357,14 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'first_cta_click_at' => '%s',
             'last_cta_click_at' => '%s',
             'cta_click_count' => '%d',
+            'ua_ch_supported' => '%d',
+            'ua_ch_mobile' => '%d',
+            'ua_ch_platform' => '%s',
+            'ua_ch_platform_version' => '%s',
+            'ua_ch_model' => '%s',
+            'ua_ch_brands' => '%s',
+            'ua_ch_full_version_list' => '%s',
+            'user_agent' => '%s',
             'last_event_at' => '%s',
         ];
 
@@ -349,6 +383,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 $value = max(0, (int) $value);
             }
 
+            if (in_array($field, ['ua_ch_supported', 'ua_ch_mobile'], true)) {
+                $value = !empty($value) ? 1 : 0;
+            }
+
             if ($field === 'pid') {
                 $value = $this->sanitize_pid((string) $value);
             }
@@ -359,6 +397,18 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
             if (in_array($field, ['tksource', 'tkzone'], true)) {
                 $value = $this->sanitize_source_value((string) $value);
+            }
+
+            if (in_array($field, ['ua_ch_platform', 'ua_ch_platform_version'], true)) {
+                $value = $this->sanitize_client_hint_token((string) $value, 50);
+            }
+
+            if ($field === 'ua_ch_model') {
+                $value = $this->sanitize_client_hint_text((string) $value, 191);
+            }
+
+            if (in_array($field, ['ua_ch_brands', 'ua_ch_full_version_list', 'user_agent'], true)) {
+                $value = $this->sanitize_client_hint_text((string) $value, 1000);
             }
 
             $fields[$field] = $value;
@@ -433,6 +483,78 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
     private function prefer_non_empty(string $existing, string $candidate): string
     {
         return $existing !== '' ? $existing : $candidate;
+    }
+
+    private function normalize_ua_context(array $context): array
+    {
+        return [
+            'ua_ch_supported' => !empty($context['ua_ch_supported']) ? 1 : 0,
+            'ua_ch_mobile' => !empty($context['ua_ch_mobile']) ? 1 : 0,
+            'ua_ch_platform' => $this->sanitize_client_hint_token((string) ($context['ua_ch_platform'] ?? ''), 50),
+            'ua_ch_platform_version' => $this->sanitize_client_hint_token((string) ($context['ua_ch_platform_version'] ?? ''), 50),
+            'ua_ch_model' => $this->sanitize_client_hint_text((string) ($context['ua_ch_model'] ?? ''), 191),
+            'ua_ch_brands' => $this->sanitize_client_hint_text((string) ($context['ua_ch_brands'] ?? ''), 1000),
+            'ua_ch_full_version_list' => $this->sanitize_client_hint_text((string) ($context['ua_ch_full_version_list'] ?? ''), 1000),
+            'user_agent' => $this->sanitize_client_hint_text((string) ($context['user_agent'] ?? ''), 1000),
+        ];
+    }
+
+    private function build_ua_update_data(array $row, array $context): array
+    {
+        $normalized = $this->normalize_ua_context($context);
+        $updates = [];
+
+        foreach (['ua_ch_supported', 'ua_ch_mobile'] as $field) {
+            if ((int) ($normalized[$field] ?? 0) > (int) ($row[$field] ?? 0)) {
+                $updates[$field] = (int) $normalized[$field];
+            }
+        }
+
+        foreach ([
+            'ua_ch_platform',
+            'ua_ch_platform_version',
+            'ua_ch_model',
+            'ua_ch_brands',
+            'ua_ch_full_version_list',
+            'user_agent',
+        ] as $field) {
+            $existing = trim((string) ($row[$field] ?? ''));
+            $candidate = trim((string) ($normalized[$field] ?? ''));
+
+            if ($existing === '' && $candidate !== '') {
+                $updates[$field] = $candidate;
+            }
+        }
+
+        return $updates;
+    }
+
+    private function sanitize_client_hint_token(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:+ -]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, max(1, $max_length));
+    }
+
+    private function sanitize_client_hint_text(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^\P{C}\r\n\t]/u', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, max(1, $max_length));
     }
 
     private function sanitize_pid(string $pid): string

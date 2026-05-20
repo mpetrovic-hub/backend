@@ -73,13 +73,14 @@ No provider-specific callback shape should leak into shared attribution code.
 - context (`service_key`, `provider_key`, `flow_key`, `landing_key`, `session_token`)
 - engagement timestamps (`page_loaded_at`, `first_cta_click_at`, `last_cta_click_at`) and click count
 - source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
+- raw UA context (`ua_ch_supported`, `ua_ch_mobile`, `ua_ch_platform`, `ua_ch_platform_version`, `ua_ch_model`, browser-brand lists, `user_agent`) when the landing UA tracking mode allows it
 
 `wp_kiwi_landing_handoff_events` stores click-to-SMS handoff diagnostics, including:
 
 - context (`service_key`, `provider_key`, `flow_key`, `landing_key`, `session_token`)
 - handoff identity (`handoff_id`, event type) and SMS metadata (`sms`/`smsto`, recipient, body/transaction-token presence)
 - browser transition hints (`elapsed_ms`, `visibility_state`) and source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
-- optional UA Client Hints captured only during CTA/handoff interaction (`platform`, `platformVersion`, `model`, browser brands, mobile flag)
+- optional UA Client Hints captured according to the shared landing UA tracking mode (`platform`, `platformVersion`, `model`, browser brands, mobile flag)
 
 `wp_kiwi_sms_body_variant_assignments` stores visible SMS-body experiment assignments, including:
 
@@ -109,7 +110,7 @@ The shared attribution layer now feeds downstream fraud-monitoring context:
 1. Landing entry capture stores `click_id` (required) and optional `pid`, `tksource`, and `tkzone` in `wp_kiwi_click_attributions`.
 2. Landing KPI engagement events (`page_loaded`, `cta_click`) resolve and persist `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_landing_engagements`.
 3. SMS-body variant assignment stores the visible token shown in the user SMS app while preserving the internal `transaction_id`.
-4. Landing handoff events (`sms_handoff_*`) preserve click-to-SMS transition evidence for operations analysis without altering KPI counters; optional UA Client Hints are best-effort and controlled by `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED`.
+4. Landing handoff events (`sms_handoff_*`) preserve click-to-SMS transition evidence for operations analysis without altering KPI counters; optional UA Client Hints are best-effort and controlled by `KIWI_LANDING_UA_TRACKING_MODE`.
 5. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_fraud_signals`.
 
 This keeps provider payload parsing at the boundary while giving the shared fraud capability stable traffic-source dimensions.
@@ -125,6 +126,15 @@ The view is deliberately built from normalized internal tables only:
 - `wp_kiwi_sales` for completed sales and amount totals
 
 The repository applies `from`, optional `to`, `service_key`, and `tksource` filters before grouping by `service_key`, `tksource`, and `tkzone`. The default lower bound is `2026-05-12 20:00:00`, because traffic-source fields were not reliable before that point. Median load-to-CTA uses database window functions; if the view or median query cannot be read on a target MySQL/MariaDB version, the shortcode shows an admin-facing error instead of failing the page.
+
+The same repository also creates `wp_kiwi_v_one_for_all` for broader landing-funnel analysis. That view keeps provider integrations out of the analytics contract and joins only normalized internal tables:
+
+- `wp_kiwi_landing_page_sessions` for landing-page loads and classic user-agent fallback
+- `wp_kiwi_premium_sms_landing_engagements` for page-loaded/CTA sessions, source snapshots, and raw UA Client Hints
+- `wp_kiwi_landing_handoff_events` for handoff attempts, hidden/no-hide outcomes, and hidden-time aggregates
+- `wp_kiwi_click_attributions` plus `wp_kiwi_sales` for completed-sale counts by landing session
+
+`device_brand`, `android_version`, and `browser` are computed in the view from raw UA fields and are not persisted as normalized columns. The view exposes `landing_key`, `service_key`, `tksource`, `tkzone`, those computed device/browser dimensions, session/load/CTA counters, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales.
 
 ## Retention and Cleanup
 

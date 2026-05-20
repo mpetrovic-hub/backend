@@ -256,10 +256,40 @@ class Kiwi_Config
             || (bool) KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED;
     }
 
+    public function get_landing_ua_tracking_mode(): string
+    {
+        if (defined('KIWI_LANDING_UA_TRACKING_MODE')) {
+            return $this->normalize_landing_ua_tracking_mode((string) KIWI_LANDING_UA_TRACKING_MODE);
+        }
+
+        if (defined('KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED')
+            && !(bool) KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED
+        ) {
+            return 'disabled';
+        }
+
+        return 'onclick';
+    }
+
+    public function get_landing_ua_tracking_mode_options(): array
+    {
+        return [
+            'disabled' => 'Disabled',
+            'onclick' => 'CTA / handoff interaction',
+            'onload' => 'Page load',
+        ];
+    }
+
     public function is_landing_handoff_ua_client_hints_enabled(): bool
     {
-        return !defined('KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED')
-            || (bool) KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED;
+        return $this->get_landing_ua_tracking_mode() !== 'disabled';
+    }
+
+    private function normalize_landing_ua_tracking_mode(string $mode): string
+    {
+        $mode = strtolower(trim($mode));
+
+        return in_array($mode, ['disabled', 'onclick', 'onload'], true) ? $mode : 'onclick';
     }
 
     public function get_sms_body_variant_experiment_countries(): array

@@ -3,6 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-05-19:
+- [Landing Analytics] Added a generic landing UA tracking mode (`disabled`, `onclick`, `onload`), engagement-table UA Client Hints persistence, and a plugin-managed `kiwi_v_one_for_all` analytics view for device/source funnel pivots while keeping the existing statistics view stable.
 - [Statistics UI] Improved the protected statistics report with compact table styling, selectable service/source filters, and datetime-local controls that preserve wall-clock seconds. Added repository support and regression coverage for filter options, malformed datetime rejection, and datetime normalization.
 - [Submodule Removal] Removed the `external/codex-control` submodule and cleared the repository submodule metadata from `.gitmodules`. This returns the control repository linkage to a non-submodule state while keeping the backend tree free of the nested dependency.
 

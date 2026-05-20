@@ -237,6 +237,7 @@ class Kiwi_Landing_Page_Router
             'landingKey' => $landing_key,
             'sessionToken' => $session_token,
             'steps' => $this->resolve_kpi_step_selectors($landing_page),
+            'uaTrackingMode' => $this->config->get_landing_ua_tracking_mode(),
             'uaClientHintsEnabled' => $this->config->is_landing_handoff_ua_client_hints_enabled(),
         ];
         $tracker_json = $this->json_for_script($tracker_payload);
@@ -256,7 +257,9 @@ class Kiwi_Landing_Page_Router
             . "var clickId=resolveClickId();"
             . "var tkSource=resolveSourceParam('tksource');"
             . "var tkZone=resolveSourceParam('tkzone');"
-            . "var uaClientHintsEnabled=!!cfg.uaClientHintsEnabled;"
+            . "var uaTrackingMode=String(cfg.uaTrackingMode||'onclick').toLowerCase();"
+            . "if(uaTrackingMode!=='disabled'&&uaTrackingMode!=='onclick'&&uaTrackingMode!=='onload'){uaTrackingMode='onclick';}"
+            . "var uaClientHintsEnabled=uaTrackingMode!=='disabled'&&!!cfg.uaClientHintsEnabled;"
             . "var uaClientHints=null;"
             . "var uaClientHintsPromise=null;"
             . "function wasSent(key){try{return window.sessionStorage.getItem(storagePrefix+key)==='1';}catch(e){return false;}}"
@@ -268,10 +271,13 @@ class Kiwi_Landing_Page_Router
             . "function sendStep(step,eventValue){if(!step||wasSent('step_'+step)){return;}"
             . "dispatch({landing_key:cfg.landingKey,session_token:cfg.sessionToken,step:step,event_value:eventValue||''});"
             . "markSent('step_'+step);}"
+            . "function shouldAttachUaToEngagement(eventType){if(!uaClientHintsEnabled){return false;}if(eventType==='page_loaded'){return uaTrackingMode==='onload';}if(eventType==='cta_click'){return uaTrackingMode==='onclick'||uaTrackingMode==='onload';}return false;}"
+            . "function dispatchEngagement(payload,onceKey){dispatch(payload);if(onceKey){markSent('eng_'+onceKey);}}"
             . "function sendEngagement(eventType,eventValue,onceKey){if(!eventType){return;}"
             . "if(onceKey&&wasSent('eng_'+onceKey)){return;}"
-            . "dispatch({landing_key:cfg.landingKey,session_token:cfg.sessionToken,event_type:eventType,event_value:eventValue||''});"
-            . "if(onceKey){markSent('eng_'+onceKey);}}"
+            . "var payload={landing_key:cfg.landingKey,session_token:cfg.sessionToken,event_type:eventType,event_value:eventValue||''};"
+            . "if(shouldAttachUaToEngagement(eventType)){var hintPromise=collectUaClientHints();if(hintPromise&&typeof hintPromise.then==='function'){hintPromise.then(function(){var uaPayload=getUaClientHintPayload();for(var key in uaPayload){if(Object.prototype.hasOwnProperty.call(uaPayload,key)){payload[key]=uaPayload[key];}}dispatchEngagement(payload,onceKey);});return;}var uaPayload=getUaClientHintPayload();for(var key in uaPayload){if(Object.prototype.hasOwnProperty.call(uaPayload,key)){payload[key]=uaPayload[key];}}}"
+            . "dispatchEngagement(payload,onceKey);}"
             . "function nowMs(){return(new Date()).getTime();}"
             . "function makeHandoffId(){return'hof_'+nowMs().toString(36)+'_'+Math.random().toString(36).slice(2,10);}"
             . "function decodeValue(value){try{return decodeURIComponent(String(value||'').replace(/\\+/g,'%20'));}catch(e){return String(value||'');}}"
