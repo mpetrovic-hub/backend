@@ -56,7 +56,13 @@ Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI ev
 
 For click-to-SMS CTAs, the same endpoint also records handoff telemetry for `sms:`/`smsto:` links. These events are diagnostic signals only: they indicate that a browser attempted an SMS handoff, hid the page, returned, or did not hide after the click. They do not prove that the SMS was sent and they do not increment KPI summary counters.
 
-When `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED` is enabled, the handoff tracker also collects best-effort User-Agent Client Hints only during CTA/handoff interaction. This can add mobile/platform/model/browser-brand hints to `sms_handoff_*` events without collecting them for every page load.
+Best-effort User-Agent context is controlled by `KIWI_LANDING_UA_TRACKING_MODE`:
+
+- `disabled`: do not collect or persist UA Client Hints for engagement or handoff payloads, even when a client posts those fields manually
+- `onclick`: collect UA Client Hints only around CTA/handoff interaction; this preserves the legacy handoff-near behavior
+- `onload`: collect UA Client Hints on page load and persist them with the `page_loaded` engagement when available
+
+The legacy `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED=false` switch maps to `disabled` when the new mode is not set. Otherwise the default remains `onclick`.
 
 For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic. The FR SMS-body variant experiment can instead render a stable visible token while keeping the internal `txn_...` correlation id unchanged server-side.
 
@@ -191,6 +197,7 @@ Notes:
 - `wp_kiwi_premium_sms_landing_engagements`
   - landing-session engagement evidence (`page_loaded_at`, first/last CTA click, click count)
   - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
+  - raw UA context (`ua_ch_*`, `user_agent`) when the UA tracking mode allows it; normalized device/browser buckets are not stored here
 
 - `wp_kiwi_landing_handoff_events`
   - click-to-SMS handoff evidence (`sms_handoff_*`)
@@ -211,6 +218,12 @@ Notes:
   - plugin-managed view for the `[kiwi_statistics]` traffic-source funnel report
   - normalizes landing engagement and completed-sale facts by `service_key`, `tksource`, and `tkzone`
   - uses `2026-05-12 20:00:00` as the default lower bound for reliable `tksource`/`tkzone` data
+
+- `wp_kiwi_v_one_for_all`
+  - plugin-managed analytics view for pivot/export work outside the shortcode UI
+  - groups by `landing_key`, `service_key`, `tksource`, `tkzone`, computed `device_brand`, computed `android_version`, and computed `browser`
+  - exposes sessions, landing-page loads, page-loaded sessions, CTA sessions/clicks, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales
+  - computes device/browser dimensions in SQL from raw UA context instead of persisting normalized buckets
 
 ## Configuration switches
 
@@ -236,8 +249,11 @@ Notes:
   - enables the SMS-body variant experiment (default: `true`)
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
   - country allowlist for the experiment (default: `['FR']`)
+- `KIWI_LANDING_UA_TRACKING_MODE`
+  - generic UA tracking mode for landing telemetry: `disabled`, `onclick`, or `onload` (default: `onclick`)
+  - `onload` increases page-load REST/DB write volume and should be enabled deliberately
 - `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED`
-  - enables best-effort UA Client Hints collection for SMS handoff events only (default: `true`)
+  - legacy compatibility switch; when set to `false` and `KIWI_LANDING_UA_TRACKING_MODE` is unset, it maps to `disabled`
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
 - `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`
@@ -262,8 +278,10 @@ When validating a landing-page flow in production or staging, verify:
 7. `backend_path` routes resolve correctly on every public hostname that proxies to the backend runtime.
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
-10. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, and shows completed sales/rates where attribution has a matching `transaction_id`.
-11. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
+10. UA tracking mode behaves as configured: `disabled` stores no UA context, `onclick` stores it only near CTA/handoff events, and `onload` stores it on `page_loaded` when browser hints are available.
+11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, and shows completed sales/rates where attribution has a matching `transaction_id`.
+12. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`.
+13. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
 
 ## Troubleshooting quick map
 

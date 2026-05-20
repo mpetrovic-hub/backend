@@ -30,9 +30,13 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
         global $wpdb;
 
         $this->last_error = '';
-        $view_name = $this->get_view_name();
-
         $wpdb->query($this->build_create_view_sql());
+
+        if ($this->has_database_error()) {
+            return false;
+        }
+
+        $wpdb->query($this->build_create_one_for_all_view_sql());
 
         return !$this->has_database_error();
     }
@@ -183,6 +187,13 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
         return $wpdb->prefix . 'kiwi_v_load_to_cta_by_tksource_tkzone';
     }
 
+    public function get_one_for_all_view_name(): string
+    {
+        global $wpdb;
+
+        return $wpdb->prefix . 'kiwi_v_one_for_all';
+    }
+
     public function get_default_from(): string
     {
         return self::DEFAULT_FROM;
@@ -315,6 +326,263 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
               ON ca.transaction_id = s.transaction_id
             WHERE s.status = 'completed'
               AND s.completed_at >= '{$default_from}'";
+    }
+
+    private function build_create_one_for_all_view_sql(): string
+    {
+        global $wpdb;
+
+        $view_name = $this->get_one_for_all_view_name();
+        $landing_session_table = $wpdb->prefix . 'kiwi_landing_page_sessions';
+        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+        $click_attribution_table = $wpdb->prefix . 'kiwi_click_attributions';
+        $sales_table = $wpdb->prefix . 'kiwi_sales';
+        $default_from = self::DEFAULT_FROM;
+
+        return "CREATE OR REPLACE VIEW {$view_name} AS
+            WITH landing_loads AS (
+                SELECT
+                    landing_key,
+                    session_token,
+                    MIN(created_at) AS metric_at,
+                    MAX(service_key) AS service_key,
+                    MAX(user_agent) AS user_agent,
+                    COUNT(*) AS landing_page_aufrufe
+                FROM {$landing_session_table}
+                WHERE created_at >= '{$default_from}'
+                GROUP BY landing_key, session_token
+            ),
+            engagement_sessions AS (
+                SELECT
+                    landing_key,
+                    session_token,
+                    created_at,
+                    service_key,
+                    tksource,
+                    tkzone,
+                    page_loaded_at,
+                    first_cta_click_at,
+                    cta_click_count,
+                    ua_ch_platform,
+                    ua_ch_platform_version,
+                    ua_ch_model,
+                    ua_ch_brands,
+                    ua_ch_full_version_list,
+                    user_agent
+                FROM {$engagement_table}
+                WHERE created_at >= '{$default_from}'
+            ),
+            session_keys AS (
+                SELECT landing_key, session_token FROM landing_loads
+                UNION
+                SELECT landing_key, session_token FROM engagement_sessions
+            ),
+            handoff_by_session AS (
+                SELECT
+                    landing_key,
+                    session_token,
+                    COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_attempted' THEN handoff_id ELSE NULL END) AS handoff_attempts,
+                    COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_hidden' THEN handoff_id ELSE NULL END) AS handoff_successes,
+                    COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_no_hide' THEN handoff_id ELSE NULL END) AS handoff_fails,
+                    MIN(CASE WHEN event_type = 'sms_handoff_hidden' THEN elapsed_ms / 1000 ELSE NULL END) AS min_hidden_seconds,
+                    MAX(CASE WHEN event_type = 'sms_handoff_hidden' THEN elapsed_ms / 1000 ELSE NULL END) AS max_hidden_seconds
+                FROM {$handoff_table}
+                WHERE created_at >= '{$default_from}'
+                GROUP BY landing_key, session_token
+            ),
+            ranked_attribution AS (
+                SELECT *
+                FROM (
+                    SELECT
+                        ca.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ca.transaction_id
+                            ORDER BY ca.conversion_confirmed_at DESC, ca.updated_at DESC, ca.id DESC
+                        ) AS kiwi_attribution_rank
+                    FROM {$click_attribution_table} ca
+                    WHERE ca.transaction_id <> ''
+                ) ranked_ca
+                WHERE ranked_ca.kiwi_attribution_rank = 1
+            ),
+            sales_by_session AS (
+                SELECT
+                    ca.landing_page_key AS landing_key,
+                    ca.session_ref AS session_token,
+                    COUNT(DISTINCT s.id) AS sales
+                FROM {$sales_table} s
+                INNER JOIN ranked_attribution ca
+                  ON ca.transaction_id = s.transaction_id
+                WHERE s.status = 'completed'
+                  AND s.completed_at >= '{$default_from}'
+                  AND ca.landing_page_key <> ''
+                  AND ca.session_ref <> ''
+                GROUP BY ca.landing_page_key, ca.session_ref
+            ),
+            session_rows AS (
+                SELECT
+                    sk.landing_key AS raw_landing_key,
+                    sk.session_token,
+                    COALESCE(NULLIF(e.service_key, ''), NULLIF(ll.service_key, ''), '(empty)') AS service_key,
+                    COALESCE(NULLIF(e.tksource, ''), '(empty)') AS tksource,
+                    COALESCE(NULLIF(e.tkzone, ''), '(empty)') AS tkzone,
+                    COALESCE(e.ua_ch_platform, '') AS ua_ch_platform,
+                    COALESCE(e.ua_ch_platform_version, '') AS ua_ch_platform_version,
+                    COALESCE(e.ua_ch_model, '') AS ua_ch_model,
+                    COALESCE(e.ua_ch_brands, '') AS ua_ch_brands,
+                    COALESCE(e.ua_ch_full_version_list, '') AS ua_ch_full_version_list,
+                    COALESCE(NULLIF(e.user_agent, ''), NULLIF(ll.user_agent, ''), '') AS raw_user_agent,
+                    COALESCE(ll.landing_page_aufrufe, 0) AS landing_page_aufrufe,
+                    CASE WHEN e.page_loaded_at IS NOT NULL THEN 1 ELSE 0 END AS page_loaded_sessions,
+                    CASE WHEN e.first_cta_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta_sessions,
+                    COALESCE(e.cta_click_count, 0) AS cta_click_events,
+                    COALESCE(h.handoff_attempts, 0) AS handoff_attempts,
+                    COALESCE(h.handoff_successes, 0) AS handoff_successes,
+                    COALESCE(h.handoff_fails, 0) AS handoff_fails,
+                    h.min_hidden_seconds,
+                    h.max_hidden_seconds,
+                    COALESCE(s.sales, 0) AS sales
+                FROM session_keys sk
+                LEFT JOIN landing_loads ll
+                  ON ll.landing_key = sk.landing_key
+                 AND ll.session_token = sk.session_token
+                LEFT JOIN engagement_sessions e
+                  ON e.landing_key = sk.landing_key
+                 AND e.session_token = sk.session_token
+                LEFT JOIN handoff_by_session h
+                  ON h.landing_key = sk.landing_key
+                 AND h.session_token = sk.session_token
+                LEFT JOIN sales_by_session s
+                  ON s.landing_key = sk.landing_key
+                 AND s.session_token = sk.session_token
+            ),
+            dimensioned AS (
+                SELECT
+                    COALESCE(NULLIF(raw_landing_key, ''), '(empty)') AS landing_key,
+                    raw_landing_key,
+                    session_token,
+                    service_key,
+                    tksource,
+                    tkzone,
+                    CASE
+                        WHEN ua_ch_model LIKE 'SM-%' OR raw_user_agent LIKE '%Samsung%' THEN 'Samsung'
+                        WHEN raw_user_agent LIKE '%Huawei%' THEN 'Huawei'
+                        WHEN raw_user_agent LIKE '%Xiaomi%' THEN 'Xiaomi'
+                        WHEN raw_user_agent LIKE '%Pixel%' THEN 'Google'
+                        WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)
+                        ELSE '(unknown)'
+                    END AS device_brand,
+                    CASE
+                        WHEN ua_ch_platform = 'Android' AND ua_ch_platform_version <> '' THEN ua_ch_platform_version
+                        WHEN raw_user_agent LIKE '%Android %' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(raw_user_agent, 'Android ', -1), ';', 1)
+                        ELSE '(unknown)'
+                    END AS android_version,
+                    CASE
+                        WHEN ua_ch_full_version_list LIKE '%Microsoft Edge%' OR ua_ch_brands LIKE '%Microsoft Edge%' OR raw_user_agent LIKE '%Edg/%' THEN 'Edge'
+                        WHEN ua_ch_full_version_list LIKE '%Google Chrome%' OR ua_ch_brands LIKE '%Google Chrome%' OR raw_user_agent LIKE '%Chrome/%' THEN 'Chrome'
+                        WHEN raw_user_agent LIKE '%Firefox/%' THEN 'Firefox'
+                        WHEN raw_user_agent LIKE '%Safari/%' THEN 'Safari'
+                        ELSE '(unknown)'
+                    END AS browser,
+                    landing_page_aufrufe,
+                    page_loaded_sessions,
+                    cta_sessions,
+                    cta_click_events,
+                    handoff_attempts,
+                    handoff_successes,
+                    handoff_fails,
+                    min_hidden_seconds,
+                    max_hidden_seconds,
+                    sales
+                FROM session_rows
+            ),
+            hidden_rows AS (
+                SELECT
+                    d.landing_key,
+                    d.service_key,
+                    d.tksource,
+                    d.tkzone,
+                    d.device_brand,
+                    d.android_version,
+                    d.browser,
+                    h.elapsed_ms / 1000 AS hidden_seconds
+                FROM dimensioned d
+                INNER JOIN {$handoff_table} h
+                  ON h.landing_key = d.raw_landing_key
+                 AND h.session_token = d.session_token
+                WHERE h.event_type = 'sms_handoff_hidden'
+                  AND h.created_at >= '{$default_from}'
+            ),
+            hidden_ranked AS (
+                SELECT
+                    hidden_rows.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY landing_key, service_key, tksource, tkzone, device_brand, android_version, browser
+                        ORDER BY hidden_seconds
+                    ) AS rn,
+                    COUNT(*) OVER (
+                        PARTITION BY landing_key, service_key, tksource, tkzone, device_brand, android_version, browser
+                    ) AS cnt
+                FROM hidden_rows
+            ),
+            hidden_medians AS (
+                SELECT
+                    landing_key,
+                    service_key,
+                    tksource,
+                    tkzone,
+                    device_brand,
+                    android_version,
+                    browser,
+                    ROUND(AVG(
+                        CASE
+                            WHEN rn IN (FLOOR((cnt + 1) / 2), FLOOR((cnt + 2) / 2))
+                            THEN hidden_seconds
+                            ELSE NULL
+                        END
+                    ), 2) AS median_hidden_seconds
+                FROM hidden_ranked
+                GROUP BY landing_key, service_key, tksource, tkzone, device_brand, android_version, browser
+            )
+            SELECT
+                d.landing_key,
+                d.service_key,
+                d.tksource,
+                d.tkzone,
+                d.device_brand,
+                d.android_version,
+                d.browser,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(d.landing_page_aufrufe), 0) AS landing_page_aufrufe,
+                COALESCE(SUM(d.page_loaded_sessions), 0) AS page_loaded_sessions,
+                COALESCE(SUM(d.cta_sessions), 0) AS cta_sessions,
+                COALESCE(SUM(d.cta_click_events), 0) AS cta_click_events,
+                COALESCE(SUM(d.handoff_attempts), 0) AS handoff_attempts,
+                COALESCE(SUM(d.handoff_successes), 0) AS handoff_successes,
+                COALESCE(SUM(d.handoff_fails), 0) AS handoff_fails,
+                ROUND(COALESCE(SUM(d.handoff_successes), 0) / NULLIF(SUM(d.handoff_attempts), 0) * 100, 2) AS handoff_rate_pct,
+                hm.median_hidden_seconds,
+                MIN(d.min_hidden_seconds) AS min_hidden_seconds,
+                MAX(d.max_hidden_seconds) AS max_hidden_seconds,
+                COALESCE(SUM(d.sales), 0) AS sales
+            FROM dimensioned d
+            LEFT JOIN hidden_medians hm
+              ON hm.landing_key = d.landing_key
+             AND hm.service_key = d.service_key
+             AND hm.tksource = d.tksource
+             AND hm.tkzone = d.tkzone
+             AND hm.device_brand = d.device_brand
+             AND hm.android_version = d.android_version
+             AND hm.browser = d.browser
+            GROUP BY
+                d.landing_key,
+                d.service_key,
+                d.tksource,
+                d.tkzone,
+                d.device_brand,
+                d.android_version,
+                d.browser,
+                hm.median_hidden_seconds";
     }
 
     private function has_database_error(): bool

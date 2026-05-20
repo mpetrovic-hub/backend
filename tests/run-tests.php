@@ -673,6 +673,24 @@ class Kiwi_Test_Config extends Kiwi_Config
     }
 }
 
+class Kiwi_Test_Landing_Ua_Config extends Kiwi_Test_Config
+{
+    private $landing_ua_tracking_mode;
+
+    public function __construct(string $landing_ua_tracking_mode, array $landing_pages = [])
+    {
+        parent::__construct(100, 0, 0, [], [], [], $landing_pages);
+        $this->landing_ua_tracking_mode = strtolower(trim($landing_ua_tracking_mode));
+    }
+
+    public function get_landing_ua_tracking_mode(): string
+    {
+        return in_array($this->landing_ua_tracking_mode, ['disabled', 'onclick', 'onload'], true)
+            ? $this->landing_ua_tracking_mode
+            : 'onclick';
+    }
+}
+
 class Kiwi_Test_Runtime_Config extends Kiwi_Config
 {
     private $landing_pages_root;
@@ -803,6 +821,11 @@ class Kiwi_Test_Attribution_Config extends Kiwi_Test_Config
 
 class Kiwi_Test_Ua_Client_Hints_Disabled_Config extends Kiwi_Test_Config
 {
+    public function get_landing_ua_tracking_mode(): string
+    {
+        return 'disabled';
+    }
+
     public function is_landing_handoff_ua_client_hints_enabled(): bool
     {
         return false;
@@ -2152,6 +2175,14 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
                 'first_cta_click_at' => '',
                 'last_cta_click_at' => '',
                 'cta_click_count' => 0,
+                'ua_ch_supported' => 0,
+                'ua_ch_mobile' => 0,
+                'ua_ch_platform' => '',
+                'ua_ch_platform_version' => '',
+                'ua_ch_model' => '',
+                'ua_ch_brands' => '',
+                'ua_ch_full_version_list' => '',
+                'user_agent' => '',
                 'last_event_at' => $occurred_at,
             ];
         }
@@ -2166,6 +2197,25 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
         $row['tksource'] = (string) ($row['tksource'] !== '' ? $row['tksource'] : (string) ($context['tksource'] ?? ''));
         $row['tkzone'] = (string) ($row['tkzone'] !== '' ? $row['tkzone'] : (string) ($context['tkzone'] ?? ''));
         $row['last_event_at'] = $occurred_at;
+
+        foreach (['ua_ch_supported', 'ua_ch_mobile'] as $field) {
+            if (!empty($context[$field]) && (int) ($row[$field] ?? 0) === 0) {
+                $row[$field] = 1;
+            }
+        }
+
+        foreach ([
+            'ua_ch_platform',
+            'ua_ch_platform_version',
+            'ua_ch_model',
+            'ua_ch_brands',
+            'ua_ch_full_version_list',
+            'user_agent',
+        ] as $field) {
+            if ((string) ($row[$field] ?? '') === '' && trim((string) ($context[$field] ?? '')) !== '') {
+                $row[$field] = trim((string) $context[$field]);
+            }
+        }
 
         if ($event_type === 'page_loaded') {
             if ((string) ($row['page_loaded_at'] ?? '') === '') {
@@ -4852,6 +4902,119 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected engagement-only events not to mutate KPI CTA counters.');
 });
 
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes gates UA context by landing tracking mode', function (): void {
+    $landing_pages = [
+        'lp2-fr' => [
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+        ],
+    ];
+    $previous_user_agent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+    $_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (Linux; Android 16; SM-S921B) AppleWebKit/537.36 Chrome/147.0.0.0 Mobile Safari/537.36';
+
+    try {
+        $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+        $service = new Kiwi_Landing_Kpi_Service(new Kiwi_Test_Landing_Ua_Config('disabled', $landing_pages), $summary_repository);
+        $disabled_engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $disabled_handoff_repository = new Kiwi_Test_Landing_Handoff_Event_Repository();
+        $disabled_routes = new Kiwi_Landing_Kpi_Rest_Routes(
+            new Kiwi_Test_Landing_Ua_Config('disabled', $landing_pages),
+            $service,
+            $disabled_engagement_repository,
+            null,
+            $disabled_handoff_repository
+        );
+
+        $disabled_routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-disabled',
+            'event_type' => 'page_loaded',
+            'ua_ch_supported' => 1,
+            'ua_ch_mobile' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_model' => 'SM-S921B',
+        ]));
+        $disabled_routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-disabled',
+            'event_type' => 'sms_handoff_attempted',
+            'handoff_id' => 'hof-disabled',
+            'href_scheme' => 'sms',
+            'sms_recipient' => '84072',
+            'ua_ch_supported' => 1,
+            'ua_ch_mobile' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_model' => 'SM-S921B',
+        ]));
+
+        $disabled_row = $disabled_engagement_repository->get_by_landing_session('lp2-fr', 'sess-disabled');
+        $disabled_handoff = array_values($disabled_handoff_repository->rows)[0] ?? [];
+
+        kiwi_assert_same(0, (int) ($disabled_row['ua_ch_supported'] ?? 0), 'Expected disabled mode to drop posted engagement UA Client Hints.');
+        kiwi_assert_same('', (string) ($disabled_row['ua_ch_platform'] ?? ''), 'Expected disabled mode not to persist engagement UA platform.');
+        kiwi_assert_same('', (string) ($disabled_row['user_agent'] ?? ''), 'Expected disabled mode not to persist engagement user agent.');
+        kiwi_assert_same(0, (int) ($disabled_handoff['ua_ch_supported'] ?? 0), 'Expected disabled mode to drop posted handoff UA Client Hints.');
+        kiwi_assert_same('', (string) ($disabled_handoff['user_agent'] ?? ''), 'Expected disabled mode not to persist handoff user agent.');
+
+        $onclick_config = new Kiwi_Test_Landing_Ua_Config('onclick', $landing_pages);
+        $onclick_service = new Kiwi_Landing_Kpi_Service($onclick_config, new Kiwi_Test_Landing_Kpi_Summary_Repository());
+        $onclick_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $onclick_routes = new Kiwi_Landing_Kpi_Rest_Routes($onclick_config, $onclick_service, $onclick_repository);
+
+        $onclick_routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-onclick',
+            'event_type' => 'page_loaded',
+            'ua_ch_supported' => 1,
+            'ua_ch_platform' => 'Android',
+        ]));
+        $row_after_load = $onclick_repository->get_by_landing_session('lp2-fr', 'sess-onclick');
+        kiwi_assert_same('', (string) ($row_after_load['ua_ch_platform'] ?? ''), 'Expected onclick mode not to persist UA Client Hints on page_loaded.');
+
+        $onclick_routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-onclick',
+            'event_type' => 'cta_click',
+            'ua_ch_supported' => 1,
+            'ua_ch_mobile' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_platform_version' => '16.0.0',
+            'ua_ch_model' => 'SM-S921B',
+            'ua_ch_brands' => 'Chromium 147, Google Chrome 147',
+            'ua_ch_full_version_list' => 'Google Chrome 147.0.7727.138',
+        ]));
+        $row_after_click = $onclick_repository->get_by_landing_session('lp2-fr', 'sess-onclick');
+        kiwi_assert_same('Android', (string) ($row_after_click['ua_ch_platform'] ?? ''), 'Expected onclick mode to persist UA Client Hints on CTA engagement.');
+        kiwi_assert_same('SM-S921B', (string) ($row_after_click['ua_ch_model'] ?? ''), 'Expected onclick mode to persist UA Client Hints model on CTA engagement.');
+        kiwi_assert_contains('Android 16', (string) ($row_after_click['user_agent'] ?? ''), 'Expected allowed UA engagement persistence to store the request user agent.');
+
+        $onload_config = new Kiwi_Test_Landing_Ua_Config('onload', $landing_pages);
+        $onload_service = new Kiwi_Landing_Kpi_Service($onload_config, new Kiwi_Test_Landing_Kpi_Summary_Repository());
+        $onload_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $onload_routes = new Kiwi_Landing_Kpi_Rest_Routes($onload_config, $onload_service, $onload_repository);
+        $onload_routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-onload',
+            'event_type' => 'page_loaded',
+            'ua_ch_supported' => 1,
+            'ua_ch_mobile' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_platform_version' => '16.0.0',
+            'ua_ch_model' => 'SM-S921B',
+        ]));
+        $onload_row = $onload_repository->get_by_landing_session('lp2-fr', 'sess-onload');
+        kiwi_assert_same('Android', (string) ($onload_row['ua_ch_platform'] ?? ''), 'Expected onload mode to persist UA Client Hints with page_loaded.');
+        kiwi_assert_same('16.0.0', (string) ($onload_row['ua_ch_platform_version'] ?? ''), 'Expected onload mode to persist platform version with page_loaded.');
+    } finally {
+        if ($previous_user_agent === null) {
+            unset($_SERVER['HTTP_USER_AGENT']);
+        } else {
+            $_SERVER['HTTP_USER_AGENT'] = $previous_user_agent;
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes resolves traffic source fields from attribution fallback', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -5480,7 +5643,9 @@ kiwi_run_test('Kiwi_Landing_Page_Router injects same-origin SMS handoff telemetr
     kiwi_assert_contains('sms_handoff_hidden', $output, 'Expected injected tracker to include hidden SMS handoff event.');
     kiwi_assert_contains('sms_handoff_returned', $output, 'Expected injected tracker to include returned SMS handoff event.');
     kiwi_assert_contains('sms_handoff_no_hide', $output, 'Expected injected tracker to include no-hide SMS handoff event.');
+    kiwi_assert_contains('uaTrackingMode', $output, 'Expected injected tracker config to expose the generic UA tracking mode.');
     kiwi_assert_contains('uaClientHintsEnabled', $output, 'Expected injected tracker config to expose the UA Client Hints switch.');
+    kiwi_assert_contains("eventType==='page_loaded'", $output, 'Expected injected tracker to decide whether page_loaded can carry UA context.');
     kiwi_assert_contains('navigator.userAgentData', $output, 'Expected injected tracker to detect UA Client Hints support.');
     kiwi_assert_contains('getHighEntropyValues', $output, 'Expected injected tracker to request high-entropy UA Client Hints.');
     kiwi_assert_contains('ua_ch_model', $output, 'Expected injected tracker to send UA Client Hints model when available.');
@@ -7213,7 +7378,17 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     kiwi_assert_contains("AND s.completed_at >= '2026-05-12 20:00:00'", $wpdb->queries[0] ?? '', 'Expected completed sale cutoff to align with completion timestamps.');
     kiwi_assert_contains('PARTITION BY ca.transaction_id', $wpdb->queries[0] ?? '', 'Expected view SQL to deduplicate attribution rows before joining completed sales.');
     kiwi_assert_contains('ranked_ca.kiwi_attribution_rank = 1', $wpdb->queries[0] ?? '', 'Expected view SQL to pick one canonical attribution row per transaction_id.');
+    kiwi_assert_contains('CREATE OR REPLACE VIEW abc_kiwi_v_one_for_all AS', $wpdb->queries[1] ?? '', 'Expected setup to also replace the one-for-all analytics view.');
+    kiwi_assert_contains('abc_kiwi_landing_page_sessions', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing page sessions.');
+    kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing engagement UA context.');
+    kiwi_assert_contains('abc_kiwi_landing_handoff_events', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include handoff diagnostics.');
+    kiwi_assert_contains('device_brand', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed device_brand.');
+    kiwi_assert_contains('android_version', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed android_version.');
+    kiwi_assert_contains('browser', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed browser.');
+    kiwi_assert_contains('handoff_rate_pct', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose handoff rate.');
+    kiwi_assert_contains('median_hidden_seconds', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose hidden-time median.');
     kiwi_assert_true(strpos($wpdb->queries[0] ?? '', 'wp_kiwi_') === false, 'Expected view SQL not to hardcode wp_ table prefixes.');
+    kiwi_assert_true(strpos($wpdb->queries[1] ?? '', 'wp_kiwi_') === false, 'Expected one-for-all view SQL not to hardcode wp_ table prefixes.');
 
     $wpdb = $previous_wpdb;
 });
@@ -7559,7 +7734,7 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
     );
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for handoff UA Client Hints columns', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for landing UA analytics columns', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -7571,7 +7746,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for handoff UA Client Hints colu
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-15-2', $schema_version, 'Expected schema version to be bumped for traffic-source statistics view migrations.');
+    kiwi_assert_same('2026-05-19-1', $schema_version, 'Expected schema version to be bumped for landing UA analytics migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-UA-Client-Hints schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
@@ -9515,6 +9690,18 @@ kiwi_run_test('Kiwi frontend auth keeps existing HLR submit flow behavior after 
 
     $_POST = [];
     $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Config exposes generic landing UA tracking modes', function (): void {
+    $config = new Kiwi_Config();
+    $options = $config->get_landing_ua_tracking_mode_options();
+    $invalid = new Kiwi_Test_Landing_Ua_Config('unexpected');
+    $onload = new Kiwi_Test_Landing_Ua_Config('onload');
+
+    kiwi_assert_same('onclick', $config->get_landing_ua_tracking_mode(), 'Expected default UA tracking mode to preserve existing CTA/handoff-only behavior.');
+    kiwi_assert_same(['disabled', 'onclick', 'onload'], array_keys($options), 'Expected config to expose the supported UA tracking modes for a future settings UI.');
+    kiwi_assert_same('onclick', $invalid->get_landing_ua_tracking_mode(), 'Expected invalid UA tracking modes to fall back to onclick.');
+    kiwi_assert_same('onload', $onload->get_landing_ua_tracking_mode(), 'Expected explicit onload mode to be representable in config tests.');
 });
 
 kiwi_run_test('Kiwi_Config allows disabling landing handoff UA Client Hints telemetry by constant', function (): void {

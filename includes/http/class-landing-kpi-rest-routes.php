@@ -223,7 +223,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
             return false;
         }
 
-        $record = $this->landing_engagement_repository->upsert_event([
+        $context = [
             'landing_key' => $landing_key,
             'session_token' => $session_token,
             'service_key' => (string) ($landing['service_key'] ?? ''),
@@ -233,7 +233,12 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'click_id' => $this->resolve_click_id_for_engagement($params, $landing, $session_token),
             'tksource' => $this->resolve_source_value_for_engagement('tksource', $params, $landing, $session_token),
             'tkzone' => $this->resolve_source_value_for_engagement('tkzone', $params, $landing, $session_token),
-        ], $event_type);
+        ];
+
+        $record = $this->landing_engagement_repository->upsert_event(
+            array_merge($context, $this->resolve_ua_context_for_event($event_type, $params, false)),
+            $event_type
+        );
 
         return !empty($record);
     }
@@ -254,10 +259,8 @@ class Kiwi_Landing_Kpi_Rest_Routes
             return false;
         }
 
-        $ua_client_hints_enabled = $this->config->is_landing_handoff_ua_client_hints_enabled();
-        $ua_client_hints = $ua_client_hints_enabled
-            ? $this->sanitize_ua_client_hints_context($params)
-            : [];
+        $ua_context = $this->resolve_ua_context_for_event($event_type, $params, true);
+        $ua_client_hints = $this->sanitize_ua_client_hints_context($ua_context);
 
         $result = $this->handoff_event_repository->insert_if_new([
             'landing_key' => $landing_key,
@@ -277,14 +280,14 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'sms_body_has_transaction' => !empty($params['sms_body_has_transaction']),
             'elapsed_ms' => max(0, (int) ($params['elapsed_ms'] ?? 0)),
             'visibility_state' => (string) ($params['visibility_state'] ?? ''),
-            'ua_ch_supported' => $ua_client_hints_enabled && !empty($params['ua_ch_supported']),
-            'ua_ch_mobile' => $ua_client_hints_enabled && !empty($params['ua_ch_mobile']),
-            'ua_ch_platform' => $ua_client_hints_enabled ? (string) ($params['ua_ch_platform'] ?? '') : '',
-            'ua_ch_platform_version' => $ua_client_hints_enabled ? (string) ($params['ua_ch_platform_version'] ?? '') : '',
-            'ua_ch_model' => $ua_client_hints_enabled ? (string) ($params['ua_ch_model'] ?? '') : '',
-            'ua_ch_brands' => $ua_client_hints_enabled ? (string) ($params['ua_ch_brands'] ?? '') : '',
-            'ua_ch_full_version_list' => $ua_client_hints_enabled ? (string) ($params['ua_ch_full_version_list'] ?? '') : '',
-            'user_agent' => $this->server_value('HTTP_USER_AGENT'),
+            'ua_ch_supported' => !empty($ua_context['ua_ch_supported']),
+            'ua_ch_mobile' => !empty($ua_context['ua_ch_mobile']),
+            'ua_ch_platform' => (string) ($ua_context['ua_ch_platform'] ?? ''),
+            'ua_ch_platform_version' => (string) ($ua_context['ua_ch_platform_version'] ?? ''),
+            'ua_ch_model' => (string) ($ua_context['ua_ch_model'] ?? ''),
+            'ua_ch_brands' => (string) ($ua_context['ua_ch_brands'] ?? ''),
+            'ua_ch_full_version_list' => (string) ($ua_context['ua_ch_full_version_list'] ?? ''),
+            'user_agent' => (string) ($ua_context['user_agent'] ?? ''),
             'raw_context' => [
                 'event_value' => $this->sanitize_event_value((string) ($params['event_value'] ?? '')),
                 'ua_client_hints' => $ua_client_hints,
@@ -292,6 +295,30 @@ class Kiwi_Landing_Kpi_Rest_Routes
         ]);
 
         return is_array($result['row'] ?? null);
+    }
+
+    private function resolve_ua_context_for_event(string $event_type, array $params, bool $is_handoff_event): array
+    {
+        $mode = $this->config->get_landing_ua_tracking_mode();
+
+        if ($mode === 'disabled') {
+            return [];
+        }
+
+        if (!$is_handoff_event) {
+            if ($event_type === 'page_loaded' && $mode !== 'onload') {
+                return [];
+            }
+
+            if ($event_type === 'cta_click' && !in_array($mode, ['onclick', 'onload'], true)) {
+                return [];
+            }
+        }
+
+        $context = $this->sanitize_ua_client_hints_context($params);
+        $context['user_agent'] = $this->server_value('HTTP_USER_AGENT');
+
+        return $context;
     }
 
     private function sanitize_ua_client_hints_context(array $params): array
