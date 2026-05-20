@@ -224,6 +224,7 @@ This section describes the operational S2S tracking contract used to move from l
   - optional user ID
 - `custom_field1` through `custom_field15`
   - optional additional Affise parameters
+  - `custom_field1` is the current operator reporting dimension and is populated from normalized `operator_name` when available
 - `action_id`
   - optional unique conversion ID in the advertiser system
   - not part of the default sale postback template

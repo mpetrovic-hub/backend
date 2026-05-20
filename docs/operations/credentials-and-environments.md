@@ -67,8 +67,8 @@ Expected keys:
 
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
   - outbound affiliate postback URL template
-  - supports placeholders such as `{clickid}` / `{{clickid}}`, `{operator_name}` / `{{operator_name}}`, `{sub7}` / `{{sub7}}`, and optional `{hash}` / `{secure}` (`{{hash}}` / `{{secure}}` also supported)
-  - example (full placeholder set): `https://offers-kiwimobile.affise.com/postback?clickid={clickid}&click_id={click_id}&sale_reference={sale_reference}&service_key={service_key}&provider_key={provider_key}&operator_name={operator_name}&sub7={sub7}&secure={secure}&hash={hash}&goal=sale`
+  - supports placeholders such as `{clickid}` / `{{clickid}}`, `{operator_name}` / `{{operator_name}}`, `{custom_field1}` / `{{custom_field1}}`, legacy `{sub7}` / `{{sub7}}`, and optional `{hash}` / `{secure}` (`{{hash}}` / `{{secure}}` also supported)
+  - example (full placeholder set): `https://offers-kiwimobile.affise.com/postback?clickid={clickid}&click_id={click_id}&sale_reference={sale_reference}&service_key={service_key}&provider_key={provider_key}&operator_name={operator_name}&custom_field1={custom_field1}&secure={secure}&hash={hash}&goal=sale`
 
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
   - shared secret for outgoing affiliate postback signing/checksum generation
@@ -86,8 +86,8 @@ Expected keys:
 
 Runtime enrichment note:
 
-- when `operator_name` is available during conversion resolution, outbound postbacks include `sub7=<operator_name>`
-- if the template already defines a `sub7` query parameter, that value is used; otherwise `sub7` is appended automatically
+- when `operator_name` is available during conversion resolution, outbound Affise postbacks include `custom_field1=<operator_name>`
+- if the template already defines a `custom_field1` query parameter, that value is used; otherwise `custom_field1` is appended automatically
 - no additional credential key is required for this enrichment
 
 Supported postback parameters/placeholders:
@@ -102,8 +102,10 @@ Supported postback parameters/placeholders:
   - upstream provider identifier (for example `nth`, `dimoco`, `lily`)
 - `operator_name`
   - resolved operator label when available in normalized conversion/sales context
+- `custom_field1`
+  - Affise reporting dimension populated from `operator_name`
 - `sub7`
-  - alias for `operator_name` used by Affise-style reporting dimensions
+  - legacy placeholder alias for `operator_name`; kept for existing templates but no longer appended automatically
 - `secure` / `hash`
   - signature/checksum value generated from configured signature algorithm/base/secret
 - signature parameter fallback (`KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`)
