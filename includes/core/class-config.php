@@ -268,7 +268,7 @@ class Kiwi_Config
             return 'disabled';
         }
 
-        return 'onclick';
+        return 'onload';
     }
 
     public function get_landing_ua_tracking_mode_options(): array
@@ -289,7 +289,7 @@ class Kiwi_Config
     {
         $mode = strtolower(trim($mode));
 
-        return in_array($mode, ['disabled', 'onclick', 'onload'], true) ? $mode : 'onclick';
+        return in_array($mode, ['disabled', 'onclick', 'onload'], true) ? $mode : 'onload';
     }
 
     public function get_sms_body_variant_experiment_countries(): array

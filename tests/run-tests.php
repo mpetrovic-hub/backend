@@ -687,7 +687,7 @@ class Kiwi_Test_Landing_Ua_Config extends Kiwi_Test_Config
     {
         return in_array($this->landing_ua_tracking_mode, ['disabled', 'onclick', 'onload'], true)
             ? $this->landing_ua_tracking_mode
-            : 'onclick';
+            : 'onload';
     }
 }
 
@@ -9698,9 +9698,9 @@ kiwi_run_test('Kiwi_Config exposes generic landing UA tracking modes', function 
     $invalid = new Kiwi_Test_Landing_Ua_Config('unexpected');
     $onload = new Kiwi_Test_Landing_Ua_Config('onload');
 
-    kiwi_assert_same('onclick', $config->get_landing_ua_tracking_mode(), 'Expected default UA tracking mode to preserve existing CTA/handoff-only behavior.');
+    kiwi_assert_same('onload', $config->get_landing_ua_tracking_mode(), 'Expected default UA tracking mode to capture page-load device context.');
     kiwi_assert_same(['disabled', 'onclick', 'onload'], array_keys($options), 'Expected config to expose the supported UA tracking modes for a future settings UI.');
-    kiwi_assert_same('onclick', $invalid->get_landing_ua_tracking_mode(), 'Expected invalid UA tracking modes to fall back to onclick.');
+    kiwi_assert_same('onload', $invalid->get_landing_ua_tracking_mode(), 'Expected invalid UA tracking modes to fall back to onload.');
     kiwi_assert_same('onload', $onload->get_landing_ua_tracking_mode(), 'Expected explicit onload mode to be representable in config tests.');
 });
 

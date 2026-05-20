@@ -62,7 +62,7 @@ Best-effort User-Agent context is controlled by `KIWI_LANDING_UA_TRACKING_MODE`:
 - `onclick`: collect UA Client Hints only around CTA/handoff interaction; this preserves the legacy handoff-near behavior
 - `onload`: collect UA Client Hints on page load and persist them with the `page_loaded` engagement when available
 
-The legacy `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED=false` switch maps to `disabled` when the new mode is not set. Otherwise the default remains `onclick`.
+The legacy `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED=false` switch maps to `disabled` when the new mode is not set. Otherwise the default is `onload`, so page-load sessions can be clustered by available device context.
 
 For NTH click-to-SMS flows, CTA construction can append the internal `transaction_id` to the SMS body through centralized adapter logic. The FR SMS-body variant experiment can instead render a stable visible token while keeping the internal `txn_...` correlation id unchanged server-side.
 
@@ -250,8 +250,8 @@ Notes:
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
   - country allowlist for the experiment (default: `['FR']`)
 - `KIWI_LANDING_UA_TRACKING_MODE`
-  - generic UA tracking mode for landing telemetry: `disabled`, `onclick`, or `onload` (default: `onclick`)
-  - `onload` increases page-load REST/DB write volume and should be enabled deliberately
+  - generic UA tracking mode for landing telemetry: `disabled`, `onclick`, or `onload` (default: `onload`)
+  - `onload` increases page-load REST/DB write volume but enables device/OS/browser clustering for non-click sessions
 - `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED`
   - legacy compatibility switch; when set to `false` and `KIWI_LANDING_UA_TRACKING_MODE` is unset, it maps to `disabled`
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
