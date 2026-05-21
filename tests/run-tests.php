@@ -4439,11 +4439,11 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant con
     kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected SMS body variant conversion counter to increment once across duplicate confirmed callbacks.');
 });
 
-kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends sub7 from persisted sales operator_name', function (): void {
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends custom_field1 from persisted sales operator_name', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $sales_repository = new Kiwi_Test_Sales_Repository();
     $sales_repository->upsert([
-        'sale_reference' => 'sale-sub7-1',
+        'sale_reference' => 'sale-custom-field1-1',
         'operator_name' => '20820',
         'operator_code' => '20820',
         'provider_key' => 'nth',
@@ -4462,8 +4462,8 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends sub7 from persisted 
     );
 
     $capture = $repository->upsert_capture([
-        'tracking_token' => 'TOKSUB7ATTRIBUTION',
-        'click_id' => 'aff:click:sub7',
+        'tracking_token' => 'TOKCUSTOMFIELDONE',
+        'click_id' => 'aff:click:custom-field1',
         'provider_key' => 'nth',
         'service_key' => 'nth_fr_one_off_jplay',
         'expires_at' => '2026-04-05 12:00:00',
@@ -4473,23 +4473,23 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends sub7 from persisted 
         'tracking_token' => (string) ($capture['tracking_token'] ?? ''),
         'provider_key' => 'nth',
         'service_key' => 'nth_fr_one_off_jplay',
-        'transaction_ref' => 'flow-sub7-1',
-        'sale_reference' => 'sale-sub7-1',
+        'transaction_ref' => 'flow-custom-field1-1',
+        'sale_reference' => 'sale-custom-field1-1',
     ]);
 
     $result = $resolver->handle_confirmed_conversion([
         'provider_key' => 'nth',
         'service_key' => 'nth_fr_one_off_jplay',
         'confirmed' => true,
-        'transaction_ref' => 'flow-sub7-1',
-        'sale_reference' => 'sale-sub7-1',
+        'transaction_ref' => 'flow-custom-field1-1',
+        'sale_reference' => 'sale-custom-field1-1',
     ]);
 
-    kiwi_assert_true($result['dispatched'] ?? false, 'Expected confirmed conversion to dispatch postback in sub7 enrichment flow.');
-    kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback call for sub7 enrichment flow.');
+    kiwi_assert_true($result['dispatched'] ?? false, 'Expected confirmed conversion to dispatch postback in custom_field1 enrichment flow.');
+    kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback call for custom_field1 enrichment flow.');
     kiwi_assert_true(
-        strpos((string) ($dispatcher->calls[0] ?? ''), 'sub7=20820') !== false,
-        'Expected postback URL to include sub7 from wp_kiwi_sales.operator_name.'
+        strpos((string) ($dispatcher->calls[0] ?? ''), 'custom_field1=20820') !== false,
+        'Expected postback URL to include custom_field1 from wp_kiwi_sales.operator_name.'
     );
 });
 
@@ -4684,6 +4684,28 @@ kiwi_run_test('Kiwi_Affiliate_Postback_Dispatcher supports double-brace clickid 
     kiwi_assert_true(
         strpos($url, 'goal=sale') !== false,
         'Expected non-placeholder query parameters to remain unchanged.'
+    );
+});
+
+kiwi_run_test('Kiwi_Affiliate_Postback_Dispatcher maps custom_field1 placeholder to operator_name', function (): void {
+    $config = new Kiwi_Test_Attribution_Config(
+        'https://offers-kiwimobile.affise.com/postback?clickid={clickid}&custom_field1={{custom_field1}}&goal=sale',
+        ''
+    );
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher($config);
+
+    $url = $dispatcher->build_postback_url('aff:custom:field1', [], [
+        'operator_name' => 'Orange FR',
+    ]);
+
+    kiwi_assert_true(
+        strpos($url, 'custom_field1=Orange%20FR') !== false,
+        'Expected dispatcher to replace custom_field1 placeholders with URL-encoded operator_name.'
+    );
+    kiwi_assert_same(
+        1,
+        substr_count($url, 'custom_field1='),
+        'Expected dispatcher not to append a duplicate custom_field1 when the template defines it.'
     );
 });
 
