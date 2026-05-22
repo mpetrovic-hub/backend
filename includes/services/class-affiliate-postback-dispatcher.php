@@ -81,6 +81,8 @@ class Kiwi_Affiliate_Postback_Dispatcher
             '{{provider_key}}' => rawurlencode($provider_key),
             '{operator_name}' => rawurlencode($operator_name),
             '{{operator_name}}' => rawurlencode($operator_name),
+            '{custom_field1}' => rawurlencode($operator_name),
+            '{{custom_field1}}' => rawurlencode($operator_name),
             '{sub7}' => rawurlencode($operator_name),
             '{{sub7}}' => rawurlencode($operator_name),
             '{secure}' => rawurlencode($signature),
@@ -100,9 +102,9 @@ class Kiwi_Affiliate_Postback_Dispatcher
             }
         }
 
-        if ($operator_name !== '' && !$this->url_has_query_parameter($url, 'sub7')) {
+        if ($operator_name !== '' && !$this->url_has_query_parameter($url, 'custom_field1')) {
             $url .= (strpos($url, '?') === false ? '?' : '&')
-                . 'sub7='
+                . 'custom_field1='
                 . rawurlencode($operator_name);
         }
 
