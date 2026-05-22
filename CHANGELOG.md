@@ -19,7 +19,7 @@ Changes are listed by date (newest first). Only medium-impact or higher updates 
 - [Statistics] Added a protected `[kiwi_statistics]` traffic-source funnel report backed by a plugin-managed `kiwi_v_load_to_cta_by_tksource_tkzone` view, with timeframe/source filters, median Load-to-CTA metrics, completed-sales rates, CSV export, tests, and operations/architecture documentation.
 
 2026-05-16:
-- [No Changes] No medium-impact or higher commits landed in repository history on 2026-05-16.
+- [Statistics Windowing] Fixed the traffic-source funnel statistics view so completed-sale metrics are timestamped and filtered by `wp_kiwi_sales.completed_at` instead of `created_at`. This keeps delayed callback/retry conversions in the reporting window where the sale actually completed.
 
 2026-05-15:
 - [Legacy Fallback] Disabled legacy `KIWI_LANDING_PAGES` fallback by default so active landing routes resolve from filesystem entries unless the rollback switch is explicitly enabled. Updated production behavior docs and regression coverage for active filesystem routes and explicit legacy rollback.
@@ -31,6 +31,9 @@ Changes are listed by date (newest first). Only medium-impact or higher updates 
 
 2026-05-13:
 - [LP6 V2] Added the `lp6-fr-v2` France one-off Premium SMS landing-page variant with dedicated markup, NTH integration metadata, responsive hero assets, CTA tracking, service disclosures, and cookie popup behavior. Follow-up styling tightened the cookie popup sizing, typography, spacing, and mobile layout.
+
+2026-05-12:
+- [Schema Version] Bumped the plugin DB schema version to `2026-05-12-1` so existing installs rerun `dbDelta` migrations for the `tksource`/`tkzone` columns introduced with traffic-source tracking.
 
 2026-05-11:
 - [Affise Params] Updated the click-attribution/postback architecture contract to use the real Affise sale template (`clickid`, `secure`, `goal`, `status`) and documented supported optional parameters with `action_id` uniqueness guidance. Clarified dispatcher behavior so only template-declared parameters are emitted and `secure={secure}` is required in Affise sale templates.

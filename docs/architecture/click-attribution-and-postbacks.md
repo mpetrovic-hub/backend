@@ -123,9 +123,9 @@ The view is deliberately built from normalized internal tables only:
 
 - `wp_kiwi_premium_sms_landing_engagements` for sessions, load events, CTA sessions, click counts, and load-to-CTA deltas
 - `wp_kiwi_click_attributions` for `transaction_id`, `service_key`, `tksource`, and `tkzone` correlation
-- `wp_kiwi_sales` for completed sales and amount totals
+- `wp_kiwi_sales` for completed sales and amount totals, using `completed_at` as the sales metric timestamp and cutoff field
 
-The repository applies `from`, optional `to`, `service_key`, and `tksource` filters before grouping by `service_key`, `tksource`, and `tkzone`. The default lower bound is `2026-05-12 20:00:00`, because traffic-source fields were not reliable before that point. Median load-to-CTA uses database window functions; if the view or median query cannot be read on a target MySQL/MariaDB version, the shortcode shows an admin-facing error instead of failing the page.
+The repository applies `from`, optional `to`, `service_key`, and `tksource` filters before grouping by `service_key`, `tksource`, and `tkzone`. The protected shortcode renders these as native date/time controls plus service/source dropdowns whose options are derived from distinct values in the view. The default lower bound is `2026-05-12 20:00:00`, because traffic-source fields were not reliable before that point. Median load-to-CTA uses database window functions; if the view or median query cannot be read on a target MySQL/MariaDB version, the shortcode shows an admin-facing error instead of failing the page.
 
 The same repository also creates `wp_kiwi_v_one_for_all` for broader landing-funnel analysis. That view keeps provider integrations out of the analytics contract and joins only normalized internal tables:
 

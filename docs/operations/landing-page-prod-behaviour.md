@@ -217,6 +217,7 @@ Notes:
 - `wp_kiwi_v_load_to_cta_by_tksource_tkzone`
   - plugin-managed view for the `[kiwi_statistics]` traffic-source funnel report
   - normalizes landing engagement and completed-sale facts by `service_key`, `tksource`, and `tkzone`
+  - assigns completed-sale facts to reporting windows by `wp_kiwi_sales.completed_at`
   - uses `2026-05-12 20:00:00` as the default lower bound for reliable `tksource`/`tkzone` data
 
 - `wp_kiwi_v_one_for_all`
@@ -279,7 +280,7 @@ When validating a landing-page flow in production or staging, verify:
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
 10. UA tracking mode behaves as configured: `disabled` stores no UA context, `onclick` stores it only near CTA/handoff events, and `onload` stores it on `page_loaded` when browser hints are available.
-11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, and shows completed sales/rates where attribution has a matching `transaction_id`.
+11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, preserves wall-clock seconds in native datetime filters, populates service/TK-source dropdowns from existing view data, and shows completed sales/rates where attribution has a matching `transaction_id`.
 12. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`.
 13. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
 
