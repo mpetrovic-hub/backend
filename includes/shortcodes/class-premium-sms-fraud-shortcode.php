@@ -345,9 +345,9 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             : 100;
         $filters_applied = isset($_GET['kiwi_fraud_filters_applied'])
             && wp_unslash((string) $_GET['kiwi_fraud_filters_applied']) === '1';
-        $flagged_only = $filters_applied
-            ? isset($_GET['kiwi_fraud_flagged_only']) && wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1'
-            : true;
+        $flagged_only = isset($_GET['kiwi_fraud_flagged_only'])
+            ? wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1'
+            : !$filters_applied;
 
         if (!in_array($identity_type, ['', 'subscriber', 'session'], true)) {
             $identity_type = '';

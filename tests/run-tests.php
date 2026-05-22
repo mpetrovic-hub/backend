@@ -9425,6 +9425,50 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode allows submitted filters to disa
     $_GET = [];
 });
 
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode honors explicit flagged only deep-link values', function (): void {
+    $_POST = [];
+    $_GET = [
+        'kiwi_fraud_flagged_only' => '0',
+    ];
+
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_deeplink',
+        'source_event_key' => 'row-deeplink-flagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-deeplink-flagged',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'count_1h' => 3,
+        'count_24h' => 3,
+        'count_total' => 3,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_deeplink',
+        'source_event_key' => 'row-deeplink-unflagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-deeplink-unflagged',
+        'occurred_at' => '2026-04-01 12:01:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => false,
+        'soft_flag_reason' => '',
+    ]);
+
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_true(strpos($output, 'name="kiwi_fraud_flagged_only" value="1" checked="checked"') === false, 'Expected explicit deep-link value 0 to keep Flagged only unchecked.');
+    kiwi_assert_contains('session-deeplink-flagged', $output, 'Expected flagged row to remain visible with explicit deep-link value 0.');
+    kiwi_assert_contains('session-deeplink-unflagged', $output, 'Expected explicit deep-link value 0 to show unflagged rows.');
+
+    $_GET = [];
+});
+
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag columns and reasons', function (): void {
     $_POST = [];
     $_GET = [
