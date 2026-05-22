@@ -256,6 +256,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
 
         $output = '';
         $output .= '<form method="get" class="kiwi-form kiwi-form-card">';
+        $output .= '<input type="hidden" name="kiwi_fraud_filters_applied" value="1">';
         $output .= '<div class="kiwi-form-row kiwi-form-row-inline">';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_fraud_service_key">Service Key</label>';
@@ -342,6 +343,11 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         $limit = isset($_GET['kiwi_fraud_limit'])
             ? (int) wp_unslash((string) $_GET['kiwi_fraud_limit'])
             : 100;
+        $filters_applied = isset($_GET['kiwi_fraud_filters_applied'])
+            && wp_unslash((string) $_GET['kiwi_fraud_filters_applied']) === '1';
+        $flagged_only = isset($_GET['kiwi_fraud_flagged_only'])
+            ? wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1'
+            : !$filters_applied;
 
         if (!in_array($identity_type, ['', 'subscriber', 'session'], true)) {
             $identity_type = '';
@@ -355,7 +361,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             'tksource' => $tksource,
             'tkzone' => $tkzone,
             'identity_type' => $identity_type,
-            'flagged_only' => isset($_GET['kiwi_fraud_flagged_only']) && wp_unslash((string) $_GET['kiwi_fraud_flagged_only']) === '1',
+            'flagged_only' => $flagged_only,
             'limit' => max(1, min(500, $limit)),
         ];
     }

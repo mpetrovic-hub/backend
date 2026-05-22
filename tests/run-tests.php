@@ -9338,6 +9338,137 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode discovers service keys from non-
     kiwi_assert_contains('value="at_service_getstronger"', $output, 'Expected generic service-key discovery to include non-NTH configured service maps.');
 });
 
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode defaults to flagged only on initial load', function (): void {
+    $_POST = [];
+    $_GET = [];
+
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_default',
+        'source_event_key' => 'row-default-flagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-default-flagged',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'count_1h' => 3,
+        'count_24h' => 3,
+        'count_total' => 3,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_default',
+        'source_event_key' => 'row-default-unflagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-default-unflagged',
+        'occurred_at' => '2026-04-01 12:01:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => false,
+        'soft_flag_reason' => '',
+    ]);
+
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_contains('name="kiwi_fraud_filters_applied" value="1"', $output, 'Expected fraud filters form to mark submitted filter requests.');
+    kiwi_assert_contains('name="kiwi_fraud_flagged_only" value="1" checked="checked"', $output, 'Expected Flagged only to be checked by default.');
+    kiwi_assert_contains('session-default-flagged', $output, 'Expected flagged row to remain visible on initial load.');
+    kiwi_assert_true(strpos($output, 'session-default-unflagged') === false, 'Expected initial load to hide unflagged rows.');
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode allows submitted filters to disable flagged only', function (): void {
+    $_POST = [];
+    $_GET = [
+        'kiwi_fraud_filters_applied' => '1',
+    ];
+
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_unchecked',
+        'source_event_key' => 'row-unchecked-flagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-unchecked-flagged',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'count_1h' => 3,
+        'count_24h' => 3,
+        'count_total' => 3,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_unchecked',
+        'source_event_key' => 'row-unchecked-unflagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-unchecked-unflagged',
+        'occurred_at' => '2026-04-01 12:01:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => false,
+        'soft_flag_reason' => '',
+    ]);
+
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_true(strpos($output, 'name="kiwi_fraud_flagged_only" value="1" checked="checked"') === false, 'Expected submitted unchecked Flagged only filter to stay unchecked.');
+    kiwi_assert_contains('session-unchecked-flagged', $output, 'Expected flagged row to remain visible when filter is disabled.');
+    kiwi_assert_contains('session-unchecked-unflagged', $output, 'Expected submitted unchecked filter to show unflagged rows.');
+
+    $_GET = [];
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode honors explicit flagged only deep-link values', function (): void {
+    $_POST = [];
+    $_GET = [
+        'kiwi_fraud_flagged_only' => '0',
+    ];
+
+    $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_deeplink',
+        'source_event_key' => 'row-deeplink-flagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-deeplink-flagged',
+        'occurred_at' => '2026-04-01 12:00:00',
+        'count_1h' => 3,
+        'count_24h' => 3,
+        'count_total' => 3,
+        'is_soft_flag' => true,
+        'soft_flag_reason' => 'count_1h>=3',
+    ]);
+    $repository->insert_if_new([
+        'provider_key' => 'nth',
+        'service_key' => 'svc_deeplink',
+        'source_event_key' => 'row-deeplink-unflagged',
+        'identity_type' => 'session',
+        'identity_value' => 'session-deeplink-unflagged',
+        'occurred_at' => '2026-04-01 12:01:00',
+        'count_1h' => 1,
+        'count_24h' => 1,
+        'count_total' => 1,
+        'is_soft_flag' => false,
+        'soft_flag_reason' => '',
+    ]);
+
+    $shortcode = new Kiwi_Premium_Sms_Fraud_Shortcode($repository, null, new Kiwi_Frontend_Auth_Gate());
+    $output = $shortcode->render();
+
+    kiwi_assert_true(strpos($output, 'name="kiwi_fraud_flagged_only" value="1" checked="checked"') === false, 'Expected explicit deep-link value 0 to keep Flagged only unchecked.');
+    kiwi_assert_contains('session-deeplink-flagged', $output, 'Expected flagged row to remain visible with explicit deep-link value 0.');
+    kiwi_assert_contains('session-deeplink-unflagged', $output, 'Expected explicit deep-link value 0 to show unflagged rows.');
+
+    $_GET = [];
+});
+
 kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag columns and reasons', function (): void {
     $_POST = [];
     $_GET = [
