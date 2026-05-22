@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-21:
+- [Affise Operator] Switched Affise operator reporting from `sub7` to `custom_field1`, mapping the normalized `operator_name` into templates or appending it when absent. Updated attribution/postback documentation, environment guidance, and regression coverage for the dispatcher and persisted-sale enrichment flow.
+
 2026-05-20:
 - [Landing Analytics] Added a generic landing UA tracking mode (`disabled`, `onclick`, `onload`), engagement-table UA Client Hints persistence, and a plugin-managed `kiwi_v_one_for_all` analytics view for device/source funnel pivots. Follow-up changes made `onload` the default mode so page-load sessions can be clustered by available device context.
 
