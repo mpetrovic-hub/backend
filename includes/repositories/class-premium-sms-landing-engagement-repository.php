@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Premium_Sms_Landing_Engagement_Repository
 {
+    private const CTA_STEPS = ['cta1', 'cta2', 'cta3'];
+
     private function get_table_name(): string
     {
         global $wpdb;
@@ -37,6 +39,15 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             first_cta_click_at DATETIME NULL,
             last_cta_click_at DATETIME NULL,
             cta_click_count INT UNSIGNED NOT NULL DEFAULT 0,
+            first_cta1_click_at DATETIME NULL,
+            last_cta1_click_at DATETIME NULL,
+            cta1_click_count INT UNSIGNED NOT NULL DEFAULT 0,
+            first_cta2_click_at DATETIME NULL,
+            last_cta2_click_at DATETIME NULL,
+            cta2_click_count INT UNSIGNED NOT NULL DEFAULT 0,
+            first_cta3_click_at DATETIME NULL,
+            last_cta3_click_at DATETIME NULL,
+            cta3_click_count INT UNSIGNED NOT NULL DEFAULT 0,
             ua_ch_supported TINYINT(1) NOT NULL DEFAULT 0,
             ua_ch_mobile TINYINT(1) NOT NULL DEFAULT 0,
             ua_ch_platform VARCHAR(50) NOT NULL DEFAULT '',
@@ -58,7 +69,9 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 
@@ -68,6 +81,9 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
         $session_token = trim((string) ($context['session_token'] ?? ''));
         $event_type = strtolower(trim($event_type));
         $occurred_at = $this->normalize_mysql_datetime($occurred_at);
+        $cta_step = $event_type === 'cta_click'
+            ? $this->normalize_cta_step((string) ($context['cta_step'] ?? ''))
+            : '';
 
         if ($landing_key === '' || $session_token === '' || !$this->is_supported_event_type($event_type)) {
             return [];
@@ -93,6 +109,15 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'first_cta_click_at' => null,
                 'last_cta_click_at' => null,
                 'cta_click_count' => 0,
+                'first_cta1_click_at' => null,
+                'last_cta1_click_at' => null,
+                'cta1_click_count' => 0,
+                'first_cta2_click_at' => null,
+                'last_cta2_click_at' => null,
+                'cta2_click_count' => 0,
+                'first_cta3_click_at' => null,
+                'last_cta3_click_at' => null,
+                'cta3_click_count' => 0,
                 'last_event_at' => $occurred_at,
             ];
             $initial_row = array_merge($initial_row, $this->normalize_ua_context($context));
@@ -103,6 +128,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 $initial_row['first_cta_click_at'] = $occurred_at;
                 $initial_row['last_cta_click_at'] = $occurred_at;
                 $initial_row['cta_click_count'] = 1;
+                $this->apply_cta_step_initial_values($initial_row, $cta_step, $occurred_at);
             }
 
             $this->insert_row($initial_row);
@@ -159,6 +185,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
             $update_data['last_cta_click_at'] = $occurred_at;
             $update_data['cta_click_count'] = max(0, (int) ($row['cta_click_count'] ?? 0)) + 1;
+            $this->apply_cta_step_update_values($update_data, $row, $cta_step, $occurred_at);
         }
 
         $this->update_by_id((int) ($row['id'] ?? 0), $update_data);
@@ -293,6 +320,15 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'first_cta_click_at' => $this->normalize_nullable_datetime($data['first_cta_click_at'] ?? null),
                 'last_cta_click_at' => $this->normalize_nullable_datetime($data['last_cta_click_at'] ?? null),
                 'cta_click_count' => max(0, (int) ($data['cta_click_count'] ?? 0)),
+                'first_cta1_click_at' => $this->normalize_nullable_datetime($data['first_cta1_click_at'] ?? null),
+                'last_cta1_click_at' => $this->normalize_nullable_datetime($data['last_cta1_click_at'] ?? null),
+                'cta1_click_count' => max(0, (int) ($data['cta1_click_count'] ?? 0)),
+                'first_cta2_click_at' => $this->normalize_nullable_datetime($data['first_cta2_click_at'] ?? null),
+                'last_cta2_click_at' => $this->normalize_nullable_datetime($data['last_cta2_click_at'] ?? null),
+                'cta2_click_count' => max(0, (int) ($data['cta2_click_count'] ?? 0)),
+                'first_cta3_click_at' => $this->normalize_nullable_datetime($data['first_cta3_click_at'] ?? null),
+                'last_cta3_click_at' => $this->normalize_nullable_datetime($data['last_cta3_click_at'] ?? null),
+                'cta3_click_count' => max(0, (int) ($data['cta3_click_count'] ?? 0)),
                 'ua_ch_supported' => !empty($data['ua_ch_supported']) ? 1 : 0,
                 'ua_ch_mobile' => !empty($data['ua_ch_mobile']) ? 1 : 0,
                 'ua_ch_platform' => $this->sanitize_client_hint_token((string) ($data['ua_ch_platform'] ?? ''), 50),
@@ -316,6 +352,15 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 '%s',
                 '%s',
                 '%s',
+                '%s',
+                '%s',
+                '%d',
+                '%s',
+                '%s',
+                '%d',
+                '%s',
+                '%s',
+                '%d',
                 '%s',
                 '%s',
                 '%d',
@@ -357,6 +402,15 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'first_cta_click_at' => '%s',
             'last_cta_click_at' => '%s',
             'cta_click_count' => '%d',
+            'first_cta1_click_at' => '%s',
+            'last_cta1_click_at' => '%s',
+            'cta1_click_count' => '%d',
+            'first_cta2_click_at' => '%s',
+            'last_cta2_click_at' => '%s',
+            'cta2_click_count' => '%d',
+            'first_cta3_click_at' => '%s',
+            'last_cta3_click_at' => '%s',
+            'cta3_click_count' => '%d',
             'ua_ch_supported' => '%d',
             'ua_ch_mobile' => '%d',
             'ua_ch_platform' => '%s',
@@ -375,11 +429,11 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
             $value = $data[$field];
 
-            if (in_array($field, ['page_loaded_at', 'first_cta_click_at', 'last_cta_click_at'], true)) {
+            if (in_array($field, $this->datetime_fields(), true)) {
                 $value = $this->normalize_nullable_datetime($value);
             }
 
-            if ($field === 'cta_click_count') {
+            if (in_array($field, $this->count_fields(), true)) {
                 $value = max(0, (int) $value);
             }
 
@@ -463,6 +517,67 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
     private function is_supported_event_type(string $event_type): bool
     {
         return in_array($event_type, ['page_loaded', 'cta_click'], true);
+    }
+
+    private function normalize_cta_step(string $cta_step): string
+    {
+        $cta_step = strtolower(trim($cta_step));
+
+        return in_array($cta_step, self::CTA_STEPS, true) ? $cta_step : '';
+    }
+
+    private function apply_cta_step_initial_values(array &$row, string $cta_step, string $occurred_at): void
+    {
+        if ($cta_step === '') {
+            return;
+        }
+
+        $row['first_' . $cta_step . '_click_at'] = $occurred_at;
+        $row['last_' . $cta_step . '_click_at'] = $occurred_at;
+        $row[$cta_step . '_click_count'] = 1;
+    }
+
+    private function apply_cta_step_update_values(array &$update_data, array $row, string $cta_step, string $occurred_at): void
+    {
+        if ($cta_step === '') {
+            return;
+        }
+
+        $first_field = 'first_' . $cta_step . '_click_at';
+        $last_field = 'last_' . $cta_step . '_click_at';
+        $count_field = $cta_step . '_click_count';
+
+        if (trim((string) ($row[$first_field] ?? '')) === '') {
+            $update_data[$first_field] = $occurred_at;
+        }
+
+        $update_data[$last_field] = $occurred_at;
+        $update_data[$count_field] = max(0, (int) ($row[$count_field] ?? 0)) + 1;
+    }
+
+    private function datetime_fields(): array
+    {
+        return [
+            'page_loaded_at',
+            'first_cta_click_at',
+            'last_cta_click_at',
+            'first_cta1_click_at',
+            'last_cta1_click_at',
+            'first_cta2_click_at',
+            'last_cta2_click_at',
+            'first_cta3_click_at',
+            'last_cta3_click_at',
+        ];
+    }
+
+    private function count_fields(): array
+    {
+        return [
+            'cta_click_count',
+            'cta1_click_count',
+            'cta2_click_count',
+            'cta3_click_count',
+        ];
     }
 
     private function normalize_nullable_datetime($value): ?string

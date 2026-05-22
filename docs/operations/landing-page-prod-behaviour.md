@@ -52,7 +52,7 @@ For filesystem HTML and CSS, local media references such as `./hero.png` are rew
 
 Keep the preload candidates in sync with the visible hero `<img>` candidates so the browser does not fetch a duplicate LCP image. External, protocol-relative, `data:`, and root-relative `/...` candidates keep their original browser semantics; only `./...` candidates are rewritten to the effective asset base.
 
-Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`, `tksource`, `tkzone`) for fraud-linkage snapshots.
+Landing engagement telemetry (`page_loaded`, `cta_click`) is sent via the KPI event endpoint and can carry source context (`pid`, `clickid`/`click_id`, `tksource`, `tkzone`) for fraud-linkage snapshots. CTA engagement payloads use `cta_step` (`cta1`, `cta2`, or `cta3`) to persist step-specific per-session click timestamps/counts without reusing the KPI `step` field.
 
 For click-to-SMS CTAs, the same endpoint also records handoff telemetry for `sms:`/`smsto:` links. These events are diagnostic signals only: they indicate that a browser attempted an SMS handoff, hid the page, returned, or did not hide after the click. They do not prove that the SMS was sent and they do not increment KPI summary counters.
 
@@ -117,6 +117,10 @@ The landing-page system supports a generic KPI funnel for optimization analysis.
   - incremented in the central landing-page router when a landing page is rendered
 - `cta1`, `cta2`, `cta3`
   - incremented through the KPI event endpoint into one summary row per landing page
+- Landing engagement events
+  - stored per landing/session for `page_loaded` and `cta_click`
+  - `cta_click` can include `cta_step=cta1|cta2|cta3` for step-specific engagement columns
+  - do not mutate `wp_kiwi_landing_kpi_summary`; KPI step counters still require a separate `step` payload
 - SMS handoff events
   - stored separately for `sms:`/`smsto:` CTA diagnostics
   - supported events: `sms_handoff_attempted`, `sms_handoff_hidden`, `sms_handoff_returned`, `sms_handoff_no_hide`
@@ -162,7 +166,7 @@ Each filesystem landing page can map KPI steps to selectors:
 ```
 
 Notes:
-- step keys must follow `cta1`, `cta2`, `cta3`, ...
+- v1 step keys are limited to `cta1`, `cta2`, and `cta3`
 - selector values can be CSS selectors
 - shorthand `class="cta"` is normalized to `.cta`
 - if no mapping is provided, router defaults to `cta1 => .cta`
@@ -172,6 +176,7 @@ Notes:
 - `POST /wp-json/kiwi-backend/v1/landing-kpi/event`
   - increments CTA summary counters (`cta1`/`cta2`/`cta3`)
   - records engagement events (`page_loaded`, `cta_click`)
+  - accepts `cta_step=cta1|cta2|cta3` only for `cta_click` engagement storage; this is distinct from the KPI `step` field
   - records SMS handoff diagnostics without changing summary counters
 - `GET /wp-json/kiwi-backend/v1/landing-kpi/report`
   - returns per-landing KPI rows with counts and rates
@@ -195,7 +200,9 @@ Notes:
   - confirmed sale records (including `transaction_id`)
 
 - `wp_kiwi_premium_sms_landing_engagements`
-  - landing-session engagement evidence (`page_loaded_at`, first/last CTA click, click count)
+  - landing-session engagement evidence (`page_loaded_at`, first/last generic CTA click, generic click count)
+  - step-specific CTA evidence (`first_cta1_click_at`, `last_cta1_click_at`, `cta1_click_count`, and the matching CTA2/CTA3 columns)
+  - legacy generic CTA columns remain populated for backward compatibility with fraud checks and existing statistics views
   - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
   - raw UA context (`ua_ch_*`, `user_agent`) when the UA tracking mode allows it; normalized device/browser buckets are not stored here
 
@@ -281,8 +288,9 @@ When validating a landing-page flow in production or staging, verify:
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
 10. UA tracking mode behaves as configured: `disabled` stores no UA context, `onclick` stores it only near CTA/handoff events, and `onload` stores it on `page_loaded` when browser hints are available.
 11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, preserves wall-clock seconds in native datetime filters, populates service/TK-source dropdowns from existing view data, and shows completed sales/rates where attribution has a matching `transaction_id`.
-12. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`.
-13. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
+12. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
+13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`.
+14. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
 
 ## Troubleshooting quick map
 

@@ -132,6 +132,8 @@ Die Tabelle enthält inzwischen generische Landing-Engagement-Daten wie Page Loa
 
 ### Erwartetes Verhalten
 
+Seit der CTA-Step-Erweiterung werden neben den generischen Legacy-Spalten `first_cta_click_at`, `last_cta_click_at` und `cta_click_count` auch step-spezifische CTA1/CTA2/CTA3-Spalten gepflegt. Nach Rollout der step-spezifischen Summary-/Statistics-Auswertung muss separat entschieden werden, ob die Legacy-CTA-Spalten dauerhaft als KompatibilitÃ¤tsschicht bleiben oder kontrolliert entfernt werden.
+
 Langfristig soll die Tabelle bzw. Repository-Benennung generischer werden, z.B. Richtung `landing_engagements`.
 
 ### Akzeptanzkriterien

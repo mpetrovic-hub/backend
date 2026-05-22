@@ -273,9 +273,10 @@ class Kiwi_Landing_Page_Router
             . "markSent('step_'+step);}"
             . "function shouldAttachUaToEngagement(eventType){if(!uaClientHintsEnabled){return false;}if(eventType==='page_loaded'){return uaTrackingMode==='onload';}if(eventType==='cta_click'){return uaTrackingMode==='onclick'||uaTrackingMode==='onload';}return false;}"
             . "function dispatchEngagement(payload,onceKey){dispatch(payload);if(onceKey){markSent('eng_'+onceKey);}}"
-            . "function sendEngagement(eventType,eventValue,onceKey){if(!eventType){return;}"
+            . "function sendEngagement(eventType,eventValue,onceKey,ctaStep){if(!eventType){return;}"
             . "if(onceKey&&wasSent('eng_'+onceKey)){return;}"
             . "var payload={landing_key:cfg.landingKey,session_token:cfg.sessionToken,event_type:eventType,event_value:eventValue||''};"
+            . "if(eventType==='cta_click'&&ctaStep){payload.cta_step=ctaStep;}"
             . "if(shouldAttachUaToEngagement(eventType)){var hintPromise=collectUaClientHints();if(hintPromise&&typeof hintPromise.then==='function'){hintPromise.then(function(){var uaPayload=getUaClientHintPayload();for(var key in uaPayload){if(Object.prototype.hasOwnProperty.call(uaPayload,key)){payload[key]=uaPayload[key];}}dispatchEngagement(payload,onceKey);});return;}var uaPayload=getUaClientHintPayload();for(var key in uaPayload){if(Object.prototype.hasOwnProperty.call(uaPayload,key)){payload[key]=uaPayload[key];}}}"
             . "dispatchEngagement(payload,onceKey);}"
             . "function nowMs(){return(new Date()).getTime();}"
@@ -290,7 +291,7 @@ class Kiwi_Landing_Page_Router
             . "function bind(step,selector){if(!selector){return;}var nodes=[];"
             . "try{nodes=document.querySelectorAll(selector);}catch(e){return;}"
             . "if(!nodes||!nodes.length){return;}"
-            . "for(var i=0;i<nodes.length;i++){nodes[i].addEventListener('pointerdown',function(){collectUaClientHints();},{passive:true});nodes[i].addEventListener('touchstart',function(){collectUaClientHints();},{passive:true});nodes[i].addEventListener('mousedown',function(){collectUaClientHints();},{passive:true});nodes[i].addEventListener('click',function(){sendStep(step,selector);sendEngagement('cta_click',step+':'+selector,'');trackSmsHandoff(this);},{passive:true});}}"
+            . "for(var i=0;i<nodes.length;i++){nodes[i].addEventListener('pointerdown',function(){collectUaClientHints();},{passive:true});nodes[i].addEventListener('touchstart',function(){collectUaClientHints();},{passive:true});nodes[i].addEventListener('mousedown',function(){collectUaClientHints();},{passive:true});nodes[i].addEventListener('click',function(){sendStep(step,selector);sendEngagement('cta_click',step+':'+selector,'',step);trackSmsHandoff(this);},{passive:true});}}"
             . "for(var step in cfg.steps){if(Object.prototype.hasOwnProperty.call(cfg.steps,step)){bind(step,cfg.steps[step]);}}"
             . "function trackPageLoaded(){sendEngagement('page_loaded','','page_loaded');}"
             . "if(typeof document!=='undefined'&&document.readyState==='complete'){trackPageLoaded();}"
@@ -329,7 +330,7 @@ class Kiwi_Landing_Page_Router
             foreach ($configured_steps as $step => $selector) {
                 $step_key = strtolower(trim((string) $step));
 
-                if (preg_match('/^cta[1-9][0-9]*$/', $step_key) !== 1) {
+                if (!in_array($step_key, ['cta1', 'cta2', 'cta3'], true)) {
                     continue;
                 }
 

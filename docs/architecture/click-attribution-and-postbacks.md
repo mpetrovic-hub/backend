@@ -71,9 +71,12 @@ No provider-specific callback shape should leak into shared attribution code.
 `wp_kiwi_premium_sms_landing_engagements` stores landing-session engagement evidence used by MO fraud monitoring, including:
 
 - context (`service_key`, `provider_key`, `flow_key`, `landing_key`, `session_token`)
-- engagement timestamps (`page_loaded_at`, `first_cta_click_at`, `last_cta_click_at`) and click count
+- engagement timestamps (`page_loaded_at`, `first_cta_click_at`, `last_cta_click_at`) and generic CTA click count
+- step-specific CTA1/CTA2/CTA3 timestamps and counts (`first_cta1_click_at`, `last_cta1_click_at`, `cta1_click_count`, and matching CTA2/CTA3 columns), populated only from valid engagement `cta_step` values
 - source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 - raw UA context (`ua_ch_supported`, `ua_ch_mobile`, `ua_ch_platform`, `ua_ch_platform_version`, `ua_ch_model`, browser-brand lists, `user_agent`) when the landing UA tracking mode allows it
+
+The legacy generic CTA columns stay populated as a compatibility layer for existing fraud checks and current traffic-source statistics views. The step-specific columns are additive storage for future daily summary/statistics work; they do not change provider callback contracts.
 
 `wp_kiwi_landing_handoff_events` stores click-to-SMS handoff diagnostics, including:
 
@@ -117,7 +120,7 @@ This keeps provider payload parsing at the boundary while giving the shared frau
 
 ## Traffic-Source Funnel Statistics
 
-The shared statistics report is exposed through the protected `[kiwi_statistics]` shortcode. It reads from the plugin-managed `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view instead of relying on a manually created phpMyAdmin view.
+The shared statistics report is exposed through the protected `[kiwi_statistics]` shortcode. It reads from the plugin-managed `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view instead of relying on a manually created phpMyAdmin view. Current statistics views continue to read the generic legacy CTA engagement fields; the CTA1/CTA2/CTA3 engagement columns provide additive input for a separate step-specific summary rollout.
 
 The view is deliberately built from normalized internal tables only:
 
