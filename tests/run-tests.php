@@ -325,6 +325,7 @@ require_once __DIR__ . '/../includes/shortcodes/class-hlr-lookup-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-premium-sms-fraud-shortcode.php';
 require_once __DIR__ . '/../includes/shortcodes/class-statistics-shortcode.php';
 require_once __DIR__ . '/../includes/services/class-shared-sales-recorder.php';
+require_once __DIR__ . '/../includes/services/class-sales-attribution-snapshot-builder.php';
 require_once __DIR__ . '/../includes/services/class-affiliate-postback-dispatcher.php';
 require_once __DIR__ . '/../includes/services/class-conversion-attribution-resolver.php';
 require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
@@ -2016,7 +2017,20 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
             (string) ($references['transaction_id'] ?? ''),
             (string) ($row['transaction_id'] ?? '')
         );
-        $this->rows[$id] = array_merge($row, $references);
+        $updates = array_filter(
+            $references,
+            static function ($value): bool {
+                return trim((string) $value) !== '';
+            }
+        );
+
+        foreach (['provider_key', 'flow_key', 'service_key', 'session_ref', 'transaction_ref', 'message_ref', 'external_ref', 'sale_reference'] as $field) {
+            if (trim((string) ($row[$field] ?? '')) !== '' && array_key_exists($field, $updates)) {
+                unset($updates[$field]);
+            }
+        }
+
+        $this->rows[$id] = array_merge($row, $updates);
         $this->rows[$id]['transaction_id'] = $transaction_id;
 
         if (($this->rows[$id]['conversion_status'] ?? '') === 'captured') {
@@ -2686,6 +2700,76 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
     }
 }
 
+class Kiwi_Test_Landing_Page_Session_Repository extends Kiwi_Landing_Page_Session_Repository
+{
+    public $rows = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function insert(array $data): bool
+    {
+        $id = $this->next_id++;
+        $this->rows[$id] = array_merge(
+            [
+                'id' => $id,
+                'created_at' => '2026-04-01 12:00:00',
+                'landing_key' => '',
+                'service_key' => '',
+                'request_host' => '',
+                'request_path' => '',
+                'session_token' => '',
+                'click_to_sms_uri' => '',
+                'referer' => '',
+                'user_agent' => '',
+                'remote_ip' => '',
+                'query_params' => [],
+                'raw_context' => [],
+            ],
+            $data,
+            ['id' => $id]
+        );
+
+        return true;
+    }
+
+    public function find_by_landing_session(string $landing_key, string $session_token): ?array
+    {
+        foreach (array_reverse($this->rows, true) as $row) {
+            if ((string) ($row['landing_key'] ?? '') !== $landing_key) {
+                continue;
+            }
+
+            if ((string) ($row['session_token'] ?? '') !== $session_token) {
+                continue;
+            }
+
+            return $row;
+        }
+
+        return null;
+    }
+
+    public function find_by_session_token(string $session_token, string $service_key = ''): ?array
+    {
+        foreach (array_reverse($this->rows, true) as $row) {
+            if ((string) ($row['session_token'] ?? '') !== $session_token) {
+                continue;
+            }
+
+            if ($service_key !== '' && (string) ($row['service_key'] ?? '') !== $service_key) {
+                continue;
+            }
+
+            return $row;
+        }
+
+        return null;
+    }
+}
+
 class Kiwi_Test_Wpdb_Sms_Body_Variant
 {
     public $prefix = 'wp_';
@@ -3222,6 +3306,7 @@ class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
 {
     public $upsert_calls = [];
     public $pid_updates = [];
+    public $snapshot_updates = [];
     public $rows = [];
     private $next_id = 1;
 
@@ -3280,6 +3365,42 @@ class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
 
         return false;
     }
+
+    public function update_attribution_snapshot_by_sale_reference(string $sale_reference, array $snapshot): bool
+    {
+        $sale_reference = trim($sale_reference);
+
+        if ($sale_reference === '') {
+            return false;
+        }
+
+        foreach ($this->rows as $index => $row) {
+            if ((string) ($row['sale_reference'] ?? '') !== $sale_reference) {
+                continue;
+            }
+
+            $context = $row['context_json'] ?? [];
+
+            if (!is_array($context)) {
+                $context = [];
+            }
+
+            if (isset($snapshot['attribution_snapshot']) && is_array($snapshot['attribution_snapshot'])) {
+                $context['attribution_snapshot'] = $snapshot['attribution_snapshot'];
+            }
+
+            $this->rows[$index] = array_merge($row, $snapshot);
+            $this->rows[$index]['context_json'] = $context;
+            $this->snapshot_updates[] = [
+                'sale_reference' => $sale_reference,
+                'snapshot' => $snapshot,
+            ];
+
+            return true;
+        }
+
+        return false;
+    }
 }
 
 class Kiwi_Test_Failing_Sales_Repository extends Kiwi_Sales_Repository
@@ -3304,6 +3425,11 @@ class Kiwi_Test_Failing_Sales_Repository extends Kiwi_Sales_Repository
     }
 
     public function update_pid_by_sale_reference(string $sale_reference, string $pid): bool
+    {
+        return false;
+    }
+
+    public function update_attribution_snapshot_by_sale_reference(string $sale_reference, array $snapshot): bool
     {
         return false;
     }
@@ -4396,6 +4522,35 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver can resolve confirmed conver
     kiwi_assert_same(1, count($dispatcher->calls), 'Expected one outbound postback for transaction_id-based confirmed conversion handling.');
 });
 
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver preserves landing session when binding provider refs', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config());
+    $resolver = new Kiwi_Conversion_Attribution_Resolver($repository, $dispatcher);
+
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKSESSIONPRESERVE',
+        'click_id' => 'aff:session:preserve',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
+        'session_ref' => 'landing-session-1',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+
+    $updated = $resolver->attach_provider_references([
+        'tracking_token' => (string) ($capture['tracking_token'] ?? ''),
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'session_ref' => 'provider-session-1',
+        'external_ref' => 'provider-session-1',
+        'transaction_ref' => 'flow-session-preserve-1',
+        'sale_reference' => 'sale-session-preserve-1',
+    ]);
+
+    kiwi_assert_same('landing-session-1', (string) ($updated['session_ref'] ?? ''), 'Expected provider binding not to overwrite the landing session reference.');
+    kiwi_assert_same('provider-session-1', (string) ($updated['external_ref'] ?? ''), 'Expected provider external ref to remain available for conversion matching.');
+});
+
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant conversion once', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config());
@@ -4640,6 +4795,160 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver leaves sales pid unchanged w
     );
 });
 
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists sales attribution snapshot from landing context', function (): void {
+    $_SERVER['REMOTE_ADDR'] = '198.51.100.77';
+
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+
+    $sales_repository->upsert([
+        'sale_reference' => 'sale-snapshot-1',
+        'transaction_id' => 'txn_snapshot_123456',
+        'provider_key' => 'nth',
+        'status' => 'completed',
+        'completed_at' => '2026-04-02 15:00:00',
+        'context_json' => [
+            'transaction' => ['sale_reference' => 'sale-snapshot-1'],
+            'report_event' => ['status' => 'delivered'],
+        ],
+    ]);
+    $landing_session_repository->insert([
+        'created_at' => '2026-04-01 08:00:00',
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'session_token' => 'sess-snapshot-1',
+        'remote_ip' => '203.0.113.44',
+        'user_agent' => 'Mozilla/5.0 (Linux; Android 14; SM-A536B) AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36',
+    ]);
+    $engagement_repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-snapshot-1',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'one-off',
+        'click_id' => 'aff:snapshot:1',
+        'tksource' => 'source_a',
+        'tkzone' => 'zone_b',
+        'ua_ch_supported' => 1,
+        'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '14.0.0',
+        'ua_ch_model' => 'SM-A536B',
+        'ua_ch_brands' => 'Google Chrome 125',
+        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+        'user_agent' => 'Mozilla/5.0 (Linux; Android 14; SM-A536B) AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36',
+    ], 'page_loaded', '2026-04-01 08:00:10');
+
+    $capture = $repository->upsert_capture([
+        'created_at' => '2026-03-31 23:59:59',
+        'tracking_token' => 'TOKSNAPSHOT00001',
+        'transaction_id' => 'txn_snapshot_123456',
+        'click_id' => 'aff:snapshot:1',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
+        'flow_key' => 'one-off',
+        'pid' => 'pid-snapshot',
+        'tksource' => 'source_a',
+        'tkzone' => 'zone_b',
+        'session_ref' => 'sess-snapshot-1',
+        'raw_context' => [
+            'query_params' => [
+                'pid' => 'pid-snapshot',
+            ],
+        ],
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config(
+        'https://offers.example.test/postback?clickid={clickid}&goal=sale',
+        ''
+    ));
+    $snapshot_builder = new Kiwi_Sales_Attribution_Snapshot_Builder(
+        $landing_session_repository,
+        $engagement_repository
+    );
+    $resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $repository,
+        $dispatcher,
+        null,
+        $sales_repository,
+        null,
+        $snapshot_builder
+    );
+
+    $result = $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+        'sale_reference' => 'sale-snapshot-1',
+        'occurred_at' => '2026-04-02 15:00:00',
+    ]);
+
+    $sale = $sales_repository->find_by_sale_reference('sale-snapshot-1') ?? [];
+
+    kiwi_assert_true($result['dispatched'] ?? false, 'Expected snapshot conversion flow to dispatch the postback.');
+    kiwi_assert_same(1, count($sales_repository->snapshot_updates), 'Expected one sales snapshot update for confirmed attributed sale.');
+    kiwi_assert_same('nth_fr_one_off_jplay', (string) ($sale['service_key'] ?? ''), 'Expected sale snapshot to persist service_key.');
+    kiwi_assert_same('lp2-fr', (string) ($sale['landing_key'] ?? ''), 'Expected sale snapshot to persist landing_key.');
+    kiwi_assert_same('sess-snapshot-1', (string) ($sale['session_ref'] ?? ''), 'Expected sale snapshot to preserve the landing session reference.');
+    kiwi_assert_same('aff:snapshot:1', (string) ($sale['click_id'] ?? ''), 'Expected sale snapshot to persist click_id.');
+    kiwi_assert_same('source_a', (string) ($sale['tksource'] ?? ''), 'Expected sale snapshot to persist tksource.');
+    kiwi_assert_same('zone_b', (string) ($sale['tkzone'] ?? ''), 'Expected sale snapshot to persist tkzone.');
+    kiwi_assert_same('2026-03-31', (string) ($sale['attribution_metric_date'] ?? ''), 'Expected metric date to prefer attribution capture date.');
+    kiwi_assert_same('203.0.113.44', (string) ($sale['client_ip'] ?? ''), 'Expected client IP to come from landing session, not callback REMOTE_ADDR.');
+    kiwi_assert_same('ipv4', (string) ($sale['client_ip_version'] ?? ''), 'Expected IPv4 version marker.');
+    kiwi_assert_same('203.0.113.0/24', (string) ($sale['client_ip_prefix'] ?? ''), 'Expected IPv4 /24 prefix.');
+    kiwi_assert_same(64, strlen((string) ($sale['client_ip_hash'] ?? '')), 'Expected client IP hash to be persisted.');
+    kiwi_assert_same('Samsung', (string) ($sale['device_brand'] ?? ''), 'Expected UA context to normalize device brand.');
+    kiwi_assert_same('14.0.0', (string) ($sale['android_version'] ?? ''), 'Expected UA context to normalize Android version.');
+    kiwi_assert_same('Chrome', (string) ($sale['browser'] ?? ''), 'Expected UA context to normalize browser.');
+    kiwi_assert_same('delivered', (string) ($sale['context_json']['report_event']['status'] ?? ''), 'Expected existing provider report context to be preserved.');
+    kiwi_assert_same(
+        'landing_page_session.remote_ip',
+        (string) ($sale['context_json']['attribution_snapshot']['debug']['ip_source'] ?? ''),
+        'Expected context_json attribution_snapshot debug data to record the IP source.'
+    );
+
+    unset($_SERVER['REMOTE_ADDR']);
+});
+
+kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder normalizes IPv6 and rejects invalid IPs', function (): void {
+    $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
+    $builder = new Kiwi_Sales_Attribution_Snapshot_Builder($landing_session_repository);
+
+    $landing_session_repository->insert([
+        'landing_key' => 'lp-v6',
+        'service_key' => 'svc-v6',
+        'session_token' => 'sess-v6',
+        'remote_ip' => '2001:db8:85a3::8a2e:370:7334',
+    ]);
+    $ipv6_snapshot = $builder->build([
+        'landing_page_key' => 'lp-v6',
+        'service_key' => 'svc-v6',
+        'session_ref' => 'sess-v6',
+    ]);
+
+    $landing_session_repository->insert([
+        'landing_key' => 'lp-bad-ip',
+        'service_key' => 'svc-bad-ip',
+        'session_token' => 'sess-bad-ip',
+        'remote_ip' => 'not-an-ip',
+    ]);
+    $invalid_snapshot = $builder->build([
+        'landing_page_key' => 'lp-bad-ip',
+        'service_key' => 'svc-bad-ip',
+        'session_ref' => 'sess-bad-ip',
+    ]);
+
+    kiwi_assert_same('ipv6', (string) ($ipv6_snapshot['client_ip_version'] ?? ''), 'Expected IPv6 version marker.');
+    kiwi_assert_same('2001:db8:85a3::/48', (string) ($ipv6_snapshot['client_ip_prefix'] ?? ''), 'Expected IPv6 /48 prefix.');
+    kiwi_assert_same('', (string) ($invalid_snapshot['client_ip'] ?? ''), 'Expected invalid IP values to stay empty.');
+    kiwi_assert_same('', (string) ($invalid_snapshot['client_ip_prefix'] ?? ''), 'Expected invalid IP prefixes to stay empty.');
+});
+
 kiwi_run_test('Kiwi_Shared_Sales_Recorder writes transaction_id to sales records when provided', function (): void {
     $repository = new Kiwi_Test_Sales_Repository();
     $recorder = new Kiwi_Shared_Sales_Recorder($repository);
@@ -4648,6 +4957,9 @@ kiwi_run_test('Kiwi_Shared_Sales_Recorder writes transaction_id to sales records
         'sale_reference' => 'sale-explicit-1',
         'flow_reference' => 'txn_1234567890abcdef1234567890abcd-a1b2c3d4e5f6',
         'transaction_id' => 'txn_explicit_123456789012',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_key' => 'lp2-fr',
+        'landing_session_token' => 'sess-explicit-1',
         'country' => 'FR',
         'flow_key' => 'one-off',
         'price' => 450,
@@ -4667,6 +4979,10 @@ kiwi_run_test('Kiwi_Shared_Sales_Recorder writes transaction_id to sales records
         $repository->upsert_calls[0]['transaction_id'] ?? '',
         'Expected shared sales recorder to persist explicit transaction_id into wp_kiwi_sales writes.'
     );
+    kiwi_assert_same('nth_fr_one_off_jplay', $repository->upsert_calls[0]['service_key'] ?? '', 'Expected shared sales recorder to persist service_key.');
+    kiwi_assert_same('lp2-fr', $repository->upsert_calls[0]['landing_key'] ?? '', 'Expected shared sales recorder to persist landing_key.');
+    kiwi_assert_same('sess-explicit-1', $repository->upsert_calls[0]['session_ref'] ?? '', 'Expected shared sales recorder to persist landing session reference when available.');
+    kiwi_assert_same('2026-04-01', $repository->upsert_calls[0]['attribution_metric_date'] ?? '', 'Expected shared sales recorder to fall back metric date to sale completion date.');
 });
 
 kiwi_run_test('Kiwi_Shared_Sales_Recorder derives transaction_id from flow_reference when explicit value is absent', function (): void {
@@ -7486,9 +7802,12 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     kiwi_assert_contains('abc_kiwi_click_attributions', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed click-attribution table.');
     kiwi_assert_contains('abc_kiwi_sales', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed sales table.');
     kiwi_assert_contains('s.completed_at AS metric_at', $wpdb->queries[0] ?? '', 'Expected completed sale metrics to be timestamped by completion time.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.service_key, ''), NULLIF(ca.service_key, ''), '(empty)') AS service_key", $wpdb->queries[0] ?? '', 'Expected completed sale metrics to prefer durable sales service snapshots.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.tksource, ''), NULLIF(ca.tksource, ''), '(empty)') AS tksource", $wpdb->queries[0] ?? '', 'Expected completed sale metrics to prefer durable sales source snapshots.');
     kiwi_assert_contains("AND s.completed_at >= '2026-05-12 20:00:00'", $wpdb->queries[0] ?? '', 'Expected completed sale cutoff to align with completion timestamps.');
     kiwi_assert_contains('PARTITION BY ca.transaction_id', $wpdb->queries[0] ?? '', 'Expected view SQL to deduplicate attribution rows before joining completed sales.');
     kiwi_assert_contains('ranked_ca.kiwi_attribution_rank = 1', $wpdb->queries[0] ?? '', 'Expected view SQL to pick one canonical attribution row per transaction_id.');
+    kiwi_assert_contains('LEFT JOIN', $wpdb->queries[0] ?? '', 'Expected completed sale metrics to tolerate missing temporary attribution rows.');
     kiwi_assert_contains('CREATE OR REPLACE VIEW abc_kiwi_v_one_for_all AS', $wpdb->queries[1] ?? '', 'Expected setup to also replace the one-for-all analytics view.');
     kiwi_assert_contains('abc_kiwi_landing_page_sessions', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing page sessions.');
     kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing engagement UA context.');
@@ -7498,6 +7817,8 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     kiwi_assert_contains('browser', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed browser.');
     kiwi_assert_contains('handoff_rate_pct', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose handoff rate.');
     kiwi_assert_contains('median_hidden_seconds', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose hidden-time median.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.landing_key, ''), NULLIF(ca.landing_page_key, '')) AS landing_key", $wpdb->queries[1] ?? '', 'Expected one-for-all sales counts to prefer durable sales landing snapshots.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.session_ref, ''), NULLIF(ca.session_ref, '')) AS session_token", $wpdb->queries[1] ?? '', 'Expected one-for-all sales counts to prefer durable sales session snapshots.');
     kiwi_assert_true(strpos($wpdb->queries[0] ?? '', 'wp_kiwi_') === false, 'Expected view SQL not to hardcode wp_ table prefixes.');
     kiwi_assert_true(strpos($wpdb->queries[1] ?? '', 'wp_kiwi_') === false, 'Expected one-for-all view SQL not to hardcode wp_ table prefixes.');
 
@@ -7845,7 +8166,7 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
     );
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for CTA step engagement columns', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for sales attribution snapshot columns', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -7857,8 +8178,8 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for CTA step engagement columns'
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-22-1', $schema_version, 'Expected schema version to be bumped for CTA step engagement migrations.');
-    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-CTA-step schema version to rerun dbDelta migrations.');
+    kiwi_assert_same('2026-05-22-2', $schema_version, 'Expected schema version to be bumped for sales attribution snapshot migrations.');
+    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
         $GLOBALS['kiwi_test_options'][$schema_option] ?? '',

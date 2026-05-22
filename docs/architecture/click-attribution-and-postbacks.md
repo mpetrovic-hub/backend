@@ -102,9 +102,14 @@ The legacy generic CTA columns stay populated as a compatibility layer for exist
 - soft-flag outcome and reason
 - source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
-`wp_kiwi_sales` can be enriched from attribution context on confirmed conversion, including:
+`wp_kiwi_sales` is the durable confirmed-sale fact table. Confirmed sales are enriched from attribution, landing-session, and engagement context so reporting does not depend on temporary attribution rows after their TTL cleanup. Snapshot fields include:
 
-- `pid` (captured from landing query params when present, sanitized before persistence)
+- service and flow dimensions (`service_key`, `provider_key`, `flow_key`, `country`)
+- landing/session/source dimensions (`landing_key`, `session_ref`, `click_id`, `pid`, `tksource`, `tkzone`)
+- normalized device dimensions (`device_brand`, `android_version`, `browser`)
+- reporting date (`attribution_metric_date`), preferring attribution/engagement/session date and falling back to sale completion date
+- landing-session client-IP context (`client_ip`, `client_ip_version`, `client_ip_prefix`, optional `client_ip_hash`)
+- `context_json.attribution_snapshot`, preserving provider `transaction`/`report_event` data while adding the source rows and normalization/debug details used for the snapshot
 
 ## Fraud Monitoring Propagation (Shared Premium SMS)
 
@@ -125,8 +130,8 @@ The shared statistics report is exposed through the protected `[kiwi_statistics]
 The view is deliberately built from normalized internal tables only:
 
 - `wp_kiwi_premium_sms_landing_engagements` for sessions, load events, CTA sessions, click counts, and load-to-CTA deltas
-- `wp_kiwi_click_attributions` for `transaction_id`, `service_key`, `tksource`, and `tkzone` correlation
-- `wp_kiwi_sales` for completed sales and amount totals, using `completed_at` as the sales metric timestamp and cutoff field
+- `wp_kiwi_sales` for completed sales, amount totals, and durable service/source dimensions, using `completed_at` as the sales metric timestamp and cutoff field
+- `wp_kiwi_click_attributions` only as a legacy fallback for completed-sale dimensions when old sale rows do not yet have a snapshot
 
 The repository applies `from`, optional `to`, `service_key`, and `tksource` filters before grouping by `service_key`, `tksource`, and `tkzone`. The protected shortcode renders these as native date/time controls plus service/source dropdowns whose options are derived from distinct values in the view. The default lower bound is `2026-05-12 20:00:00`, because traffic-source fields were not reliable before that point. Median load-to-CTA uses database window functions; if the view or median query cannot be read on a target MySQL/MariaDB version, the shortcode shows an admin-facing error instead of failing the page.
 
@@ -135,9 +140,9 @@ The same repository also creates `wp_kiwi_v_one_for_all` for broader landing-fun
 - `wp_kiwi_landing_page_sessions` for landing-page loads and classic user-agent fallback
 - `wp_kiwi_premium_sms_landing_engagements` for page-loaded/CTA sessions, source snapshots, and raw UA Client Hints
 - `wp_kiwi_landing_handoff_events` for handoff attempts, hidden/no-hide outcomes, and hidden-time aggregates
-- `wp_kiwi_click_attributions` plus `wp_kiwi_sales` for completed-sale counts by landing session
+- `wp_kiwi_sales` for completed-sale counts by durable landing/session snapshots, with `wp_kiwi_click_attributions` as a fallback for legacy rows
 
-`device_brand`, `android_version`, and `browser` are computed in the view from raw UA fields and are not persisted as normalized columns. The view exposes `landing_key`, `service_key`, `tksource`, `tkzone`, those computed device/browser dimensions, session/load/CTA counters, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales.
+`device_brand`, `android_version`, and `browser` are computed in the view from raw UA fields for session rows and are also persisted on new sale snapshots for durable sale analysis. The view exposes `landing_key`, `service_key`, `tksource`, `tkzone`, those device/browser dimensions, session/load/CTA counters, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales.
 
 ## Retention and Cleanup
 
@@ -169,6 +174,8 @@ Cookie retention note:
 - affiliate postback secret is configuration-driven, never hardcoded
 - incoming aggregator callbacks are not modeled around a fake shared secret
 - callback trust/validation remains provider-specific
+- sale `client_ip` is copied only from landing/session context, never from provider callback request metadata
+- raw sale IP is personal data; broad analysis should prefer `client_ip_prefix` or `client_ip_hash` where possible
 
 ## Reliability Rules
 
@@ -250,6 +257,6 @@ This section describes the operational S2S tracking contract used to move from l
 - NTH MO adapter may extract `transaction_id` from keyword-suffixed MO content (for example `JPLAY txn_xxx`) at the provider boundary
 - when the FR SMS-body variant experiment is active, NTH MO handling first keeps direct `txn_...` parsing, then resolves assigned visible tokens such as `JPLAY abc...` or `JPLAY ArcadeHeroabc...` through `wp_kiwi_sms_body_variant_assignments`
 - NTH service passes normalized conversion signals into `Kiwi_Conversion_Attribution_Resolver`
-- resolver may enrich the matched sale row with shared attribution metadata (for example `pid`) without leaking provider callback fields into sales writes
+- resolver enriches the matched sale row with shared attribution snapshots (source/session/device/IP dimensions) without leaking provider callback payload shapes into sales writes
 
 This is an integration example, not an NTH-only architecture. Additional providers should reuse the same shared resolver/dispatcher capability.

@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-22-1';
+    private const DB_SCHEMA_VERSION = '2026-05-22-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -445,6 +445,7 @@ TEXT;
         $sales_repository = new Kiwi_Sales_Repository();
         $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
+        $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
         $sms_body_variant_repository = new Kiwi_Sms_Body_Variant_Repository();
         $sms_body_variant_service = new Kiwi_Sms_Body_Variant_Service(
             $config,
@@ -456,6 +457,10 @@ TEXT;
             new Kiwi_Landing_Kpi_Summary_Repository()
         );
         $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+        $sales_snapshot_builder = new Kiwi_Sales_Attribution_Snapshot_Builder(
+            $landing_page_session_repository,
+            $landing_engagement_repository
+        );
         $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
         $premium_sms_mo_engagement_evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
             $config,
@@ -472,7 +477,8 @@ TEXT;
             $affiliate_postback_dispatcher,
             $landing_kpi_service,
             $sales_repository,
-            $sms_body_variant_repository
+            $sms_body_variant_repository,
+            $sales_snapshot_builder
         );
         $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
             $config,
@@ -495,6 +501,7 @@ TEXT;
             'sales_recorder' => $sales_recorder,
             'sales_repository' => $sales_repository,
             'click_attribution_repository' => $click_attribution_repository,
+            'landing_page_session_repository' => $landing_page_session_repository,
             'sms_body_variant_repository' => $sms_body_variant_repository,
             'sms_body_variant_service' => $sms_body_variant_service,
             'landing_engagement_repository' => $landing_engagement_repository,
