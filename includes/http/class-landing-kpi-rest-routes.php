@@ -235,6 +235,14 @@ class Kiwi_Landing_Kpi_Rest_Routes
             'tkzone' => $this->resolve_source_value_for_engagement('tkzone', $params, $landing, $session_token),
         ];
 
+        if ($event_type === 'cta_click') {
+            $cta_step = strtolower(trim((string) ($params['cta_step'] ?? '')));
+
+            if ($this->is_valid_step($cta_step)) {
+                $context['cta_step'] = $cta_step;
+            }
+        }
+
         $record = $this->landing_engagement_repository->upsert_event(
             array_merge($context, $this->resolve_ua_context_for_event($event_type, $params, false)),
             $event_type

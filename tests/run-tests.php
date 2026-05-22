@@ -23,6 +23,7 @@ $GLOBALS['kiwi_test_shortcodes'] = [];
 $GLOBALS['kiwi_test_rest_routes'] = [];
 $GLOBALS['kiwi_test_http_responses'] = [];
 $GLOBALS['kiwi_test_http_requests'] = [];
+$GLOBALS['kiwi_test_dbdelta_queries'] = [];
 
 function add_action($hook, $callback): void
 {
@@ -671,6 +672,11 @@ class Kiwi_Test_Config extends Kiwi_Config
     {
         return max(0, (int) $this->premium_sms_fraud_mo_min_seconds_after_load);
     }
+}
+
+function dbDelta($sql): void
+{
+    $GLOBALS['kiwi_test_dbdelta_queries'][] = (string) $sql;
 }
 
 class Kiwi_Test_Landing_Ua_Config extends Kiwi_Test_Config
@@ -2175,6 +2181,15 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
                 'first_cta_click_at' => '',
                 'last_cta_click_at' => '',
                 'cta_click_count' => 0,
+                'first_cta1_click_at' => '',
+                'last_cta1_click_at' => '',
+                'cta1_click_count' => 0,
+                'first_cta2_click_at' => '',
+                'last_cta2_click_at' => '',
+                'cta2_click_count' => 0,
+                'first_cta3_click_at' => '',
+                'last_cta3_click_at' => '',
+                'cta3_click_count' => 0,
                 'ua_ch_supported' => 0,
                 'ua_ch_mobile' => 0,
                 'ua_ch_platform' => '',
@@ -2228,6 +2243,20 @@ class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_S
 
             $row['last_cta_click_at'] = $occurred_at;
             $row['cta_click_count'] = max(0, (int) ($row['cta_click_count'] ?? 0)) + 1;
+
+            $cta_step = strtolower(trim((string) ($context['cta_step'] ?? '')));
+            if (in_array($cta_step, ['cta1', 'cta2', 'cta3'], true)) {
+                $first_field = 'first_' . $cta_step . '_click_at';
+                $last_field = 'last_' . $cta_step . '_click_at';
+                $count_field = $cta_step . '_click_count';
+
+                if ((string) ($row[$first_field] ?? '') === '') {
+                    $row[$first_field] = $occurred_at;
+                }
+
+                $row[$last_field] = $occurred_at;
+                $row[$count_field] = max(0, (int) ($row[$count_field] ?? 0)) + 1;
+            }
         }
 
         $this->rows[$id] = $row;
@@ -4900,13 +4929,15 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
         'landing_key' => 'lp2-fr',
         'session_token' => 'sess-kpi-1',
         'event_type' => 'cta_click',
-        'event_value' => 'cta1:.cta',
+        'cta_step' => 'cta2',
+        'event_value' => 'cta2:.cta',
     ]));
     $cta_click_b = $routes->handle_event(new WP_REST_Request([], [
         'landing_key' => 'lp2-fr',
         'session_token' => 'sess-kpi-1',
         'event_type' => 'cta_click',
-        'event_value' => 'cta1:.cta',
+        'cta_step' => 'cta2',
+        'event_value' => 'cta2:.cta-confirm',
     ]));
 
     $row = $engagement_repository->get_by_landing_session('lp2-fr', 'sess-kpi-1');
@@ -4917,11 +4948,14 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
     kiwi_assert_true(is_array($row), 'Expected engagement storage row to be persisted by landing/session.');
     kiwi_assert_same('2026-04-01 12:00:00', (string) ($row['page_loaded_at'] ?? ''), 'Expected first page_loaded timestamp to be captured.');
     kiwi_assert_same(2, (int) ($row['cta_click_count'] ?? 0), 'Expected cta_click count to increment for repeated click events.');
+    kiwi_assert_same(2, (int) ($row['cta2_click_count'] ?? 0), 'Expected cta_step=cta2 engagement events to increment only the CTA2 engagement count.');
+    kiwi_assert_same(0, (int) ($row['cta1_click_count'] ?? 0), 'Expected cta_step=cta2 engagement events not to increment CTA1 engagement count.');
     kiwi_assert_same('affpid_42', (string) ($row['pid'] ?? ''), 'Expected landing engagement storage to persist pid from KPI event payload.');
     kiwi_assert_same('aff-click-42', (string) ($row['click_id'] ?? ''), 'Expected landing engagement storage to persist clickid from KPI event payload.');
     kiwi_assert_same('PropellerAds', (string) ($row['tksource'] ?? ''), 'Expected landing engagement storage to persist tksource from KPI event payload.');
     kiwi_assert_same('10766952', (string) ($row['tkzone'] ?? ''), 'Expected landing engagement storage to persist tkzone from KPI event payload.');
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected engagement-only events not to mutate KPI CTA counters.');
+    kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta2'] ?? 0), 'Expected cta_step engagement metadata not to double-increment KPI CTA2 counters.');
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes gates UA context by landing tracking mode', function (): void {
@@ -5633,11 +5667,13 @@ kiwi_run_test('Kiwi_Landing_Page_Router accepts integration kpi_cta_steps using 
         'kpi_cta_steps' => [
             'cta1' => 'class="cta"',
             'cta2' => '.mobile_number_input',
+            'cta4' => '.future-confirm',
         ],
     ]);
 
     kiwi_assert_same('.cta', $steps['cta1'] ?? '', 'Expected class=\"cta\" shorthand to normalize into .cta selector.');
     kiwi_assert_same('.mobile_number_input', $steps['cta2'] ?? '', 'Expected direct CSS selectors to remain unchanged.');
+    kiwi_assert_true(!isset($steps['cta4']), 'Expected v1 KPI selector mapping to ignore unsupported CTA steps beyond CTA3.');
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Router injects same-origin SMS handoff telemetry', function (): void {
@@ -5676,6 +5712,8 @@ kiwi_run_test('Kiwi_Landing_Page_Router injects same-origin SMS handoff telemetr
     kiwi_assert_contains('fetch(cfg.endpoint', $output, 'Expected injected tracker to prefer fetch delivery.');
     kiwi_assert_contains('sendBeacon', $output, 'Expected injected tracker to retain sendBeacon only as a fallback path.');
     kiwi_assert_contains('sendStep(step,selector)', $output, 'Expected injected tracker to keep CTA step binding behavior.');
+    kiwi_assert_contains('payload.cta_step=ctaStep', $output, 'Expected CTA engagement telemetry to send cta_step separately from KPI step events.');
+    kiwi_assert_contains("sendEngagement('cta_click',step+':'+selector,'',step)", $output, 'Expected CTA clicks to send cta_step on the engagement request.');
 });
 
 kiwi_run_test('Kiwi_Landing_Primary_Cta_Resolver builds NTH sms CTA with transaction_id suffix', function (): void {
@@ -6168,10 +6206,12 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository upserts by landing
     $first_click = $repository->upsert_event([
         'landing_key' => 'lp2-fr',
         'session_token' => 'sess-1',
+        'cta_step' => 'cta1',
     ], 'cta_click', '2026-04-01 12:00:07');
     $second_click = $repository->upsert_event([
         'landing_key' => 'lp2-fr',
         'session_token' => 'sess-1',
+        'cta_step' => 'cta2',
     ], 'cta_click', '2026-04-01 12:00:09');
 
     kiwi_assert_same(1, count($repository->rows), 'Expected one engagement row per landing/session pair.');
@@ -6180,6 +6220,55 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository upserts by landing
     kiwi_assert_same('2026-04-01 12:00:07', (string) ($first_click['first_cta_click_at'] ?? ''), 'Expected first cta click timestamp to be recorded once.');
     kiwi_assert_same('2026-04-01 12:00:09', (string) ($second_click['last_cta_click_at'] ?? ''), 'Expected last cta click timestamp to advance with later clicks.');
     kiwi_assert_same(2, (int) ($second_click['cta_click_count'] ?? 0), 'Expected cta click count to increment on each click event.');
+    kiwi_assert_same('2026-04-01 12:00:07', (string) ($first_click['first_cta1_click_at'] ?? ''), 'Expected CTA1 first-click timestamp to be recorded when cta_step=cta1.');
+    kiwi_assert_same(1, (int) ($second_click['cta1_click_count'] ?? 0), 'Expected CTA1 step count to remain isolated from CTA2 clicks.');
+    kiwi_assert_same('2026-04-01 12:00:09', (string) ($second_click['first_cta2_click_at'] ?? ''), 'Expected CTA2 first-click timestamp to be recorded when cta_step=cta2.');
+    kiwi_assert_same(1, (int) ($second_click['cta2_click_count'] ?? 0), 'Expected CTA2 step count to increment independently.');
+    kiwi_assert_same(0, (int) ($second_click['cta3_click_count'] ?? 0), 'Expected untouched CTA3 step count to remain zero.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository ignores invalid cta_step for step-specific counts', function (): void {
+    $repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+
+    $row = $repository->upsert_event([
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-invalid-step',
+        'cta_step' => 'cta4',
+    ], 'cta_click', '2026-04-01 12:00:07');
+
+    kiwi_assert_same(1, (int) ($row['cta_click_count'] ?? 0), 'Expected invalid cta_step to preserve legacy CTA click count behavior.');
+    kiwi_assert_same(0, (int) ($row['cta1_click_count'] ?? 0), 'Expected invalid cta_step not to increment CTA1 count.');
+    kiwi_assert_same(0, (int) ($row['cta2_click_count'] ?? 0), 'Expected invalid cta_step not to increment CTA2 count.');
+    kiwi_assert_same(0, (int) ($row['cta3_click_count'] ?? 0), 'Expected invalid cta_step not to increment CTA3 count.');
+});
+
+kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository schema includes CTA step columns', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+    };
+
+    $repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+    $repository->create_table();
+    $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+    foreach (['cta1', 'cta2', 'cta3'] as $step) {
+        kiwi_assert_contains('first_' . $step . '_click_at DATETIME NULL', $sql, 'Expected schema to include first timestamp for ' . $step . '.');
+        kiwi_assert_contains('last_' . $step . '_click_at DATETIME NULL', $sql, 'Expected schema to include last timestamp for ' . $step . '.');
+        kiwi_assert_contains($step . '_click_count INT UNSIGNED NOT NULL DEFAULT 0', $sql, 'Expected schema to include click count for ' . $step . '.');
+    }
+
+    $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
 });
 
 kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service records unknown links without soft-flagging and flags fast MO deltas', function (): void {
@@ -7756,20 +7845,20 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
     );
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for landing UA analytics columns', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for CTA step engagement columns', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
 
     $GLOBALS['kiwi_test_options'] = [
-        $schema_option => '2026-05-07-2',
+        $schema_option => '2026-05-19-1',
     ];
 
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-19-1', $schema_version, 'Expected schema version to be bumped for landing UA analytics migrations.');
-    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-UA-Client-Hints schema version to rerun dbDelta migrations.');
+    kiwi_assert_same('2026-05-22-1', $schema_version, 'Expected schema version to be bumped for CTA step engagement migrations.');
+    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-CTA-step schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
         $GLOBALS['kiwi_test_options'][$schema_option] ?? '',
