@@ -155,7 +155,9 @@ The daily summary intentionally differs from the transition views:
 - sales without snapshot attribution are retained in `(unknown)` dimension buckets instead of being dropped
 - refreshes are date-range bounded and replace the target date window so repeated runs are idempotent
 
-No shortcode, CSV, cron, or raw-table cleanup behavior is switched to the daily summary yet. The existing views remain the current UI/read path until a later reporting rollout chooses to consume the persistent table.
+WP-Cron runs the same bounded refresh contract hourly through `kiwi_landing_funnel_daily_summary_refresh`. The rolling window defaults to seven lookback days plus today via `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`, uses a transient lock to avoid concurrent recomputes, and stores the latest result in `kiwi_landing_funnel_daily_summary_refresh_last_result`.
+
+No shortcode, CSV, or raw-table cleanup behavior is switched to the daily summary yet. The existing views remain the current UI/read path until a later reporting rollout chooses to consume the persistent table.
 
 ## Retention and Cleanup
 

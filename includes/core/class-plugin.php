@@ -14,6 +14,10 @@ class Kiwi_Plugin
     private const DB_SCHEMA_VERSION = '2026-05-26-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
+    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
+    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY = 'kiwi_landing_funnel_daily_summary_refresh_lock';
+    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS = 1800;
+    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_summary_refresh_last_result';
 
     private $plugin_root_path;
     private $plugin_base_url;
@@ -47,6 +51,8 @@ class Kiwi_Plugin
         add_action('init', [$this, 'ensure_click_attribution_table']);
         add_action('init', [$this, 'ensure_sales_table']);
         add_action('init', [$this, 'cleanup_expired_click_attributions']);
+        add_action('init', [$this, 'schedule_landing_funnel_daily_summary_refresh']);
+        add_action(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_summary_refresh']);
         add_action('init', [$this, 'maybe_export_statistics']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
@@ -229,6 +235,88 @@ class Kiwi_Plugin
         $this->cleanup_click_attribution_records(
             $this->get_click_attribution_cleanup_limit()
         );
+    }
+
+    public function schedule_landing_funnel_daily_summary_refresh(): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+
+        if (wp_next_scheduled(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK) !== false) {
+            return;
+        }
+
+        wp_schedule_event(
+            time(),
+            'hourly',
+            self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK
+        );
+    }
+
+    public function run_landing_funnel_daily_summary_refresh(): array
+    {
+        $started_at = $this->get_current_time_mysql();
+
+        if ($this->has_landing_funnel_daily_summary_refresh_lock()) {
+            $result = [
+                'success' => false,
+                'from_date' => '',
+                'to_date' => '',
+                'deleted' => 0,
+                'inserted' => 0,
+                'error' => 'Landing funnel daily summary refresh skipped because lock is active.',
+                'started_at' => $started_at,
+                'finished_at' => $this->get_current_time_mysql(),
+                'skipped_due_to_lock' => true,
+            ];
+            $this->persist_landing_funnel_daily_summary_refresh_result($result);
+            $this->log_landing_funnel_daily_summary_refresh($result['error']);
+
+            return $result;
+        }
+
+        $this->set_landing_funnel_daily_summary_refresh_lock();
+
+        try {
+            $range = $this->build_landing_funnel_daily_summary_refresh_range();
+            $service = $this->build_landing_funnel_daily_summary_refresh_service();
+            $service_result = $service->refresh_range($range['from_date'], $range['to_date']);
+            $result = $this->normalize_landing_funnel_daily_summary_refresh_result(
+                $service_result,
+                $range['from_date'],
+                $range['to_date'],
+                $started_at
+            );
+
+            if (!$result['success'] && $result['error'] === '' && method_exists($service, 'get_last_error')) {
+                $result['error'] = (string) $service->get_last_error();
+            }
+        } catch (Throwable $error) {
+            $range = isset($range) && is_array($range) ? $range : ['from_date' => '', 'to_date' => ''];
+            $result = [
+                'success' => false,
+                'from_date' => (string) ($range['from_date'] ?? ''),
+                'to_date' => (string) ($range['to_date'] ?? ''),
+                'deleted' => 0,
+                'inserted' => 0,
+                'error' => $error->getMessage(),
+                'started_at' => $started_at,
+                'finished_at' => $this->get_current_time_mysql(),
+                'skipped_due_to_lock' => false,
+            ];
+        } finally {
+            $this->clear_landing_funnel_daily_summary_refresh_lock();
+        }
+
+        $this->persist_landing_funnel_daily_summary_refresh_result($result);
+        $this->log_landing_funnel_daily_summary_refresh(
+            $result['success']
+                ? 'Refresh succeeded for ' . $result['from_date'] . ' to ' . $result['to_date'] . '; deleted=' . $result['deleted'] . '; inserted=' . $result['inserted'] . '.'
+                : 'Refresh failed for ' . $result['from_date'] . ' to ' . $result['to_date'] . ': ' . $result['error']
+        );
+
+        return $result;
     }
 
     public function maybe_render_landing_page(): void
@@ -787,6 +875,42 @@ TEXT;
         $repository->cleanup_expired($limit);
     }
 
+    protected function build_landing_funnel_daily_summary_refresh_service(): Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
+    {
+        return new Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service();
+    }
+
+    protected function get_current_business_date(): string
+    {
+        if (function_exists('current_time')) {
+            $time = current_time('mysql');
+
+            if (is_string($time) && preg_match('/^(\d{4}-\d{2}-\d{2})/', $time, $matches) === 1) {
+                return $matches[1];
+            }
+        }
+
+        return date('Y-m-d', $this->get_current_timestamp());
+    }
+
+    protected function get_current_time_mysql(): string
+    {
+        if (function_exists('current_time')) {
+            $time = current_time('mysql');
+
+            if (is_string($time) && $time !== '') {
+                return $time;
+            }
+        }
+
+        return date('Y-m-d H:i:s');
+    }
+
+    protected function log_landing_funnel_daily_summary_refresh(string $message): void
+    {
+        error_log('[kiwi-landing-funnel-daily-summary-refresh] ' . $message);
+    }
+
     private function should_run_click_attribution_cleanup(): bool
     {
         if (!function_exists('get_transient') || !function_exists('set_transient')) {
@@ -804,6 +928,86 @@ TEXT;
         );
 
         return true;
+    }
+
+    private function build_landing_funnel_daily_summary_refresh_range(): array
+    {
+        $config = new Kiwi_Config();
+        $refresh_days = $config->get_landing_funnel_summary_refresh_days();
+        $to_date = $this->get_current_business_date();
+        $timestamp = strtotime($to_date . ' -' . $refresh_days . ' days');
+
+        return [
+            'from_date' => $timestamp === false ? $to_date : date('Y-m-d', $timestamp),
+            'to_date' => $to_date,
+        ];
+    }
+
+    private function normalize_landing_funnel_daily_summary_refresh_result(
+        array $result,
+        string $from_date,
+        string $to_date,
+        string $started_at
+    ): array {
+        return [
+            'success' => (bool) ($result['success'] ?? false),
+            'from_date' => (string) ($result['from_date'] ?? $from_date),
+            'to_date' => (string) ($result['to_date'] ?? $to_date),
+            'deleted' => (int) ($result['deleted'] ?? 0),
+            'inserted' => (int) ($result['inserted'] ?? 0),
+            'error' => (string) ($result['error'] ?? ''),
+            'started_at' => $started_at,
+            'finished_at' => $this->get_current_time_mysql(),
+            'skipped_due_to_lock' => false,
+        ];
+    }
+
+    private function has_landing_funnel_daily_summary_refresh_lock(): bool
+    {
+        return function_exists('get_transient')
+            && get_transient(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY) !== false;
+    }
+
+    private function set_landing_funnel_daily_summary_refresh_lock(): void
+    {
+        if (!function_exists('set_transient')) {
+            return;
+        }
+
+        set_transient(
+            self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY,
+            '1',
+            self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS
+        );
+    }
+
+    private function clear_landing_funnel_daily_summary_refresh_lock(): void
+    {
+        if (function_exists('delete_transient')) {
+            delete_transient(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY);
+        }
+    }
+
+    private function persist_landing_funnel_daily_summary_refresh_result(array $result): void
+    {
+        if (!function_exists('update_option')) {
+            return;
+        }
+
+        update_option(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION, $result, false);
+    }
+
+    private function get_current_timestamp(): int
+    {
+        if (function_exists('current_time')) {
+            $timestamp = current_time('timestamp');
+
+            if (is_numeric($timestamp)) {
+                return (int) $timestamp;
+            }
+        }
+
+        return time();
     }
 
     private function get_installed_schema_version(): string

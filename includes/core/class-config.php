@@ -280,6 +280,13 @@ class Kiwi_Config
         ];
     }
 
+    public function get_landing_funnel_summary_refresh_days(): int
+    {
+        return defined('KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS')
+            ? max(0, (int) KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS)
+            : 7;
+    }
+
     public function is_landing_handoff_ua_client_hints_enabled(): bool
     {
         return $this->get_landing_ua_tracking_mode() !== 'disabled';

@@ -24,6 +24,9 @@ $GLOBALS['kiwi_test_rest_routes'] = [];
 $GLOBALS['kiwi_test_http_responses'] = [];
 $GLOBALS['kiwi_test_http_requests'] = [];
 $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+$GLOBALS['kiwi_test_cron_events'] = [];
+$GLOBALS['kiwi_test_next_scheduled'] = [];
+$GLOBALS['kiwi_test_deleted_transients'] = [];
 
 function add_action($hook, $callback): void
 {
@@ -73,6 +76,32 @@ function get_transient($key)
 function set_transient($key, $value, $expiration = 0): bool
 {
     $GLOBALS['kiwi_test_transients'][$key] = $value;
+
+    return true;
+}
+
+function delete_transient($key): bool
+{
+    $GLOBALS['kiwi_test_deleted_transients'][] = (string) $key;
+    unset($GLOBALS['kiwi_test_transients'][$key]);
+
+    return true;
+}
+
+function wp_next_scheduled($hook)
+{
+    return $GLOBALS['kiwi_test_next_scheduled'][(string) $hook] ?? false;
+}
+
+function wp_schedule_event($timestamp, $recurrence, $hook): bool
+{
+    $event = [
+        'timestamp' => (int) $timestamp,
+        'recurrence' => (string) $recurrence,
+        'hook' => (string) $hook,
+    ];
+    $GLOBALS['kiwi_test_cron_events'][] = $event;
+    $GLOBALS['kiwi_test_next_scheduled'][(string) $hook] = (int) $timestamp;
 
     return true;
 }
@@ -998,6 +1027,65 @@ class Kiwi_Test_Plugin_Performance_Gates extends Kiwi_Plugin
     protected function cleanup_click_attribution_records(int $limit): void
     {
         $this->cleanup_limits[] = $limit;
+    }
+}
+
+class Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service extends Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
+{
+    public $calls = [];
+    private $result;
+    private $last_error;
+
+    public function __construct(array $result, string $last_error = '')
+    {
+        $this->result = $result;
+        $this->last_error = $last_error;
+    }
+
+    public function refresh_range(string $from_date, string $to_date): array
+    {
+        $this->calls[] = [$from_date, $to_date];
+
+        return $this->result;
+    }
+
+    public function get_last_error(): string
+    {
+        return $this->last_error;
+    }
+}
+
+class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
+{
+    public $current_business_date = '2026-05-26';
+    public $current_time_mysql = '2026-05-26 12:00:00';
+    public $logs = [];
+    private $refresh_service;
+
+    public function __construct(Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service $refresh_service)
+    {
+        parent::__construct(dirname(__DIR__), 'https://example.test/plugin/');
+        $this->refresh_service = $refresh_service;
+    }
+
+    protected function build_landing_funnel_daily_summary_refresh_service(): Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
+    {
+        return $this->refresh_service;
+    }
+
+    protected function get_current_business_date(): string
+    {
+        return $this->current_business_date;
+    }
+
+    protected function get_current_time_mysql(): string
+    {
+        return $this->current_time_mysql;
+    }
+
+    protected function log_landing_funnel_daily_summary_refresh(string $message): void
+    {
+        $this->logs[] = $message;
     }
 }
 
@@ -8248,6 +8336,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'ensure_click_attribution_table',
             'ensure_sales_table',
             'cleanup_expired_click_attributions',
+            'schedule_landing_funnel_daily_summary_refresh',
             'maybe_export_statistics',
             'maybe_export_hlr_results',
             'maybe_run_dimoco_test',
@@ -8398,6 +8487,110 @@ kiwi_run_test('Kiwi_Plugin throttles click attribution cleanup with transient lo
 
     kiwi_assert_same([321], $plugin->cleanup_limits, 'Expected cleanup execution to be throttled while lock is active.');
     kiwi_assert_same('1', $GLOBALS['kiwi_test_transients'][$cleanup_lock_key] ?? '', 'Expected cleanup throttle lock to be stored after first cleanup run.');
+});
+
+kiwi_run_test('Kiwi_Plugin schedules the landing funnel daily summary cron hook once', function (): void {
+    $GLOBALS['kiwi_test_hooks'] = [];
+    $GLOBALS['kiwi_test_cron_events'] = [];
+    $GLOBALS['kiwi_test_next_scheduled'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $hook = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK');
+
+    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->register();
+    $plugin->schedule_landing_funnel_daily_summary_refresh();
+    $plugin->schedule_landing_funnel_daily_summary_refresh();
+
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks'][$hook]), 'Expected the daily summary cron hook to be registered.');
+    kiwi_assert_same(1, count($GLOBALS['kiwi_test_cron_events']), 'Expected daily summary refresh to be scheduled only when no event exists.');
+    kiwi_assert_same('hourly', $GLOBALS['kiwi_test_cron_events'][0]['recurrence'] ?? '', 'Expected daily summary refresh to use the documented hourly interval.');
+    kiwi_assert_same($hook, $GLOBALS['kiwi_test_cron_events'][0]['hook'] ?? '', 'Expected scheduled event to use the daily summary refresh hook.');
+});
+
+kiwi_run_test('Kiwi_Plugin runs landing funnel daily summary refresh for the default rolling window', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY');
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-19',
+        'to_date' => '2026-05-26',
+        'deleted' => 4,
+        'inserted' => 6,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+
+    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+
+    kiwi_assert_true($result['success'], 'Expected the daily summary refresh wrapper to return the service success.');
+    kiwi_assert_same([['2026-05-19', '2026-05-26']], $service->calls, 'Expected default refresh window to cover today minus seven lookback days through today.');
+    kiwi_assert_same(4, $result['deleted'], 'Expected refresh result to expose deleted rows.');
+    kiwi_assert_same(6, $result['inserted'], 'Expected refresh result to expose inserted rows.');
+    kiwi_assert_true(!isset($GLOBALS['kiwi_test_transients'][$lock_key]), 'Expected daily summary refresh lock to be cleared after normal completion.');
+    kiwi_assert_same([$lock_key], $GLOBALS['kiwi_test_deleted_transients'], 'Expected normal completion to explicitly delete the refresh lock.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected last refresh result to be persisted as an option.');
+    kiwi_assert_contains('Refresh succeeded for 2026-05-19 to 2026-05-26', implode("\n", $plugin->logs), 'Expected successful refresh to be visibly logged.');
+});
+
+kiwi_run_test('Kiwi_Plugin skips landing funnel daily summary refresh while lock is active', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY');
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $GLOBALS['kiwi_test_transients'][$lock_key] = '1';
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-19',
+        'to_date' => '2026-05-26',
+        'deleted' => 4,
+        'inserted' => 6,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+
+    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+
+    kiwi_assert_true($result['skipped_due_to_lock'], 'Expected active lock to produce an explicit skip result.');
+    kiwi_assert_same([], $service->calls, 'Expected locked refresh not to call the aggregation service.');
+    kiwi_assert_same('1', $GLOBALS['kiwi_test_transients'][$lock_key] ?? '', 'Expected existing lock to remain untouched on skip.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected lock skip result to be persisted as the latest operational state.');
+    kiwi_assert_contains('lock is active', implode("\n", $plugin->logs), 'Expected lock skip to be visibly logged.');
+});
+
+kiwi_run_test('Kiwi_Plugin persists landing funnel daily summary refresh failures', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY');
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => false,
+        'from_date' => '2026-05-19',
+        'to_date' => '2026-05-26',
+        'deleted' => 0,
+        'inserted' => 0,
+        'error' => 'summary insert failed',
+    ], 'summary insert failed');
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+
+    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+
+    kiwi_assert_true(!$result['success'], 'Expected failed aggregation service result to remain failed.');
+    kiwi_assert_same('summary insert failed', $result['error'], 'Expected failed refresh error to be retained.');
+    kiwi_assert_true(!isset($GLOBALS['kiwi_test_transients'][$lock_key]), 'Expected refresh lock to be cleared after failed service completion.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected failed refresh result to be persisted for operations.');
+    kiwi_assert_contains('Refresh failed for 2026-05-19 to 2026-05-26: summary insert failed', implode("\n", $plugin->logs), 'Expected failed refresh to be visibly logged.');
 });
 
 kiwi_run_test('Kiwi_Plugin exports HLR rows from the transient identified by batch_id', function (): void {
@@ -10455,4 +10648,16 @@ kiwi_run_test('Kiwi_Config allows disabling landing handoff UA Client Hints tele
     $config = new Kiwi_Test_Config();
 
     kiwi_assert_true(!$config->is_landing_handoff_ua_client_hints_enabled(), 'Expected landing handoff UA Client Hints telemetry to be disabled by constant.');
+});
+
+kiwi_run_test('Kiwi_Config exposes landing funnel daily summary refresh days', function (): void {
+    $config = new Kiwi_Config();
+
+    kiwi_assert_same(7, $config->get_landing_funnel_summary_refresh_days(), 'Expected daily summary refresh window to default to seven lookback days.');
+
+    if (!defined('KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS')) {
+        define('KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS', -4);
+    }
+
+    kiwi_assert_same(0, $config->get_landing_funnel_summary_refresh_days(), 'Expected negative daily summary refresh windows to be clamped to zero.');
 });
