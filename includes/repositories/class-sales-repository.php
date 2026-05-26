@@ -86,7 +86,7 @@ class Kiwi_Sales_Repository
         $existing = $this->find_by_sale_reference((string) ($data['sale_reference'] ?? ''));
 
         if (is_array($existing)) {
-            $this->update((int) $existing['id'], $data);
+            $this->update((int) $existing['id'], $data, $existing);
 
             return $this->find_by_sale_reference((string) ($data['sale_reference'] ?? '')) ?? $existing;
         }
@@ -204,7 +204,7 @@ class Kiwi_Sales_Repository
         return (int) $wpdb->insert_id;
     }
 
-    private function update(int $id, array $data): bool
+    private function update(int $id, array $data, array $existing = []): bool
     {
         global $wpdb;
 
@@ -212,38 +212,68 @@ class Kiwi_Sales_Repository
             $this->get_table_name(),
             [
                 'updated_at' => $this->current_time_mysql(),
-                'transaction_id' => $data['transaction_id'] ?? '',
-                'pid' => $data['pid'] ?? '',
-                'provider_key' => $data['provider_key'] ?? '',
-                'service_key' => $this->sanitize_key((string) ($data['service_key'] ?? ''), 100),
-                'country' => $data['country'] ?? '',
-                'flow_key' => $data['flow_key'] ?? '',
-                'landing_key' => $this->sanitize_key((string) ($data['landing_key'] ?? ''), 100),
-                'session_ref' => $this->sanitize_text_dimension((string) ($data['session_ref'] ?? ''), 150),
-                'click_id' => $this->sanitize_source_value((string) ($data['click_id'] ?? '')),
-                'tksource' => $this->sanitize_source_value((string) ($data['tksource'] ?? '')),
-                'tkzone' => $this->sanitize_source_value((string) ($data['tkzone'] ?? '')),
-                'device_brand' => $this->sanitize_text_dimension((string) ($data['device_brand'] ?? ''), 100),
-                'android_version' => $this->sanitize_text_dimension((string) ($data['android_version'] ?? ''), 50),
-                'browser' => $this->sanitize_text_dimension((string) ($data['browser'] ?? ''), 100),
-                'attribution_metric_date' => $this->normalize_nullable_date((string) ($data['attribution_metric_date'] ?? '')),
-                'client_ip' => $this->sanitize_client_ip((string) ($data['client_ip'] ?? '')),
-                'client_ip_version' => $this->sanitize_ip_version((string) ($data['client_ip_version'] ?? '')),
-                'client_ip_prefix' => $this->sanitize_text_dimension((string) ($data['client_ip_prefix'] ?? ''), 120),
-                'client_ip_hash' => $this->sanitize_hash((string) ($data['client_ip_hash'] ?? '')),
-                'sale_type' => $data['sale_type'] ?? '',
-                'status' => $data['status'] ?? '',
-                'amount_minor' => isset($data['amount_minor']) ? (int) $data['amount_minor'] : 0,
-                'currency' => $data['currency'] ?? '',
-                'subscriber_reference' => $data['subscriber_reference'] ?? '',
-                'operator_code' => $data['operator_code'] ?? '',
-                'operator_name' => $data['operator_name'] ?? '',
-                'shortcode' => $data['shortcode'] ?? '',
-                'keyword' => $data['keyword'] ?? '',
-                'external_sale_id' => $data['external_sale_id'] ?? '',
-                'external_transaction_id' => $data['external_transaction_id'] ?? '',
-                'completed_at' => $data['completed_at'] ?? null,
-                'context_json' => isset($data['context_json']) ? wp_json_encode($data['context_json']) : '',
+                'transaction_id' => array_key_exists('transaction_id', $data) ? (string) $data['transaction_id'] : (string) ($existing['transaction_id'] ?? ''),
+                'pid' => array_key_exists('pid', $data) ? (string) $data['pid'] : (string) ($existing['pid'] ?? ''),
+                'provider_key' => array_key_exists('provider_key', $data) ? (string) $data['provider_key'] : (string) ($existing['provider_key'] ?? ''),
+                'service_key' => array_key_exists('service_key', $data)
+                    ? $this->sanitize_key((string) $data['service_key'], 100)
+                    : (string) ($existing['service_key'] ?? ''),
+                'country' => array_key_exists('country', $data) ? (string) $data['country'] : (string) ($existing['country'] ?? ''),
+                'flow_key' => array_key_exists('flow_key', $data) ? (string) $data['flow_key'] : (string) ($existing['flow_key'] ?? ''),
+                'landing_key' => array_key_exists('landing_key', $data)
+                    ? $this->sanitize_key((string) $data['landing_key'], 100)
+                    : (string) ($existing['landing_key'] ?? ''),
+                'session_ref' => array_key_exists('session_ref', $data)
+                    ? $this->sanitize_text_dimension((string) $data['session_ref'], 150)
+                    : (string) ($existing['session_ref'] ?? ''),
+                'click_id' => array_key_exists('click_id', $data)
+                    ? $this->sanitize_source_value((string) $data['click_id'])
+                    : (string) ($existing['click_id'] ?? ''),
+                'tksource' => array_key_exists('tksource', $data)
+                    ? $this->sanitize_source_value((string) $data['tksource'])
+                    : (string) ($existing['tksource'] ?? ''),
+                'tkzone' => array_key_exists('tkzone', $data)
+                    ? $this->sanitize_source_value((string) $data['tkzone'])
+                    : (string) ($existing['tkzone'] ?? ''),
+                'device_brand' => array_key_exists('device_brand', $data)
+                    ? $this->sanitize_text_dimension((string) $data['device_brand'], 100)
+                    : (string) ($existing['device_brand'] ?? ''),
+                'android_version' => array_key_exists('android_version', $data)
+                    ? $this->sanitize_text_dimension((string) $data['android_version'], 50)
+                    : (string) ($existing['android_version'] ?? ''),
+                'browser' => array_key_exists('browser', $data)
+                    ? $this->sanitize_text_dimension((string) $data['browser'], 100)
+                    : (string) ($existing['browser'] ?? ''),
+                'attribution_metric_date' => array_key_exists('attribution_metric_date', $data)
+                    ? $this->normalize_nullable_date((string) $data['attribution_metric_date'])
+                    : ($existing['attribution_metric_date'] ?? null),
+                'client_ip' => array_key_exists('client_ip', $data)
+                    ? $this->sanitize_client_ip((string) $data['client_ip'])
+                    : (string) ($existing['client_ip'] ?? ''),
+                'client_ip_version' => array_key_exists('client_ip_version', $data)
+                    ? $this->sanitize_ip_version((string) $data['client_ip_version'])
+                    : (string) ($existing['client_ip_version'] ?? ''),
+                'client_ip_prefix' => array_key_exists('client_ip_prefix', $data)
+                    ? $this->sanitize_text_dimension((string) $data['client_ip_prefix'], 120)
+                    : (string) ($existing['client_ip_prefix'] ?? ''),
+                'client_ip_hash' => array_key_exists('client_ip_hash', $data)
+                    ? $this->sanitize_hash((string) $data['client_ip_hash'])
+                    : (string) ($existing['client_ip_hash'] ?? ''),
+                'sale_type' => array_key_exists('sale_type', $data) ? (string) $data['sale_type'] : (string) ($existing['sale_type'] ?? ''),
+                'status' => array_key_exists('status', $data) ? (string) $data['status'] : (string) ($existing['status'] ?? ''),
+                'amount_minor' => array_key_exists('amount_minor', $data) ? (int) $data['amount_minor'] : (int) ($existing['amount_minor'] ?? 0),
+                'currency' => array_key_exists('currency', $data) ? (string) $data['currency'] : (string) ($existing['currency'] ?? ''),
+                'subscriber_reference' => array_key_exists('subscriber_reference', $data) ? (string) $data['subscriber_reference'] : (string) ($existing['subscriber_reference'] ?? ''),
+                'operator_code' => array_key_exists('operator_code', $data) ? (string) $data['operator_code'] : (string) ($existing['operator_code'] ?? ''),
+                'operator_name' => array_key_exists('operator_name', $data) ? (string) $data['operator_name'] : (string) ($existing['operator_name'] ?? ''),
+                'shortcode' => array_key_exists('shortcode', $data) ? (string) $data['shortcode'] : (string) ($existing['shortcode'] ?? ''),
+                'keyword' => array_key_exists('keyword', $data) ? (string) $data['keyword'] : (string) ($existing['keyword'] ?? ''),
+                'external_sale_id' => array_key_exists('external_sale_id', $data) ? (string) $data['external_sale_id'] : (string) ($existing['external_sale_id'] ?? ''),
+                'external_transaction_id' => array_key_exists('external_transaction_id', $data) ? (string) $data['external_transaction_id'] : (string) ($existing['external_transaction_id'] ?? ''),
+                'completed_at' => array_key_exists('completed_at', $data) ? $data['completed_at'] : ($existing['completed_at'] ?? null),
+                'context_json' => array_key_exists('context_json', $data)
+                    ? wp_json_encode($data['context_json'])
+                    : (string) ($existing['context_json'] ?? ''),
             ],
             ['id' => $id],
             [
