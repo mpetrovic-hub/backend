@@ -226,7 +226,7 @@ Notes:
   - per-service volume counts, soft-flag reasons, source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
 - `wp_kiwi_v_load_to_cta_by_tksource_tkzone`
-  - plugin-managed view for the `[kiwi_statistics]` traffic-source funnel report
+  - plugin-managed legacy/debug view for the traffic-source funnel report
   - normalizes landing engagement and completed-sale facts by `service_key`, `tksource`, and `tkzone`
   - assigns completed-sale facts to reporting windows by `wp_kiwi_sales.completed_at`
   - prefers durable `wp_kiwi_sales` snapshot fields for completed-sale dimensions and falls back to temporary attribution rows only for legacy sales without snapshots
@@ -250,7 +250,7 @@ Notes:
   - is refreshed by bounded date-range recompute: the target `metric_date` window is deleted and reinserted, so rerunning the same range is idempotent
   - is refreshed hourly by WP-Cron hook `kiwi_landing_funnel_daily_summary_refresh`, using a transient lock to prevent concurrent runs
   - stores the last refresh or lock-skip result in WordPress option `kiwi_landing_funnel_daily_summary_refresh_last_result`
-  - is not yet wired to the statistics shortcode, CSV export, or raw-table cleanup
+  - is the primary read source for the protected `[kiwi_statistics]` shortcode and its CSV export; raw-table cleanup still remains separate
 
 ## Configuration switches
 
@@ -308,7 +308,7 @@ When validating a landing-page flow in production or staging, verify:
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
 10. UA tracking mode behaves as configured: `disabled` stores no UA context, `onclick` stores it only near CTA/handoff events, and `onload` stores it on `page_loaded` when browser hints are available.
-11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, preserves wall-clock seconds in native datetime filters, populates service/TK-source dropdowns from existing view data, and shows completed sales/rates from sales snapshots even after temporary attribution rows expire.
+11. Statistics tool (`[kiwi_statistics]`) reads `wp_kiwi_landing_funnel_daily_summary`, defaults to `2026-05-12`, supports date, service, landing, TK-source, TK-zone, device-brand, Android-version, and browser filters, and exports the same filtered rows to CSV. The legacy `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view should still exist for debug analysis.
 12. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
 13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`; completed sales should still count when their durable `landing_key/session_ref` snapshot is present.
 14. Confirm WP-Cron has scheduled `kiwi_landing_funnel_daily_summary_refresh`; manually trigger it in staging and verify the default window covers today plus the configured lookback days.

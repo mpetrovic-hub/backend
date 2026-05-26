@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-26-1';
+    private const DB_SCHEMA_VERSION = '2026-05-26-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -139,7 +139,7 @@ class Kiwi_Plugin
         $premium_sms_fraud_shortcode->register();
 
         $statistics_shortcode = new Kiwi_Statistics_Shortcode(
-            $runtime['traffic_source_funnel_statistics_repository'],
+            $runtime['landing_funnel_daily_summary_repository'],
             $this->frontend_auth_gate
         );
         $statistics_shortcode->register();
@@ -395,14 +395,14 @@ class Kiwi_Plugin
             );
         }
 
-        $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
+        $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
         $shortcode = new Kiwi_Statistics_Shortcode($repository, $this->frontend_auth_gate);
         $filters = $shortcode->read_filters_from_request();
         $rows = $repository->get_rows($filters, (int) ($filters['limit'] ?? 100));
 
         if ($repository->get_last_error() !== '') {
             header('Content-Type: text/plain; charset=utf-8');
-            echo 'Statistics view ' . $repository->get_view_name() . ' is not readable.';
+            echo 'Statistics source ' . $repository->get_source_name() . ' is not readable.';
             exit;
         }
 
@@ -484,6 +484,7 @@ TEXT;
         $dimoco_callback_blacklist_repository = new Kiwi_Dimoco_Callback_Blacklist_Repository();
         $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
         $premium_sms_landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+        $landing_funnel_daily_summary_repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
         $traffic_source_funnel_statistics_repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository();
 
         $operator_lookup_service = new Kiwi_Operator_Lookup_Service(
@@ -519,6 +520,7 @@ TEXT;
             'operator_lookup_batch_service' => $operator_lookup_batch_service,
             'premium_sms_fraud_signal_repository' => $premium_sms_fraud_signal_repository,
             'premium_sms_landing_engagement_repository' => $premium_sms_landing_engagement_repository,
+            'landing_funnel_daily_summary_repository' => $landing_funnel_daily_summary_repository,
             'traffic_source_funnel_statistics_repository' => $traffic_source_funnel_statistics_repository,
         ];
     }

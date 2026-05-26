@@ -86,6 +86,7 @@ require_once __DIR__ . '/repositories/class-landing-kpi-summary-repository.php';
 require_once __DIR__ . '/repositories/class-landing-handoff-event-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/repositories/interface-statistics-read-repository.php';
 require_once __DIR__ . '/repositories/class-landing-funnel-daily-summary-repository.php';
 require_once __DIR__ . '/repositories/class-traffic-source-funnel-statistics-repository.php';
 
