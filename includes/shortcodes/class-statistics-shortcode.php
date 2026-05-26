@@ -7,31 +7,42 @@ if (!defined('ABSPATH')) {
 class Kiwi_Statistics_Shortcode
 {
     public const EXPORT_COLUMNS = [
+        'metric_date' => 'Date',
+        'landing_key' => 'Landing',
         'service_key' => 'Service',
+        'provider_key' => 'Provider',
+        'flow_key' => 'Flow',
+        'country' => 'Country',
+        'pid' => 'PID',
         'tksource' => 'TK Source',
         'tkzone' => 'TK Zone',
+        'device_brand' => 'Device Brand',
+        'android_version' => 'Android',
+        'browser' => 'Browser',
         'sessions' => 'Sessions',
-        'loaded_sessions' => 'Loaded Sessions',
-        'cta_sessions' => 'CTA Sessions',
-        'cta_click_events' => 'CTA Click Events',
-        'cta_session_cr' => 'CTA Session CR %',
-        'avg_seconds_load_to_cta' => 'Avg Load->CTA s',
-        'median_seconds_load_to_cta' => 'Median Load->CTA s',
-        'min_seconds_load_to_cta' => 'Min Load->CTA s',
-        'max_seconds_load_to_cta' => 'Max Load->CTA s',
-        'successful_sales' => 'Successful Sales',
-        'successful_sales_amount_minor' => 'Sales Amount Minor',
-        'sales_per_session_cr' => 'Sales/Session CR %',
-        'sales_per_cta_session_cr' => 'Sales/CTA Session CR %',
-        'successful_sale_ids' => 'Sale IDs',
-        'successful_transaction_ids' => 'Transaction IDs',
+        'page_loaded_sessions' => 'Page Loaded Sessions',
+        'cta1_sessions' => 'CTA1 Sessions',
+        'cta1_click_events' => 'CTA1 Click Events',
+        'cta2_sessions' => 'CTA2 Sessions',
+        'cta2_click_events' => 'CTA2 Click Events',
+        'cta3_sessions' => 'CTA3 Sessions',
+        'cta3_click_events' => 'CTA3 Click Events',
+        'handoff_attempts' => 'Handoff Attempts',
+        'handoff_successes' => 'Handoff Successes',
+        'handoff_fails' => 'Handoff Fails',
+        'handoff_rate_pct' => 'Handoff Rate %',
+        'min_hidden_seconds' => 'Min Hidden s',
+        'median_hidden_seconds' => 'Median Hidden s',
+        'max_hidden_seconds' => 'Max Hidden s',
+        'sales' => 'Sales',
+        'sales_amount_minor' => 'Sales Amount Minor',
     ];
 
     private $repository;
     private $frontend_auth_gate;
 
     public function __construct(
-        Kiwi_Traffic_Source_Funnel_Statistics_Repository $repository,
+        Kiwi_Statistics_Read_Repository_Interface $repository,
         ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null
     ) {
         $this->repository = $repository;
@@ -63,14 +74,14 @@ class Kiwi_Statistics_Shortcode
         $output .= '<header class="kiwi-section-header">';
         $output .= '<div class="kiwi-section-header-content">';
         $output .= '<h2 class="kiwi-page-title">Statistics</h2>';
-        $output .= '<p class="kiwi-page-subtitle">Traffic-source funnel metrics grouped by service, TK source, and TK zone.</p>';
+        $output .= '<p class="kiwi-page-subtitle">Daily landing funnel summary grouped by source, landing, service, and device dimensions.</p>';
         $output .= '</div>';
         $output .= '</header>';
         $output .= $this->render_filter_form($filters, $filter_options);
 
         if ($error !== '') {
-            $output .= '<div class="kiwi-notice kiwi-notice--error"><p>Statistics view '
-                . esc_html($this->repository->get_view_name())
+            $output .= '<div class="kiwi-notice kiwi-notice--error"><p>Statistics source '
+                . esc_html($this->repository->get_source_name())
                 . ' is not readable: '
                 . esc_html($error)
                 . '</p></div>';
@@ -87,7 +98,7 @@ class Kiwi_Statistics_Shortcode
         }
 
         $output .= '<section class="kiwi-card kiwi-table-card">';
-        $output .= '<h4 class="kiwi-section-title">Load to CTA by Traffic Source</h4>';
+        $output .= '<h4 class="kiwi-section-title">Landing Funnel Daily Summary</h4>';
         $output .= '<div class="kiwi-table-wrap">';
         $output .= '<table class="kiwi-table kiwi-table--statistics">';
         $output .= '<thead><tr>';
@@ -123,7 +134,12 @@ class Kiwi_Statistics_Shortcode
             'from' => $this->repository->get_default_from(),
             'to' => '',
             'service_key' => '',
+            'landing_key' => '',
             'tksource' => '',
+            'tkzone' => '',
+            'device_brand' => '',
+            'android_version' => '',
+            'browser' => '',
             'limit' => 100,
         ];
 
@@ -139,8 +155,28 @@ class Kiwi_Statistics_Shortcode
             $filters['service_key'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_service_key']));
         }
 
+        if (isset($_GET['kiwi_stats_landing_key'])) {
+            $filters['landing_key'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_landing_key']));
+        }
+
         if (isset($_GET['kiwi_stats_tksource'])) {
             $filters['tksource'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_tksource']));
+        }
+
+        if (isset($_GET['kiwi_stats_tkzone'])) {
+            $filters['tkzone'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_tkzone']));
+        }
+
+        if (isset($_GET['kiwi_stats_device_brand'])) {
+            $filters['device_brand'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_device_brand']));
+        }
+
+        if (isset($_GET['kiwi_stats_android_version'])) {
+            $filters['android_version'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_android_version']));
+        }
+
+        if (isset($_GET['kiwi_stats_browser'])) {
+            $filters['browser'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_browser']));
         }
 
         if (isset($_GET['kiwi_stats_limit'])) {
@@ -154,23 +190,12 @@ class Kiwi_Statistics_Shortcode
     {
         $export_url = $this->build_export_url($filters);
         $service_key = (string) ($filters['service_key'] ?? '');
+        $landing_key = (string) ($filters['landing_key'] ?? '');
         $tksource = (string) ($filters['tksource'] ?? '');
-        $service_keys = isset($filter_options['service_keys']) && is_array($filter_options['service_keys'])
-            ? $filter_options['service_keys']
-            : [];
-        $tksources = isset($filter_options['tksources']) && is_array($filter_options['tksources'])
-            ? $filter_options['tksources']
-            : [];
-
-        if ($service_key !== '' && !in_array($service_key, $service_keys, true)) {
-            $service_keys[] = $service_key;
-            sort($service_keys, SORT_STRING);
-        }
-
-        if ($tksource !== '' && !in_array($tksource, $tksources, true)) {
-            $tksources[] = $tksource;
-            sort($tksources, SORT_STRING);
-        }
+        $tkzone = (string) ($filters['tkzone'] ?? '');
+        $device_brand = (string) ($filters['device_brand'] ?? '');
+        $android_version = (string) ($filters['android_version'] ?? '');
+        $browser = (string) ($filters['browser'] ?? '');
 
         $output = '';
 
@@ -178,34 +203,19 @@ class Kiwi_Statistics_Shortcode
         $output .= '<div class="kiwi-form-row kiwi-form-row-inline">';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_from">From</label>';
-        $output .= '<input id="kiwi_stats_from" class="kiwi-input kiwi-width-small" type="datetime-local" step="1" name="kiwi_stats_from" value="' . esc_attr($this->format_datetime_local((string) ($filters['from'] ?? ''))) . '">';
+        $output .= '<input id="kiwi_stats_from" class="kiwi-input kiwi-width-small" type="date" name="kiwi_stats_from" value="' . esc_attr($this->format_date_value((string) ($filters['from'] ?? ''))) . '">';
         $output .= '</div>';
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_to">To</label>';
-        $output .= '<input id="kiwi_stats_to" class="kiwi-input kiwi-width-small" type="datetime-local" step="1" name="kiwi_stats_to" value="' . esc_attr($this->format_datetime_local((string) ($filters['to'] ?? ''))) . '">';
+        $output .= '<input id="kiwi_stats_to" class="kiwi-input kiwi-width-small" type="date" name="kiwi_stats_to" value="' . esc_attr($this->format_date_value((string) ($filters['to'] ?? ''))) . '">';
         $output .= '</div>';
-        $output .= '<div class="kiwi-field kiwi-field--compact">';
-        $output .= '<label class="kiwi-field-label" for="kiwi_stats_service_key">Service Key</label>';
-        $output .= '<select id="kiwi_stats_service_key" class="kiwi-select kiwi-width-small" name="kiwi_stats_service_key">';
-        $output .= '<option value="">all</option>';
-
-        foreach ($service_keys as $option) {
-            $output .= '<option value="' . esc_attr($option) . '"' . selected($service_key, $option, false) . '>' . esc_html($option) . '</option>';
-        }
-
-        $output .= '</select>';
-        $output .= '</div>';
-        $output .= '<div class="kiwi-field kiwi-field--compact">';
-        $output .= '<label class="kiwi-field-label" for="kiwi_stats_tksource">TK Source</label>';
-        $output .= '<select id="kiwi_stats_tksource" class="kiwi-select kiwi-width-small" name="kiwi_stats_tksource">';
-        $output .= '<option value="">all</option>';
-
-        foreach ($tksources as $option) {
-            $output .= '<option value="' . esc_attr($option) . '"' . selected($tksource, $option, false) . '>' . esc_html($option) . '</option>';
-        }
-
-        $output .= '</select>';
-        $output .= '</div>';
+        $output .= $this->render_select_filter('kiwi_stats_service_key', 'Service Key', $service_key, $this->get_filter_options_for_key($filter_options, 'service_keys'));
+        $output .= $this->render_select_filter('kiwi_stats_landing_key', 'Landing Key', $landing_key, $this->get_filter_options_for_key($filter_options, 'landing_keys'));
+        $output .= $this->render_select_filter('kiwi_stats_tksource', 'TK Source', $tksource, $this->get_filter_options_for_key($filter_options, 'tksources'));
+        $output .= $this->render_select_filter('kiwi_stats_tkzone', 'TK Zone', $tkzone, $this->get_filter_options_for_key($filter_options, 'tkzones'));
+        $output .= $this->render_select_filter('kiwi_stats_device_brand', 'Device Brand', $device_brand, $this->get_filter_options_for_key($filter_options, 'device_brands'));
+        $output .= $this->render_select_filter('kiwi_stats_android_version', 'Android', $android_version, $this->get_filter_options_for_key($filter_options, 'android_versions'));
+        $output .= $this->render_select_filter('kiwi_stats_browser', 'Browser', $browser, $this->get_filter_options_for_key($filter_options, 'browsers'));
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_limit">Limit</label>';
         $output .= '<input id="kiwi_stats_limit" class="kiwi-input kiwi-width-small" type="number" min="1" max="500" name="kiwi_stats_limit" value="' . esc_attr((string) ($filters['limit'] ?? 100)) . '">';
@@ -227,7 +237,12 @@ class Kiwi_Statistics_Shortcode
             'kiwi_stats_from' => (string) ($filters['from'] ?? ''),
             'kiwi_stats_to' => (string) ($filters['to'] ?? ''),
             'kiwi_stats_service_key' => (string) ($filters['service_key'] ?? ''),
+            'kiwi_stats_landing_key' => (string) ($filters['landing_key'] ?? ''),
             'kiwi_stats_tksource' => (string) ($filters['tksource'] ?? ''),
+            'kiwi_stats_tkzone' => (string) ($filters['tkzone'] ?? ''),
+            'kiwi_stats_device_brand' => (string) ($filters['device_brand'] ?? ''),
+            'kiwi_stats_android_version' => (string) ($filters['android_version'] ?? ''),
+            'kiwi_stats_browser' => (string) ($filters['browser'] ?? ''),
             'kiwi_stats_limit' => (string) ($filters['limit'] ?? 100),
         ];
 
@@ -245,7 +260,37 @@ class Kiwi_Statistics_Shortcode
         return (string) $value;
     }
 
-    private function format_datetime_local(string $value): string
+    private function get_filter_options_for_key(array $filter_options, string $key): array
+    {
+        return isset($filter_options[$key]) && is_array($filter_options[$key])
+            ? $filter_options[$key]
+            : [];
+    }
+
+    private function render_select_filter(string $id, string $label, string $selected_value, array $options): string
+    {
+        if ($selected_value !== '' && !in_array($selected_value, $options, true)) {
+            $options[] = $selected_value;
+            sort($options, SORT_STRING);
+        }
+
+        $output = '';
+        $output .= '<div class="kiwi-field kiwi-field--compact">';
+        $output .= '<label class="kiwi-field-label" for="' . esc_attr($id) . '">' . esc_html($label) . '</label>';
+        $output .= '<select id="' . esc_attr($id) . '" class="kiwi-select kiwi-width-small" name="' . esc_attr($id) . '">';
+        $output .= '<option value="">all</option>';
+
+        foreach ($options as $option) {
+            $output .= '<option value="' . esc_attr($option) . '"' . selected($selected_value, $option, false) . '>' . esc_html($option) . '</option>';
+        }
+
+        $output .= '</select>';
+        $output .= '</div>';
+
+        return $output;
+    }
+
+    private function format_date_value(string $value): string
     {
         $value = trim($value);
 
@@ -253,43 +298,19 @@ class Kiwi_Statistics_Shortcode
             return '';
         }
 
-        $wall_clock_datetime = $this->format_wall_clock_datetime_local($value);
-
-        if ($wall_clock_datetime !== null) {
-            return $wall_clock_datetime;
-        }
-
-        if (preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/', $value) === 1) {
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})(?:[ T].*)?$/', $value, $matches) !== 1) {
             return '';
-        }
-
-        $timestamp = strtotime($value);
-
-        if ($timestamp === false) {
-            return '';
-        }
-
-        return gmdate('Y-m-d\TH:i:s', $timestamp);
-    }
-
-    private function format_wall_clock_datetime_local(string $value): ?string
-    {
-        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/', $value, $matches) !== 1) {
-            return null;
         }
 
         $year = (int) $matches[1];
         $month = (int) $matches[2];
         $day = (int) $matches[3];
-        $hour = (int) $matches[4];
-        $minute = (int) $matches[5];
-        $second = isset($matches[6]) ? (int) $matches[6] : 0;
 
-        if (!checkdate($month, $day, $year) || $hour > 23 || $minute > 59 || $second > 59) {
-            return null;
+        if (!checkdate($month, $day, $year)) {
+            return '';
         }
 
-        return sprintf('%04d-%02d-%02dT%02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second);
+        return sprintf('%04d-%02d-%02d', $year, $month, $day);
     }
 
     private function get_column_class(string $field): string

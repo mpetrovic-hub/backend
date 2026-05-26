@@ -4,7 +4,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Kiwi_Traffic_Source_Funnel_Statistics_Repository
+class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistics_Read_Repository_Interface
 {
     public const DEFAULT_FROM = '2026-05-12 20:00:00';
 
@@ -185,6 +185,11 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
         global $wpdb;
 
         return $wpdb->prefix . 'kiwi_v_load_to_cta_by_tksource_tkzone';
+    }
+
+    public function get_source_name(): string
+    {
+        return $this->get_view_name();
     }
 
     public function get_one_for_all_view_name(): string

@@ -125,7 +125,11 @@ This keeps provider payload parsing at the boundary while giving the shared frau
 
 ## Traffic-Source Funnel Statistics
 
-The shared statistics report is exposed through the protected `[kiwi_statistics]` shortcode. It reads from the plugin-managed `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view instead of relying on a manually created phpMyAdmin view. Current statistics views continue to read the generic legacy CTA engagement fields; the CTA1/CTA2/CTA3 engagement columns provide additive input for a separate step-specific summary rollout.
+The shared statistics report is exposed through the protected `[kiwi_statistics]` shortcode. Its primary UI and CSV export path reads from the persistent `wp_kiwi_landing_funnel_daily_summary` table so larger date ranges can be filtered and pivoted without rebuilding the old transition views on every request. The report supports date-range filters plus `service_key`, `landing_key`, `tksource`, `tkzone`, `device_brand`, `android_version`, and `browser` filters.
+
+The shortcode and CSV export share one internal statistics-read contract and one column list. The current columns are the summary dimensions (`metric_date`, landing/service/provider/flow/country/source/device buckets) plus daily metrics for sessions, page loads, CTA1/CTA2/CTA3 sessions and click events, handoff attempts/successes/fails/rate, hidden-time min/median/max, sales, and `sales_amount_minor`. The daily summary does not store sale ID or transaction ID drilldown lists; those legacy CSV columns are intentionally not emitted by the summary read path.
+
+The plugin-managed `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view remains available as a legacy/debug source instead of a primary Statistics UI dependency. It reads the generic legacy CTA engagement fields and groups by `service_key`, `tksource`, and `tkzone`.
 
 The view is deliberately built from normalized internal tables only:
 
@@ -157,7 +161,7 @@ The daily summary intentionally differs from the transition views:
 
 WP-Cron runs the same bounded refresh contract hourly through `kiwi_landing_funnel_daily_summary_refresh`. The rolling window defaults to seven lookback days plus today via `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`, uses a transient lock to avoid concurrent recomputes, and stores the latest result in `kiwi_landing_funnel_daily_summary_refresh_last_result`.
 
-No shortcode, CSV, or raw-table cleanup behavior is switched to the daily summary yet. The existing views remain the current UI/read path until a later reporting rollout chooses to consume the persistent table.
+Raw-table cleanup behavior is not switched to the daily summary. The existing views remain schema-managed for legacy/debug analysis, while the shortcode and CSV export consume the persistent table.
 
 ## Retention and Cleanup
 

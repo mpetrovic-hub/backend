@@ -345,6 +345,7 @@ require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-re
 require_once __DIR__ . '/../includes/repositories/class-sms-body-variant-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/../includes/repositories/interface-statistics-read-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-traffic-source-funnel-statistics-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
@@ -2584,6 +2585,48 @@ class Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository extends Kiwi_Traffic
     }
 }
 
+class Kiwi_Test_Landing_Funnel_Daily_Summary_Repository extends Kiwi_Landing_Funnel_Daily_Summary_Repository
+{
+    public $rows = [];
+    public $calls = [];
+    public $filter_options = [
+        'service_keys' => [],
+        'landing_keys' => [],
+        'tksources' => [],
+        'tkzones' => [],
+        'device_brands' => [],
+        'android_versions' => [],
+        'browsers' => [],
+    ];
+    public $error = '';
+    public $source_name = 'wp_kiwi_landing_funnel_daily_summary';
+
+    public function get_rows(array $filters = [], int $limit = 100): array
+    {
+        $this->calls[] = [
+            'filters' => $filters,
+            'limit' => $limit,
+        ];
+
+        return $this->rows;
+    }
+
+    public function get_filter_options(array $filters = []): array
+    {
+        return $this->filter_options;
+    }
+
+    public function get_last_error(): string
+    {
+        return $this->error;
+    }
+
+    public function get_source_name(): string
+    {
+        return $this->source_name;
+    }
+}
+
 class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Repository
 {
     public $assignments = [];
@@ -3284,6 +3327,8 @@ class Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary
     public $last_error = '';
     public $queries = [];
     public $prepared_statements = [];
+    public $result_rows = [];
+    public $result_rows_queue = [];
 
     public function get_charset_collate(): string
     {
@@ -3323,6 +3368,22 @@ class Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary
         }
 
         return 0;
+    }
+
+    public function get_results($statement, $output = null): array
+    {
+        $this->prepared_statements[] = is_array($statement)
+            ? $statement
+            : [
+                'query' => (string) $statement,
+                'args' => [],
+            ];
+
+        if (!empty($this->result_rows_queue)) {
+            return array_shift($this->result_rows_queue);
+        }
+
+        return $this->result_rows;
     }
 }
 
@@ -8050,6 +8111,119 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered statistics rows from the summary table', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+    $wpdb->result_rows = [
+        [
+            'metric_date' => '2026-05-25',
+            'landing_key' => 'lp2-fr',
+            'service_key' => 'svc_a',
+            'provider_key' => 'nth',
+            'flow_key' => 'one-off',
+            'country' => 'FR',
+            'pid' => 'pid_a',
+            'tksource' => 'src_a',
+            'tkzone' => 'zone_a',
+            'device_brand' => 'Samsung',
+            'android_version' => '14',
+            'browser' => 'Chrome',
+            'sessions' => 10,
+            'page_loaded_sessions' => 9,
+            'cta1_sessions' => 7,
+            'cta1_click_events' => 8,
+            'cta2_sessions' => 4,
+            'cta2_click_events' => 4,
+            'cta3_sessions' => 2,
+            'cta3_click_events' => 2,
+            'handoff_attempts' => 5,
+            'handoff_successes' => 4,
+            'handoff_fails' => 1,
+            'handoff_rate_pct' => '80.00',
+            'min_hidden_seconds' => '1.00',
+            'median_hidden_seconds' => '2.00',
+            'max_hidden_seconds' => '3.00',
+            'sales' => 2,
+            'sales_amount_minor' => 900,
+        ],
+    ];
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
+    $rows = $repository->get_rows([
+        'from' => '2026-05-24T10:30:00',
+        'to' => '2026-05-25 23:59:59',
+        'service_key' => 'svc_a',
+        'landing_key' => 'lp2-fr',
+        'tksource' => 'src_a',
+        'tkzone' => 'zone_a',
+        'device_brand' => 'Samsung',
+        'android_version' => '14',
+        'browser' => 'Chrome',
+    ], 999);
+    $statement = $wpdb->prepared_statements[count($wpdb->prepared_statements) - 1] ?? [];
+    $query = (string) ($statement['query'] ?? '');
+
+    kiwi_assert_same($wpdb->result_rows, $rows, 'Expected summary repository to return database rows when the summary table is readable.');
+    kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_summary', $query, 'Expected statistics query to read from the daily summary table.');
+    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s AND device_brand = %s AND android_version = %s AND browser = %s', $query, 'Expected all supported UI filters to be applied to summary rows.');
+    kiwi_assert_contains('cta1_sessions', $query, 'Expected query to expose CTA1 metrics.');
+    kiwi_assert_contains('cta2_sessions', $query, 'Expected query to expose CTA2 metrics.');
+    kiwi_assert_contains('cta3_sessions', $query, 'Expected query to expose CTA3 metrics.');
+    kiwi_assert_contains('handoff_attempts', $query, 'Expected query to expose handoff metrics.');
+    kiwi_assert_contains('sales_amount_minor', $query, 'Expected query to expose sales amount metrics.');
+    kiwi_assert_true(strpos($query, 'successful_sale_ids') === false, 'Expected summary read path not to expose legacy drilldown sale IDs.');
+    kiwi_assert_same(
+        ['2026-05-24', '2026-05-25', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 500],
+        $statement['args'] ?? [],
+        'Expected repository query args to normalize date filters and cap the limit to 500.'
+    );
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filter options', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+    $wpdb->result_rows_queue = [
+        [['service_key' => 'svc_b'], ['service_key' => 'svc_a'], ['service_key' => 'svc_a']],
+        [['landing_key' => 'lp6-fr'], ['landing_key' => 'lp2-fr']],
+        [['tksource' => 'src_b'], ['tksource' => 'src_a']],
+        [['tkzone' => 'zone_b'], ['tkzone' => 'zone_a']],
+        [['device_brand' => 'Samsung'], ['device_brand' => 'Google']],
+        [['android_version' => '14'], ['android_version' => '13']],
+        [['browser' => 'Chrome'], ['browser' => 'Safari']],
+    ];
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
+    $options = $repository->get_filter_options([
+        'from' => '2026-05-24T10:30:00',
+        'to' => '2026-05-25 23:59:59',
+    ]);
+
+    kiwi_assert_same(['svc_a', 'svc_b'], $options['service_keys'] ?? [], 'Expected service filter options to be distinct and sorted.');
+    kiwi_assert_same(['lp2-fr', 'lp6-fr'], $options['landing_keys'] ?? [], 'Expected landing filter options to be distinct and sorted.');
+    kiwi_assert_same(['src_a', 'src_b'], $options['tksources'] ?? [], 'Expected TK source filter options to be distinct and sorted.');
+    kiwi_assert_same(['zone_a', 'zone_b'], $options['tkzones'] ?? [], 'Expected TK zone filter options to be distinct and sorted.');
+    kiwi_assert_same(['Google', 'Samsung'], $options['device_brands'] ?? [], 'Expected device-brand filter options to be distinct and sorted.');
+    kiwi_assert_same(['13', '14'], $options['android_versions'] ?? [], 'Expected Android filter options to be distinct and sorted.');
+    kiwi_assert_same(['Chrome', 'Safari'], $options['browsers'] ?? [], 'Expected browser filter options to be distinct and sorted.');
+    kiwi_assert_contains('SELECT DISTINCT service_key', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected service options to query distinct service keys from the summary table.');
+    kiwi_assert_contains('SELECT DISTINCT browser', (string) ($wpdb->prepared_statements[12]['query'] ?? ''), 'Expected browser options to query distinct browsers from the summary table.');
+    kiwi_assert_same(
+        ['2026-05-24', '2026-05-25'],
+        $wpdb->prepared_statements[0]['args'] ?? [],
+        'Expected options query to reuse normalized date filters.'
+    );
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-managed prefixed view', function (): void {
     global $wpdb;
 
@@ -8187,19 +8361,19 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository exposes distinct
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi statistics datetime filters preserve timezone-less wall-clock seconds', function (): void {
+kiwi_run_test('Kiwi statistics date filters normalize datetime input to summary dates', function (): void {
     $previous_timezone = date_default_timezone_get();
     date_default_timezone_set('Europe/Berlin');
 
     try {
-        $repository = new Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository();
+        $repository = new Kiwi_Test_Landing_Funnel_Daily_Summary_Repository();
         $filters = $repository->normalize_filters([
             'from' => '2026-05-13 00:00:30',
             'to' => '2026-05-13T00:00:45',
         ]);
 
-        kiwi_assert_same('2026-05-13 00:00:30', $filters['from'] ?? '', 'Expected timezone-less MySQL from filter to keep wall-clock seconds in Europe/Berlin.');
-        kiwi_assert_same('2026-05-13 00:00:45', $filters['to'] ?? '', 'Expected timezone-less datetime-local to filter to keep wall-clock seconds in Europe/Berlin.');
+        kiwi_assert_same('2026-05-13', $filters['from'] ?? '', 'Expected timezone-less MySQL from filter to map to the same summary date.');
+        kiwi_assert_same('2026-05-13', $filters['to'] ?? '', 'Expected timezone-less datetime-local to filter to map to the same summary date.');
 
         $malformed_filters = $repository->normalize_filters([
             'from' => '2026-13-99T25:61',
@@ -8207,9 +8381,9 @@ kiwi_run_test('Kiwi statistics datetime filters preserve timezone-less wall-cloc
         ]);
 
         kiwi_assert_same(
-            Kiwi_Traffic_Source_Funnel_Statistics_Repository::DEFAULT_FROM,
+            Kiwi_Landing_Funnel_Daily_Summary_Repository::DEFAULT_FROM,
             $malformed_filters['from'] ?? '',
-            'Expected malformed datetime-local from filter to fall back instead of reaching SQL as a datetime literal.'
+            'Expected malformed datetime-local from filter to fall back instead of reaching SQL as a date literal.'
         );
         kiwi_assert_same('', $malformed_filters['to'] ?? '', 'Expected malformed optional datetime-local to filter to be rejected.');
 
@@ -8219,6 +8393,8 @@ kiwi_run_test('Kiwi statistics datetime filters preserve timezone-less wall-cloc
         ];
         $repository->rows = [
             [
+                'metric_date' => '2026-05-13',
+                'landing_key' => 'lp2-fr',
                 'service_key' => 'svc_a',
                 'tksource' => 'src_a',
                 'tkzone' => 'zone_a',
@@ -8228,89 +8404,180 @@ kiwi_run_test('Kiwi statistics datetime filters preserve timezone-less wall-cloc
         $shortcode = new Kiwi_Statistics_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
         $output = $shortcode->render();
 
-        kiwi_assert_contains('name="kiwi_stats_from" value="2026-05-13T00:00:30"', $output, 'Expected datetime-local from value not to shift to UTC while rendering.');
-        kiwi_assert_contains('name="kiwi_stats_to" value="2026-05-13T00:00:45"', $output, 'Expected datetime-local to value not to shift to UTC while rendering.');
-        kiwi_assert_true(strpos($output, '2026-05-12T22:00:30') === false, 'Expected statistics filter rendering not to shift Europe/Berlin wall-clock time to UTC.');
+        kiwi_assert_contains('name="kiwi_stats_from" value="2026-05-13"', $output, 'Expected date from value not to shift to UTC while rendering.');
+        kiwi_assert_contains('name="kiwi_stats_to" value="2026-05-13"', $output, 'Expected date to value not to shift to UTC while rendering.');
+        kiwi_assert_true(strpos($output, '2026-05-12') === false, 'Expected statistics filter rendering not to shift Europe/Berlin dates to UTC.');
     } finally {
         $_GET = [];
         date_default_timezone_set($previous_timezone);
     }
 });
 
-kiwi_run_test('Kiwi_Statistics_Shortcode renders filters, median, sales, and empty source labels', function (): void {
+kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, handoff, and sales', function (): void {
     $_GET = [
         'kiwi_stats_from' => '2026-05-13T00:00:30',
         'kiwi_stats_to' => '2026-05-14T00:00:45',
         'kiwi_stats_service_key' => 'svc_a',
+        'kiwi_stats_landing_key' => 'lp2-fr',
         'kiwi_stats_tksource' => 'src_a',
+        'kiwi_stats_tkzone' => 'zone_a',
+        'kiwi_stats_device_brand' => 'Samsung',
+        'kiwi_stats_android_version' => '14',
+        'kiwi_stats_browser' => 'Chrome',
         'kiwi_stats_limit' => '50',
     ];
 
-    $repository = new Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository();
+    $repository = new Kiwi_Test_Landing_Funnel_Daily_Summary_Repository();
     $repository->filter_options = [
         'service_keys' => ['svc_a', 'svc_b'],
+        'landing_keys' => ['lp2-fr', 'lp6-fr'],
         'tksources' => ['src_a', 'src_b'],
+        'tkzones' => ['zone_a', 'zone_b'],
+        'device_brands' => ['Google', 'Samsung'],
+        'android_versions' => ['13', '14'],
+        'browsers' => ['Chrome', 'Safari'],
     ];
     $repository->rows = [
         [
+            'metric_date' => '2026-05-13',
+            'landing_key' => 'lp2-fr',
             'service_key' => 'svc_a',
+            'provider_key' => 'nth',
+            'flow_key' => 'one-off',
+            'country' => 'FR',
+            'pid' => 'pid_a',
             'tksource' => 'src_a',
-            'tkzone' => '(empty)',
+            'tkzone' => 'zone_a',
+            'device_brand' => 'Samsung',
+            'android_version' => '14',
+            'browser' => 'Chrome',
             'sessions' => 4,
-            'loaded_sessions' => 3,
-            'cta_sessions' => 2,
-            'cta_click_events' => 5,
-            'cta_session_cr' => '66.67',
-            'avg_seconds_load_to_cta' => '2.50',
-            'median_seconds_load_to_cta' => '2.00',
-            'min_seconds_load_to_cta' => '1',
-            'max_seconds_load_to_cta' => '4',
-            'successful_sales' => 1,
-            'successful_sales_amount_minor' => 450,
-            'sales_per_session_cr' => '25.00',
-            'sales_per_cta_session_cr' => '50.00',
-            'successful_sale_ids' => '7',
-            'successful_transaction_ids' => 'txn-7-long-reference',
+            'page_loaded_sessions' => 3,
+            'cta1_sessions' => 2,
+            'cta1_click_events' => 5,
+            'cta2_sessions' => 1,
+            'cta2_click_events' => 2,
+            'cta3_sessions' => 1,
+            'cta3_click_events' => 1,
+            'handoff_attempts' => 2,
+            'handoff_successes' => 1,
+            'handoff_fails' => 1,
+            'handoff_rate_pct' => '50.00',
+            'min_hidden_seconds' => '1.00',
+            'median_hidden_seconds' => '2.00',
+            'max_hidden_seconds' => '4.00',
+            'sales' => 1,
+            'sales_amount_minor' => 450,
         ],
     ];
     $shortcode = new Kiwi_Statistics_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
     $output = $shortcode->render();
 
-    kiwi_assert_contains('Traffic Source Funnel Statistics', $output, 'Expected statistics shortcode shell to render.');
-    kiwi_assert_contains('type="datetime-local" step="1" name="kiwi_stats_from" value="2026-05-13T00:00:30"', $output, 'Expected From filter to render as native seconds-capable datetime-local input.');
-    kiwi_assert_contains('type="datetime-local" step="1" name="kiwi_stats_to" value="2026-05-14T00:00:45"', $output, 'Expected To filter to render as native seconds-capable datetime-local input.');
+    kiwi_assert_contains('Landing Funnel Daily Summary', $output, 'Expected statistics shortcode shell to render summary wording.');
+    kiwi_assert_contains('type="date" name="kiwi_stats_from" value="2026-05-13"', $output, 'Expected From filter to render as a date input for summary metric_date.');
+    kiwi_assert_contains('type="date" name="kiwi_stats_to" value="2026-05-14"', $output, 'Expected To filter to render as a date input for summary metric_date.');
     kiwi_assert_contains('<select id="kiwi_stats_service_key" class="kiwi-select kiwi-width-small" name="kiwi_stats_service_key">', $output, 'Expected Service Key filter to render as a select.');
     kiwi_assert_contains('<option value="">all</option><option value="svc_a" selected="selected">svc_a</option><option value="svc_b">svc_b</option>', $output, 'Expected Service Key select to include all plus dynamic selected options.');
+    kiwi_assert_contains('<select id="kiwi_stats_landing_key" class="kiwi-select kiwi-width-small" name="kiwi_stats_landing_key">', $output, 'Expected Landing Key filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_tksource" class="kiwi-select kiwi-width-small" name="kiwi_stats_tksource">', $output, 'Expected TK Source filter to render as a select.');
     kiwi_assert_contains('<option value="">all</option><option value="src_a" selected="selected">src_a</option><option value="src_b">src_b</option>', $output, 'Expected TK Source select to include all plus dynamic selected options.');
+    kiwi_assert_contains('<select id="kiwi_stats_tkzone" class="kiwi-select kiwi-width-small" name="kiwi_stats_tkzone">', $output, 'Expected TK Zone filter to render as a select.');
+    kiwi_assert_contains('<select id="kiwi_stats_device_brand" class="kiwi-select kiwi-width-small" name="kiwi_stats_device_brand">', $output, 'Expected Device Brand filter to render as a select.');
+    kiwi_assert_contains('<select id="kiwi_stats_android_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_android_version">', $output, 'Expected Android filter to render as a select.');
+    kiwi_assert_contains('<select id="kiwi_stats_browser" class="kiwi-select kiwi-width-small" name="kiwi_stats_browser">', $output, 'Expected Browser filter to render as a select.');
     kiwi_assert_contains('kiwi-table kiwi-table--statistics', $output, 'Expected statistics table modifier for compact scrolling layout.');
-    kiwi_assert_contains('class="kiwi-statistics-col kiwi-statistics-col--successful-transaction-ids" title="txn-7-long-reference"', $output, 'Expected long transaction cells to keep the full value available via title.');
-    kiwi_assert_contains('title="Median Load->CTA s">Median Load->CTA s</th>', $output, 'Expected statistics table to render median column.');
-    kiwi_assert_contains('title="Successful Sales">Successful Sales</th>', $output, 'Expected statistics table to render sales column.');
-    kiwi_assert_contains('(empty)', $output, 'Expected normalized empty source labels to remain readable.');
-    kiwi_assert_contains('txn-7-long-reference', $output, 'Expected compact transaction drilldown references to render.');
-    kiwi_assert_same('2026-05-13 00:00:30', $repository->calls[0]['filters']['from'] ?? '', 'Expected shortcode to preserve seconds in from filter.');
-    kiwi_assert_same('2026-05-14 00:00:45', $repository->calls[0]['filters']['to'] ?? '', 'Expected shortcode to preserve seconds in to filter.');
+    kiwi_assert_contains('title="CTA1 Sessions">CTA1 Sessions</th>', $output, 'Expected statistics table to render CTA1 summary column.');
+    kiwi_assert_contains('title="CTA2 Sessions">CTA2 Sessions</th>', $output, 'Expected statistics table to render CTA2 summary column.');
+    kiwi_assert_contains('title="CTA3 Sessions">CTA3 Sessions</th>', $output, 'Expected statistics table to render CTA3 summary column.');
+    kiwi_assert_contains('title="Handoff Attempts">Handoff Attempts</th>', $output, 'Expected statistics table to render handoff summary column.');
+    kiwi_assert_contains('title="Sales">Sales</th>', $output, 'Expected statistics table to render sales column.');
+    kiwi_assert_contains('title="Samsung">Samsung</td>', $output, 'Expected device dimension to render in the summary table.');
+    kiwi_assert_true(strpos($output, 'txn-7-long-reference') === false, 'Expected legacy transaction drilldown references not to render from summary rows.');
+    kiwi_assert_same('2026-05-13', $repository->calls[0]['filters']['from'] ?? '', 'Expected shortcode to pass normalized date from filter to repository.');
+    kiwi_assert_same('2026-05-14', $repository->calls[0]['filters']['to'] ?? '', 'Expected shortcode to pass normalized date to filter to repository.');
     kiwi_assert_same('svc_a', $repository->calls[0]['filters']['service_key'] ?? '', 'Expected shortcode to pass service_key filter to repository.');
+    kiwi_assert_same('lp2-fr', $repository->calls[0]['filters']['landing_key'] ?? '', 'Expected shortcode to pass landing_key filter to repository.');
     kiwi_assert_same('src_a', $repository->calls[0]['filters']['tksource'] ?? '', 'Expected shortcode to pass tksource filter to repository.');
-    kiwi_assert_contains('kiwi_stats_from=2026-05-13+00%3A00%3A30', $output, 'Expected CSV export URL to preserve normalized from filter seconds.');
+    kiwi_assert_same('zone_a', $repository->calls[0]['filters']['tkzone'] ?? '', 'Expected shortcode to pass tkzone filter to repository.');
+    kiwi_assert_same('Samsung', $repository->calls[0]['filters']['device_brand'] ?? '', 'Expected shortcode to pass device_brand filter to repository.');
+    kiwi_assert_same('14', $repository->calls[0]['filters']['android_version'] ?? '', 'Expected shortcode to pass android_version filter to repository.');
+    kiwi_assert_same('Chrome', $repository->calls[0]['filters']['browser'] ?? '', 'Expected shortcode to pass browser filter to repository.');
+    kiwi_assert_contains('kiwi_stats_from=2026-05-13', $output, 'Expected CSV export URL to preserve normalized from date filter.');
     kiwi_assert_contains('kiwi_stats_service_key=svc_a', $output, 'Expected CSV export URL to preserve service filter.');
+    kiwi_assert_contains('kiwi_stats_landing_key=lp2-fr', $output, 'Expected CSV export URL to preserve landing filter.');
     kiwi_assert_contains('kiwi_stats_tksource=src_a', $output, 'Expected CSV export URL to preserve TK source filter.');
+    kiwi_assert_contains('kiwi_stats_tkzone=zone_a', $output, 'Expected CSV export URL to preserve TK zone filter.');
+    kiwi_assert_contains('kiwi_stats_device_brand=Samsung', $output, 'Expected CSV export URL to preserve device-brand filter.');
+    kiwi_assert_contains('kiwi_stats_android_version=14', $output, 'Expected CSV export URL to preserve Android filter.');
+    kiwi_assert_contains('kiwi_stats_browser=Chrome', $output, 'Expected CSV export URL to preserve browser filter.');
 
     $_GET = [];
 });
 
-kiwi_run_test('Kiwi_Statistics_Shortcode shows an admin error when the statistics view is unreadable', function (): void {
+kiwi_run_test('Kiwi_Statistics_Shortcode shows an admin error when the summary table is unreadable', function (): void {
     $_GET = [];
 
-    $repository = new Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository();
-    $repository->error = 'view command denied';
-    $repository->view_name = 'wp_kiwi_v_load_to_cta_by_tksource_tkzone';
+    $repository = new Kiwi_Test_Landing_Funnel_Daily_Summary_Repository();
+    $repository->error = 'table command denied';
+    $repository->source_name = 'wp_kiwi_landing_funnel_daily_summary';
     $shortcode = new Kiwi_Statistics_Shortcode($repository, new Kiwi_Frontend_Auth_Gate());
     $output = $shortcode->render();
 
-    kiwi_assert_contains('Statistics view wp_kiwi_v_load_to_cta_by_tksource_tkzone is not readable', $output, 'Expected clear admin error when the managed view cannot be read.');
-    kiwi_assert_contains('view command denied', $output, 'Expected database read error details to be shown without credentials.');
+    kiwi_assert_contains('Statistics source wp_kiwi_landing_funnel_daily_summary is not readable', $output, 'Expected clear admin error when the managed summary table cannot be read.');
+    kiwi_assert_contains('table command denied', $output, 'Expected database read error details to be shown without credentials.');
+});
+
+kiwi_run_test('Kiwi_Plugin statistics CSV export reads the daily summary with the same filters', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_get = $_GET;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+    $wpdb->result_rows = [
+        [
+            'metric_date' => '2026-05-13',
+            'landing_key' => 'lp2-fr',
+            'service_key' => 'svc_a',
+            'tksource' => 'src_a',
+            'tkzone' => 'zone_a',
+            'device_brand' => 'Samsung',
+            'android_version' => '14',
+            'browser' => 'Chrome',
+            'sessions' => 4,
+            'cta1_sessions' => 2,
+            'handoff_attempts' => 2,
+            'sales' => 1,
+        ],
+    ];
+    $_GET = [
+        'kiwi_statistics_export' => '1',
+        'kiwi_stats_from' => '2026-05-13T00:00:30',
+        'kiwi_stats_to' => '2026-05-14T00:00:45',
+        'kiwi_stats_service_key' => 'svc_a',
+        'kiwi_stats_landing_key' => 'lp2-fr',
+        'kiwi_stats_tksource' => 'src_a',
+        'kiwi_stats_tkzone' => 'zone_a',
+        'kiwi_stats_device_brand' => 'Samsung',
+        'kiwi_stats_android_version' => '14',
+        'kiwi_stats_browser' => 'Chrome',
+        'kiwi_stats_limit' => '50',
+    ];
+
+    $plugin = new Kiwi_Test_Plugin(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->maybe_export_statistics();
+    $statement = $wpdb->prepared_statements[count($wpdb->prepared_statements) - 1] ?? [];
+
+    kiwi_assert_same($wpdb->result_rows, $plugin->exported_statistics_rows, 'Expected Statistics CSV export to return summary rows.');
+    kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_summary', (string) ($statement['query'] ?? ''), 'Expected CSV export to read from the summary table.');
+    kiwi_assert_same(
+        ['2026-05-13', '2026-05-14', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 50],
+        $statement['args'] ?? [],
+        'Expected CSV export filters to match shortcode request filters.'
+    );
+
+    $_GET = $previous_get;
+    $wpdb = $previous_wpdb;
 });
 
 kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles', function (): void {
