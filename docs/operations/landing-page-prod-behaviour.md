@@ -239,6 +239,17 @@ Notes:
   - computes session-row device/browser dimensions in SQL from raw UA context; new sale rows also persist matching normalized buckets for durable sale analysis
   - counts completed sales by `wp_kiwi_sales.landing_key/session_ref` first, falling back to attribution joins for legacy rows
 
+- `wp_kiwi_landing_funnel_daily_summary`
+  - plugin-managed persistent table for daily funnel aggregates
+  - groups by `metric_date`, `landing_key`, `service_key`, `provider_key`, `flow_key`, `country`, `pid`, `tksource`, `tkzone`, `device_brand`, `android_version`, and `browser`
+  - stores a stable `dimension_hash` with a unique key on `metric_date + dimension_hash`
+  - exposes distinct sessions, page-loaded sessions, CTA1/CTA2/CTA3 session and event counts, handoff attempts/successes/fails/rate, hidden-time min/median/max, sales, and `sales_amount_minor`
+  - counts distinct `landing_key + session_token` sessions from landing-session rows and engagement-only fallback rows; handoff-only rows can contribute handoff metrics without inflating `sessions`
+  - aggregates completed sales from durable `wp_kiwi_sales` snapshot columns, using `attribution_metric_date` with `DATE(completed_at)` fallback for old records
+  - writes missing dimensions to `(unknown)` buckets so unattributed sales remain visible
+  - is refreshed by bounded date-range recompute: the target `metric_date` window is deleted and reinserted, so rerunning the same range is idempotent
+  - is not yet wired to the statistics shortcode, CSV export, cron, or raw-table cleanup
+
 ## Configuration switches
 
 ### Landing-page loading
@@ -296,8 +307,9 @@ When validating a landing-page flow in production or staging, verify:
 11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, preserves wall-clock seconds in native datetime filters, populates service/TK-source dropdowns from existing view data, and shows completed sales/rates from sales snapshots even after temporary attribution rows expire.
 12. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
 13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`; completed sales should still count when their durable `landing_key/session_ref` snapshot is present.
-14. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
-15. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis or export.
+14. For a controlled date range, run the landing funnel daily summary refresh and compare `wp_kiwi_landing_funnel_daily_summary` against raw landing/session, engagement, handoff, and sales rows. A second refresh for the same date range should keep row counts and totals unchanged.
+15. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
+16. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis or export.
 
 ## Troubleshooting quick map
 

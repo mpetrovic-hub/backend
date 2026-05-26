@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-26:
+- [Landing Funnel Daily Summary] Added the schema-managed `wp_kiwi_landing_funnel_daily_summary` table plus a bounded recompute service for daily landing/source/device funnel aggregates. The summary counts distinct landing/session traffic with engagement fallback, step-specific CTA1/CTA2/CTA3 engagement, handoff diagnostics, and completed sales from durable `wp_kiwi_sales` snapshots with `(unknown)` buckets for missing dimensions.
+
 2026-05-22:
 - [Landing Analytics] Added additive CTA1/CTA2/CTA3 engagement columns and `cta_step` capture so per-session landing engagement can separate multi-step CTA clicks while continuing to maintain the legacy generic CTA fields for existing fraud and statistics consumers.
 - [Sales Attribution Snapshot] Added durable `wp_kiwi_sales` attribution snapshots for confirmed sales, including service/landing/session/source fields, normalized device dimensions, metric date, and landing-session client-IP prefix/hash context. Statistics views now prefer sales snapshot dimensions and only fall back to temporary attribution rows for legacy records.

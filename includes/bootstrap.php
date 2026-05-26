@@ -62,6 +62,7 @@ require_once __DIR__ . '/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-resolver.php';
 require_once __DIR__ . '/services/class-landing-kpi-service.php';
+require_once __DIR__ . '/services/class-landing-funnel-daily-summary-aggregation-service.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/services/class-premium-sms-mo-engagement-evaluator-service.php';
@@ -85,6 +86,7 @@ require_once __DIR__ . '/repositories/class-landing-kpi-summary-repository.php';
 require_once __DIR__ . '/repositories/class-landing-handoff-event-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/repositories/class-landing-funnel-daily-summary-repository.php';
 require_once __DIR__ . '/repositories/class-traffic-source-funnel-statistics-repository.php';
 
 /**

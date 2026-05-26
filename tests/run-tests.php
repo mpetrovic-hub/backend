@@ -316,6 +316,7 @@ require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-re
 require_once __DIR__ . '/../includes/repositories/class-sms-body-variant-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-traffic-source-funnel-statistics-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
@@ -337,6 +338,7 @@ require_once __DIR__ . '/../includes/services/class-landing-kpi-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/../includes/services/class-sms-body-variant-service.php';
+require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-summary-aggregation-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
@@ -3185,6 +3187,54 @@ class Kiwi_Test_Wpdb_Traffic_Source_Statistics
         }
 
         return $this->result_rows;
+    }
+}
+
+class Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary
+{
+    public $prefix = 'wp_';
+    public $last_error = '';
+    public $queries = [];
+    public $prepared_statements = [];
+
+    public function get_charset_collate(): string
+    {
+        return 'DEFAULT CHARSET=utf8mb4';
+    }
+
+    public function prepare($query, ...$args)
+    {
+        if (count($args) === 1 && is_array($args[0])) {
+            $args = $args[0];
+        }
+
+        $statement = [
+            'query' => (string) $query,
+            'args' => $args,
+        ];
+        $this->prepared_statements[] = $statement;
+
+        return $statement;
+    }
+
+    public function query($statement)
+    {
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $this->queries[] = [
+            'query' => $query,
+            'args' => $args,
+        ];
+
+        if (stripos($query, 'DELETE FROM') === 0) {
+            return 4;
+        }
+
+        if (stripos($query, 'INSERT INTO') === 0) {
+            return 6;
+        }
+
+        return 0;
     }
 }
 
@@ -7786,6 +7836,132 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service retries attribution postback on dupli
     kiwi_assert_same(2, count($postback_dispatcher->calls), 'Expected no additional postback dispatch after successful retry.');
 });
 
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository creates schema-managed prefixed table', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
+    $repository->create_table();
+    $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+    kiwi_assert_contains('CREATE TABLE abc_kiwi_landing_funnel_daily_summary', $sql, 'Expected daily summary schema to use the configured table prefix.');
+    foreach ([
+        'metric_date DATE NOT NULL',
+        "landing_key VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "service_key VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "provider_key VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "flow_key VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "country VARCHAR(10) NOT NULL DEFAULT '(unknown)'",
+        "pid VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
+        "tksource VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
+        "tkzone VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
+        "device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "android_version VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "browser VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        'dimension_hash CHAR(64) NOT NULL',
+    ] as $column) {
+        kiwi_assert_contains($column, $sql, 'Expected required summary dimension column: ' . $column);
+    }
+    foreach ([
+        'sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'page_loaded_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta1_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta1_click_events BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta2_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta2_click_events BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta3_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta3_click_events BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_attempts BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_successes BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_fails BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_rate_pct DECIMAL(7,2) NOT NULL DEFAULT 0',
+        'median_hidden_seconds DECIMAL(12,2) NULL',
+        'min_hidden_seconds DECIMAL(12,2) NULL',
+        'max_hidden_seconds DECIMAL(12,2) NULL',
+        'sales BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'sales_amount_minor BIGINT(20) NOT NULL DEFAULT 0',
+    ] as $column) {
+        kiwi_assert_contains($column, $sql, 'Expected required summary metric column: ' . $column);
+    }
+    kiwi_assert_contains('UNIQUE KEY metric_date_dimension_hash (metric_date, dimension_hash)', $sql, 'Expected idempotent uniqueness by metric_date and dimension hash.');
+    kiwi_assert_true(strpos($sql, 'landing_page_aufrufe') === false, 'Expected new summary schema not to carry old landing_page_aufrufe output.');
+    kiwi_assert_true(strpos($sql, 'engaged_sessions') === false, 'Expected new summary schema not to add engaged_sessions.');
+    kiwi_assert_true(strpos($sql, 'wp_kiwi_') === false, 'Expected daily summary schema not to hardcode wp_ table prefixes.');
+
+    $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idempotent bounded aggregate refresh', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
+    $service = new Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service($repository);
+    $result = $service->refresh_range('2026-05-22', '2026-05-22');
+    $service->refresh_range('2026-05-22', '2026-05-22');
+
+    kiwi_assert_true($result['success'], 'Expected aggregate refresh to succeed when delete and insert queries succeed.');
+    kiwi_assert_same(4, $result['deleted'], 'Expected refresh result to expose deleted row count.');
+    kiwi_assert_same(6, $result['inserted'], 'Expected refresh result to expose inserted row count.');
+
+    $prepared = $wpdb->prepared_statements;
+    kiwi_assert_same(
+        ['2026-05-22', '2026-05-22'],
+        $prepared[0]['args'] ?? [],
+        'Expected refresh to delete the exact metric_date window before inserting replacement rows.'
+    );
+    kiwi_assert_same(
+        [
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-22',
+            '2026-05-22',
+        ],
+        $prepared[1]['args'] ?? [],
+        'Expected refresh insert to bind bounded source windows and sales metric dates.'
+    );
+    $insert_sql = (string) ($prepared[1]['query'] ?? '');
+
+    kiwi_assert_contains('INSERT INTO abc_kiwi_landing_funnel_daily_summary', $insert_sql, 'Expected refresh to populate the persistent summary table.');
+    kiwi_assert_contains('FROM abc_kiwi_landing_page_sessions', $insert_sql, 'Expected refresh to aggregate landing sessions.');
+    kiwi_assert_contains('FROM abc_kiwi_premium_sms_landing_engagements', $insert_sql, 'Expected refresh to aggregate landing engagement sessions.');
+    kiwi_assert_contains('FROM abc_kiwi_landing_handoff_events', $insert_sql, 'Expected refresh to aggregate handoff diagnostics.');
+    kiwi_assert_contains('FROM abc_kiwi_sales s', $insert_sql, 'Expected refresh to aggregate completed sales from durable sales snapshots.');
+    kiwi_assert_true(strpos($insert_sql, 'abc_kiwi_click_attributions') === false, 'Expected daily summary sales aggregation not to depend on temporary click attribution rows.');
+    kiwi_assert_contains('MAX(has_session_fact) AS has_session_fact', $insert_sql, 'Expected distinct landing/session counting to collapse landing plus engagement rows.');
+    kiwi_assert_contains('first_engagement_at AS metric_at, 1 AS has_session_fact', $insert_sql, 'Expected engagement-only sessions to count as sessions.');
+    kiwi_assert_contains('first_handoff_at AS metric_at, 0 AS has_session_fact', $insert_sql, 'Expected handoff-only rows not to inflate sessions.');
+    kiwi_assert_contains('SUM(cta1_click_count) AS cta1_click_events', $insert_sql, 'Expected CTA1 events to use step-specific engagement counts.');
+    kiwi_assert_contains('SUM(cta2_click_count) AS cta2_click_events', $insert_sql, 'Expected CTA2 events to use step-specific engagement counts.');
+    kiwi_assert_contains('SUM(cta3_click_count) AS cta3_click_events', $insert_sql, 'Expected CTA3 events to use step-specific engagement counts.');
+    kiwi_assert_contains("COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_attempted' THEN handoff_id ELSE NULL END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to deduplicate by handoff id.');
+    kiwi_assert_contains('ROW_NUMBER() OVER (', $insert_sql, 'Expected hidden-time median to use a window-function ranking query.');
+    kiwi_assert_contains('COALESCE(s.attribution_metric_date, DATE(s.completed_at)) AS metric_date', $insert_sql, 'Expected sales metric date to prefer durable attribution snapshots with completion-date fallback.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.landing_key, ''), '(unknown)') AS landing_key", $insert_sql, 'Expected unattributed sales to land in unknown dimension buckets.');
+    kiwi_assert_contains('SHA2(CONCAT_WS', $insert_sql, 'Expected stable dimension_hash computation from normalized dimension fields.');
+    kiwi_assert_true(strpos($insert_sql, 'landing_page_aufrufe') === false, 'Expected aggregate refresh not to emit old landing_page_aufrufe metric.');
+    kiwi_assert_true(strpos($insert_sql, 'engaged_sessions') === false, 'Expected aggregate refresh not to emit engaged_sessions.');
+    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date BETWEEN %s AND %s', $prepared[0]['query'] ?? '', 'Expected first prepared statement to delete before insert for idempotent recompute.');
+    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date BETWEEN %s AND %s', $prepared[2]['query'] ?? '', 'Expected repeated refresh to delete the window again instead of accumulating rows.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-managed prefixed view', function (): void {
     global $wpdb;
 
@@ -8143,7 +8319,7 @@ kiwi_run_test('Kiwi_Plugin runs schema migrations once and persists schema versi
     );
 });
 
-kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository list', function (): void {
+kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema repository list', function (): void {
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $method = new ReflectionMethod(Kiwi_Plugin::class, 'build_schema_repositories');
     $method->setAccessible(true);
@@ -8164,9 +8340,13 @@ kiwi_run_test('Kiwi_Plugin includes landing handoff events in schema repository 
         in_array(Kiwi_Traffic_Source_Funnel_Statistics_Repository::class, $classes, true),
         'Expected schema migrations to include the traffic-source funnel statistics view repository.'
     );
+    kiwi_assert_true(
+        in_array(Kiwi_Landing_Funnel_Daily_Summary_Repository::class, $classes, true),
+        'Expected schema migrations to include the landing funnel daily summary repository.'
+    );
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for sales attribution snapshot columns', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for landing funnel daily summary table', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -8178,7 +8358,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for sales attribution snapshot c
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-22-2', $schema_version, 'Expected schema version to be bumped for sales attribution snapshot migrations.');
+    kiwi_assert_same('2026-05-26-1', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
