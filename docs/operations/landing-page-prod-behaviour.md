@@ -99,13 +99,15 @@ High-level flow:
 2. Provider callbacks are normalized at provider boundary.
 3. Confirmed conversions are resolved against attribution state using stable references (transaction/message/session/external refs).
 4. Successful one-off sales are persisted in `wp_kiwi_sales`.
-5. Affiliate postback dispatch is triggered only for confirmed conversions and only once after `postback_sent_at` is set.
-6. When a matching sale exists, outbound postback includes `custom_field1=<operator_name>` sourced from `wp_kiwi_sales.operator_name`.
+5. After attribution matching, the sale row is enriched with a durable snapshot of service, landing/session, source, device, metric date, and landing-session client-IP context.
+6. Affiliate postback dispatch is triggered only for confirmed conversions and only once after `postback_sent_at` is set.
+7. When a matching sale exists, outbound postback includes `custom_field1=<operator_name>` sourced from `wp_kiwi_sales.operator_name`.
 
 Important boundary:
 
 - Incoming provider callback validation is provider-specific.
 - Outgoing affiliate secret/signature applies only to outbound postbacks.
+- Client IP stored on sales must come from `wp_kiwi_landing_page_sessions.remote_ip`; provider/aggregator callback `REMOTE_ADDR` is not a user-IP source.
 
 ## Landing-page KPI tracking
 
@@ -197,7 +199,9 @@ Notes:
   - FR one-off flow transaction lifecycle and external references
 
 - `wp_kiwi_sales`
-  - confirmed sale records (including `transaction_id`)
+  - durable confirmed sale records
+  - includes `transaction_id`, service/landing/session/source snapshots (`service_key`, `landing_key`, `session_ref`, `click_id`, `pid`, `tksource`, `tkzone`), normalized device buckets (`device_brand`, `android_version`, `browser`), `attribution_metric_date`, and landing-session IP snapshot fields (`client_ip`, `client_ip_version`, `client_ip_prefix`, `client_ip_hash`)
+  - keeps existing provider context in `context_json` and adds `context_json.attribution_snapshot` with source/debug rows used to build the snapshot
 
 - `wp_kiwi_premium_sms_landing_engagements`
   - landing-session engagement evidence (`page_loaded_at`, first/last generic CTA click, generic click count)
@@ -225,13 +229,15 @@ Notes:
   - plugin-managed view for the `[kiwi_statistics]` traffic-source funnel report
   - normalizes landing engagement and completed-sale facts by `service_key`, `tksource`, and `tkzone`
   - assigns completed-sale facts to reporting windows by `wp_kiwi_sales.completed_at`
+  - prefers durable `wp_kiwi_sales` snapshot fields for completed-sale dimensions and falls back to temporary attribution rows only for legacy sales without snapshots
   - uses `2026-05-12 20:00:00` as the default lower bound for reliable `tksource`/`tkzone` data
 
 - `wp_kiwi_v_one_for_all`
   - plugin-managed analytics view for pivot/export work outside the shortcode UI
   - groups by `landing_key`, `service_key`, `tksource`, `tkzone`, computed `device_brand`, computed `android_version`, and computed `browser`
   - exposes sessions, landing-page loads, page-loaded sessions, CTA sessions/clicks, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales
-  - computes device/browser dimensions in SQL from raw UA context instead of persisting normalized buckets
+  - computes session-row device/browser dimensions in SQL from raw UA context; new sale rows also persist matching normalized buckets for durable sale analysis
+  - counts completed sales by `wp_kiwi_sales.landing_key/session_ref` first, falling back to attribution joins for legacy rows
 
 ## Configuration switches
 
@@ -287,10 +293,11 @@ When validating a landing-page flow in production or staging, verify:
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
 10. UA tracking mode behaves as configured: `disabled` stores no UA context, `onclick` stores it only near CTA/handoff events, and `onload` stores it on `page_loaded` when browser hints are available.
-11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, preserves wall-clock seconds in native datetime filters, populates service/TK-source dropdowns from existing view data, and shows completed sales/rates where attribution has a matching `transaction_id`.
+11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, preserves wall-clock seconds in native datetime filters, populates service/TK-source dropdowns from existing view data, and shows completed sales/rates from sales snapshots even after temporary attribution rows expire.
 12. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
-13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`.
+13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`; completed sales should still count when their durable `landing_key/session_ref` snapshot is present.
 14. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
+15. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis or export.
 
 ## Troubleshooting quick map
 

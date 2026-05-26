@@ -11,19 +11,22 @@ class Kiwi_Conversion_Attribution_Resolver
     private $landing_kpi_service;
     private $sales_repository;
     private $sms_body_variant_repository;
+    private $sales_snapshot_builder;
 
     public function __construct(
         Kiwi_Click_Attribution_Repository $repository,
         Kiwi_Affiliate_Postback_Dispatcher $dispatcher,
         ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null,
         ?Kiwi_Sales_Repository $sales_repository = null,
-        ?Kiwi_Sms_Body_Variant_Repository $sms_body_variant_repository = null
+        ?Kiwi_Sms_Body_Variant_Repository $sms_body_variant_repository = null,
+        ?Kiwi_Sales_Attribution_Snapshot_Builder $sales_snapshot_builder = null
     ) {
         $this->repository = $repository;
         $this->dispatcher = $dispatcher;
         $this->landing_kpi_service = $landing_kpi_service;
         $this->sales_repository = $sales_repository;
         $this->sms_body_variant_repository = $sms_body_variant_repository;
+        $this->sales_snapshot_builder = $sales_snapshot_builder;
     }
 
     public function attach_provider_references(array $binding): ?array
@@ -137,6 +140,7 @@ class Kiwi_Conversion_Attribution_Resolver
 
         $updated_row = $this->repository->get_by_id((int) $row['id']) ?? $row;
         $this->maybe_persist_sale_pid_from_attribution($updated_row, $conversion);
+        $this->maybe_persist_sale_attribution_snapshot($updated_row, $conversion);
         $conversion = $this->enrich_conversion_with_sales_data($conversion, $updated_row);
         $dispatch_result = $this->dispatcher->dispatch($updated_row, $conversion);
         $this->repository->record_postback_attempt((int) $row['id'], $dispatch_result);
@@ -200,6 +204,37 @@ class Kiwi_Conversion_Attribution_Resolver
         }
 
         $this->sales_repository->update_pid_by_sale_reference($sale_reference, $pid);
+    }
+
+    private function maybe_persist_sale_attribution_snapshot(array $attribution_row, array $conversion): void
+    {
+        if (!$this->sales_repository instanceof Kiwi_Sales_Repository) {
+            return;
+        }
+
+        if (!$this->sales_snapshot_builder instanceof Kiwi_Sales_Attribution_Snapshot_Builder) {
+            return;
+        }
+
+        $sale_reference = trim((string) ($conversion['sale_reference'] ?? ($attribution_row['sale_reference'] ?? '')));
+
+        if ($sale_reference === '') {
+            return;
+        }
+
+        $sale = $this->sales_repository->find_by_sale_reference($sale_reference);
+
+        if (!is_array($sale)) {
+            return;
+        }
+
+        $snapshot = $this->sales_snapshot_builder->build($attribution_row, $sale, $conversion);
+
+        if (empty($snapshot)) {
+            return;
+        }
+
+        $this->sales_repository->update_attribution_snapshot_by_sale_reference($sale_reference, $snapshot);
     }
 
     private function resolve_query_params_from_raw_context($raw_context): array

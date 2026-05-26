@@ -84,6 +84,68 @@ class Kiwi_Landing_Page_Session_Repository
         return $result !== false;
     }
 
+    public function find_by_landing_session(string $landing_key, string $session_token): ?array
+    {
+        global $wpdb;
+
+        $landing_key = trim($landing_key);
+        $session_token = trim($session_token);
+
+        if ($landing_key === '' || $session_token === '') {
+            return null;
+        }
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT *
+                 FROM {$this->get_table_name()}
+                 WHERE landing_key = %s
+                   AND session_token = %s
+                 ORDER BY id DESC
+                 LIMIT 1",
+                $landing_key,
+                $session_token
+            ),
+            ARRAY_A
+        );
+
+        return is_array($row) ? $row : null;
+    }
+
+    public function find_by_session_token(string $session_token, string $service_key = ''): ?array
+    {
+        global $wpdb;
+
+        $session_token = trim($session_token);
+        $service_key = trim($service_key);
+
+        if ($session_token === '') {
+            return null;
+        }
+
+        $where = 'session_token = %s';
+        $params = [$session_token];
+
+        if ($service_key !== '') {
+            $where .= ' AND service_key = %s';
+            $params[] = $service_key;
+        }
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT *
+                 FROM {$this->get_table_name()}
+                 WHERE {$where}
+                 ORDER BY id DESC
+                 LIMIT 1",
+                ...$params
+            ),
+            ARRAY_A
+        );
+
+        return is_array($row) ? $row : null;
+    }
+
     private function current_time_mysql(): string
     {
         if (function_exists('current_time')) {

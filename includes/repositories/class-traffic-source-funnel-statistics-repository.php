@@ -296,9 +296,9 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
             UNION ALL
             SELECT
                 s.completed_at AS metric_at,
-                COALESCE(NULLIF(ca.service_key, ''), '(empty)') AS service_key,
-                COALESCE(NULLIF(ca.tksource, ''), '(empty)') AS tksource,
-                COALESCE(NULLIF(ca.tkzone, ''), '(empty)') AS tkzone,
+                COALESCE(NULLIF(s.service_key, ''), NULLIF(ca.service_key, ''), '(empty)') AS service_key,
+                COALESCE(NULLIF(s.tksource, ''), NULLIF(ca.tksource, ''), '(empty)') AS tksource,
+                COALESCE(NULLIF(s.tkzone, ''), NULLIF(ca.tkzone, ''), '(empty)') AS tkzone,
                 0 AS session_count,
                 0 AS loaded_session,
                 0 AS cta_session,
@@ -309,7 +309,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
                 s.transaction_id AS successful_transaction_id,
                 s.completed_at AS sale_completed_at
             FROM {$sales_table} s
-            INNER JOIN (
+            LEFT JOIN (
                 SELECT *
                 FROM (
                     SELECT
@@ -407,17 +407,19 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository
             ),
             sales_by_session AS (
                 SELECT
-                    ca.landing_page_key AS landing_key,
-                    ca.session_ref AS session_token,
+                    COALESCE(NULLIF(s.landing_key, ''), NULLIF(ca.landing_page_key, '')) AS landing_key,
+                    COALESCE(NULLIF(s.session_ref, ''), NULLIF(ca.session_ref, '')) AS session_token,
                     COUNT(DISTINCT s.id) AS sales
                 FROM {$sales_table} s
-                INNER JOIN ranked_attribution ca
+                LEFT JOIN ranked_attribution ca
                   ON ca.transaction_id = s.transaction_id
                 WHERE s.status = 'completed'
                   AND s.completed_at >= '{$default_from}'
-                  AND ca.landing_page_key <> ''
-                  AND ca.session_ref <> ''
-                GROUP BY ca.landing_page_key, ca.session_ref
+                  AND COALESCE(NULLIF(s.landing_key, ''), NULLIF(ca.landing_page_key, '')) IS NOT NULL
+                  AND COALESCE(NULLIF(s.session_ref, ''), NULLIF(ca.session_ref, '')) IS NOT NULL
+                GROUP BY
+                    COALESCE(NULLIF(s.landing_key, ''), NULLIF(ca.landing_page_key, '')),
+                    COALESCE(NULLIF(s.session_ref, ''), NULLIF(ca.session_ref, ''))
             ),
             session_rows AS (
                 SELECT

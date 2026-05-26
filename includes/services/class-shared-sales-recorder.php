@@ -26,8 +26,12 @@ class Kiwi_Shared_Sales_Recorder
             'sale_reference' => $sale_reference,
             'transaction_id' => $transaction_id,
             'provider_key' => 'nth',
+            'service_key' => (string) ($transaction['service_key'] ?? ''),
             'country' => (string) ($transaction['country'] ?? ''),
             'flow_key' => (string) ($transaction['flow_key'] ?? ''),
+            'landing_key' => (string) ($transaction['landing_key'] ?? ''),
+            'session_ref' => (string) ($transaction['landing_session_token'] ?? ''),
+            'attribution_metric_date' => $this->resolve_metric_date((string) ($report_event['occurred_at'] ?? '')),
             'sale_type' => 'premium_sms_one_off',
             'status' => 'completed',
             'amount_minor' => isset($transaction['price']) ? (int) $transaction['price'] : 0,
@@ -81,6 +85,29 @@ class Kiwi_Shared_Sales_Recorder
         }
 
         return '';
+    }
+
+    private function resolve_metric_date(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $value, $matches) === 1) {
+            $year = (int) ($matches[1] ?? 0);
+            $month = (int) ($matches[2] ?? 0);
+            $day = (int) ($matches[3] ?? 0);
+
+            return checkdate($month, $day, $year)
+                ? sprintf('%04d-%02d-%02d', $year, $month, $day)
+                : '';
+        }
+
+        $timestamp = strtotime($value);
+
+        return $timestamp === false ? '' : gmdate('Y-m-d', $timestamp);
     }
 
     private function decode_meta_json($value): ?array

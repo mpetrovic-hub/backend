@@ -89,6 +89,7 @@ Runtime enrichment note:
 - when `operator_name` is available during conversion resolution, outbound Affise postbacks include `custom_field1=<operator_name>`
 - if the template already defines a `custom_field1` query parameter, that value is used; otherwise `custom_field1` is appended automatically
 - no additional credential key is required for this enrichment
+- confirmed sales also receive a durable attribution snapshot from internal landing/session context; this does not require a new credential or environment constant
 
 Supported postback parameters/placeholders:
 
@@ -112,6 +113,12 @@ Supported postback parameters/placeholders:
   - when a signature is available and template does not include `{secure}` or `{hash}`, dispatcher appends this query parameter automatically
 
 Do not store real values for these secrets in repository docs.
+
+## Sales attribution snapshot data handling
+
+Confirmed sales may store `client_ip`, `client_ip_prefix`, and `client_ip_hash` in `wp_kiwi_sales` from the landing-session row. This is operational analytics data, not an aggregator credential. It must not be populated from provider callback request metadata, because callback source IPs usually belong to the provider or aggregator.
+
+Use `client_ip_prefix` or `client_ip_hash` for broad analysis/export where raw IP is not required. No real IP examples or customer data should be added to repository docs.
 
 ## NTH callback logging toggles
 

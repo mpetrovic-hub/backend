@@ -4,6 +4,7 @@ Changes are listed by date (newest first). Only medium-impact or higher updates 
 
 2026-05-22:
 - [Landing Analytics] Added additive CTA1/CTA2/CTA3 engagement columns and `cta_step` capture so per-session landing engagement can separate multi-step CTA clicks while continuing to maintain the legacy generic CTA fields for existing fraud and statistics consumers.
+- [Sales Attribution Snapshot] Added durable `wp_kiwi_sales` attribution snapshots for confirmed sales, including service/landing/session/source fields, normalized device dimensions, metric date, and landing-session client-IP prefix/hash context. Statistics views now prefer sales snapshot dimensions and only fall back to temporary attribution rows for legacy records.
 
 2026-05-21:
 - [Affise Operator] Switched Affise operator reporting from `sub7` to `custom_field1`, mapping the normalized `operator_name` into templates or appending it when absent. Updated attribution/postback documentation, environment guidance, and regression coverage for the dispatcher and persisted-sale enrichment flow.

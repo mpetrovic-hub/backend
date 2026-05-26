@@ -316,14 +316,14 @@ class Kiwi_Click_Attribution_Repository
         return $this->update_by_id($id, [
             'updated_at' => $this->current_time_mysql(),
             'transaction_id' => $transaction_id,
-            'provider_key' => (string) ($references['provider_key'] ?? ($existing['provider_key'] ?? '')),
-            'flow_key' => (string) ($references['flow_key'] ?? ($existing['flow_key'] ?? '')),
-            'service_key' => (string) ($references['service_key'] ?? ($existing['service_key'] ?? '')),
-            'session_ref' => (string) ($references['session_ref'] ?? ($existing['session_ref'] ?? '')),
-            'transaction_ref' => (string) ($references['transaction_ref'] ?? ($existing['transaction_ref'] ?? '')),
-            'message_ref' => (string) ($references['message_ref'] ?? ($existing['message_ref'] ?? '')),
-            'external_ref' => (string) ($references['external_ref'] ?? ($existing['external_ref'] ?? '')),
-            'sale_reference' => (string) ($references['sale_reference'] ?? ($existing['sale_reference'] ?? '')),
+            'provider_key' => $this->prefer_non_empty((string) ($existing['provider_key'] ?? ''), (string) ($references['provider_key'] ?? '')),
+            'flow_key' => $this->prefer_non_empty((string) ($existing['flow_key'] ?? ''), (string) ($references['flow_key'] ?? '')),
+            'service_key' => $this->prefer_non_empty((string) ($existing['service_key'] ?? ''), (string) ($references['service_key'] ?? '')),
+            'session_ref' => $this->prefer_non_empty((string) ($existing['session_ref'] ?? ''), (string) ($references['session_ref'] ?? '')),
+            'transaction_ref' => $this->prefer_non_empty((string) ($existing['transaction_ref'] ?? ''), (string) ($references['transaction_ref'] ?? '')),
+            'message_ref' => $this->prefer_non_empty((string) ($existing['message_ref'] ?? ''), (string) ($references['message_ref'] ?? '')),
+            'external_ref' => $this->prefer_non_empty((string) ($existing['external_ref'] ?? ''), (string) ($references['external_ref'] ?? '')),
+            'sale_reference' => $this->prefer_non_empty((string) ($existing['sale_reference'] ?? ''), (string) ($references['sale_reference'] ?? '')),
             'conversion_status' => $conversion_status,
         ]);
     }

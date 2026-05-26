@@ -26,7 +26,7 @@ For aggregator-specific details, see:
 | Shared/Core | conversion attribution resolver + affiliate postback dispatch | generic | confirmed conversions | implemented | Confirmed-only dispatch, idempotent postbacks, retry on failed postback until `postback_sent_at` is set |
 | Shared/Core | landing KPI summary tracking | generic | clicks / cta1..ctaN / conv | implemented | `wp_kiwi_landing_kpi_summary` + KPI REST endpoints |
 | Shared/Core | SMS body variant experiment | FR | click-to-SMS | implemented | `wp_kiwi_sms_body_variant_assignments` + summary table; stable visible tokens map back to internal `transaction_id` |
-| Shared/Core | sales persistence + enrichment | generic | confirmed sales | implemented | `wp_kiwi_sales` with transaction correlation and enrichment fields (for example `pid`) |
+| Shared/Core | sales persistence + enrichment | generic | confirmed sales | implemented | `wp_kiwi_sales` with transaction correlation, durable attribution/source/device snapshots, and landing-session IP prefix/hash context |
 | Shared/Core | premium-SMS inbound MO fraud monitoring (volume + engagement) | generic | premium-SMS inbound MO | implemented | `wp_kiwi_premium_sms_fraud_signals` + `wp_kiwi_premium_sms_landing_engagements`; dual identity (`subscriber`/`session`), per-service 1h/24h snapshot counts, engagement soft-flag checks (`missing_page_loaded`, `missing_cta_click`, fast MO), unknown engagement links recorded as audit context only, source context snapshots (`pid`, `click_id`), default observe mode with optional block integration |
 | Dimoco | operator-lookup | generic / multi-country | API action | implemented | Existing backend capability routed through Dimoco where configured |
 | Dimoco | refund | generic | API action | implemented | Existing backend capability with callback persistence |
@@ -58,7 +58,7 @@ Current known repository capabilities:
 - outbound affiliate postback dispatch with idempotency and signing options
 - landing KPI summary tracking
 - SMS body variant assignments and SQL-based summary metrics for click-to-SMS experiments
-- shared sales persistence/enrichment
+- shared sales persistence/enrichment with durable attribution snapshots for confirmed sales
 - premium-SMS inbound MO fraud monitoring with volume and landing-engagement signals, including source-context snapshots (`pid`, `click_id`)
 
 ### Dimoco
