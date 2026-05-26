@@ -248,7 +248,9 @@ Notes:
   - aggregates completed sales from durable `wp_kiwi_sales` snapshot columns, using `attribution_metric_date` with `DATE(completed_at)` fallback for old records
   - writes missing dimensions to `(unknown)` buckets so unattributed sales remain visible
   - is refreshed by bounded date-range recompute: the target `metric_date` window is deleted and reinserted, so rerunning the same range is idempotent
-  - is not yet wired to the statistics shortcode, CSV export, cron, or raw-table cleanup
+  - is refreshed hourly by WP-Cron hook `kiwi_landing_funnel_daily_summary_refresh`, using a transient lock to prevent concurrent runs
+  - stores the last refresh or lock-skip result in WordPress option `kiwi_landing_funnel_daily_summary_refresh_last_result`
+  - is not yet wired to the statistics shortcode, CSV export, or raw-table cleanup
 
 ## Configuration switches
 
@@ -279,6 +281,8 @@ Notes:
   - `onload` increases page-load REST/DB write volume but enables device/OS/browser clustering for non-click sessions
 - `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED`
   - legacy compatibility switch; when set to `false` and `KIWI_LANDING_UA_TRACKING_MODE` is unset, it maps to `disabled`
+- `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`
+  - number of lookback days recalculated by the daily summary rolling refresh in addition to today (default: `7`, minimum: `0`)
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
 - `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`
@@ -307,9 +311,11 @@ When validating a landing-page flow in production or staging, verify:
 11. Statistics tool (`[kiwi_statistics]`) loads the `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view, defaults to `2026-05-12 20:00:00`, keeps rows with `cta_sessions = 0` visible, preserves wall-clock seconds in native datetime filters, populates service/TK-source dropdowns from existing view data, and shows completed sales/rates from sales snapshots even after temporary attribution rows expire.
 12. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
 13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`; completed sales should still count when their durable `landing_key/session_ref` snapshot is present.
-14. For a controlled date range, run the landing funnel daily summary refresh and compare `wp_kiwi_landing_funnel_daily_summary` against raw landing/session, engagement, handoff, and sales rows. A second refresh for the same date range should keep row counts and totals unchanged.
-15. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
-16. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis or export.
+14. Confirm WP-Cron has scheduled `kiwi_landing_funnel_daily_summary_refresh`; manually trigger it in staging and verify the default window covers today plus the configured lookback days.
+15. Check `kiwi_landing_funnel_daily_summary_refresh_last_result` after success, failure, and simulated lock cases; errors should also be visible through the `[kiwi-landing-funnel-daily-summary-refresh]` log prefix.
+16. For a controlled date range, run the landing funnel daily summary refresh and compare `wp_kiwi_landing_funnel_daily_summary` against raw landing/session, engagement, handoff, and sales rows. A second refresh for the same date range should keep row counts and totals unchanged.
+17. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
+18. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis or export.
 
 ## Troubleshooting quick map
 

@@ -3,6 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-05-26:
+- [Landing Funnel Daily Summary Refresh] Added an hourly WP-Cron rolling refresh for the daily funnel summary with a default seven-day lookback plus today, transient locking, persisted last-run status, and visible success/failure logging.
 - [Landing Funnel Daily Summary] Added the schema-managed `wp_kiwi_landing_funnel_daily_summary` table plus a bounded recompute service for daily landing/source/device funnel aggregates. The summary counts distinct landing/session traffic with engagement fallback, step-specific CTA1/CTA2/CTA3 engagement, handoff diagnostics, and completed sales from durable `wp_kiwi_sales` snapshots with `(unknown)` buckets for missing dimensions.
 
 2026-05-22:

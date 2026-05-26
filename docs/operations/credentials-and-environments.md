@@ -91,6 +91,16 @@ Runtime enrichment note:
 - no additional credential key is required for this enrichment
 - confirmed sales also receive a durable attribution snapshot from internal landing/session context; this does not require a new credential or environment constant
 
+## Landing funnel daily summary refresh
+
+The daily landing-funnel summary refresh is operational configuration, not an aggregator credential. It is read from `wp-config.php` through `Kiwi_Config`.
+
+- `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`
+  - number of lookback days recalculated by the WP-Cron rolling refresh in addition to today
+  - default: `7`, which refreshes `today - 7 days` through today
+  - minimum: `0`, which refreshes only today
+  - negative values are clamped to `0`
+
 Supported postback parameters/placeholders:
 
 - `clickid` / `click_id`
