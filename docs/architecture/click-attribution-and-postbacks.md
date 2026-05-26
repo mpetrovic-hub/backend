@@ -144,6 +144,19 @@ The same repository also creates `wp_kiwi_v_one_for_all` for broader landing-fun
 
 `device_brand`, `android_version`, and `browser` are computed in the view from raw UA fields for session rows and are also persisted on new sale snapshots for durable sale analysis. The view exposes `landing_key`, `service_key`, `tksource`, `tkzone`, those device/browser dimensions, session/load/CTA counters, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales.
 
+`wp_kiwi_landing_funnel_daily_summary` is the persistent target model for daily landing-funnel analytics. It is populated by `Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service` from the same normalized internal tables, not from provider payloads. The summary groups by `metric_date`, landing/service/provider/flow/country/source dimensions, and normalized device/browser buckets. `metric_date` is derived from session/traffic timestamps for landing, engagement, and handoff facts; completed sales use `wp_kiwi_sales.attribution_metric_date` with `DATE(completed_at)` only as a fallback. Sales dimensions come from durable `wp_kiwi_sales` snapshot columns and do not depend on temporary click-attribution rows.
+
+The daily summary intentionally differs from the transition views:
+
+- it stores a stable `dimension_hash` with a unique key on `metric_date + dimension_hash`
+- `sessions` counts distinct `landing_key + session_token` from landing sessions plus engagement-only fallback sessions
+- CTA metrics use the step-specific CTA1/CTA2/CTA3 engagement columns
+- handoff metrics are deduplicated by handoff id and include hidden-time min/median/max
+- sales without snapshot attribution are retained in `(unknown)` dimension buckets instead of being dropped
+- refreshes are date-range bounded and replace the target date window so repeated runs are idempotent
+
+No shortcode, CSV, cron, or raw-table cleanup behavior is switched to the daily summary yet. The existing views remain the current UI/read path until a later reporting rollout chooses to consume the persistent table.
+
 ## Retention and Cleanup
 
 Attribution rows are intentionally temporary and use explicit expiry.

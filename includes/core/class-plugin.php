@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-22-2';
+    private const DB_SCHEMA_VERSION = '2026-05-26-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
 
@@ -769,6 +769,7 @@ TEXT;
             new Kiwi_Sms_Body_Variant_Repository(),
             new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
             new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
+            new Kiwi_Landing_Funnel_Daily_Summary_Repository(),
             new Kiwi_Traffic_Source_Funnel_Statistics_Repository(),
         ];
     }
