@@ -79,6 +79,9 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             KEY pid (pid),
             KEY tksource (tksource),
             KEY tkzone (tkzone),
+            KEY device_brand (device_brand),
+            KEY android_version (android_version),
+            KEY browser (browser),
             KEY dimension_hash (dimension_hash)
         ) {$charset_collate};";
 

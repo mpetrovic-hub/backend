@@ -8038,6 +8038,13 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository creates schema-manag
         kiwi_assert_contains($column, $sql, 'Expected required summary metric column: ' . $column);
     }
     kiwi_assert_contains('UNIQUE KEY metric_date_dimension_hash (metric_date, dimension_hash)', $sql, 'Expected idempotent uniqueness by metric_date and dimension hash.');
+    foreach ([
+        'KEY device_brand (device_brand)',
+        'KEY android_version (android_version)',
+        'KEY browser (browser)',
+    ] as $index) {
+        kiwi_assert_contains($index, $sql, 'Expected filterable summary dimension index: ' . $index);
+    }
     kiwi_assert_true(strpos($sql, 'landing_page_aufrufe') === false, 'Expected new summary schema not to carry old landing_page_aufrufe output.');
     kiwi_assert_true(strpos($sql, 'engaged_sessions') === false, 'Expected new summary schema not to add engaged_sessions.');
     kiwi_assert_true(strpos($sql, 'wp_kiwi_') === false, 'Expected daily summary schema not to hardcode wp_ table prefixes.');
@@ -8714,7 +8721,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for landing funnel daily summary
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-26-1', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary migrations.');
+    kiwi_assert_same('2026-05-26-2', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary index migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
