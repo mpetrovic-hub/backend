@@ -248,7 +248,7 @@ class Kiwi_Plugin
         }
 
         wp_schedule_event(
-            $this->get_current_timestamp(),
+            time(),
             'hourly',
             self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK
         );
