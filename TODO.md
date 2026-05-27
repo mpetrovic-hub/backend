@@ -154,3 +154,16 @@ Erst Analyse/Plan erstellen. Mögliche Strategie: neue generische View/Alias-Sch
 ### Manuelle Tests
 
 - [ ] Bestehende Fraud-/Statistics-/Landing-Reports nach Refactor prüfen
+
+## 3. Debug-/SQL-Dump-Logging nach Summary-Fix wieder entschaerfen
+
+### Reminder
+
+Das grosse SQL-Dump-Logging fuer den Landing-Funnel-Daily-Summary-Refresh war zur Diagnose von `max_statement_time exceeded` hilfreich, soll aber nicht dauerhaft noisy in Production bleiben. PR-Referenz: https://github.com/mpetrovic-hub/backend/pull/42
+
+### TODO
+
+- [ ] Nach dem Performance-Fix fuer `wp_kiwi_landing_funnel_daily_summary` pruefen, ob grosse SQL-Dumps entfernt sind.
+- [ ] Falls Debug-Ausgaben weiter noetig sind, hinter einen expliziten Debug-Switch legen und stark kuerzen.
+
+
