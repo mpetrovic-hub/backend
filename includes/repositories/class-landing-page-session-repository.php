@@ -38,10 +38,13 @@ class Kiwi_Landing_Page_Session_Repository
             KEY landing_key (landing_key),
             KEY service_key (service_key),
             KEY session_token (session_token),
-            KEY created_at (created_at)
+            KEY created_at (created_at),
+            KEY created_landing_session (created_at, landing_key, session_token)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 

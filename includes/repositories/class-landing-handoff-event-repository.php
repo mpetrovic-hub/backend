@@ -61,10 +61,13 @@ class Kiwi_Landing_Handoff_Event_Repository
             KEY tkzone (tkzone),
             KEY handoff_id (handoff_id),
             KEY event_type (event_type),
-            KEY created_at (created_at)
+            KEY created_at (created_at),
+            KEY created_landing_session_event (created_at, landing_key, session_token, event_type)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 

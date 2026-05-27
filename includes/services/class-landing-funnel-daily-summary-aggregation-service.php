@@ -35,17 +35,48 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
             ];
         }
 
-        $from_datetime = $from_date . ' 00:00:00';
-        $to_exclusive_datetime = $this->next_date($to_date) . ' 00:00:00';
+        $deleted = 0;
+        $inserted = 0;
+        $daily_results = [];
+
+        foreach ($this->build_metric_dates($from_date, $to_date) as $metric_date) {
+            $daily_result = $this->refresh_metric_date($metric_date);
+            $daily_results[] = $daily_result;
+            $deleted += (int) $daily_result['deleted'];
+            $inserted += (int) $daily_result['inserted'];
+
+            if (!($daily_result['success'] ?? false)) {
+                return $this->build_result(false, $from_date, $to_date, $deleted, $inserted, $daily_results);
+            }
+        }
+
+        return $this->build_result(true, $from_date, $to_date, $deleted, $inserted, $daily_results);
+    }
+
+    private function refresh_metric_date(string $metric_date): array
+    {
+        $this->last_error = '';
+        $metric_date = $this->normalize_date($metric_date);
+
+        if ($metric_date === '') {
+            $this->last_error = 'Invalid landing funnel daily summary metric date.';
+
+            return $this->build_daily_result(false, '', 0, 0);
+        }
+
+        $from_datetime = $metric_date . ' 00:00:00';
+        $to_exclusive_datetime = $this->next_date($metric_date) . ' 00:00:00';
+        $handoff_from_datetime = $this->previous_date($metric_date) . ' 00:00:00';
+        $handoff_to_exclusive_datetime = $this->next_date($this->next_date($metric_date)) . ' 00:00:00';
 
         $this->run_statement('START TRANSACTION');
-        $deleted = $this->repository->delete_metric_date_range($from_date, $to_date);
+        $deleted = $this->repository->delete_metric_date($metric_date);
 
         if ($deleted < 0) {
-            $this->last_error = $this->repository->get_last_error();
+            $this->last_error = $this->format_step_error($metric_date, 'delete', $this->repository->get_last_error());
             $this->run_statement('ROLLBACK');
 
-            return $this->build_result(false, $from_date, $to_date, 0, 0);
+            return $this->build_daily_result(false, $metric_date, 0, 0);
         }
 
         $inserted = $this->repository->insert_aggregate_rows(
@@ -55,25 +86,30 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 $to_exclusive_datetime,
                 $from_datetime,
                 $to_exclusive_datetime,
+                $handoff_from_datetime,
+                $handoff_to_exclusive_datetime,
                 $from_datetime,
                 $to_exclusive_datetime,
                 $from_datetime,
+                $handoff_to_exclusive_datetime,
+                $metric_date,
+                $metric_date,
+                $from_datetime,
                 $to_exclusive_datetime,
-                $from_date,
-                $to_date,
+                $metric_date,
             ]
         );
 
         if ($inserted < 0) {
-            $this->last_error = $this->repository->get_last_error();
+            $this->last_error = $this->format_step_error($metric_date, 'insert aggregate rows', $this->repository->get_last_error());
             $this->run_statement('ROLLBACK');
 
-            return $this->build_result(false, $from_date, $to_date, $deleted, 0);
+            return $this->build_daily_result(false, $metric_date, $deleted, 0);
         }
 
         $this->run_statement('COMMIT');
 
-        return $this->build_result(true, $from_date, $to_date, $deleted, $inserted);
+        return $this->build_daily_result(true, $metric_date, $deleted, $inserted);
     }
 
     public function get_last_error(): string
@@ -212,6 +248,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND landing_key <> ''
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
+                HAVING first_handoff_at >= %s
+                   AND first_handoff_at < %s
             ),
             session_keys AS (
                 SELECT
@@ -355,6 +393,9 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     END AS browser,
                     ROUND(h.elapsed_ms / 1000, 2) AS hidden_seconds
                 FROM session_dimensions sd
+                INNER JOIN handoff_by_session hs
+                  ON hs.landing_key = sd.raw_landing_key
+                 AND hs.session_token = sd.session_token
                 INNER JOIN {$handoff_table} h
                   ON h.landing_key = sd.raw_landing_key
                  AND h.session_token = sd.session_token
@@ -429,7 +470,14 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(SUM(s.amount_minor), 0) AS sales_amount_minor
                 FROM {$sales_table} s
                 WHERE s.status = 'completed'
-                  AND COALESCE(s.attribution_metric_date, DATE(s.completed_at)) BETWEEN %s AND %s
+                  AND (
+                      s.attribution_metric_date BETWEEN %s AND %s
+                      OR (
+                          s.attribution_metric_date IS NULL
+                          AND s.completed_at >= %s
+                          AND s.completed_at < %s
+                      )
+                  )
                 GROUP BY
                     COALESCE(s.attribution_metric_date, DATE(s.completed_at)),
                     COALESCE(NULLIF(s.landing_key, ''), '(unknown)'),
@@ -528,7 +576,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
              AND hm.device_brand = a.device_brand
              AND hm.android_version = a.android_version
              AND hm.browser = a.browser
-            WHERE a.metric_date IS NOT NULL
+            WHERE a.metric_date = %s
               AND (
                   a.sessions > 0
                   OR a.page_loaded_sessions > 0
@@ -547,7 +595,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         string $from_date,
         string $to_date,
         int $deleted,
-        int $inserted
+        int $inserted,
+        array $daily_results = []
     ): array {
         return [
             'success' => $success,
@@ -556,7 +605,53 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
             'deleted' => $deleted,
             'inserted' => $inserted,
             'error' => $success ? '' : $this->last_error,
+            'daily_results' => $daily_results,
         ];
+    }
+
+    private function build_daily_result(
+        bool $success,
+        string $metric_date,
+        int $deleted,
+        int $inserted
+    ): array {
+        return [
+            'success' => $success,
+            'metric_date' => $metric_date,
+            'deleted' => $deleted,
+            'inserted' => $inserted,
+            'error' => $success ? '' : $this->last_error,
+        ];
+    }
+
+    private function build_metric_dates(string $from_date, string $to_date): array
+    {
+        $dates = [];
+        $current = $from_date;
+
+        while ($current !== '' && strcmp($current, $to_date) <= 0) {
+            $dates[] = $current;
+            $next = $this->next_date($current);
+
+            if ($next === $current) {
+                break;
+            }
+
+            $current = $next;
+        }
+
+        return $dates;
+    }
+
+    private function format_step_error(string $metric_date, string $step, string $error): string
+    {
+        $error = trim($error);
+
+        if ($error === '') {
+            $error = 'failed without database error detail.';
+        }
+
+        return $metric_date . ' ' . $step . ': ' . $error;
     }
 
     private function normalize_date(string $value): string
@@ -583,6 +678,13 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
     private function next_date(string $date): string
     {
         $timestamp = strtotime($date . ' +1 day');
+
+        return $timestamp === false ? $date : gmdate('Y-m-d', $timestamp);
+    }
+
+    private function previous_date(string $date): string
+    {
+        $timestamp = strtotime($date . ' -1 day');
 
         return $timestamp === false ? $date : gmdate('Y-m-d', $timestamp);
     }

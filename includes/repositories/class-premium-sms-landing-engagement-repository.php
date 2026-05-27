@@ -66,7 +66,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             KEY click_id (click_id),
             KEY tksource (tksource),
             KEY tkzone (tkzone),
-            KEY updated_at (updated_at)
+            KEY updated_at (updated_at),
+            KEY created_landing_session (created_at, landing_key, session_token)
         ) {$charset_collate};";
 
         if (!function_exists('dbDelta')) {

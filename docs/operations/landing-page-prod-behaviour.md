@@ -247,9 +247,12 @@ Notes:
   - counts distinct `landing_key + session_token` sessions from landing-session rows and engagement-only fallback rows; handoff-only rows can contribute handoff metrics without inflating `sessions`
   - aggregates completed sales from durable `wp_kiwi_sales` snapshot columns, using `attribution_metric_date` with `DATE(completed_at)` fallback for old records
   - writes missing dimensions to `(unknown)` buckets so unattributed sales remain visible
-  - is refreshed by bounded date-range recompute: the target `metric_date` window is deleted and reinserted, so rerunning the same range is idempotent
+  - is refreshed by bounded date-range recompute: the requested window is internally split into one transaction per `metric_date`, with only that day deleted and reinserted
   - is refreshed hourly by WP-Cron hook `kiwi_landing_funnel_daily_summary_refresh`, using a transient lock to prevent concurrent runs
-  - stores the last refresh or lock-skip result in WordPress option `kiwi_landing_funnel_daily_summary_refresh_last_result`
+  - stores the last refresh or lock-skip result in WordPress option `kiwi_landing_funnel_daily_summary_refresh_last_result`; refresh results include aggregate counts and can include compact `daily_results` entries for per-day diagnostics
+  - reports failing chunks with the metric date and step, for example `2026-05-23 delete: ...` or `2026-05-23 insert aggregate rows: ...`
+  - keeps cross-midnight handoff attempts and hidden/success events together by scanning adjacent handoff rows while still attributing the aggregate to the first handoff date
+  - uses composite indexes on the raw landing-session, engagement, handoff, and sales snapshot tables to keep day chunks inside production database limits
   - is the primary read source for the protected `[kiwi_statistics]` shortcode and its CSV export; raw-table cleanup still remains separate
 
 ## Configuration switches
@@ -283,6 +286,8 @@ Notes:
   - legacy compatibility switch; when set to `false` and `KIWI_LANDING_UA_TRACKING_MODE` is unset, it maps to `disabled`
 - `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`
   - number of lookback days recalculated by the daily summary rolling refresh in addition to today (default: `7`, minimum: `0`)
+  - the configured range remains valid for operations, but execution is chunked internally per day to avoid one large multi-day SQL statement
+  - hourly WP-Cron refreshes apply an effective one-day minimum even when this is configured as `0`, so post-midnight hidden/success handoff events can update yesterday's first-handoff bucket
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
 - `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`
@@ -311,9 +316,9 @@ When validating a landing-page flow in production or staging, verify:
 11. Statistics tool (`[kiwi_statistics]`) reads `wp_kiwi_landing_funnel_daily_summary`, defaults to `2026-05-12`, supports date, service, landing, TK-source, TK-zone, device-brand, Android-version, and browser filters, and exports the same filtered rows to CSV. The legacy `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view should still exist for debug analysis.
 12. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
 13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`; completed sales should still count when their durable `landing_key/session_ref` snapshot is present.
-14. Confirm WP-Cron has scheduled `kiwi_landing_funnel_daily_summary_refresh`; manually trigger it in staging and verify the default window covers today plus the configured lookback days.
-15. Check `kiwi_landing_funnel_daily_summary_refresh_last_result` after success, failure, and simulated lock cases; errors should also be visible through the `[kiwi-landing-funnel-daily-summary-refresh]` log prefix. If WordPress does not expose a concrete database error, the refresh result should still include a fallback prepare/query diagnostic naming the failed summary operation.
-16. For a controlled date range, run the landing funnel daily summary refresh and compare `wp_kiwi_landing_funnel_daily_summary` against raw landing/session, engagement, handoff, and sales rows. A second refresh for the same date range should keep row counts and totals unchanged.
+14. Confirm WP-Cron has scheduled `kiwi_landing_funnel_daily_summary_refresh`; manually trigger it in staging with `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS=0`, then with the default lookback, and verify the range is processed one day at a time. With `0`, the hourly result should still show yesterday through today as the effective carryover window.
+15. Check `kiwi_landing_funnel_daily_summary_refresh_last_result` after success, failure, and simulated lock cases; errors should also be visible through the `[kiwi-landing-funnel-daily-summary-refresh]` log prefix. If WordPress does not expose a concrete database error, the refresh result should still include a fallback prepare/query diagnostic naming the failed metric date and summary step.
+16. For a controlled date range, run the landing funnel daily summary refresh and compare `wp_kiwi_landing_funnel_daily_summary` against raw landing/session, engagement, handoff, and sales rows. A second refresh for the same date range should keep row counts and totals unchanged, and normal success logs should not contain large SQL dumps.
 17. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
 18. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis or export.
 
