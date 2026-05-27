@@ -286,23 +286,23 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     tksource,
                     tkzone,
                     CASE
-                        WHEN ua_ch_model LIKE 'SM-%' OR raw_user_agent LIKE '%Samsung%' THEN 'Samsung'
-                        WHEN raw_user_agent LIKE '%Huawei%' THEN 'Huawei'
-                        WHEN raw_user_agent LIKE '%Xiaomi%' THEN 'Xiaomi'
-                        WHEN raw_user_agent LIKE '%Pixel%' THEN 'Google'
+                        WHEN ua_ch_model LIKE 'SM-%%' OR raw_user_agent LIKE '%%Samsung%%' THEN 'Samsung'
+                        WHEN raw_user_agent LIKE '%%Huawei%%' THEN 'Huawei'
+                        WHEN raw_user_agent LIKE '%%Xiaomi%%' THEN 'Xiaomi'
+                        WHEN raw_user_agent LIKE '%%Pixel%%' THEN 'Google'
                         WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)
                         ELSE '(unknown)'
                     END AS device_brand,
                     CASE
                         WHEN ua_ch_platform = 'Android' AND ua_ch_platform_version <> '' THEN ua_ch_platform_version
-                        WHEN raw_user_agent LIKE '%Android %' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(raw_user_agent, 'Android ', -1), ';', 1)
+                        WHEN raw_user_agent LIKE '%%Android %%' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(raw_user_agent, 'Android ', -1), ';', 1)
                         ELSE '(unknown)'
                     END AS android_version,
                     CASE
-                        WHEN ua_ch_full_version_list LIKE '%Microsoft Edge%' OR ua_ch_brands LIKE '%Microsoft Edge%' OR raw_user_agent LIKE '%Edg/%' THEN 'Edge'
-                        WHEN ua_ch_full_version_list LIKE '%Google Chrome%' OR ua_ch_brands LIKE '%Google Chrome%' OR raw_user_agent LIKE '%Chrome/%' THEN 'Chrome'
-                        WHEN raw_user_agent LIKE '%Firefox/%' THEN 'Firefox'
-                        WHEN raw_user_agent LIKE '%Safari/%' THEN 'Safari'
+                        WHEN ua_ch_full_version_list LIKE '%%Microsoft Edge%%' OR ua_ch_brands LIKE '%%Microsoft Edge%%' OR raw_user_agent LIKE '%%Edg/%%' THEN 'Edge'
+                        WHEN ua_ch_full_version_list LIKE '%%Google Chrome%%' OR ua_ch_brands LIKE '%%Google Chrome%%' OR raw_user_agent LIKE '%%Chrome/%%' THEN 'Chrome'
+                        WHEN raw_user_agent LIKE '%%Firefox/%%' THEN 'Firefox'
+                        WHEN raw_user_agent LIKE '%%Safari/%%' THEN 'Safari'
                         ELSE '(unknown)'
                     END AS browser,
                     sessions,
@@ -334,23 +334,23 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     sd.tksource,
                     sd.tkzone,
                     CASE
-                        WHEN sd.ua_ch_model LIKE 'SM-%' OR sd.raw_user_agent LIKE '%Samsung%' THEN 'Samsung'
-                        WHEN sd.raw_user_agent LIKE '%Huawei%' THEN 'Huawei'
-                        WHEN sd.raw_user_agent LIKE '%Xiaomi%' THEN 'Xiaomi'
-                        WHEN sd.raw_user_agent LIKE '%Pixel%' THEN 'Google'
+                        WHEN sd.ua_ch_model LIKE 'SM-%%' OR sd.raw_user_agent LIKE '%%Samsung%%' THEN 'Samsung'
+                        WHEN sd.raw_user_agent LIKE '%%Huawei%%' THEN 'Huawei'
+                        WHEN sd.raw_user_agent LIKE '%%Xiaomi%%' THEN 'Xiaomi'
+                        WHEN sd.raw_user_agent LIKE '%%Pixel%%' THEN 'Google'
                         WHEN sd.ua_ch_model <> '' THEN SUBSTRING_INDEX(sd.ua_ch_model, ' ', 1)
                         ELSE '(unknown)'
                     END AS device_brand,
                     CASE
                         WHEN sd.ua_ch_platform = 'Android' AND sd.ua_ch_platform_version <> '' THEN sd.ua_ch_platform_version
-                        WHEN sd.raw_user_agent LIKE '%Android %' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(sd.raw_user_agent, 'Android ', -1), ';', 1)
+                        WHEN sd.raw_user_agent LIKE '%%Android %%' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(sd.raw_user_agent, 'Android ', -1), ';', 1)
                         ELSE '(unknown)'
                     END AS android_version,
                     CASE
-                        WHEN sd.ua_ch_full_version_list LIKE '%Microsoft Edge%' OR sd.ua_ch_brands LIKE '%Microsoft Edge%' OR sd.raw_user_agent LIKE '%Edg/%' THEN 'Edge'
-                        WHEN sd.ua_ch_full_version_list LIKE '%Google Chrome%' OR sd.ua_ch_brands LIKE '%Google Chrome%' OR sd.raw_user_agent LIKE '%Chrome/%' THEN 'Chrome'
-                        WHEN sd.raw_user_agent LIKE '%Firefox/%' THEN 'Firefox'
-                        WHEN sd.raw_user_agent LIKE '%Safari/%' THEN 'Safari'
+                        WHEN sd.ua_ch_full_version_list LIKE '%%Microsoft Edge%%' OR sd.ua_ch_brands LIKE '%%Microsoft Edge%%' OR sd.raw_user_agent LIKE '%%Edg/%%' THEN 'Edge'
+                        WHEN sd.ua_ch_full_version_list LIKE '%%Google Chrome%%' OR sd.ua_ch_brands LIKE '%%Google Chrome%%' OR sd.raw_user_agent LIKE '%%Chrome/%%' THEN 'Chrome'
+                        WHEN sd.raw_user_agent LIKE '%%Firefox/%%' THEN 'Firefox'
+                        WHEN sd.raw_user_agent LIKE '%%Safari/%%' THEN 'Safari'
                         ELSE '(unknown)'
                     END AS browser,
                     ROUND(h.elapsed_ms / 1000, 2) AS hidden_seconds

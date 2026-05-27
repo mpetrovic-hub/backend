@@ -3329,6 +3329,8 @@ class Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary
     public $prepared_statements = [];
     public $result_rows = [];
     public $result_rows_queue = [];
+    public $prepare_failure_prefix = '';
+    public $query_failure_prefix = '';
 
     public function get_charset_collate(): string
     {
@@ -3347,6 +3349,10 @@ class Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary
         ];
         $this->prepared_statements[] = $statement;
 
+        if ($this->prepare_failure_prefix !== '' && stripos((string) $query, $this->prepare_failure_prefix) === 0) {
+            return false;
+        }
+
         return $statement;
     }
 
@@ -3358,6 +3364,10 @@ class Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary
             'query' => $query,
             'args' => $args,
         ];
+
+        if ($this->query_failure_prefix !== '' && stripos($query, $this->query_failure_prefix) === 0) {
+            return false;
+        }
 
         if (stripos($query, 'DELETE FROM') === 0) {
             return 4;
@@ -8112,8 +8122,51 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('SHA2(CONCAT_WS', $insert_sql, 'Expected stable dimension_hash computation from normalized dimension fields.');
     kiwi_assert_true(strpos($insert_sql, 'landing_page_aufrufe') === false, 'Expected aggregate refresh not to emit old landing_page_aufrufe metric.');
     kiwi_assert_true(strpos($insert_sql, 'engaged_sessions') === false, 'Expected aggregate refresh not to emit engaged_sessions.');
+    kiwi_assert_contains("LIKE '%%Samsung%%'", $insert_sql, 'Expected literal summary LIKE wildcards to be escaped for wpdb prepare.');
+    kiwi_assert_contains("LIKE 'SM-%%'", $insert_sql, 'Expected prefix summary LIKE wildcards to be escaped for wpdb prepare.');
+
+    preg_match_all("/LIKE\\s+'([^']*%[^']*)'/", $insert_sql, $like_matches);
+    foreach ($like_matches[1] as $like_pattern) {
+        $length = strlen($like_pattern);
+
+        for ($i = 0; $i < $length; $i++) {
+            if ($like_pattern[$i] !== '%') {
+                continue;
+            }
+
+            $previous_is_percent = $i > 0 && $like_pattern[$i - 1] === '%';
+            $next_is_percent = $i + 1 < $length && $like_pattern[$i + 1] === '%';
+            kiwi_assert_true(
+                $previous_is_percent || $next_is_percent,
+                'Expected all literal percent wildcards in prepared summary LIKE patterns to be escaped: ' . $like_pattern
+            );
+        }
+    }
+
     kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date BETWEEN %s AND %s', $prepared[0]['query'] ?? '', 'Expected first prepared statement to delete before insert for idempotent recompute.');
     kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date BETWEEN %s AND %s', $prepared[2]['query'] ?? '', 'Expected repeated refresh to delete the window again instead of accumulating rows.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service reports empty insert query failures', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+    $wpdb->query_failure_prefix = 'INSERT INTO';
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
+    $service = new Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service($repository);
+
+    $result = $service->refresh_range('2026-05-22', '2026-05-22');
+
+    kiwi_assert_true(!$result['success'], 'Expected aggregate refresh to fail when the insert query fails.');
+    kiwi_assert_same(4, $result['deleted'], 'Expected failed insert result to retain the delete count.');
+    kiwi_assert_same(0, $result['inserted'], 'Expected failed insert result to expose zero inserted rows.');
+    kiwi_assert_contains('insert daily summary aggregate rows query failed without database error detail', $result['error'], 'Expected empty wpdb errors to be replaced with a diagnosable summary refresh error.');
+    kiwi_assert_same($result['error'], $service->get_last_error(), 'Expected service last_error to match the persisted refresh result error.');
 
     $wpdb = $previous_wpdb;
 });

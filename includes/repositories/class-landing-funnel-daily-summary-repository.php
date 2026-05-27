@@ -98,13 +98,14 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
 
         return $this->run_prepared_query(
             "DELETE FROM {$table_name} WHERE metric_date BETWEEN %s AND %s",
-            [$from_date, $to_date]
+            [$from_date, $to_date],
+            'delete daily summary metric date range'
         );
     }
 
     public function insert_aggregate_rows(string $sql, array $params): int
     {
-        return $this->run_prepared_query($sql, $params);
+        return $this->run_prepared_query($sql, $params, 'insert daily summary aggregate rows');
     }
 
     public function get_rows(array $filters = [], int $limit = 100): array
@@ -225,15 +226,32 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         return $normalized;
     }
 
-    private function run_prepared_query(string $sql, array $params): int
+    private function run_prepared_query(string $sql, array $params, string $context): int
     {
         global $wpdb;
 
         $this->last_error = '';
         $statement = empty($params) ? $sql : $wpdb->prepare($sql, ...$params);
+
+        if (!is_string($statement) && !is_array($statement)) {
+            if (!$this->has_database_error()) {
+                $this->last_error = 'Landing funnel daily summary ' . $context . ' prepare failed without database error detail.';
+            }
+
+            return -1;
+        }
+
         $result = $wpdb->query($statement);
 
-        if ($result === false || $this->has_database_error()) {
+        if ($result === false) {
+            if (!$this->has_database_error()) {
+                $this->last_error = 'Landing funnel daily summary ' . $context . ' query failed without database error detail.';
+            }
+
+            return -1;
+        }
+
+        if ($this->has_database_error()) {
             return -1;
         }
 
