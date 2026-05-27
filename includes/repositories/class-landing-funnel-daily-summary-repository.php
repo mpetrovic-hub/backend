@@ -103,6 +103,17 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         );
     }
 
+    public function delete_metric_date(string $metric_date): int
+    {
+        $table_name = $this->get_table_name();
+
+        return $this->run_prepared_query(
+            "DELETE FROM {$table_name} WHERE metric_date = %s",
+            [$metric_date],
+            'delete daily summary metric date'
+        );
+    }
+
     public function insert_aggregate_rows(string $sql, array $params): int
     {
         return $this->run_prepared_query($sql, $params, 'insert daily summary aggregate rows');

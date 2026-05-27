@@ -100,6 +100,7 @@ The daily landing-funnel summary refresh is operational configuration, not an ag
   - default: `7`, which refreshes `today - 7 days` through today
   - minimum: `0`, which refreshes only today
   - negative values are clamped to `0`
+  - the selected window is processed internally as per-day chunks, so the default value remains usable on production data without one multi-day aggregate statement
 
 Supported postback parameters/placeholders:
 

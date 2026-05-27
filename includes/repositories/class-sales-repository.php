@@ -74,10 +74,14 @@ class Kiwi_Sales_Repository
             KEY client_ip_prefix (client_ip_prefix),
             KEY client_ip_hash (client_ip_hash),
             KEY external_sale_id (external_sale_id),
-            KEY created_at (created_at)
+            KEY created_at (created_at),
+            KEY status_attribution_metric_date (status, attribution_metric_date),
+            KEY status_completed_at (status, completed_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 

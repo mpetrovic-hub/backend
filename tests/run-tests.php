@@ -6796,6 +6796,41 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository schema includes CT
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Landing funnel source schemas include daily refresh composite indexes', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+    };
+
+    (new Kiwi_Landing_Page_Session_Repository())->create_table();
+    (new Kiwi_Premium_Sms_Landing_Engagement_Repository())->create_table();
+    (new Kiwi_Landing_Handoff_Event_Repository())->create_table();
+    (new Kiwi_Sales_Repository())->create_table();
+
+    $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+    kiwi_assert_same(
+        2,
+        substr_count($sql, 'KEY created_landing_session (created_at, landing_key, session_token)'),
+        'Expected landing sessions and engagement sessions to support date-bounded landing/session scans.'
+    );
+    kiwi_assert_contains('KEY created_landing_session_event (created_at, landing_key, session_token, event_type)', $sql, 'Expected handoff events to support date-bounded session/event scans.');
+    kiwi_assert_contains('KEY status_attribution_metric_date (status, attribution_metric_date)', $sql, 'Expected sales snapshots to support completed sales lookup by attribution metric date.');
+    kiwi_assert_contains('KEY status_completed_at (status, completed_at)', $sql, 'Expected legacy sales fallback to support completed_at date scans.');
+
+    $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service records unknown links without soft-flagging and flags fast MO deltas', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -8081,9 +8116,9 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
 
     $prepared = $wpdb->prepared_statements;
     kiwi_assert_same(
-        ['2026-05-22', '2026-05-22'],
+        ['2026-05-22'],
         $prepared[0]['args'] ?? [],
-        'Expected refresh to delete the exact metric_date window before inserting replacement rows.'
+        'Expected refresh to delete the exact metric_date before inserting replacement rows.'
     );
     kiwi_assert_same(
         [
@@ -8097,6 +8132,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
             '2026-05-23 00:00:00',
             '2026-05-22',
             '2026-05-22',
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
         ],
         $prepared[1]['args'] ?? [],
         'Expected refresh insert to bind bounded source windows and sales metric dates.'
@@ -8118,6 +8155,9 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains("COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_attempted' THEN handoff_id ELSE NULL END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to deduplicate by handoff id.');
     kiwi_assert_contains('ROW_NUMBER() OVER (', $insert_sql, 'Expected hidden-time median to use a window-function ranking query.');
     kiwi_assert_contains('COALESCE(s.attribution_metric_date, DATE(s.completed_at)) AS metric_date', $insert_sql, 'Expected sales metric date to prefer durable attribution snapshots with completion-date fallback.');
+    kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use an indexable attribution metric date filter.');
+    kiwi_assert_contains('s.completed_at >= %s', $insert_sql, 'Expected legacy sales fallback to use an indexable completed_at lower bound.');
+    kiwi_assert_contains('s.completed_at < %s', $insert_sql, 'Expected legacy sales fallback to use an indexable completed_at upper bound.');
     kiwi_assert_contains("COALESCE(NULLIF(s.landing_key, ''), '(unknown)') AS landing_key", $insert_sql, 'Expected unattributed sales to land in unknown dimension buckets.');
     kiwi_assert_contains('SHA2(CONCAT_WS', $insert_sql, 'Expected stable dimension_hash computation from normalized dimension fields.');
     kiwi_assert_true(strpos($insert_sql, 'landing_page_aufrufe') === false, 'Expected aggregate refresh not to emit old landing_page_aufrufe metric.');
@@ -8143,8 +8183,52 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
         }
     }
 
-    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date BETWEEN %s AND %s', $prepared[0]['query'] ?? '', 'Expected first prepared statement to delete before insert for idempotent recompute.');
-    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date BETWEEN %s AND %s', $prepared[2]['query'] ?? '', 'Expected repeated refresh to delete the window again instead of accumulating rows.');
+    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date = %s', $prepared[0]['query'] ?? '', 'Expected first prepared statement to delete one metric_date before insert for idempotent recompute.');
+    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_summary WHERE metric_date = %s', $prepared[2]['query'] ?? '', 'Expected repeated refresh to delete the same metric_date again instead of accumulating rows.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service chunks multi-day refresh by metric date', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
+    $service = new Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service($repository);
+    $result = $service->refresh_range('2026-05-20', '2026-05-22');
+
+    kiwi_assert_true($result['success'], 'Expected multi-day aggregate refresh to succeed when all daily chunks succeed.');
+    kiwi_assert_same(12, $result['deleted'], 'Expected multi-day refresh to aggregate daily deleted row counts.');
+    kiwi_assert_same(18, $result['inserted'], 'Expected multi-day refresh to aggregate daily inserted row counts.');
+    kiwi_assert_same(3, count($result['daily_results'] ?? []), 'Expected one compact daily result per metric date.');
+    kiwi_assert_same('2026-05-20', $result['daily_results'][0]['metric_date'] ?? '', 'Expected daily results to retain the first chunk date.');
+    kiwi_assert_same('2026-05-22', $result['daily_results'][2]['metric_date'] ?? '', 'Expected daily results to retain the last chunk date.');
+
+    $prepared = $wpdb->prepared_statements;
+    kiwi_assert_same(['2026-05-20'], $prepared[0]['args'] ?? [], 'Expected first chunk to delete only the first metric date.');
+    kiwi_assert_same(['2026-05-21'], $prepared[2]['args'] ?? [], 'Expected second chunk to delete only the second metric date.');
+    kiwi_assert_same(['2026-05-22'], $prepared[4]['args'] ?? [], 'Expected third chunk to delete only the third metric date.');
+    kiwi_assert_same(
+        [
+            '2026-05-21 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-21 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-21 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-21 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-21',
+            '2026-05-21',
+            '2026-05-21 00:00:00',
+            '2026-05-22 00:00:00',
+        ],
+        $prepared[3]['args'] ?? [],
+        'Expected each chunk insert to bind only its own day.'
+    );
 
     $wpdb = $previous_wpdb;
 });
@@ -8165,8 +8249,32 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service reports emp
     kiwi_assert_true(!$result['success'], 'Expected aggregate refresh to fail when the insert query fails.');
     kiwi_assert_same(4, $result['deleted'], 'Expected failed insert result to retain the delete count.');
     kiwi_assert_same(0, $result['inserted'], 'Expected failed insert result to expose zero inserted rows.');
+    kiwi_assert_contains('2026-05-22 insert aggregate rows:', $result['error'], 'Expected insert failures to name the failing metric date and step.');
     kiwi_assert_contains('insert daily summary aggregate rows query failed without database error detail', $result['error'], 'Expected empty wpdb errors to be replaced with a diagnosable summary refresh error.');
     kiwi_assert_same($result['error'], $service->get_last_error(), 'Expected service last_error to match the persisted refresh result error.');
+    kiwi_assert_same($result['error'], $result['daily_results'][0]['error'] ?? '', 'Expected daily chunk error to match the range refresh error.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service reports delete step failures by metric date', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+    $wpdb->query_failure_prefix = 'DELETE FROM';
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
+    $service = new Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service($repository);
+
+    $result = $service->refresh_range('2026-05-22', '2026-05-22');
+
+    kiwi_assert_true(!$result['success'], 'Expected aggregate refresh to fail when the daily delete fails.');
+    kiwi_assert_same(0, $result['deleted'], 'Expected failed delete result to expose zero deleted rows.');
+    kiwi_assert_same(0, $result['inserted'], 'Expected failed delete result not to insert rows.');
+    kiwi_assert_contains('2026-05-22 delete:', $result['error'], 'Expected delete failures to name the failing metric date and step.');
+    kiwi_assert_contains('delete daily summary metric date query failed without database error detail', $result['error'], 'Expected empty delete wpdb errors to use the repository fallback diagnostic.');
 
     $wpdb = $previous_wpdb;
 });
@@ -8774,7 +8882,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for landing funnel daily summary
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-26-2', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary index migrations.');
+    kiwi_assert_same('2026-05-27-1', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary source index migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,

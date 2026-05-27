@@ -161,9 +161,8 @@ Erst Analyse/Plan erstellen. Mögliche Strategie: neue generische View/Alias-Sch
 
 Das grosse SQL-Dump-Logging fuer den Landing-Funnel-Daily-Summary-Refresh war zur Diagnose von `max_statement_time exceeded` hilfreich, soll aber nicht dauerhaft noisy in Production bleiben. PR-Referenz: https://github.com/mpetrovic-hub/backend/pull/42
 
-### TODO
+### Status
 
-- [ ] Nach dem Performance-Fix fuer `wp_kiwi_landing_funnel_daily_summary` pruefen, ob grosse SQL-Dumps entfernt sind.
-- [ ] Falls Debug-Ausgaben weiter noetig sind, hinter einen expliziten Debug-Switch legen und stark kuerzen.
-
+- Erledigt mit Issue #43: der Refresh laeuft intern pro `metric_date` und normales Erfolgs-/Fehlerlogging bleibt kurz.
+- Keine dauerhaften grossen Summary-SQL-Dumps sind Teil des normalen Refresh-Pfads. Falls spaeter wieder SQL-Diagnosen noetig werden, muessen sie hinter einen expliziten Debug-Schalter und gekuerzt bleiben.
 

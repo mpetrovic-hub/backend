@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-26-2';
+    private const DB_SCHEMA_VERSION = '2026-05-27-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -951,7 +951,7 @@ TEXT;
         string $to_date,
         string $started_at
     ): array {
-        return [
+        $normalized = [
             'success' => (bool) ($result['success'] ?? false),
             'from_date' => (string) ($result['from_date'] ?? $from_date),
             'to_date' => (string) ($result['to_date'] ?? $to_date),
@@ -962,6 +962,12 @@ TEXT;
             'finished_at' => $this->get_current_time_mysql(),
             'skipped_due_to_lock' => false,
         ];
+
+        if (isset($result['daily_results']) && is_array($result['daily_results'])) {
+            $normalized['daily_results'] = array_values($result['daily_results']);
+        }
+
+        return $normalized;
     }
 
     private function has_landing_funnel_daily_summary_refresh_lock(): bool
