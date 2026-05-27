@@ -251,6 +251,7 @@ Notes:
   - is refreshed hourly by WP-Cron hook `kiwi_landing_funnel_daily_summary_refresh`, using a transient lock to prevent concurrent runs
   - stores the last refresh or lock-skip result in WordPress option `kiwi_landing_funnel_daily_summary_refresh_last_result`; refresh results include aggregate counts and can include compact `daily_results` entries for per-day diagnostics
   - reports failing chunks with the metric date and step, for example `2026-05-23 delete: ...` or `2026-05-23 insert aggregate rows: ...`
+  - keeps cross-midnight handoff attempts and hidden/success events together by scanning adjacent handoff rows while still attributing the aggregate to the first handoff date
   - uses composite indexes on the raw landing-session, engagement, handoff, and sales snapshot tables to keep day chunks inside production database limits
   - is the primary read source for the protected `[kiwi_statistics]` shortcode and its CSV export; raw-table cleanup still remains separate
 

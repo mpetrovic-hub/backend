@@ -66,6 +66,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
 
         $from_datetime = $metric_date . ' 00:00:00';
         $to_exclusive_datetime = $this->next_date($metric_date) . ' 00:00:00';
+        $handoff_from_datetime = $this->previous_date($metric_date) . ' 00:00:00';
+        $handoff_to_exclusive_datetime = $this->next_date($this->next_date($metric_date)) . ' 00:00:00';
 
         $this->run_statement('START TRANSACTION');
         $deleted = $this->repository->delete_metric_date($metric_date);
@@ -84,10 +86,12 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 $to_exclusive_datetime,
                 $from_datetime,
                 $to_exclusive_datetime,
+                $handoff_from_datetime,
+                $handoff_to_exclusive_datetime,
                 $from_datetime,
                 $to_exclusive_datetime,
                 $from_datetime,
-                $to_exclusive_datetime,
+                $handoff_to_exclusive_datetime,
                 $metric_date,
                 $metric_date,
                 $from_datetime,
@@ -214,6 +218,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND landing_key <> ''
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
+                HAVING first_handoff_at >= %s
+                   AND first_handoff_at < %s
             ),
             handoff_by_session AS (
                 SELECT
@@ -386,6 +392,9 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     END AS browser,
                     ROUND(h.elapsed_ms / 1000, 2) AS hidden_seconds
                 FROM session_dimensions sd
+                INNER JOIN handoff_by_session hs
+                  ON hs.landing_key = sd.raw_landing_key
+                 AND hs.session_token = sd.session_token
                 INNER JOIN {$handoff_table} h
                   ON h.landing_key = sd.raw_landing_key
                  AND h.session_token = sd.session_token
@@ -668,6 +677,13 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
     private function next_date(string $date): string
     {
         $timestamp = strtotime($date . ' +1 day');
+
+        return $timestamp === false ? $date : gmdate('Y-m-d', $timestamp);
+    }
+
+    private function previous_date(string $date): string
+    {
+        $timestamp = strtotime($date . ' -1 day');
 
         return $timestamp === false ? $date : gmdate('Y-m-d', $timestamp);
     }

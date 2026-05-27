@@ -8126,17 +8126,19 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
             '2026-05-23 00:00:00',
             '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
+            '2026-05-21 00:00:00',
+            '2026-05-24 00:00:00',
             '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
             '2026-05-22 00:00:00',
-            '2026-05-23 00:00:00',
+            '2026-05-24 00:00:00',
             '2026-05-22',
             '2026-05-22',
             '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
         ],
         $prepared[1]['args'] ?? [],
-        'Expected refresh insert to bind bounded source windows and sales metric dates.'
+        'Expected refresh insert to bind day-bounded session/sales windows and extended handoff windows.'
     );
     $insert_sql = (string) ($prepared[1]['query'] ?? '');
 
@@ -8153,6 +8155,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('SUM(cta2_click_count) AS cta2_click_events', $insert_sql, 'Expected CTA2 events to use step-specific engagement counts.');
     kiwi_assert_contains('SUM(cta3_click_count) AS cta3_click_events', $insert_sql, 'Expected CTA3 events to use step-specific engagement counts.');
     kiwi_assert_contains("COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_attempted' THEN handoff_id ELSE NULL END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to deduplicate by handoff id.');
+    kiwi_assert_contains('HAVING first_handoff_at >= %s', $insert_sql, 'Expected handoff grouping to stay attributed to the target metric date.');
+    kiwi_assert_contains('INNER JOIN handoff_by_session hs', $insert_sql, 'Expected hidden median rows to use the same target-date handoff grouping.');
     kiwi_assert_contains('ROW_NUMBER() OVER (', $insert_sql, 'Expected hidden-time median to use a window-function ranking query.');
     kiwi_assert_contains('COALESCE(s.attribution_metric_date, DATE(s.completed_at)) AS metric_date', $insert_sql, 'Expected sales metric date to prefer durable attribution snapshots with completion-date fallback.');
     kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use an indexable attribution metric date filter.');
@@ -8217,17 +8221,19 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service chunks mult
             '2026-05-22 00:00:00',
             '2026-05-21 00:00:00',
             '2026-05-22 00:00:00',
+            '2026-05-20 00:00:00',
+            '2026-05-23 00:00:00',
             '2026-05-21 00:00:00',
             '2026-05-22 00:00:00',
             '2026-05-21 00:00:00',
-            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
             '2026-05-21',
             '2026-05-21',
             '2026-05-21 00:00:00',
             '2026-05-22 00:00:00',
         ],
         $prepared[3]['args'] ?? [],
-        'Expected each chunk insert to bind only its own day.'
+        'Expected each chunk insert to bind only its own metric day while keeping adjacent handoff events grouped.'
     );
 
     $wpdb = $previous_wpdb;
