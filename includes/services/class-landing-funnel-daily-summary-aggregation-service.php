@@ -218,6 +218,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND landing_key <> ''
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
+                HAVING first_handoff_at >= %s
+                   AND first_handoff_at < %s
             ),
             handoff_by_session AS (
                 SELECT
@@ -247,8 +249,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND landing_key <> ''
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
-                HAVING first_handoff_at >= %s
-                   AND first_handoff_at < %s
             ),
             session_keys AS (
                 SELECT

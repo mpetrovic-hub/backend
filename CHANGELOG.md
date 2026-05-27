@@ -3,7 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-05-27:
-- [Landing Funnel Daily Summary Refresh] Changed the production refresh from one multi-day aggregate query to per-day chunks with per-day transactions, date+step failure diagnostics, source-table composite indexes, and index-friendly completed-sales date filters. Handoff grouping keeps adjacent cross-midnight attempted/hidden events attributed to the first handoff date. The default seven-day rolling window remains supported.
+- [Landing Funnel Daily Summary Refresh] Changed the production refresh from one multi-day aggregate query to per-day chunks with per-day transactions, date+step failure diagnostics, source-table composite indexes, and index-friendly completed-sales date filters. Handoff grouping keeps adjacent cross-midnight attempted/hidden events attributed to the first handoff date, and hourly refreshes always include a prior-day carryover even when the configured lookback is zero. The default seven-day rolling window remains supported.
 - [Landing Funnel Daily Summary Refresh] Fixed prepared SQL wildcard escaping in the daily summary aggregation refresh so device/browser LIKE patterns no longer break `$wpdb->prepare()`. Empty database error details during refresh delete/insert failures now persist a diagnostic fallback error for operations.
 
 2026-05-26:

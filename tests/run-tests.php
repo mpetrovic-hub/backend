@@ -1060,6 +1060,7 @@ class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
 {
     public $current_business_date = '2026-05-26';
     public $current_time_mysql = '2026-05-26 12:00:00';
+    public $refresh_days = 7;
     public $logs = [];
     private $refresh_service;
 
@@ -1082,6 +1083,11 @@ class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
     protected function get_current_time_mysql(): string
     {
         return $this->current_time_mysql;
+    }
+
+    protected function get_landing_funnel_daily_summary_refresh_days(): int
+    {
+        return max(0, (int) $this->refresh_days);
     }
 
     protected function log_landing_funnel_daily_summary_refresh(string $message): void
@@ -8977,6 +8983,30 @@ kiwi_run_test('Kiwi_Plugin runs landing funnel daily summary refresh for the def
     kiwi_assert_same([$lock_key], $GLOBALS['kiwi_test_deleted_transients'], 'Expected normal completion to explicitly delete the refresh lock.');
     kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected last refresh result to be persisted as an option.');
     kiwi_assert_contains('Refresh succeeded for 2026-05-19 to 2026-05-26', implode("\n", $plugin->logs), 'Expected successful refresh to be visibly logged.');
+});
+
+kiwi_run_test('Kiwi_Plugin keeps a prior-day carryover when daily summary refresh days is zero', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-25',
+        'to_date' => '2026-05-26',
+        'deleted' => 2,
+        'inserted' => 3,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+    $plugin->refresh_days = 0;
+
+    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+
+    kiwi_assert_true($result['success'], 'Expected zero-lookback refresh with handoff carryover to succeed.');
+    kiwi_assert_same([['2026-05-25', '2026-05-26']], $service->calls, 'Expected hourly zero-lookback refresh to include yesterday so cross-midnight handoff completions update the first-handoff day.');
+    kiwi_assert_same('2026-05-25', $result['from_date'], 'Expected persisted result to expose the effective carryover start date.');
+    kiwi_assert_contains('Refresh succeeded for 2026-05-25 to 2026-05-26', implode("\n", $plugin->logs), 'Expected carryover refresh range to be visible in logs.');
 });
 
 kiwi_run_test('Kiwi_Plugin skips landing funnel daily summary refresh while lock is active', function (): void {

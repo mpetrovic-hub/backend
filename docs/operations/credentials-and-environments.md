@@ -98,9 +98,10 @@ The daily landing-funnel summary refresh is operational configuration, not an ag
 - `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`
   - number of lookback days recalculated by the WP-Cron rolling refresh in addition to today
   - default: `7`, which refreshes `today - 7 days` through today
-  - minimum: `0`, which refreshes only today
+  - minimum configured value: `0`
   - negative values are clamped to `0`
   - the selected window is processed internally as per-day chunks, so the default value remains usable on production data without one multi-day aggregate statement
+  - hourly WP-Cron refreshes apply an effective one-day minimum, so `0` refreshes yesterday through today to preserve cross-midnight handoff completions
 
 Supported postback parameters/placeholders:
 

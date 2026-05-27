@@ -934,8 +934,7 @@ TEXT;
 
     private function build_landing_funnel_daily_summary_refresh_range(): array
     {
-        $config = new Kiwi_Config();
-        $refresh_days = $config->get_landing_funnel_summary_refresh_days();
+        $refresh_days = max(1, $this->get_landing_funnel_daily_summary_refresh_days());
         $to_date = $this->get_current_business_date();
         $timestamp = strtotime($to_date . ' -' . $refresh_days . ' days');
 
@@ -943,6 +942,13 @@ TEXT;
             'from_date' => $timestamp === false ? $to_date : date('Y-m-d', $timestamp),
             'to_date' => $to_date,
         ];
+    }
+
+    protected function get_landing_funnel_daily_summary_refresh_days(): int
+    {
+        $config = new Kiwi_Config();
+
+        return $config->get_landing_funnel_summary_refresh_days();
     }
 
     private function normalize_landing_funnel_daily_summary_refresh_result(
