@@ -3,6 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-05-27:
+- [Raw Analytics Retention] Documented the no-delete retention plan and validation gates for raw landing/session, engagement, handoff, and attribution tables after the durable sales snapshot and daily funnel summary rollout.
 - [Landing Funnel Daily Summary Refresh] Fixed prepared SQL wildcard escaping in the daily summary aggregation refresh so device/browser LIKE patterns no longer break `$wpdb->prepare()`. Empty database error details during refresh delete/insert failures now persist a diagnostic fallback error for operations.
 
 2026-05-26:

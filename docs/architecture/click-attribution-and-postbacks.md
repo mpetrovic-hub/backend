@@ -165,7 +165,32 @@ Raw-table cleanup behavior is not switched to the daily summary. The existing vi
 
 ## Retention and Cleanup
 
-Attribution rows are intentionally temporary and use explicit expiry.
+This issue only defines the raw-analytics retention plan. It does not add DELETE jobs, change schema, change refresh windows, or shorten any existing TTL. Later cleanup work needs a separate issue after the validation gates below have production evidence.
+
+Durable sources after the summary rollout:
+
+- `wp_kiwi_sales` is the durable confirmed-sale fact table and must be retained long term.
+- `wp_kiwi_landing_funnel_daily_summary` is the durable reporting aggregate and must be retained long term or very long term.
+- Raw analytics tables remain operational/debug/recompute sources until the daily summary, sales snapshots, backup/restore, and active read paths are proven sufficient for the requested history window.
+
+| Table | Data class and current purpose | Durable source after rollout | Retention category | Cleanup gate and validation evidence | Early-cleanup risk |
+| --- | --- | --- | --- | --- | --- |
+| `wp_kiwi_click_attributions` | Temporary attribution, reference binding, conversion/postback audit, and legacy completed-sale dimension fallback. | `wp_kiwi_sales` for confirmed-sale dimensions and `wp_kiwi_landing_funnel_daily_summary` for reporting totals. | Short-lived operational table with the existing `expires_at`/TTL cleanup unchanged. | Do not shorten TTL while callbacks can still bind, postback audit is needed, or old sales still rely on attribution fallback. Validate sampled sales have durable snapshot fields and current statistics/reporting questions do not depend on old attribution rows. | Lost conversion matching, missing postback audit, or dropped legacy sale dimensions. |
+| `wp_kiwi_landing_page_sessions` | Raw landing loads, session fallback, classic user-agent fallback, and landing-session client-IP snapshot source. | Daily summary for load/session/device aggregates; `wp_kiwi_sales` for sale-linked landing/session/source/device/IP snapshots. | Medium-term debug and recompute source. | Keep until the bounded daily summary refresh has been compared against raw sessions for the chosen period, the support/recompute lookback is agreed, and IP/device questions can be answered from summary or sales snapshots. | Old periods cannot be fully recomputed from raw landing sessions; sale IP/device investigations lose source rows. |
+| `wp_kiwi_premium_sms_landing_engagements` | Raw page-load, CTA1/CTA2/CTA3, source, UA, and engagement evidence used by fraud/debug analysis and summary recompute. | Daily summary for CTA/session aggregates; fraud/sales tables for downstream snapshots where applicable. | Medium-term debug, recompute, and fraud-support source. | Keep until CTA metrics and source/device buckets match the daily summary in production samples, `(unknown)` buckets are understood, and fraud/operations lookback needs are covered. | Per-session engagement evidence and fraud/debug context disappear before operators can investigate anomalies. |
+| `wp_kiwi_landing_handoff_events` | Raw click-to-SMS handoff diagnostics, transition hints, source snapshots, and optional UA context. | Daily summary for handoff counts, rates, and hidden-time aggregates. | Medium-term debug and recompute source. | Keep until handoff metrics in the daily summary match raw samples and no open support/debug case needs per-handoff browser transition details. | Click-to-SMS delivery issues become harder to diagnose and old handoff aggregates cannot be rebuilt. |
+| `wp_kiwi_sales` | Durable confirmed-sale records with provider-neutral attribution snapshots. | Itself. | Permanent or very long term. | Retention changes require accounting/reporting approval plus backup/restore validation; this table is not part of raw cleanup. | Sales reporting, reconciliation, and attribution history are lost. |
+| `wp_kiwi_landing_funnel_daily_summary` | Persistent daily landing/source/device funnel aggregate. | Itself. | Permanent or very long term. | Retention changes require reporting approval, backup/restore validation, and confirmation that raw history is no longer needed for recompute. | Long-range reporting breaks once raw rows are trimmed. |
+
+Validation required before any future raw cleanup issue:
+
+1. Pick a controlled production or staging date range and run the bounded summary refresh for that range twice; the second run must keep row counts and totals stable.
+2. Compare raw session, page-load, CTA1/CTA2/CTA3, handoff, and sales counts to `wp_kiwi_landing_funnel_daily_summary` by the dimensions that matter operationally: landing, service, source, device/browser, and metric date.
+3. Compare sampled confirmed sales in `wp_kiwi_sales` against attribution, engagement, and landing-session source rows, especially `landing_key`, `session_ref`, `pid`, `tksource`, `tkzone`, device/browser fields, client-IP snapshot fields, and `attribution_metric_date`.
+4. Review `(unknown)` buckets and legacy/debug view usage. Any reporting, CSV, pivot, fraud, or support question that still needs raw rows is a cleanup blocker.
+5. Confirm backup/restore expectations for `wp_kiwi_sales` and `wp_kiwi_landing_funnel_daily_summary`, and capture evidence in the cleanup issue or PR before enabling deletes.
+
+Existing click-attribution cleanup behavior remains unchanged:
 
 - row expiry timestamp: `expires_at`
 - TTL config key: `KIWI_CLICK_ATTRIBUTION_TTL_SECONDS`

@@ -191,6 +191,11 @@ Notes:
 - `wp_kiwi_click_attributions`
   - temporary server-side attribution state
   - click ID, internal `transaction_id`, refs, postback audit, TTL expiry
+  - short-lived operational retention; existing `expires_at` cleanup stays unchanged until callbacks, postback audit, and legacy sale fallback no longer need the row window
+
+- `wp_kiwi_landing_page_sessions`
+  - raw landing-session evidence for rendered landing loads, session fallback, classic user-agent fallback, and landing-session client-IP snapshots
+  - medium-term debug/recompute retention until summary counts, sale snapshots, and support lookback needs are validated
 
 - `wp_kiwi_nth_events`
   - normalized inbound/outbound NTH event log with dedupe
@@ -202,6 +207,7 @@ Notes:
   - durable confirmed sale records
   - includes `transaction_id`, service/landing/session/source snapshots (`service_key`, `landing_key`, `session_ref`, `click_id`, `pid`, `tksource`, `tkzone`), normalized device buckets (`device_brand`, `android_version`, `browser`), `attribution_metric_date`, and landing-session IP snapshot fields (`client_ip`, `client_ip_version`, `client_ip_prefix`, `client_ip_hash`)
   - keeps existing provider context in `context_json` and adds `context_json.attribution_snapshot` with source/debug rows used to build the snapshot
+  - durable sales source; not part of raw analytics cleanup
 
 - `wp_kiwi_premium_sms_landing_engagements`
   - landing-session engagement evidence (`page_loaded_at`, first/last generic CTA click, generic click count)
@@ -209,10 +215,12 @@ Notes:
   - legacy generic CTA columns remain populated for backward compatibility with fraud checks and existing statistics views
   - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
   - raw UA context (`ua_ch_*`, `user_agent`) when the UA tracking mode allows it; normalized device/browser buckets are not stored here
+  - medium-term debug/recompute/fraud-support retention until summary counts and operations lookback are validated
 
 - `wp_kiwi_landing_handoff_events`
   - click-to-SMS handoff evidence (`sms_handoff_*`)
   - source snapshots (`pid`, `click_id`, `tksource`, `tkzone`), handoff details (`sms`, `smsto`, recipient/body metadata), and optional UA Client Hints (`platform`, `platformVersion`, `model`, browser brands)
+  - medium-term debug/recompute retention until handoff summary metrics are validated and open browser-transition investigations are closed
 
 - `wp_kiwi_sms_body_variant_assignments`
   - visible SMS token assignments for the FR click-to-SMS experiment
@@ -251,6 +259,27 @@ Notes:
   - is refreshed hourly by WP-Cron hook `kiwi_landing_funnel_daily_summary_refresh`, using a transient lock to prevent concurrent runs
   - stores the last refresh or lock-skip result in WordPress option `kiwi_landing_funnel_daily_summary_refresh_last_result`
   - is the primary read source for the protected `[kiwi_statistics]` shortcode and its CSV export; raw-table cleanup still remains separate
+  - durable reporting source; keep long term so old ranges remain reportable after raw analytics rows are eventually trimmed
+
+## Raw analytics retention operating plan
+
+No raw analytics data is deleted by the current retention plan. Cleanup must remain a later, separate implementation issue with production or staging evidence that the durable tables answer the required reporting and support questions.
+
+Retention categories:
+
+- Permanent or very long term: `wp_kiwi_sales` and `wp_kiwi_landing_funnel_daily_summary`.
+- Short-lived operational: `wp_kiwi_click_attributions`, using the existing `expires_at` and `KIWI_CLICK_ATTRIBUTION_TTL_SECONDS` cleanup behavior.
+- Medium-term debug/recompute: `wp_kiwi_landing_page_sessions`, `wp_kiwi_premium_sms_landing_engagements`, and `wp_kiwi_landing_handoff_events`.
+
+Before enabling any future cleanup for the medium-term raw tables:
+
+1. Choose a controlled date range and run the daily summary refresh twice; the second run should keep row counts and aggregate totals stable.
+2. Compare raw rows against `wp_kiwi_landing_funnel_daily_summary` for sessions, page-loaded sessions, CTA1/CTA2/CTA3 sessions and clicks, handoff attempts/success/failure/hidden-time metrics, sales, and `sales_amount_minor`.
+3. Compare sampled confirmed sales against `wp_kiwi_sales` snapshot fields, including `landing_key`, `session_ref`, `pid`, `tksource`, `tkzone`, device/browser buckets, client-IP snapshot fields, and `attribution_metric_date`.
+4. Review `(unknown)` buckets and any remaining legacy/debug view or ad hoc export usage. Any still-needed raw-table question blocks cleanup for that table.
+5. Confirm the required support, fraud, and recompute lookback windows with operations before choosing concrete retention days.
+6. Confirm backup/restore expectations for `wp_kiwi_sales` and `wp_kiwi_landing_funnel_daily_summary`; after raw cleanup, old ranges can no longer be fully rebuilt from source rows.
+7. Record the validation evidence in the cleanup issue or PR before adding DELETE jobs, changing TTLs, or scheduling retention cron tasks.
 
 ## Configuration switches
 
