@@ -96,6 +96,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 $metric_date,
                 $from_datetime,
                 $to_exclusive_datetime,
+                $metric_date,
             ]
         );
 
@@ -218,8 +219,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND landing_key <> ''
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
-                HAVING first_handoff_at >= %s
-                   AND first_handoff_at < %s
             ),
             handoff_by_session AS (
                 SELECT
@@ -249,6 +248,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND landing_key <> ''
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
+                HAVING first_handoff_at >= %s
+                   AND first_handoff_at < %s
             ),
             session_keys AS (
                 SELECT
@@ -575,7 +576,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
              AND hm.device_brand = a.device_brand
              AND hm.android_version = a.android_version
              AND hm.browser = a.browser
-            WHERE a.metric_date IS NOT NULL
+            WHERE a.metric_date = %s
               AND (
                   a.sessions > 0
                   OR a.page_loaded_sessions > 0
