@@ -278,23 +278,23 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
             return 'Samsung';
         }
 
-        if (stripos($user_agent, 'Huawei') !== false || stripos($ua_ch_model, 'Huawei') !== false) {
+        if (stripos($user_agent, 'Huawei') !== false || stripos($ua_ch_model, 'Huawei') === 0) {
             return 'Huawei';
         }
 
-        if (stripos($user_agent, 'Xiaomi') !== false || stripos($ua_ch_model, 'Xiaomi') !== false) {
+        if (
+            stripos($user_agent, 'Xiaomi') !== false
+            || stripos($user_agent, 'Redmi') !== false
+            || stripos($user_agent, 'POCO') !== false
+            || stripos($ua_ch_model, 'Xiaomi') === 0
+            || stripos($ua_ch_model, 'Redmi') === 0
+            || stripos($ua_ch_model, 'POCO') === 0
+        ) {
             return 'Xiaomi';
         }
 
-        if (stripos($user_agent, 'Pixel') !== false || stripos($ua_ch_model, 'Pixel') !== false) {
+        if (stripos($user_agent, 'Pixel') !== false || stripos($ua_ch_model, 'Pixel') === 0) {
             return 'Google';
-        }
-
-        if ($ua_ch_model !== '') {
-            $parts = preg_split('/\s+/', $ua_ch_model);
-            $brand = is_array($parts) && !empty($parts) ? (string) $parts[0] : $ua_ch_model;
-
-            return $this->sanitize_text_dimension($brand, 100);
         }
 
         return $has_ua_context ? '(unknown)' : '';

@@ -236,7 +236,8 @@ Notes:
   - plugin-managed analytics view for pivot/export work outside the shortcode UI
   - groups by `landing_key`, `service_key`, `tksource`, `tkzone`, computed `device_brand`, computed `android_version`, and computed `browser`
   - exposes sessions, landing-page loads, page-loaded sessions, CTA sessions/clicks, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales
-  - computes session-row device/browser dimensions in SQL from raw UA context; new sale rows also persist matching normalized buckets for durable sale analysis
+  - computes session-row device/browser dimensions in SQL from raw UA context; `device_brand` only uses known manufacturer rules and sends unknown model strings to `(unknown)`
+  - new sale rows also persist matching normalized buckets for durable sale analysis
   - counts completed sales by `wp_kiwi_sales.landing_key/session_ref` first, falling back to attribution joins for legacy rows
 
 - `wp_kiwi_landing_funnel_daily_summary`

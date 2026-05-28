@@ -5132,6 +5132,38 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists sales attribution s
     unset($_SERVER['REMOTE_ADDR']);
 });
 
+kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder restricts device brands to known rules', function (): void {
+    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $builder = new Kiwi_Sales_Attribution_Snapshot_Builder(null, $engagement_repository);
+
+    $assert_brand = static function (string $expected, string $session_token, string $model, string $user_agent = '') use ($builder, $engagement_repository): void {
+        $engagement_repository->upsert_event([
+            'landing_key' => 'lp-brand',
+            'session_token' => $session_token,
+            'service_key' => 'svc-brand',
+            'ua_ch_supported' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_model' => $model,
+            'user_agent' => $user_agent,
+        ], 'page_loaded', '2026-04-01 08:00:00');
+
+        $snapshot = $builder->build([
+            'landing_page_key' => 'lp-brand',
+            'service_key' => 'svc-brand',
+            'session_ref' => $session_token,
+        ]);
+
+        kiwi_assert_same($expected, (string) ($snapshot['device_brand'] ?? ''), 'Expected device brand normalization for model ' . $model . '.');
+    };
+
+    $assert_brand('(unknown)', 'sess-brand-unknown', 'Moto G Power');
+    $assert_brand('Samsung', 'sess-brand-samsung', 'SM-S921B');
+    $assert_brand('Google', 'sess-brand-pixel', 'Pixel 8');
+    $assert_brand('Xiaomi', 'sess-brand-xiaomi', 'Xiaomi 14');
+    $assert_brand('Xiaomi', 'sess-brand-redmi', 'Redmi Note 13');
+    $assert_brand('Xiaomi', 'sess-brand-poco', 'POCO F6');
+});
+
 kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder normalizes IPv6 and rejects invalid IPs', function (): void {
     $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
     $builder = new Kiwi_Sales_Attribution_Snapshot_Builder($landing_session_repository);
@@ -8169,6 +8201,12 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix", $insert_sql, 'Expected sales facts to use durable sale IP prefix snapshots with unknown fallback.');
     kiwi_assert_contains("'.0/24'", $insert_sql, 'Expected session IP aggregation to bucket IPv4 addresses as /24 prefixes.');
     kiwi_assert_contains("'::/48'", $insert_sql, 'Expected session IP aggregation to bucket IPv6 addresses as /48 prefixes.');
+    kiwi_assert_true(strpos($insert_sql, "WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)") === false, 'Expected summary session brand logic not to promote unknown model tokens to device brands.');
+    kiwi_assert_true(strpos($insert_sql, "WHEN sd.ua_ch_model <> '' THEN SUBSTRING_INDEX(sd.ua_ch_model, ' ', 1)") === false, 'Expected hidden median brand logic not to promote unknown model tokens to device brands.');
+    kiwi_assert_contains("WHEN ua_ch_model LIKE 'SM-%%' OR raw_user_agent LIKE '%%Samsung%%' THEN 'Samsung'", $insert_sql, 'Expected summary session facts to keep Samsung brand rules.');
+    kiwi_assert_contains("WHEN ua_ch_model LIKE 'Xiaomi%%' OR ua_ch_model LIKE 'Redmi%%' OR ua_ch_model LIKE 'POCO%%'", $insert_sql, 'Expected summary session facts to group Xiaomi-family models defensively.');
+    kiwi_assert_contains("WHEN ua_ch_model LIKE 'Pixel%%' OR raw_user_agent LIKE '%%Pixel%%' THEN 'Google'", $insert_sql, 'Expected summary session facts to keep Pixel as Google.');
+    kiwi_assert_contains("WHEN sd.ua_ch_model LIKE 'Xiaomi%%' OR sd.ua_ch_model LIKE 'Redmi%%' OR sd.ua_ch_model LIKE 'POCO%%'", $insert_sql, 'Expected hidden median facts to use the same Xiaomi-family brand rules.');
     kiwi_assert_true(strpos($insert_sql, 's.client_ip,') === false, 'Expected daily summary refresh not to select raw sale IPs.');
     kiwi_assert_true(strpos($insert_sql, 's.client_ip_hash') === false, 'Expected daily summary refresh not to select sale IP hashes.');
     kiwi_assert_contains('MAX(has_session_fact) AS has_session_fact', $insert_sql, 'Expected distinct landing/session counting to collapse landing plus engagement rows.');
@@ -8471,6 +8509,10 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing engagement UA context.');
     kiwi_assert_contains('abc_kiwi_landing_handoff_events', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include handoff diagnostics.');
     kiwi_assert_contains('device_brand', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed device_brand.');
+    kiwi_assert_true(strpos($wpdb->queries[1] ?? '', "WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)") === false, 'Expected one-for-all device brand logic not to promote unknown model tokens to brands.');
+    kiwi_assert_contains("WHEN ua_ch_model LIKE 'SM-%' OR raw_user_agent LIKE '%Samsung%' THEN 'Samsung'", $wpdb->queries[1] ?? '', 'Expected one-for-all view to keep Samsung brand rules.');
+    kiwi_assert_contains("WHEN ua_ch_model LIKE 'Xiaomi%' OR ua_ch_model LIKE 'Redmi%' OR ua_ch_model LIKE 'POCO%'", $wpdb->queries[1] ?? '', 'Expected one-for-all view to group Xiaomi-family models defensively.');
+    kiwi_assert_contains("WHEN ua_ch_model LIKE 'Pixel%' OR raw_user_agent LIKE '%Pixel%' THEN 'Google'", $wpdb->queries[1] ?? '', 'Expected one-for-all view to keep Pixel as Google.');
     kiwi_assert_contains('android_version', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed android_version.');
     kiwi_assert_contains('browser', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed browser.');
     kiwi_assert_contains('handoff_rate_pct', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose handoff rate.');
