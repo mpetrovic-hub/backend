@@ -128,6 +128,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $session_ip_version_expression = $this->build_client_ip_version_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
         $session_ip_prefix_expression = $this->build_client_ip_prefix_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
+        $session_device_brand_expression = $this->build_device_brand_case_expression('ua_ch_model', 'raw_user_agent', true);
+        $hidden_device_brand_expression = $this->build_device_brand_case_expression('sd.ua_ch_model', 'sd.raw_user_agent', true);
 
         $dimension_hash_expression = "SHA2(CONCAT_WS('|',
                     a.landing_key,
@@ -332,14 +334,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     pid,
                     tksource,
                     tkzone,
-                    CASE
-                        WHEN ua_ch_model LIKE 'SM-%%' OR raw_user_agent LIKE '%%Samsung%%' THEN 'Samsung'
-                        WHEN raw_user_agent LIKE '%%Huawei%%' THEN 'Huawei'
-                        WHEN raw_user_agent LIKE '%%Xiaomi%%' THEN 'Xiaomi'
-                        WHEN raw_user_agent LIKE '%%Pixel%%' THEN 'Google'
-                        WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)
-                        ELSE '(unknown)'
-                    END AS device_brand,
+                    {$session_device_brand_expression} AS device_brand,
                     CASE
                         WHEN ua_ch_platform = 'Android' AND ua_ch_platform_version <> '' THEN ua_ch_platform_version
                         WHEN raw_user_agent LIKE '%%Android %%' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(raw_user_agent, 'Android ', -1), ';', 1)
@@ -382,14 +377,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     sd.pid,
                     sd.tksource,
                     sd.tkzone,
-                    CASE
-                        WHEN sd.ua_ch_model LIKE 'SM-%%' OR sd.raw_user_agent LIKE '%%Samsung%%' THEN 'Samsung'
-                        WHEN sd.raw_user_agent LIKE '%%Huawei%%' THEN 'Huawei'
-                        WHEN sd.raw_user_agent LIKE '%%Xiaomi%%' THEN 'Xiaomi'
-                        WHEN sd.raw_user_agent LIKE '%%Pixel%%' THEN 'Google'
-                        WHEN sd.ua_ch_model <> '' THEN SUBSTRING_INDEX(sd.ua_ch_model, ' ', 1)
-                        ELSE '(unknown)'
-                    END AS device_brand,
+                    {$hidden_device_brand_expression} AS device_brand,
                     CASE
                         WHEN sd.ua_ch_platform = 'Android' AND sd.ua_ch_platform_version <> '' THEN sd.ua_ch_platform_version
                         WHEN sd.raw_user_agent LIKE '%%Android %%' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(sd.raw_user_agent, 'Android ', -1), ';', 1)
@@ -687,6 +675,20 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         return "CASE
                         WHEN {$ipv4_condition} THEN 'ipv4'
                         WHEN {$ipv6_condition} THEN 'ipv6'
+                        ELSE '(unknown)'
+                    END";
+    }
+
+    private function build_device_brand_case_expression(string $model_column, string $user_agent_column, bool $escape_percent): string
+    {
+        $contains_wildcard = $escape_percent ? '%%' : '%';
+        $prefix_wildcard = $escape_percent ? '%%' : '%';
+
+        return "CASE
+                        WHEN {$model_column} LIKE 'SM-{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Samsung{$contains_wildcard}' THEN 'Samsung'
+                        WHEN {$model_column} LIKE 'Huawei{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Huawei{$contains_wildcard}' THEN 'Huawei'
+                        WHEN {$model_column} LIKE 'Xiaomi{$prefix_wildcard}' OR {$model_column} LIKE 'Redmi{$prefix_wildcard}' OR {$model_column} LIKE 'POCO{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Xiaomi{$contains_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Redmi{$contains_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}POCO{$contains_wildcard}' THEN 'Xiaomi'
+                        WHEN {$model_column} LIKE 'Pixel{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Pixel{$contains_wildcard}' THEN 'Google'
                         ELSE '(unknown)'
                     END";
     }

@@ -344,6 +344,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
         $click_attribution_table = $wpdb->prefix . 'kiwi_click_attributions';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $default_from = self::DEFAULT_FROM;
+        $device_brand_expression = $this->build_device_brand_case_expression('ua_ch_model', 'raw_user_agent');
 
         return "CREATE OR REPLACE VIEW {$view_name} AS
             WITH landing_loads AS (
@@ -471,14 +472,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
                     service_key,
                     tksource,
                     tkzone,
-                    CASE
-                        WHEN ua_ch_model LIKE 'SM-%' OR raw_user_agent LIKE '%Samsung%' THEN 'Samsung'
-                        WHEN raw_user_agent LIKE '%Huawei%' THEN 'Huawei'
-                        WHEN raw_user_agent LIKE '%Xiaomi%' THEN 'Xiaomi'
-                        WHEN raw_user_agent LIKE '%Pixel%' THEN 'Google'
-                        WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)
-                        ELSE '(unknown)'
-                    END AS device_brand,
+                    {$device_brand_expression} AS device_brand,
                     CASE
                         WHEN ua_ch_platform = 'Android' AND ua_ch_platform_version <> '' THEN ua_ch_platform_version
                         WHEN raw_user_agent LIKE '%Android %' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(raw_user_agent, 'Android ', -1), ';', 1)
@@ -605,6 +599,17 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
         $this->last_error = $error;
 
         return true;
+    }
+
+    private function build_device_brand_case_expression(string $model_column, string $user_agent_column): string
+    {
+        return "CASE
+                        WHEN {$model_column} LIKE 'SM-%' OR {$user_agent_column} LIKE '%Samsung%' THEN 'Samsung'
+                        WHEN {$model_column} LIKE 'Huawei%' OR {$user_agent_column} LIKE '%Huawei%' THEN 'Huawei'
+                        WHEN {$model_column} LIKE 'Xiaomi%' OR {$model_column} LIKE 'Redmi%' OR {$model_column} LIKE 'POCO%' OR {$user_agent_column} LIKE '%Xiaomi%' OR {$user_agent_column} LIKE '%Redmi%' OR {$user_agent_column} LIKE '%POCO%' THEN 'Xiaomi'
+                        WHEN {$model_column} LIKE 'Pixel%' OR {$user_agent_column} LIKE '%Pixel%' THEN 'Google'
+                        ELSE '(unknown)'
+                    END";
     }
 
     private function normalize_datetime(string $value, string $fallback): string
