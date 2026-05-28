@@ -126,6 +126,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
+        $session_ip_version_expression = $this->build_client_ip_version_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
+        $session_ip_prefix_expression = $this->build_client_ip_prefix_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
 
         $dimension_hash_expression = "SHA2(CONCAT_WS('|',
                     a.landing_key,
@@ -138,7 +140,9 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     a.tkzone,
                     a.device_brand,
                     a.android_version,
-                    a.browser
+                    a.browser,
+                    a.client_ip_version,
+                    a.client_ip_prefix
                 ), 256)";
 
         return "INSERT INTO {$summary_table} (
@@ -154,6 +158,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 device_brand,
                 android_version,
                 browser,
+                client_ip_version,
+                client_ip_prefix,
                 dimension_hash,
                 sessions,
                 page_loaded_sessions,
@@ -181,7 +187,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     session_token,
                     MIN(created_at) AS first_landing_at,
                     MAX(service_key) AS service_key,
-                    MAX(user_agent) AS user_agent
+                    MAX(user_agent) AS user_agent,
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(remote_ip, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS remote_ip
                 FROM {$landing_session_table}
                 WHERE created_at >= %s
                   AND created_at < %s
@@ -288,6 +295,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(e.ua_ch_brands, ''), NULLIF(h.ua_ch_brands, ''), '') AS ua_ch_brands,
                     COALESCE(NULLIF(e.ua_ch_full_version_list, ''), NULLIF(h.ua_ch_full_version_list, ''), '') AS ua_ch_full_version_list,
                     COALESCE(NULLIF(e.user_agent, ''), NULLIF(h.user_agent, ''), NULLIF(l.user_agent, ''), '') AS raw_user_agent,
+                    {$session_ip_version_expression} AS client_ip_version,
+                    {$session_ip_prefix_expression} AS client_ip_prefix,
                     CASE WHEN sk.has_session_fact > 0 THEN 1 ELSE 0 END AS sessions,
                     COALESCE(e.page_loaded_sessions, 0) AS page_loaded_sessions,
                     COALESCE(e.cta1_sessions, 0) AS cta1_sessions,
@@ -343,6 +352,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                         WHEN raw_user_agent LIKE '%%Safari/%%' THEN 'Safari'
                         ELSE '(unknown)'
                     END AS browser,
+                    client_ip_version,
+                    client_ip_prefix,
                     sessions,
                     page_loaded_sessions,
                     cta1_sessions,
@@ -391,6 +402,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                         WHEN sd.raw_user_agent LIKE '%%Safari/%%' THEN 'Safari'
                         ELSE '(unknown)'
                     END AS browser,
+                    sd.client_ip_version,
+                    sd.client_ip_prefix,
                     ROUND(h.elapsed_ms / 1000, 2) AS hidden_seconds
                 FROM session_dimensions sd
                 INNER JOIN handoff_by_session hs
@@ -407,11 +420,11 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 SELECT
                     hidden_events.*,
                     ROW_NUMBER() OVER (
-                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser
+                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
                         ORDER BY hidden_seconds
                     ) AS rn,
                     COUNT(*) OVER (
-                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser
+                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
                     ) AS cnt
                 FROM hidden_events
             ),
@@ -429,6 +442,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     device_brand,
                     android_version,
                     browser,
+                    client_ip_version,
+                    client_ip_prefix,
                     ROUND(AVG(
                         CASE
                             WHEN rn IN (FLOOR((cnt + 1) / 2), FLOOR((cnt + 2) / 2))
@@ -437,7 +452,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                         END
                     ), 2) AS median_hidden_seconds
                 FROM hidden_ranked
-                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser
+                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
             ),
             sales_facts AS (
                 SELECT
@@ -453,6 +468,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(s.device_brand, ''), '(unknown)') AS device_brand,
                     COALESCE(NULLIF(s.android_version, ''), '(unknown)') AS android_version,
                     COALESCE(NULLIF(s.browser, ''), '(unknown)') AS browser,
+                    COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)') AS client_ip_version,
+                    COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix,
                     0 AS sessions,
                     0 AS page_loaded_sessions,
                     0 AS cta1_sessions,
@@ -490,7 +507,9 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(s.tkzone, ''), '(unknown)'),
                     COALESCE(NULLIF(s.device_brand, ''), '(unknown)'),
                     COALESCE(NULLIF(s.android_version, ''), '(unknown)'),
-                    COALESCE(NULLIF(s.browser, ''), '(unknown)')
+                    COALESCE(NULLIF(s.browser, ''), '(unknown)'),
+                    COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)'),
+                    COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)')
             ),
             all_facts AS (
                 SELECT * FROM session_facts
@@ -511,6 +530,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     device_brand,
                     android_version,
                     browser,
+                    client_ip_version,
+                    client_ip_prefix,
                     SUM(sessions) AS sessions,
                     SUM(page_loaded_sessions) AS page_loaded_sessions,
                     SUM(cta1_sessions) AS cta1_sessions,
@@ -527,7 +548,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     SUM(sales) AS sales,
                     SUM(sales_amount_minor) AS sales_amount_minor
                 FROM all_facts
-                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser
+                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
             )
             SELECT
                 a.metric_date,
@@ -542,6 +563,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 a.device_brand,
                 a.android_version,
                 a.browser,
+                a.client_ip_version,
+                a.client_ip_prefix,
                 {$dimension_hash_expression} AS dimension_hash,
                 a.sessions,
                 a.page_loaded_sessions,
@@ -576,6 +599,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
              AND hm.device_brand = a.device_brand
              AND hm.android_version = a.android_version
              AND hm.browser = a.browser
+             AND hm.client_ip_version = a.client_ip_version
+             AND hm.client_ip_prefix = a.client_ip_prefix
             WHERE a.metric_date = %s
               AND (
                   a.sessions > 0
@@ -652,6 +677,65 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         }
 
         return $metric_date . ' ' . $step . ': ' . $error;
+    }
+
+    private function build_client_ip_version_expression(string $column): string
+    {
+        $ipv4_condition = $this->build_ipv4_condition_expression($column);
+        $ipv6_condition = $this->build_ipv6_condition_expression($column);
+
+        return "CASE
+                        WHEN {$ipv4_condition} THEN 'ipv4'
+                        WHEN {$ipv6_condition} THEN 'ipv6'
+                        ELSE '(unknown)'
+                    END";
+    }
+
+    private function build_client_ip_prefix_expression(string $column): string
+    {
+        $ip = $this->build_client_ip_value_expression($column);
+        $ipv4_condition = $this->build_ipv4_condition_expression($column);
+        $ipv6_condition = $this->build_ipv6_condition_expression($column);
+        $hex = "HEX(INET6_ATON({$ip}))";
+        $ipv6_group_1 = "COALESCE(NULLIF(LOWER(TRIM(LEADING '0' FROM SUBSTRING({$hex}, 1, 4))), ''), '0')";
+        $ipv6_group_2 = "COALESCE(NULLIF(LOWER(TRIM(LEADING '0' FROM SUBSTRING({$hex}, 5, 4))), ''), '0')";
+        $ipv6_group_3 = "COALESCE(NULLIF(LOWER(TRIM(LEADING '0' FROM SUBSTRING({$hex}, 9, 4))), ''), '0')";
+
+        return "CASE
+                        WHEN {$ipv4_condition} THEN CONCAT(
+                            CAST(SUBSTRING_INDEX({$ip}, '.', 1) AS UNSIGNED),
+                            '.',
+                            CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 2), '.', -1) AS UNSIGNED),
+                            '.',
+                            CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 3), '.', -1) AS UNSIGNED),
+                            '.0/24'
+                        )
+                        WHEN {$ipv6_condition} THEN CONCAT({$ipv6_group_1}, ':', {$ipv6_group_2}, ':', {$ipv6_group_3}, '::/48')
+                        ELSE '(unknown)'
+                    END";
+    }
+
+    private function build_client_ip_value_expression(string $column): string
+    {
+        return "TRIM(BOTH ']' FROM TRIM(BOTH '[' FROM TRIM({$column})))";
+    }
+
+    private function build_ipv4_condition_expression(string $column): string
+    {
+        $ip = $this->build_client_ip_value_expression($column);
+
+        return "({$ip} REGEXP '^[0-9]{1,3}([.][0-9]{1,3}){3}$'
+                        AND CAST(SUBSTRING_INDEX({$ip}, '.', 1) AS UNSIGNED) BETWEEN 0 AND 255
+                        AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 2), '.', -1) AS UNSIGNED) BETWEEN 0 AND 255
+                        AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 3), '.', -1) AS UNSIGNED) BETWEEN 0 AND 255
+                        AND CAST(SUBSTRING_INDEX({$ip}, '.', -1) AS UNSIGNED) BETWEEN 0 AND 255)";
+    }
+
+    private function build_ipv6_condition_expression(string $column): string
+    {
+        $ip = $this->build_client_ip_value_expression($column);
+
+        return "({$ip} LIKE '%%:%%' AND INET6_ATON({$ip}) IS NOT NULL)";
     }
 
     private function normalize_date(string $value): string

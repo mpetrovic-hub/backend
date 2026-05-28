@@ -16,6 +16,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         'device_brand' => 'device_brands',
         'android_version' => 'android_versions',
         'browser' => 'browsers',
+        'client_ip_version' => 'client_ip_versions',
+        'client_ip_prefix' => 'client_ip_prefixes',
     ];
 
     private $last_error = '';
@@ -48,6 +50,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)',
             android_version VARCHAR(50) NOT NULL DEFAULT '(unknown)',
             browser VARCHAR(100) NOT NULL DEFAULT '(unknown)',
+            client_ip_version VARCHAR(10) NOT NULL DEFAULT '(unknown)',
+            client_ip_prefix VARCHAR(120) NOT NULL DEFAULT '(unknown)',
             dimension_hash CHAR(64) NOT NULL,
             sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             page_loaded_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
@@ -82,6 +86,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             KEY device_brand (device_brand),
             KEY android_version (android_version),
             KEY browser (browser),
+            KEY client_ip_version (client_ip_version),
+            KEY client_ip_prefix (client_ip_prefix),
             KEY dimension_hash (dimension_hash)
         ) {$charset_collate};";
 
@@ -162,6 +168,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
                     device_brand,
                     android_version,
                     browser,
+                    client_ip_version,
+                    client_ip_prefix,
                     sessions,
                     page_loaded_sessions,
                     cta1_sessions,
@@ -231,7 +239,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         ];
 
         foreach (array_keys(self::FILTER_FIELDS) as $field) {
-            $normalized[$field] = $this->normalize_filter_value((string) ($filters[$field] ?? ''));
+            $normalized[$field] = $this->normalize_filter_value((string) ($filters[$field] ?? ''), $field);
         }
 
         return $normalized;
@@ -322,7 +330,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         $values = [];
 
         foreach ($rows as $row) {
-            $value = $this->normalize_filter_value((string) ($row[$field] ?? ''));
+            $value = $this->normalize_filter_value((string) ($row[$field] ?? ''), $field);
 
             if ($value !== '') {
                 $values[] = $value;
@@ -367,7 +375,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         return $this->normalize_date($value, '');
     }
 
-    private function normalize_filter_value(string $value): string
+    private function normalize_filter_value(string $value, string $field = ''): string
     {
         $value = trim($value);
 
@@ -379,9 +387,15 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             return $value;
         }
 
-        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $pattern = $field === 'client_ip_prefix'
+            ? '/[^A-Za-z0-9._~:\/-]/'
+            : '/[^A-Za-z0-9._~:-]/';
+        $max_length = $field === 'client_ip_prefix'
+            ? 120
+            : ($field === 'client_ip_version' ? 10 : 191);
+        $value = preg_replace($pattern, '', $value);
         $value = is_string($value) ? $value : '';
 
-        return substr($value, 0, 191);
+        return substr($value, 0, $max_length);
     }
 }

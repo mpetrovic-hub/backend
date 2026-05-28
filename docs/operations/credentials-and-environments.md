@@ -130,7 +130,7 @@ Do not store real values for these secrets in repository docs.
 
 Confirmed sales may store `client_ip`, `client_ip_prefix`, and `client_ip_hash` in `wp_kiwi_sales` from the landing-session row. This is operational analytics data, not an aggregator credential. It must not be populated from provider callback request metadata, because callback source IPs usually belong to the provider or aggregator.
 
-Use `client_ip_prefix` or `client_ip_hash` for broad analysis/export where raw IP is not required. No real IP examples or customer data should be added to repository docs.
+Use `client_ip_prefix` or `client_ip_hash` for broad analysis/export where raw IP is not required. The landing funnel daily summary and protected Statistics CSV expose only coarse `client_ip_version` and `client_ip_prefix` buckets, not raw IP or IP hashes. No real IP examples or customer data should be added to repository docs.
 
 ## NTH callback logging toggles
 

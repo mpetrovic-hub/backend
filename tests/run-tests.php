@@ -2603,6 +2603,8 @@ class Kiwi_Test_Landing_Funnel_Daily_Summary_Repository extends Kiwi_Landing_Fun
         'device_brands' => [],
         'android_versions' => [],
         'browsers' => [],
+        'client_ip_versions' => [],
+        'client_ip_prefixes' => [],
     ];
     public $error = '';
     public $source_name = 'wp_kiwi_landing_funnel_daily_summary';
@@ -8063,6 +8065,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository creates schema-manag
         "device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
         "android_version VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
         "browser VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "client_ip_version VARCHAR(10) NOT NULL DEFAULT '(unknown)'",
+        "client_ip_prefix VARCHAR(120) NOT NULL DEFAULT '(unknown)'",
         'dimension_hash CHAR(64) NOT NULL',
     ] as $column) {
         kiwi_assert_contains($column, $sql, 'Expected required summary dimension column: ' . $column);
@@ -8093,9 +8097,13 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository creates schema-manag
         'KEY device_brand (device_brand)',
         'KEY android_version (android_version)',
         'KEY browser (browser)',
+        'KEY client_ip_version (client_ip_version)',
+        'KEY client_ip_prefix (client_ip_prefix)',
     ] as $index) {
         kiwi_assert_contains($index, $sql, 'Expected filterable summary dimension index: ' . $index);
     }
+    kiwi_assert_true(strpos($sql, 'client_ip VARCHAR') === false, 'Expected daily summary schema not to store raw client IPs.');
+    kiwi_assert_true(strpos($sql, 'client_ip_hash') === false, 'Expected daily summary schema not to store client IP hashes.');
     kiwi_assert_true(strpos($sql, 'landing_page_aufrufe') === false, 'Expected new summary schema not to carry old landing_page_aufrufe output.');
     kiwi_assert_true(strpos($sql, 'engaged_sessions') === false, 'Expected new summary schema not to add engaged_sessions.');
     kiwi_assert_true(strpos($sql, 'wp_kiwi_') === false, 'Expected daily summary schema not to hardcode wp_ table prefixes.');
@@ -8155,6 +8163,14 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('FROM abc_kiwi_landing_handoff_events', $insert_sql, 'Expected refresh to aggregate handoff diagnostics.');
     kiwi_assert_contains('FROM abc_kiwi_sales s', $insert_sql, 'Expected refresh to aggregate completed sales from durable sales snapshots.');
     kiwi_assert_true(strpos($insert_sql, 'abc_kiwi_click_attributions') === false, 'Expected daily summary sales aggregation not to depend on temporary click attribution rows.');
+    kiwi_assert_contains('client_ip_version', $insert_sql, 'Expected daily summary refresh to carry client IP version as a coarse dimension.');
+    kiwi_assert_contains('client_ip_prefix', $insert_sql, 'Expected daily summary refresh to carry client IP prefix as a coarse dimension.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)') AS client_ip_version", $insert_sql, 'Expected sales facts to use durable sale IP version snapshots with unknown fallback.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix", $insert_sql, 'Expected sales facts to use durable sale IP prefix snapshots with unknown fallback.');
+    kiwi_assert_contains("'.0/24'", $insert_sql, 'Expected session IP aggregation to bucket IPv4 addresses as /24 prefixes.');
+    kiwi_assert_contains("'::/48'", $insert_sql, 'Expected session IP aggregation to bucket IPv6 addresses as /48 prefixes.');
+    kiwi_assert_true(strpos($insert_sql, 's.client_ip,') === false, 'Expected daily summary refresh not to select raw sale IPs.');
+    kiwi_assert_true(strpos($insert_sql, 's.client_ip_hash') === false, 'Expected daily summary refresh not to select sale IP hashes.');
     kiwi_assert_contains('MAX(has_session_fact) AS has_session_fact', $insert_sql, 'Expected distinct landing/session counting to collapse landing plus engagement rows.');
     kiwi_assert_contains('first_engagement_at AS metric_at, 1 AS has_session_fact', $insert_sql, 'Expected engagement-only sessions to count as sessions.');
     kiwi_assert_contains('first_handoff_at AS metric_at, 0 AS has_session_fact', $insert_sql, 'Expected handoff-only rows not to inflate sessions.');
@@ -8170,11 +8186,14 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     );
     kiwi_assert_contains('INNER JOIN handoff_by_session hs', $insert_sql, 'Expected hidden median rows to use the same target-date handoff grouping.');
     kiwi_assert_contains('ROW_NUMBER() OVER (', $insert_sql, 'Expected hidden-time median to use a window-function ranking query.');
+    kiwi_assert_contains('PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix', $insert_sql, 'Expected hidden medians to partition by IP dimensions.');
     kiwi_assert_contains('COALESCE(s.attribution_metric_date, DATE(s.completed_at)) AS metric_date', $insert_sql, 'Expected sales metric date to prefer durable attribution snapshots with completion-date fallback.');
     kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use an indexable attribution metric date filter.');
     kiwi_assert_contains('s.completed_at >= %s', $insert_sql, 'Expected legacy sales fallback to use an indexable completed_at lower bound.');
     kiwi_assert_contains('s.completed_at < %s', $insert_sql, 'Expected legacy sales fallback to use an indexable completed_at upper bound.');
     kiwi_assert_contains('WHERE a.metric_date = %s', $insert_sql, 'Expected each daily insert to write only the metric_date deleted by the chunk.');
+    kiwi_assert_contains('AND hm.client_ip_version = a.client_ip_version', $insert_sql, 'Expected hidden medians to join back on IP version.');
+    kiwi_assert_contains('AND hm.client_ip_prefix = a.client_ip_prefix', $insert_sql, 'Expected hidden medians to join back on IP prefix.');
     kiwi_assert_contains("COALESCE(NULLIF(s.landing_key, ''), '(unknown)') AS landing_key", $insert_sql, 'Expected unattributed sales to land in unknown dimension buckets.');
     kiwi_assert_contains('SHA2(CONCAT_WS', $insert_sql, 'Expected stable dimension_hash computation from normalized dimension fields.');
     kiwi_assert_true(strpos($insert_sql, 'landing_page_aufrufe') === false, 'Expected aggregate refresh not to emit old landing_page_aufrufe metric.');
@@ -8319,6 +8338,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
             'device_brand' => 'Samsung',
             'android_version' => '14',
             'browser' => 'Chrome',
+            'client_ip_version' => 'ipv4',
+            'client_ip_prefix' => '203.0.113.0/24',
             'sessions' => 10,
             'page_loaded_sessions' => 9,
             'cta1_sessions' => 7,
@@ -8350,13 +8371,15 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
         'device_brand' => 'Samsung',
         'android_version' => '14',
         'browser' => 'Chrome',
+        'client_ip_version' => 'ipv4',
+        'client_ip_prefix' => '203.0.113.0/24',
     ], 999);
     $statement = $wpdb->prepared_statements[count($wpdb->prepared_statements) - 1] ?? [];
     $query = (string) ($statement['query'] ?? '');
 
     kiwi_assert_same($wpdb->result_rows, $rows, 'Expected summary repository to return database rows when the summary table is readable.');
     kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_summary', $query, 'Expected statistics query to read from the daily summary table.');
-    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s AND device_brand = %s AND android_version = %s AND browser = %s', $query, 'Expected all supported UI filters to be applied to summary rows.');
+    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s AND device_brand = %s AND android_version = %s AND browser = %s AND client_ip_version = %s AND client_ip_prefix = %s', $query, 'Expected all supported UI filters to be applied to summary rows.');
     kiwi_assert_contains('cta1_sessions', $query, 'Expected query to expose CTA1 metrics.');
     kiwi_assert_contains('cta2_sessions', $query, 'Expected query to expose CTA2 metrics.');
     kiwi_assert_contains('cta3_sessions', $query, 'Expected query to expose CTA3 metrics.');
@@ -8364,10 +8387,13 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
     kiwi_assert_contains('sales_amount_minor', $query, 'Expected query to expose sales amount metrics.');
     kiwi_assert_true(strpos($query, 'successful_sale_ids') === false, 'Expected summary read path not to expose legacy drilldown sale IDs.');
     kiwi_assert_same(
-        ['2026-05-24', '2026-05-25', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 500],
+        ['2026-05-24', '2026-05-25', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 'ipv4', '203.0.113.0/24', 500],
         $statement['args'] ?? [],
         'Expected repository query args to normalize date filters and cap the limit to 500.'
     );
+    kiwi_assert_contains('client_ip_version', $query, 'Expected summary rows to expose client IP version.');
+    kiwi_assert_contains('client_ip_prefix', $query, 'Expected summary rows to expose client IP prefix.');
+    kiwi_assert_true(strpos($query, 'client_ip_hash') === false, 'Expected summary rows not to expose client IP hashes.');
 
     $wpdb = $previous_wpdb;
 });
@@ -8386,6 +8412,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filt
         [['device_brand' => 'Samsung'], ['device_brand' => 'Google']],
         [['android_version' => '14'], ['android_version' => '13']],
         [['browser' => 'Chrome'], ['browser' => 'Safari']],
+        [['client_ip_version' => 'ipv6'], ['client_ip_version' => 'ipv4'], ['client_ip_version' => '(unknown)']],
+        [['client_ip_prefix' => '203.0.113.0/24'], ['client_ip_prefix' => '2001:db8:85a3::/48']],
     ];
 
     $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
@@ -8401,8 +8429,12 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filt
     kiwi_assert_same(['Google', 'Samsung'], $options['device_brands'] ?? [], 'Expected device-brand filter options to be distinct and sorted.');
     kiwi_assert_same(['13', '14'], $options['android_versions'] ?? [], 'Expected Android filter options to be distinct and sorted.');
     kiwi_assert_same(['Chrome', 'Safari'], $options['browsers'] ?? [], 'Expected browser filter options to be distinct and sorted.');
+    kiwi_assert_same(['(unknown)', 'ipv4', 'ipv6'], $options['client_ip_versions'] ?? [], 'Expected IP version filter options to be distinct and sorted.');
+    kiwi_assert_same(['2001:db8:85a3::/48', '203.0.113.0/24'], $options['client_ip_prefixes'] ?? [], 'Expected IP prefix filter options to preserve slash suffixes.');
     kiwi_assert_contains('SELECT DISTINCT service_key', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected service options to query distinct service keys from the summary table.');
     kiwi_assert_contains('SELECT DISTINCT browser', (string) ($wpdb->prepared_statements[12]['query'] ?? ''), 'Expected browser options to query distinct browsers from the summary table.');
+    kiwi_assert_contains('SELECT DISTINCT client_ip_version', (string) ($wpdb->prepared_statements[14]['query'] ?? ''), 'Expected IP version options to query distinct values from the summary table.');
+    kiwi_assert_contains('SELECT DISTINCT client_ip_prefix', (string) ($wpdb->prepared_statements[16]['query'] ?? ''), 'Expected IP prefix options to query distinct values from the summary table.');
     kiwi_assert_same(
         ['2026-05-24', '2026-05-25'],
         $wpdb->prepared_statements[0]['args'] ?? [],
@@ -8558,10 +8590,14 @@ kiwi_run_test('Kiwi statistics date filters normalize datetime input to summary 
         $filters = $repository->normalize_filters([
             'from' => '2026-05-13 00:00:30',
             'to' => '2026-05-13T00:00:45',
+            'client_ip_version' => 'ipv4',
+            'client_ip_prefix' => '203.0.113.0/24',
         ]);
 
         kiwi_assert_same('2026-05-13', $filters['from'] ?? '', 'Expected timezone-less MySQL from filter to map to the same summary date.');
         kiwi_assert_same('2026-05-13', $filters['to'] ?? '', 'Expected timezone-less datetime-local to filter to map to the same summary date.');
+        kiwi_assert_same('ipv4', $filters['client_ip_version'] ?? '', 'Expected IP version filter to be preserved.');
+        kiwi_assert_same('203.0.113.0/24', $filters['client_ip_prefix'] ?? '', 'Expected IP prefix filter to preserve slash suffixes.');
 
         $malformed_filters = $repository->normalize_filters([
             'from' => '2026-13-99T25:61',
@@ -8612,6 +8648,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
         'kiwi_stats_device_brand' => 'Samsung',
         'kiwi_stats_android_version' => '14',
         'kiwi_stats_browser' => 'Chrome',
+        'kiwi_stats_client_ip_version' => 'ipv4',
+        'kiwi_stats_client_ip_prefix' => '203.0.113.0/24',
         'kiwi_stats_limit' => '50',
     ];
 
@@ -8624,6 +8662,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
         'device_brands' => ['Google', 'Samsung'],
         'android_versions' => ['13', '14'],
         'browsers' => ['Chrome', 'Safari'],
+        'client_ip_versions' => ['ipv4', 'ipv6'],
+        'client_ip_prefixes' => ['2001:db8:85a3::/48', '203.0.113.0/24'],
     ];
     $repository->rows = [
         [
@@ -8639,6 +8679,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
             'device_brand' => 'Samsung',
             'android_version' => '14',
             'browser' => 'Chrome',
+            'client_ip_version' => 'ipv4',
+            'client_ip_prefix' => '203.0.113.0/24',
             'sessions' => 4,
             'page_loaded_sessions' => 3,
             'cta1_sessions' => 2,
@@ -8673,13 +8715,19 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
     kiwi_assert_contains('<select id="kiwi_stats_device_brand" class="kiwi-select kiwi-width-small" name="kiwi_stats_device_brand">', $output, 'Expected Device Brand filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_android_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_android_version">', $output, 'Expected Android filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_browser" class="kiwi-select kiwi-width-small" name="kiwi_stats_browser">', $output, 'Expected Browser filter to render as a select.');
+    kiwi_assert_contains('<select id="kiwi_stats_client_ip_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_client_ip_version">', $output, 'Expected IP version filter to render as a select.');
+    kiwi_assert_contains('<select id="kiwi_stats_client_ip_prefix" class="kiwi-select kiwi-width-small" name="kiwi_stats_client_ip_prefix">', $output, 'Expected IP prefix filter to render as a select.');
     kiwi_assert_contains('kiwi-table kiwi-table--statistics', $output, 'Expected statistics table modifier for compact scrolling layout.');
     kiwi_assert_contains('title="CTA1 Sessions">CTA1 Sessions</th>', $output, 'Expected statistics table to render CTA1 summary column.');
     kiwi_assert_contains('title="CTA2 Sessions">CTA2 Sessions</th>', $output, 'Expected statistics table to render CTA2 summary column.');
     kiwi_assert_contains('title="CTA3 Sessions">CTA3 Sessions</th>', $output, 'Expected statistics table to render CTA3 summary column.');
     kiwi_assert_contains('title="Handoff Attempts">Handoff Attempts</th>', $output, 'Expected statistics table to render handoff summary column.');
+    kiwi_assert_contains('title="IP Version">IP Version</th>', $output, 'Expected statistics table to render IP version column.');
+    kiwi_assert_contains('title="IP Prefix">IP Prefix</th>', $output, 'Expected statistics table to render IP prefix column.');
     kiwi_assert_contains('title="Sales">Sales</th>', $output, 'Expected statistics table to render sales column.');
     kiwi_assert_contains('title="Samsung">Samsung</td>', $output, 'Expected device dimension to render in the summary table.');
+    kiwi_assert_contains('title="203.0.113.0/24">203.0.113.0/24</td>', $output, 'Expected coarse IP prefix dimension to render in the summary table.');
+    kiwi_assert_true(strpos($output, 'client_ip_hash') === false, 'Expected statistics output not to expose client IP hashes.');
     kiwi_assert_true(strpos($output, 'txn-7-long-reference') === false, 'Expected legacy transaction drilldown references not to render from summary rows.');
     kiwi_assert_same('2026-05-13', $repository->calls[0]['filters']['from'] ?? '', 'Expected shortcode to pass normalized date from filter to repository.');
     kiwi_assert_same('2026-05-14', $repository->calls[0]['filters']['to'] ?? '', 'Expected shortcode to pass normalized date to filter to repository.');
@@ -8690,6 +8738,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
     kiwi_assert_same('Samsung', $repository->calls[0]['filters']['device_brand'] ?? '', 'Expected shortcode to pass device_brand filter to repository.');
     kiwi_assert_same('14', $repository->calls[0]['filters']['android_version'] ?? '', 'Expected shortcode to pass android_version filter to repository.');
     kiwi_assert_same('Chrome', $repository->calls[0]['filters']['browser'] ?? '', 'Expected shortcode to pass browser filter to repository.');
+    kiwi_assert_same('ipv4', $repository->calls[0]['filters']['client_ip_version'] ?? '', 'Expected shortcode to pass IP version filter to repository.');
+    kiwi_assert_same('203.0.113.0/24', $repository->calls[0]['filters']['client_ip_prefix'] ?? '', 'Expected shortcode to pass IP prefix filter to repository.');
     kiwi_assert_contains('kiwi_stats_from=2026-05-13', $output, 'Expected CSV export URL to preserve normalized from date filter.');
     kiwi_assert_contains('kiwi_stats_service_key=svc_a', $output, 'Expected CSV export URL to preserve service filter.');
     kiwi_assert_contains('kiwi_stats_landing_key=lp2-fr', $output, 'Expected CSV export URL to preserve landing filter.');
@@ -8698,6 +8748,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
     kiwi_assert_contains('kiwi_stats_device_brand=Samsung', $output, 'Expected CSV export URL to preserve device-brand filter.');
     kiwi_assert_contains('kiwi_stats_android_version=14', $output, 'Expected CSV export URL to preserve Android filter.');
     kiwi_assert_contains('kiwi_stats_browser=Chrome', $output, 'Expected CSV export URL to preserve browser filter.');
+    kiwi_assert_contains('kiwi_stats_client_ip_version=ipv4', $output, 'Expected CSV export URL to preserve IP version filter.');
+    kiwi_assert_contains('kiwi_stats_client_ip_prefix=203.0.113.0%2F24', $output, 'Expected CSV export URL to preserve encoded IP prefix filter.');
 
     $_GET = [];
 });
@@ -8732,6 +8784,8 @@ kiwi_run_test('Kiwi_Plugin statistics CSV export reads the daily summary with th
             'device_brand' => 'Samsung',
             'android_version' => '14',
             'browser' => 'Chrome',
+            'client_ip_version' => 'ipv4',
+            'client_ip_prefix' => '203.0.113.0/24',
             'sessions' => 4,
             'cta1_sessions' => 2,
             'handoff_attempts' => 2,
@@ -8749,6 +8803,8 @@ kiwi_run_test('Kiwi_Plugin statistics CSV export reads the daily summary with th
         'kiwi_stats_device_brand' => 'Samsung',
         'kiwi_stats_android_version' => '14',
         'kiwi_stats_browser' => 'Chrome',
+        'kiwi_stats_client_ip_version' => 'ipv4',
+        'kiwi_stats_client_ip_prefix' => '203.0.113.0/24',
         'kiwi_stats_limit' => '50',
     ];
 
@@ -8759,7 +8815,7 @@ kiwi_run_test('Kiwi_Plugin statistics CSV export reads the daily summary with th
     kiwi_assert_same($wpdb->result_rows, $plugin->exported_statistics_rows, 'Expected Statistics CSV export to return summary rows.');
     kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_summary', (string) ($statement['query'] ?? ''), 'Expected CSV export to read from the summary table.');
     kiwi_assert_same(
-        ['2026-05-13', '2026-05-14', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 50],
+        ['2026-05-13', '2026-05-14', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 'ipv4', '203.0.113.0/24', 50],
         $statement['args'] ?? [],
         'Expected CSV export filters to match shortcode request filters.'
     );
@@ -8902,7 +8958,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for landing funnel daily summary
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-27-1', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary source index migrations.');
+    kiwi_assert_same('2026-05-28-1', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary IP dimension migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
