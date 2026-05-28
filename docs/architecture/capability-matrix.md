@@ -25,7 +25,7 @@ For aggregator-specific details, see:
 | Shared/Core | click attribution capture (server-side) | generic | landing entry | implemented | `wp_kiwi_click_attributions` with opaque tracking token cookie and server-side refs |
 | Shared/Core | conversion attribution resolver + affiliate postback dispatch | generic | confirmed conversions | implemented | Confirmed-only dispatch, idempotent postbacks, retry on failed postback until `postback_sent_at` is set |
 | Shared/Core | landing KPI summary tracking | generic | clicks / cta1..ctaN / conv | implemented | `wp_kiwi_landing_kpi_summary` + KPI REST endpoints |
-| Shared/Core | landing funnel daily summary analytics | generic | landing / engagement / handoff / sales reporting | implemented | `wp_kiwi_landing_funnel_daily_summary` with date-range recompute, hourly rolling WP-Cron refresh, step-specific CTA metrics, handoff diagnostics, durable sales snapshot dimensions, and `(unknown)` buckets |
+| Shared/Core | landing funnel daily summary analytics | generic | landing / engagement / handoff / sales reporting | implemented | `wp_kiwi_landing_funnel_daily_summary` with date-range recompute, hourly rolling WP-Cron refresh, step-specific CTA metrics, handoff diagnostics, durable sales/device/coarse-IP snapshot dimensions, and `(unknown)` buckets |
 | Shared/Core | SMS body variant experiment | FR | click-to-SMS | implemented | `wp_kiwi_sms_body_variant_assignments` + summary table; stable visible tokens map back to internal `transaction_id` |
 | Shared/Core | sales persistence + enrichment | generic | confirmed sales | implemented | `wp_kiwi_sales` with transaction correlation, durable attribution/source/device snapshots, and landing-session IP prefix/hash context |
 | Shared/Core | premium-SMS inbound MO fraud monitoring (volume + engagement) | generic | premium-SMS inbound MO | implemented | `wp_kiwi_premium_sms_fraud_signals` + `wp_kiwi_premium_sms_landing_engagements`; dual identity (`subscriber`/`session`), per-service 1h/24h snapshot counts, engagement soft-flag checks (`missing_page_loaded`, `missing_cta_click`, fast MO), unknown engagement links recorded as audit context only, source context snapshots (`pid`, `click_id`), default observe mode with optional block integration |
@@ -58,7 +58,7 @@ Current known repository capabilities:
 - shared click attribution and conversion correlation
 - outbound affiliate postback dispatch with idempotency and signing options
 - landing KPI summary tracking
-- persistent landing funnel daily summary analytics
+- persistent landing funnel daily summary analytics, including coarse IP version/prefix dimensions without raw IP or IP-hash reporting
 - SMS body variant assignments and SQL-based summary metrics for click-to-SMS experiments
 - shared sales persistence/enrichment with durable attribution snapshots for confirmed sales
 - premium-SMS inbound MO fraud monitoring with volume and landing-engagement signals, including source-context snapshots (`pid`, `click_id`)

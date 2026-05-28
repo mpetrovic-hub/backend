@@ -19,6 +19,8 @@ class Kiwi_Statistics_Shortcode
         'device_brand' => 'Device Brand',
         'android_version' => 'Android',
         'browser' => 'Browser',
+        'client_ip_version' => 'IP Version',
+        'client_ip_prefix' => 'IP Prefix',
         'sessions' => 'Sessions',
         'page_loaded_sessions' => 'Page Loaded Sessions',
         'cta1_sessions' => 'CTA1 Sessions',
@@ -140,6 +142,8 @@ class Kiwi_Statistics_Shortcode
             'device_brand' => '',
             'android_version' => '',
             'browser' => '',
+            'client_ip_version' => '',
+            'client_ip_prefix' => '',
             'limit' => 100,
         ];
 
@@ -179,6 +183,14 @@ class Kiwi_Statistics_Shortcode
             $filters['browser'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_browser']));
         }
 
+        if (isset($_GET['kiwi_stats_client_ip_version'])) {
+            $filters['client_ip_version'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_client_ip_version']));
+        }
+
+        if (isset($_GET['kiwi_stats_client_ip_prefix'])) {
+            $filters['client_ip_prefix'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_client_ip_prefix']));
+        }
+
         if (isset($_GET['kiwi_stats_limit'])) {
             $filters['limit'] = (int) sanitize_text_field(wp_unslash($_GET['kiwi_stats_limit']));
         }
@@ -196,6 +208,8 @@ class Kiwi_Statistics_Shortcode
         $device_brand = (string) ($filters['device_brand'] ?? '');
         $android_version = (string) ($filters['android_version'] ?? '');
         $browser = (string) ($filters['browser'] ?? '');
+        $client_ip_version = (string) ($filters['client_ip_version'] ?? '');
+        $client_ip_prefix = (string) ($filters['client_ip_prefix'] ?? '');
 
         $output = '';
 
@@ -216,6 +230,8 @@ class Kiwi_Statistics_Shortcode
         $output .= $this->render_select_filter('kiwi_stats_device_brand', 'Device Brand', $device_brand, $this->get_filter_options_for_key($filter_options, 'device_brands'));
         $output .= $this->render_select_filter('kiwi_stats_android_version', 'Android', $android_version, $this->get_filter_options_for_key($filter_options, 'android_versions'));
         $output .= $this->render_select_filter('kiwi_stats_browser', 'Browser', $browser, $this->get_filter_options_for_key($filter_options, 'browsers'));
+        $output .= $this->render_select_filter('kiwi_stats_client_ip_version', 'IP Version', $client_ip_version, $this->get_filter_options_for_key($filter_options, 'client_ip_versions'));
+        $output .= $this->render_select_filter('kiwi_stats_client_ip_prefix', 'IP Prefix', $client_ip_prefix, $this->get_filter_options_for_key($filter_options, 'client_ip_prefixes'));
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_limit">Limit</label>';
         $output .= '<input id="kiwi_stats_limit" class="kiwi-input kiwi-width-small" type="number" min="1" max="500" name="kiwi_stats_limit" value="' . esc_attr((string) ($filters['limit'] ?? 100)) . '">';
@@ -243,6 +259,8 @@ class Kiwi_Statistics_Shortcode
             'kiwi_stats_device_brand' => (string) ($filters['device_brand'] ?? ''),
             'kiwi_stats_android_version' => (string) ($filters['android_version'] ?? ''),
             'kiwi_stats_browser' => (string) ($filters['browser'] ?? ''),
+            'kiwi_stats_client_ip_version' => (string) ($filters['client_ip_version'] ?? ''),
+            'kiwi_stats_client_ip_prefix' => (string) ($filters['client_ip_prefix'] ?? ''),
             'kiwi_stats_limit' => (string) ($filters['limit'] ?? 100),
         ];
 

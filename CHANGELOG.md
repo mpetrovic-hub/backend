@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-28:
+- [Landing Funnel Daily Summary] Added coarse IP dimensions to `wp_kiwi_landing_funnel_daily_summary`: `client_ip_version` and `/24` or `/48` `client_ip_prefix` buckets are now part of aggregation, filtering, Statistics UI, and CSV export while raw `client_ip` and `client_ip_hash` remain excluded from summary reporting.
+
 2026-05-27:
 - [Landing Funnel Daily Summary Refresh] Changed the production refresh from one multi-day aggregate query to per-day chunks with per-day transactions, date+step failure diagnostics, source-table composite indexes, and index-friendly completed-sales date filters. Handoff grouping keeps adjacent cross-midnight attempted/hidden events attributed to the first handoff date, and hourly refreshes always include a prior-day carryover even when the configured lookback is zero. The default seven-day rolling window remains supported.
 - [Landing Funnel Daily Summary Refresh] Fixed prepared SQL wildcard escaping in the daily summary aggregation refresh so device/browser LIKE patterns no longer break `$wpdb->prepare()`. Empty database error details during refresh delete/insert failures now persist a diagnostic fallback error for operations.

@@ -125,9 +125,9 @@ This keeps provider payload parsing at the boundary while giving the shared frau
 
 ## Traffic-Source Funnel Statistics
 
-The shared statistics report is exposed through the protected `[kiwi_statistics]` shortcode. Its primary UI and CSV export path reads from the persistent `wp_kiwi_landing_funnel_daily_summary` table so larger date ranges can be filtered and pivoted without rebuilding the old transition views on every request. The report supports date-range filters plus `service_key`, `landing_key`, `tksource`, `tkzone`, `device_brand`, `android_version`, and `browser` filters.
+The shared statistics report is exposed through the protected `[kiwi_statistics]` shortcode. Its primary UI and CSV export path reads from the persistent `wp_kiwi_landing_funnel_daily_summary` table so larger date ranges can be filtered and pivoted without rebuilding the old transition views on every request. The report supports date-range filters plus `service_key`, `landing_key`, `tksource`, `tkzone`, `device_brand`, `android_version`, `browser`, `client_ip_version`, and `client_ip_prefix` filters.
 
-The shortcode and CSV export share one internal statistics-read contract and one column list. The current columns are the summary dimensions (`metric_date`, landing/service/provider/flow/country/source/device buckets) plus daily metrics for sessions, page loads, CTA1/CTA2/CTA3 sessions and click events, handoff attempts/successes/fails/rate, hidden-time min/median/max, sales, and `sales_amount_minor`. The daily summary does not store sale ID or transaction ID drilldown lists; those legacy CSV columns are intentionally not emitted by the summary read path.
+The shortcode and CSV export share one internal statistics-read contract and one column list. The current columns are the summary dimensions (`metric_date`, landing/service/provider/flow/country/source/device buckets, `client_ip_version`, and coarse `client_ip_prefix`) plus daily metrics for sessions, page loads, CTA1/CTA2/CTA3 sessions and click events, handoff attempts/successes/fails/rate, hidden-time min/median/max, sales, and `sales_amount_minor`. The daily summary does not store sale ID, transaction ID drilldown lists, raw `client_ip`, or `client_ip_hash`; those legacy or personal-data-heavy columns are intentionally not emitted by the summary read path.
 
 The plugin-managed `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view remains available as a legacy/debug source instead of a primary Statistics UI dependency. It reads the generic legacy CTA engagement fields and groups by `service_key`, `tksource`, and `tkzone`.
 
@@ -148,11 +148,12 @@ The same repository also creates `wp_kiwi_v_one_for_all` for broader landing-fun
 
 `device_brand`, `android_version`, and `browser` are computed in the view from raw UA fields for session rows and are also persisted on new sale snapshots for durable sale analysis. The view exposes `landing_key`, `service_key`, `tksource`, `tkzone`, those device/browser dimensions, session/load/CTA counters, handoff attempts/successes/fails/rate, hidden-time aggregates, and completed sales.
 
-`wp_kiwi_landing_funnel_daily_summary` is the persistent target model for daily landing-funnel analytics. It is populated by `Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service` from the same normalized internal tables, not from provider payloads. The summary groups by `metric_date`, landing/service/provider/flow/country/source dimensions, and normalized device/browser buckets. `metric_date` is derived from session/traffic timestamps for landing, engagement, and handoff facts; completed sales use `wp_kiwi_sales.attribution_metric_date` with `DATE(completed_at)` only as a fallback. Sales dimensions come from durable `wp_kiwi_sales` snapshot columns and do not depend on temporary click-attribution rows.
+`wp_kiwi_landing_funnel_daily_summary` is the persistent target model for daily landing-funnel analytics. It is populated by `Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service` from the same normalized internal tables, not from provider payloads. The summary groups by `metric_date`, landing/service/provider/flow/country/source dimensions, normalized device/browser buckets, and coarse client-IP dimensions. Session facts derive `client_ip_version` and `client_ip_prefix` from `wp_kiwi_landing_page_sessions.remote_ip`; completed sales use the durable `wp_kiwi_sales.client_ip_version` and `wp_kiwi_sales.client_ip_prefix` snapshot columns. IPv4 is bucketed as `/24`, IPv6 as `/48`, and missing or invalid values go to `(unknown)`. `metric_date` is derived from session/traffic timestamps for landing, engagement, and handoff facts; completed sales use `wp_kiwi_sales.attribution_metric_date` with `DATE(completed_at)` only as a fallback. Sales dimensions come from durable `wp_kiwi_sales` snapshot columns and do not depend on temporary click-attribution rows.
 
 The daily summary intentionally differs from the transition views:
 
 - it stores a stable `dimension_hash` with a unique key on `metric_date + dimension_hash`
+- `dimension_hash`, handoff hidden-time median partitions, and hidden-median joins include the same coarse IP dimensions as the final aggregate rows
 - `sessions` counts distinct `landing_key + session_token` from landing sessions plus engagement-only fallback sessions
 - CTA metrics use the step-specific CTA1/CTA2/CTA3 engagement columns
 - handoff metrics are deduplicated by handoff id and include hidden-time min/median/max
@@ -160,6 +161,7 @@ The daily summary intentionally differs from the transition views:
 - refreshes keep a date-range bounded public contract but process the range as independent `metric_date` day chunks
 - each day chunk deletes and reinserts only its target `metric_date`, so repeated runs remain idempotent without issuing one multi-day aggregate query
 - handoff facts use an adjacent-day scan around the target day and then filter grouped sessions back to the first handoff timestamp on the target `metric_date`; this keeps an attempted handoff just before midnight and its hidden/success event just after midnight in the same daily bucket
+- existing summary rows outside refreshed windows receive dbDelta defaults for new IP dimension columns and keep their previous `dimension_hash` until their day is recomputed; no automatic historical full backfill is implied
 
 WP-Cron runs the same bounded refresh contract hourly through `kiwi_landing_funnel_daily_summary_refresh`. The rolling window defaults to seven lookback days plus today via `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`, uses a transient lock to avoid concurrent recomputes, and stores the latest result in `kiwi_landing_funnel_daily_summary_refresh_last_result`. Automatic hourly refreshes use an effective one-day minimum even when the configured lookback is `0`, because cross-midnight hidden/success events after midnight can still belong to yesterday's first handoff bucket. The stored result keeps aggregate `deleted`/`inserted` counts and may include compact `daily_results` entries with `metric_date`, counts, and a date+step error such as `2026-05-23 insert aggregate rows: ...` when a chunk fails.
 
@@ -204,6 +206,7 @@ Cookie retention note:
 - callback trust/validation remains provider-specific
 - sale `client_ip` is copied only from landing/session context, never from provider callback request metadata
 - raw sale IP is personal data; broad analysis should prefer `client_ip_prefix` or `client_ip_hash` where possible
+- the daily summary and protected Statistics CSV expose only `client_ip_version` and coarse `client_ip_prefix`; they do not store or export raw `client_ip` or `client_ip_hash`
 
 ## Reliability Rules
 
