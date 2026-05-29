@@ -1033,6 +1033,14 @@ class Kiwi_Test_Plugin_Performance_Gates extends Kiwi_Plugin
     }
 }
 
+class Kiwi_Test_Plugin_Device_Dimension_Migration extends Kiwi_Plugin
+{
+    public function run_device_dimension_migration_for_test(): void
+    {
+        $this->migrate_legacy_android_version_columns();
+    }
+}
+
 class Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service extends Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
 {
     public $calls = [];
@@ -9379,6 +9387,87 @@ kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema rep
         in_array(Kiwi_Landing_Funnel_Daily_Summary_Repository::class, $classes, true),
         'Expected schema migrations to include the landing funnel daily summary repository.'
     );
+});
+
+kiwi_run_test('Kiwi_Plugin backfills legacy Android version before dropping old columns', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $queries = [];
+        public $columns = [
+            'abc_kiwi_sales' => [
+                'android_version' => true,
+                'os' => true,
+                'os_version' => true,
+            ],
+            'abc_kiwi_landing_funnel_daily_summary' => [
+                'android_version' => true,
+                'os' => true,
+                'os_version' => true,
+            ],
+        ];
+
+        public function prepare($query, ...$args)
+        {
+            if (count($args) === 1 && is_array($args[0])) {
+                $args = $args[0];
+            }
+
+            return [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+        }
+
+        public function get_var($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+
+            if (preg_match('/SHOW COLUMNS FROM ([A-Za-z0-9_]+) LIKE %s/', $query, $matches) !== 1) {
+                return null;
+            }
+
+            $table_name = (string) ($matches[1] ?? '');
+            $column_name = (string) ($args[0] ?? '');
+
+            return !empty($this->columns[$table_name][$column_name]) ? $column_name : null;
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $this->queries[] = $query;
+
+            if (preg_match('/ALTER TABLE ([A-Za-z0-9_]+) DROP COLUMN ([A-Za-z0-9_]+)/', $query, $matches) === 1) {
+                unset($this->columns[(string) ($matches[1] ?? '')][(string) ($matches[2] ?? '')]);
+            }
+
+            return 1;
+        }
+    };
+
+    $plugin = new Kiwi_Test_Plugin_Device_Dimension_Migration(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->run_device_dimension_migration_for_test();
+    $sql = implode("\n", $wpdb->queries);
+    $sales_update_position = strpos($sql, 'UPDATE abc_kiwi_sales');
+    $sales_drop_position = strpos($sql, 'ALTER TABLE abc_kiwi_sales DROP COLUMN android_version');
+    $summary_update_position = strpos($sql, 'UPDATE abc_kiwi_landing_funnel_daily_summary');
+    $summary_drop_position = strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN android_version');
+
+    kiwi_assert_true(is_int($sales_update_position), 'Expected sales migration to backfill from legacy android_version before dropping it.');
+    kiwi_assert_true(is_int($summary_update_position), 'Expected summary migration to backfill from legacy android_version before dropping it.');
+    kiwi_assert_true(is_int($sales_drop_position) && $sales_drop_position > $sales_update_position, 'Expected sales legacy column drop to run after backfill.');
+    kiwi_assert_true(is_int($summary_drop_position) && $summary_drop_position > $summary_update_position, 'Expected summary legacy column drop to run after backfill.');
+    kiwi_assert_contains("THEN 'Android'", $sql, 'Expected non-empty legacy Android buckets to backfill os=Android.');
+    kiwi_assert_contains("REGEXP '^[1-9][0-9]?([._][0-9]+)*$'", $sql, 'Expected legacy Android version backfill to accept only numeric major/dotted values.');
+    kiwi_assert_contains("SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(COALESCE(android_version, '')), '.', 1), '_', 1)", $sql, 'Expected dotted legacy versions such as 16.0.0 to backfill as major-only buckets.');
+    kiwi_assert_contains("WHEN TRIM(COALESCE(android_version, '')) <> '' AND TRIM(COALESCE(android_version, '')) <> '(unknown)' THEN '(unknown)'", $sql, 'Expected non-numeric legacy Android versions to backfill as unknown os_version.');
+    kiwi_assert_true(strpos($sql, 'os_version = android_version') === false, 'Expected migration not to blindly copy diluted legacy Android version values.');
+
+    $wpdb = $previous_wpdb;
 });
 
 kiwi_run_test('Kiwi_Plugin bumps schema version for normalized device dimensions', function (): void {

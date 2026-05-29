@@ -856,7 +856,7 @@ TEXT;
             $repository->create_table();
         }
 
-        $this->drop_legacy_android_version_columns();
+        $this->migrate_legacy_android_version_columns();
     }
 
     protected function build_schema_repositories(): array
@@ -881,17 +881,65 @@ TEXT;
         ];
     }
 
-    protected function drop_legacy_android_version_columns(): void
+    protected function migrate_legacy_android_version_columns(): void
     {
         foreach ([
             (new Kiwi_Sales_Repository())->get_table_name_for_schema(),
             (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->get_table_name(),
         ] as $table_name) {
+            $this->backfill_legacy_android_version_column($table_name);
             $this->drop_column_if_exists($table_name, 'android_version');
         }
     }
 
+    private function backfill_legacy_android_version_column(string $table_name): void
+    {
+        global $wpdb;
+
+        if (!$this->column_exists($table_name, 'android_version')) {
+            return;
+        }
+
+        if (!$this->column_exists($table_name, 'os') || !$this->column_exists($table_name, 'os_version')) {
+            return;
+        }
+
+        $legacy_value = "TRIM(COALESCE(android_version, ''))";
+        $legacy_has_value = "{$legacy_value} <> '' AND {$legacy_value} <> '(unknown)'";
+        $legacy_major_expression = "SUBSTRING_INDEX(SUBSTRING_INDEX({$legacy_value}, '.', 1), '_', 1)";
+
+        $wpdb->query(
+            "UPDATE {$table_name}
+             SET os = CASE
+                    WHEN {$legacy_has_value}
+                         AND (os = '' OR os = '(unknown)')
+                    THEN 'Android'
+                    ELSE os
+                 END,
+                 os_version = CASE
+                    WHEN os_version <> '' AND os_version <> '(unknown)' THEN os_version
+                    WHEN {$legacy_has_value}
+                         AND {$legacy_value} REGEXP '^[1-9][0-9]?([._][0-9]+)*$'
+                    THEN {$legacy_major_expression}
+                    WHEN {$legacy_has_value} THEN '(unknown)'
+                    ELSE os_version
+                 END
+             WHERE {$legacy_has_value}"
+        );
+    }
+
     private function drop_column_if_exists(string $table_name, string $column_name): void
+    {
+        global $wpdb;
+
+        if (!$this->column_exists($table_name, $column_name)) {
+            return;
+        }
+
+        $wpdb->query("ALTER TABLE {$table_name} DROP COLUMN {$column_name}");
+    }
+
+    private function column_exists(string $table_name, string $column_name): bool
     {
         global $wpdb;
 
@@ -899,7 +947,7 @@ TEXT;
         $column_name = trim($column_name);
 
         if ($table_name === '' || $column_name === '') {
-            return;
+            return false;
         }
 
         if (!is_object($wpdb)
@@ -907,13 +955,13 @@ TEXT;
             || !method_exists($wpdb, 'prepare')
             || !method_exists($wpdb, 'query')
         ) {
-            return;
+            return false;
         }
 
         if (preg_match('/^[A-Za-z0-9_]+$/', $table_name) !== 1
             || preg_match('/^[A-Za-z0-9_]+$/', $column_name) !== 1
         ) {
-            return;
+            return false;
         }
 
         $exists = $wpdb->get_var(
@@ -923,11 +971,7 @@ TEXT;
             )
         );
 
-        if ($exists === null || $exists === false || $exists === '') {
-            return;
-        }
-
-        $wpdb->query("ALTER TABLE {$table_name} DROP COLUMN {$column_name}");
+        return !($exists === null || $exists === false || $exists === '');
     }
 
     protected function get_click_attribution_cleanup_limit(): int
