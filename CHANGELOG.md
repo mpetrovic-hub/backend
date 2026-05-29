@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-29:
+- [Landing Analytics] Added canonical landing-session dimensions on `wp_kiwi_landing_page_sessions` for provider, flow, country, `pid`, `tksource`, `tkzone`, and normalized `browser_language`. Landing-session rows now preserve source parameters even without `click_id`, and the daily summary uses those session columns instead of repairing dimensions from engagement or handoff events.
+
 2026-05-28:
 - [Landing Funnel Daily Summary] Added coarse IP dimensions to `wp_kiwi_landing_funnel_daily_summary`: `client_ip_version` and `/24` or `/48` `client_ip_prefix` buckets are now part of aggregation, filtering, Statistics UI, and CSV export while raw `client_ip` and `client_ip_hash` remain excluded from summary reporting.
 

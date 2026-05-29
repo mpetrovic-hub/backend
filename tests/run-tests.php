@@ -2859,6 +2859,13 @@ class Kiwi_Test_Landing_Page_Session_Repository extends Kiwi_Landing_Page_Sessio
                 'created_at' => '2026-04-01 12:00:00',
                 'landing_key' => '',
                 'service_key' => '',
+                'provider_key' => '',
+                'flow_key' => '',
+                'country' => '',
+                'pid' => '',
+                'tksource' => '',
+                'tkzone' => '',
+                'browser_language' => '(unknown)',
                 'request_host' => '',
                 'request_path' => '',
                 'session_token' => '',
@@ -4324,6 +4331,52 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves backend path and dedicated host
     kiwi_assert_same('lp2-fr', $public_host_path_match['landing_key'], 'Expected backend path matching to be host-agnostic for proxied public domains.');
     kiwi_assert_same('lp2-fr', $host_match['landing_key'], 'Expected dedicated host matching to resolve the configured landing page.');
     kiwi_assert_same(null, $no_match, 'Expected unrelated requests not to match a landing page.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router builds canonical session dimensions from landing request context', function (): void {
+    $router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Config(),
+        new Kiwi_Test_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+    $method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'build_session_dimension_context');
+    $method->setAccessible(true);
+
+    $dimensions = $method->invoke($router, [
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ], [
+        'country' => 'fr',
+    ], [
+        'PID' => 'partner 123!',
+        'tksource' => 'src-1._~:a',
+        'tkzone' => 'zone/42',
+    ], 'fr-FR,fr;q=0.9,en;q=0.7');
+
+    kiwi_assert_same('nth', $dimensions['provider_key'] ?? '', 'Expected provider_key to come from landing metadata.');
+    kiwi_assert_same('nth-fr-one-off', $dimensions['flow_key'] ?? '', 'Expected flow_key to come from landing metadata.');
+    kiwi_assert_same('FR', $dimensions['country'] ?? '', 'Expected country to fall back to service context and normalize to uppercase.');
+    kiwi_assert_same('partner123', $dimensions['pid'] ?? '', 'Expected pid to be sanitized directly from query params without requiring click_id.');
+    kiwi_assert_same('src-1._~:a', $dimensions['tksource'] ?? '', 'Expected tksource to preserve conservative source characters.');
+    kiwi_assert_same('zone42', $dimensions['tkzone'] ?? '', 'Expected tkzone to strip unsupported characters.');
+    kiwi_assert_same('fr', $dimensions['browser_language'] ?? '', 'Expected browser_language to store the primary language from Accept-Language.');
+
+    $unknown_dimensions = $method->invoke($router, [
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'country' => 'de',
+    ], [
+        'country' => 'FR',
+    ], [
+        'pid' => ['bad'],
+        'tksource' => '',
+    ], '*, 123;q=0.8');
+
+    kiwi_assert_same('DE', $unknown_dimensions['country'] ?? '', 'Expected landing metadata country to win over service country.');
+    kiwi_assert_same('', $unknown_dimensions['pid'] ?? '', 'Expected array query values to be ignored for source dimensions.');
+    kiwi_assert_same('', $unknown_dimensions['tksource'] ?? '', 'Expected empty source values to stay empty at capture time.');
+    kiwi_assert_same('(unknown)', $unknown_dimensions['browser_language'] ?? '', 'Expected invalid Accept-Language values to use the unknown bucket.');
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing variants without legacy fallback', function (): void {
@@ -6836,6 +6889,100 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository schema includes CT
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Landing_Page_Session_Repository creates canonical dimension schema', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+    };
+
+    (new Kiwi_Landing_Page_Session_Repository())->create_table();
+    $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+    foreach ([
+        'provider_key VARCHAR(50) NOT NULL DEFAULT \'\'',
+        'flow_key VARCHAR(50) NOT NULL DEFAULT \'\'',
+        'country VARCHAR(10) NOT NULL DEFAULT \'\'',
+        'pid VARCHAR(191) NOT NULL DEFAULT \'\'',
+        'tksource VARCHAR(191) NOT NULL DEFAULT \'\'',
+        'tkzone VARCHAR(191) NOT NULL DEFAULT \'\'',
+        "browser_language VARCHAR(20) NOT NULL DEFAULT '(unknown)'",
+    ] as $column) {
+        kiwi_assert_contains($column, $sql, 'Expected canonical landing-session dimension column: ' . $column);
+    }
+
+    foreach ([
+        'KEY provider_key (provider_key)',
+        'KEY flow_key (flow_key)',
+        'KEY country (country)',
+        'KEY pid (pid)',
+        'KEY tksource (tksource)',
+        'KEY tkzone (tkzone)',
+        'KEY browser_language (browser_language)',
+    ] as $index) {
+        kiwi_assert_contains($index, $sql, 'Expected canonical landing-session dimension index: ' . $index);
+    }
+
+    $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Session_Repository persists canonical dimension values', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $inserted_table = '';
+        public $inserted_data = [];
+        public $inserted_formats = [];
+
+        public function insert(string $table, array $data, array $formats = [])
+        {
+            $this->inserted_table = $table;
+            $this->inserted_data = $data;
+            $this->inserted_formats = $formats;
+
+            return 1;
+        }
+    };
+
+    $repository = new Kiwi_Landing_Page_Session_Repository();
+    $inserted = $repository->insert([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'pid' => 'partner123',
+        'tksource' => 'src-a',
+        'tkzone' => 'zone-b',
+        'browser_language' => 'fr',
+        'session_token' => 'sess-canonical',
+    ]);
+
+    kiwi_assert_true($inserted, 'Expected landing-session insert to succeed with canonical dimensions.');
+    kiwi_assert_same('abc_kiwi_landing_page_sessions', $wpdb->inserted_table, 'Expected insert to target the prefixed landing-session table.');
+    kiwi_assert_same('nth', $wpdb->inserted_data['provider_key'] ?? '', 'Expected provider_key to be passed to wpdb insert.');
+    kiwi_assert_same('nth-fr-one-off', $wpdb->inserted_data['flow_key'] ?? '', 'Expected flow_key to be passed to wpdb insert.');
+    kiwi_assert_same('FR', $wpdb->inserted_data['country'] ?? '', 'Expected country to be passed to wpdb insert.');
+    kiwi_assert_same('partner123', $wpdb->inserted_data['pid'] ?? '', 'Expected pid to be passed to wpdb insert.');
+    kiwi_assert_same('src-a', $wpdb->inserted_data['tksource'] ?? '', 'Expected tksource to be passed to wpdb insert.');
+    kiwi_assert_same('zone-b', $wpdb->inserted_data['tkzone'] ?? '', 'Expected tkzone to be passed to wpdb insert.');
+    kiwi_assert_same('fr', $wpdb->inserted_data['browser_language'] ?? '', 'Expected browser_language to be passed to wpdb insert.');
+    kiwi_assert_same(count($wpdb->inserted_data), count($wpdb->inserted_formats), 'Expected insert formats to cover every landing-session column.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Landing funnel source schemas include daily refresh composite indexes', function (): void {
     global $wpdb;
 
@@ -8195,6 +8342,18 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('FROM abc_kiwi_landing_handoff_events', $insert_sql, 'Expected refresh to aggregate handoff diagnostics.');
     kiwi_assert_contains('FROM abc_kiwi_sales s', $insert_sql, 'Expected refresh to aggregate completed sales from durable sales snapshots.');
     kiwi_assert_true(strpos($insert_sql, 'abc_kiwi_click_attributions') === false, 'Expected daily summary sales aggregation not to depend on temporary click attribution rows.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(provider_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS provider_key", $insert_sql, 'Expected landing loads to read canonical provider_key from landing sessions.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(pid, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS pid", $insert_sql, 'Expected landing loads to read canonical pid from landing sessions.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.provider_key, ''), '(unknown)') AS provider_key", $insert_sql, 'Expected provider_key dimensions to come from landing sessions only.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.flow_key, ''), '(unknown)') AS flow_key", $insert_sql, 'Expected flow_key dimensions to come from landing sessions only.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.country, ''), '(unknown)') AS country", $insert_sql, 'Expected country dimensions to come from landing sessions only.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.pid, ''), '(unknown)') AS pid", $insert_sql, 'Expected pid dimensions to come from landing sessions only.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.tksource, ''), '(unknown)') AS tksource", $insert_sql, 'Expected tksource dimensions to come from landing sessions only.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.tkzone, ''), '(unknown)') AS tkzone", $insert_sql, 'Expected tkzone dimensions to come from landing sessions only.');
+    kiwi_assert_true(strpos($insert_sql, 'COALESCE(NULLIF(e.provider_key') === false, 'Expected provider_key not to be repaired from engagement rows.');
+    kiwi_assert_true(strpos($insert_sql, 'COALESCE(NULLIF(e.pid') === false, 'Expected pid not to be repaired from engagement rows.');
+    kiwi_assert_true(strpos($insert_sql, 'NULLIF(h.tksource') === false, 'Expected tksource not to be repaired from handoff rows.');
+    kiwi_assert_true(strpos($insert_sql, "'(unknown)' AS country") === false, 'Expected country to use the canonical session column instead of a hardcoded unknown bucket.');
     kiwi_assert_contains('client_ip_version', $insert_sql, 'Expected daily summary refresh to carry client IP version as a coarse dimension.');
     kiwi_assert_contains('client_ip_prefix', $insert_sql, 'Expected daily summary refresh to carry client IP prefix as a coarse dimension.');
     kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)') AS client_ip_version", $insert_sql, 'Expected sales facts to use durable sale IP version snapshots with unknown fallback.');
@@ -8988,7 +9147,7 @@ kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema rep
     );
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for landing funnel daily summary table', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for canonical landing session dimensions', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -9000,7 +9159,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for landing funnel daily summary
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-28-1', $schema_version, 'Expected schema version to be bumped for landing funnel daily summary IP dimension migrations.');
+    kiwi_assert_same('2026-05-29-1', $schema_version, 'Expected schema version to be bumped for canonical landing-session dimension migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,

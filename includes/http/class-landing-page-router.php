@@ -71,10 +71,23 @@ class Kiwi_Landing_Page_Router
             $primary_cta_href
         );
         $click_to_sms_uri = (string) ($landing_page['cta_href'] ?? '#');
+        $session_dimensions = $this->build_session_dimension_context(
+            $landing_page,
+            $service,
+            is_array($_GET) ? $_GET : [],
+            isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? (string) $_SERVER['HTTP_ACCEPT_LANGUAGE'] : ''
+        );
 
         $this->landing_page_session_repository->insert([
             'landing_key' => $match['landing_key'],
             'service_key' => $match['landing_page']['service_key'] ?? '',
+            'provider_key' => $session_dimensions['provider_key'],
+            'flow_key' => $session_dimensions['flow_key'],
+            'country' => $session_dimensions['country'],
+            'pid' => $session_dimensions['pid'],
+            'tksource' => $session_dimensions['tksource'],
+            'tkzone' => $session_dimensions['tkzone'],
+            'browser_language' => $session_dimensions['browser_language'],
             'request_host' => $host,
             'request_path' => $match['request_path'],
             'session_token' => $session_token,
@@ -87,6 +100,7 @@ class Kiwi_Landing_Page_Router
                 'host' => $host,
                 'request_uri' => $request_uri,
                 'landing_page' => $landing_page,
+                'session_dimensions' => $session_dimensions,
             ],
         ]);
 
@@ -403,6 +417,95 @@ class Kiwi_Landing_Page_Router
         }
 
         return str_replace('</', '<\/', $encoded);
+    }
+
+    private function build_session_dimension_context(
+        array $landing_page,
+        array $service,
+        array $query_params,
+        string $accept_language
+    ): array {
+        return [
+            'provider_key' => $this->sanitize_dimension_key((string) ($landing_page['provider'] ?? ''), 50),
+            'flow_key' => $this->sanitize_dimension_key((string) ($landing_page['flow'] ?? ''), 50),
+            'country' => $this->resolve_session_country($landing_page, $service),
+            'pid' => $this->resolve_query_source_dimension($query_params, 'pid'),
+            'tksource' => $this->resolve_query_source_dimension($query_params, 'tksource'),
+            'tkzone' => $this->resolve_query_source_dimension($query_params, 'tkzone'),
+            'browser_language' => $this->normalize_accept_language($accept_language),
+        ];
+    }
+
+    private function resolve_session_country(array $landing_page, array $service): string
+    {
+        foreach ([$landing_page['country'] ?? '', $service['country'] ?? ''] as $candidate) {
+            $country = strtoupper(trim((string) $candidate));
+            $country = preg_replace('/[^A-Z0-9]/', '', $country);
+            $country = is_string($country) ? substr($country, 0, 10) : '';
+
+            if ($country !== '') {
+                return $country;
+            }
+        }
+
+        return '';
+    }
+
+    private function resolve_query_source_dimension(array $query_params, string $name): string
+    {
+        $name = strtolower($name);
+
+        foreach ($query_params as $key => $value) {
+            if (strtolower((string) $key) !== $name || is_array($value)) {
+                continue;
+            }
+
+            $dimension = $this->sanitize_dimension_key((string) $value, 191);
+
+            if ($dimension !== '') {
+                return $dimension;
+            }
+        }
+
+        return '';
+    }
+
+    private function sanitize_dimension_key(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, max(1, $max_length));
+    }
+
+    private function normalize_accept_language(string $accept_language): string
+    {
+        $accept_language = trim($accept_language);
+
+        if ($accept_language === '') {
+            return '(unknown)';
+        }
+
+        $parts = preg_split('/,/', $accept_language);
+        $parts = is_array($parts) ? $parts : [];
+
+        foreach ($parts as $part) {
+            $tag = trim((string) preg_replace('/;.*/', '', (string) $part));
+
+            if (preg_match('/^([A-Za-z]{2,3})(?:-[A-Za-z0-9]{2,8})*$/', $tag, $matches) !== 1) {
+                continue;
+            }
+
+            return strtolower((string) ($matches[1] ?? ''));
+        }
+
+        return '(unknown)';
     }
 
     private function maybe_record_kpi_click(string $landing_key, array $landing_page): void
