@@ -12,6 +12,8 @@ class Kiwi_Landing_Kpi_Rest_Routes
     private $click_attribution_repository;
     private $handoff_event_repository;
     private $sms_body_variant_repository;
+    private $landing_page_session_repository;
+    private $device_context_normalizer;
 
     public function __construct(
         Kiwi_Config $config,
@@ -19,7 +21,9 @@ class Kiwi_Landing_Kpi_Rest_Routes
         ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null,
         ?Kiwi_Click_Attribution_Repository $click_attribution_repository = null,
         ?Kiwi_Landing_Handoff_Event_Repository $handoff_event_repository = null,
-        ?Kiwi_Sms_Body_Variant_Repository $sms_body_variant_repository = null
+        ?Kiwi_Sms_Body_Variant_Repository $sms_body_variant_repository = null,
+        ?Kiwi_Landing_Page_Session_Repository $landing_page_session_repository = null,
+        ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null
     ) {
         $this->config = $config;
         $this->kpi_service = $kpi_service;
@@ -27,6 +31,10 @@ class Kiwi_Landing_Kpi_Rest_Routes
         $this->click_attribution_repository = $click_attribution_repository;
         $this->handoff_event_repository = $handoff_event_repository;
         $this->sms_body_variant_repository = $sms_body_variant_repository;
+        $this->landing_page_session_repository = $landing_page_session_repository;
+        $this->device_context_normalizer = $device_context_normalizer instanceof Kiwi_Device_Context_Normalizer
+            ? $device_context_normalizer
+            : new Kiwi_Device_Context_Normalizer();
     }
 
     public function register(): void
@@ -243,12 +251,33 @@ class Kiwi_Landing_Kpi_Rest_Routes
             }
         }
 
+        $ua_context = $this->resolve_ua_context_for_event($event_type, $params, false);
         $record = $this->landing_engagement_repository->upsert_event(
-            array_merge($context, $this->resolve_ua_context_for_event($event_type, $params, false)),
+            array_merge($context, $ua_context),
             $event_type
         );
 
+        if (!empty($record)) {
+            $this->enrich_landing_session_device_context($landing_key, $session_token, $ua_context);
+        }
+
         return !empty($record);
+    }
+
+    private function enrich_landing_session_device_context(string $landing_key, string $session_token, array $ua_context): void
+    {
+        if (!$this->landing_page_session_repository instanceof Kiwi_Landing_Page_Session_Repository) {
+            return;
+        }
+
+        // Keep UA parsing at the PHP boundary so reporting SQL reads normalized buckets.
+        $device_context = $this->device_context_normalizer->normalize($ua_context);
+        $this->landing_page_session_repository->enrich_device_context_by_landing_session(
+            $landing_key,
+            $session_token,
+            $device_context,
+            $this->device_context_normalizer
+        );
     }
 
     private function capture_handoff_event(
@@ -301,6 +330,10 @@ class Kiwi_Landing_Kpi_Rest_Routes
                 'ua_client_hints' => $ua_client_hints,
             ],
         ]);
+
+        if (is_array($result['row'] ?? null)) {
+            $this->enrich_landing_session_device_context($landing_key, $session_token, $ua_context);
+        }
 
         return is_array($result['row'] ?? null);
     }

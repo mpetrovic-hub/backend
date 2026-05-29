@@ -39,6 +39,7 @@ require_once __DIR__ . '/providers/class-routed-operator-lookup-provider.php';
 require_once __DIR__ . '/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/repositories/class-sms-body-variant-repository.php';
+require_once __DIR__ . '/repositories/class-device-model-brand-map-repository.php';
 
 /**
  * Services
@@ -54,6 +55,7 @@ require_once __DIR__ . '/services/class-operator-lookup-service.php';
 require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
+require_once __DIR__ . '/services/class-device-context-normalizer.php';
 require_once __DIR__ . '/services/class-shared-sales-recorder.php';
 require_once __DIR__ . '/services/class-sales-attribution-snapshot-builder.php';
 require_once __DIR__ . '/services/class-affiliate-postback-dispatcher.php';

@@ -13,6 +13,11 @@ class Kiwi_Sales_Repository
         return $wpdb->prefix . 'kiwi_sales';
     }
 
+    public function get_table_name_for_schema(): string
+    {
+        return $this->get_table_name();
+    }
+
     public function create_table(): void
     {
         global $wpdb;
@@ -37,7 +42,8 @@ class Kiwi_Sales_Repository
             tksource VARCHAR(191) NOT NULL DEFAULT '',
             tkzone VARCHAR(191) NOT NULL DEFAULT '',
             device_brand VARCHAR(100) NOT NULL DEFAULT '',
-            android_version VARCHAR(50) NOT NULL DEFAULT '',
+            os VARCHAR(50) NOT NULL DEFAULT '',
+            os_version VARCHAR(50) NOT NULL DEFAULT '',
             browser VARCHAR(100) NOT NULL DEFAULT '',
             attribution_metric_date DATE NULL,
             client_ip VARCHAR(100) NOT NULL DEFAULT '',
@@ -70,6 +76,10 @@ class Kiwi_Sales_Repository
             KEY click_id (click_id),
             KEY tksource (tksource),
             KEY tkzone (tkzone),
+            KEY device_brand (device_brand),
+            KEY os (os),
+            KEY os_version (os_version),
+            KEY browser (browser),
             KEY attribution_metric_date (attribution_metric_date),
             KEY client_ip_prefix (client_ip_prefix),
             KEY client_ip_hash (client_ip_hash),
@@ -145,7 +155,8 @@ class Kiwi_Sales_Repository
                 'tksource' => $this->sanitize_source_value((string) ($data['tksource'] ?? '')),
                 'tkzone' => $this->sanitize_source_value((string) ($data['tkzone'] ?? '')),
                 'device_brand' => $this->sanitize_text_dimension((string) ($data['device_brand'] ?? ''), 100),
-                'android_version' => $this->sanitize_text_dimension((string) ($data['android_version'] ?? ''), 50),
+                'os' => $this->sanitize_text_dimension((string) ($data['os'] ?? ''), 50),
+                'os_version' => $this->sanitize_text_dimension((string) ($data['os_version'] ?? ''), 50),
                 'browser' => $this->sanitize_text_dimension((string) ($data['browser'] ?? ''), 100),
                 'attribution_metric_date' => $this->normalize_nullable_date((string) ($data['attribution_metric_date'] ?? '')),
                 'client_ip' => $this->sanitize_client_ip((string) ($data['client_ip'] ?? '')),
@@ -167,6 +178,7 @@ class Kiwi_Sales_Repository
                 'context_json' => isset($data['context_json']) ? wp_json_encode($data['context_json']) : '',
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -242,9 +254,12 @@ class Kiwi_Sales_Repository
                 'device_brand' => array_key_exists('device_brand', $data)
                     ? $this->sanitize_text_dimension((string) $data['device_brand'], 100)
                     : (string) ($existing['device_brand'] ?? ''),
-                'android_version' => array_key_exists('android_version', $data)
-                    ? $this->sanitize_text_dimension((string) $data['android_version'], 50)
-                    : (string) ($existing['android_version'] ?? ''),
+                'os' => array_key_exists('os', $data)
+                    ? $this->sanitize_text_dimension((string) $data['os'], 50)
+                    : (string) ($existing['os'] ?? ''),
+                'os_version' => array_key_exists('os_version', $data)
+                    ? $this->sanitize_text_dimension((string) $data['os_version'], 50)
+                    : (string) ($existing['os_version'] ?? ''),
                 'browser' => array_key_exists('browser', $data)
                     ? $this->sanitize_text_dimension((string) $data['browser'], 100)
                     : (string) ($existing['browser'] ?? ''),
@@ -281,6 +296,7 @@ class Kiwi_Sales_Repository
             ],
             ['id' => $id],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -372,7 +388,8 @@ class Kiwi_Sales_Repository
             'tksource' => '%s',
             'tkzone' => '%s',
             'device_brand' => '%s',
-            'android_version' => '%s',
+            'os' => '%s',
+            'os_version' => '%s',
             'browser' => '%s',
             'attribution_metric_date' => '%s',
             'client_ip' => '%s',
@@ -469,7 +486,8 @@ class Kiwi_Sales_Repository
             case 'browser':
                 return $this->sanitize_text_dimension((string) $value, 100);
 
-            case 'android_version':
+            case 'os':
+            case 'os_version':
                 return $this->sanitize_text_dimension((string) $value, 50);
 
             case 'attribution_metric_date':

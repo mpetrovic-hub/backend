@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-29-1';
+    private const DB_SCHEMA_VERSION = '2026-05-29-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -178,9 +178,13 @@ class Kiwi_Plugin
 
         $landing_kpi_summary_repository = new Kiwi_Landing_Kpi_Summary_Repository();
         $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+        $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
         $landing_handoff_event_repository = new Kiwi_Landing_Handoff_Event_Repository();
         $sms_body_variant_repository = new Kiwi_Sms_Body_Variant_Repository();
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
+        $device_normalizer = new Kiwi_Device_Context_Normalizer(
+            new Kiwi_Device_Model_Brand_Map_Repository()
+        );
         $landing_kpi_service = new Kiwi_Landing_Kpi_Service(
             $config,
             $landing_kpi_summary_repository
@@ -191,7 +195,9 @@ class Kiwi_Plugin
             $landing_engagement_repository,
             $click_attribution_repository,
             $landing_handoff_event_repository,
-            $sms_body_variant_repository
+            $sms_body_variant_repository,
+            $landing_page_session_repository,
+            $device_normalizer
         );
         $landing_kpi_rest_routes->register();
     }
@@ -323,6 +329,9 @@ class Kiwi_Plugin
     {
         $config = new Kiwi_Config();
         $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
+        $device_normalizer = new Kiwi_Device_Context_Normalizer(
+            new Kiwi_Device_Model_Brand_Map_Repository()
+        );
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $tracking_capture_service = new Kiwi_Tracking_Capture_Service(
             $config,
@@ -346,7 +355,8 @@ class Kiwi_Plugin
             $this->plugin_base_url,
             $tracking_capture_service,
             $primary_cta_resolver,
-            $landing_kpi_service
+            $landing_kpi_service,
+            $device_normalizer
         );
 
         $router->maybe_render_current_request();
@@ -536,6 +546,9 @@ TEXT;
         $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
         $landing_page_session_repository = new Kiwi_Landing_Page_Session_Repository();
+        $device_normalizer = new Kiwi_Device_Context_Normalizer(
+            new Kiwi_Device_Model_Brand_Map_Repository()
+        );
         $sms_body_variant_repository = new Kiwi_Sms_Body_Variant_Repository();
         $sms_body_variant_service = new Kiwi_Sms_Body_Variant_Service(
             $config,
@@ -549,7 +562,8 @@ TEXT;
         $landing_engagement_repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
         $sales_snapshot_builder = new Kiwi_Sales_Attribution_Snapshot_Builder(
             $landing_page_session_repository,
-            $landing_engagement_repository
+            $landing_engagement_repository,
+            $device_normalizer
         );
         $premium_sms_fraud_signal_repository = new Kiwi_Premium_Sms_Fraud_Signal_Repository();
         $premium_sms_mo_engagement_evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
@@ -841,6 +855,8 @@ TEXT;
 
             $repository->create_table();
         }
+
+        $this->migrate_legacy_android_version_columns();
     }
 
     protected function build_schema_repositories(): array
@@ -849,6 +865,7 @@ TEXT;
             new Kiwi_Dimoco_Callback_Operator_Lookup_Repository(),
             new Kiwi_Dimoco_Callback_Refund_Repository(),
             new Kiwi_Dimoco_Callback_Blacklist_Repository(),
+            new Kiwi_Device_Model_Brand_Map_Repository(),
             new Kiwi_Landing_Page_Session_Repository(),
             new Kiwi_Nth_Event_Repository(),
             new Kiwi_Nth_Flow_Transaction_Repository(),
@@ -862,6 +879,99 @@ TEXT;
             new Kiwi_Landing_Funnel_Daily_Summary_Repository(),
             new Kiwi_Traffic_Source_Funnel_Statistics_Repository(),
         ];
+    }
+
+    protected function migrate_legacy_android_version_columns(): void
+    {
+        foreach ([
+            (new Kiwi_Sales_Repository())->get_table_name_for_schema(),
+            (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->get_table_name(),
+        ] as $table_name) {
+            $this->backfill_legacy_android_version_column($table_name);
+            $this->drop_column_if_exists($table_name, 'android_version');
+        }
+    }
+
+    private function backfill_legacy_android_version_column(string $table_name): void
+    {
+        global $wpdb;
+
+        if (!$this->column_exists($table_name, 'android_version')) {
+            return;
+        }
+
+        if (!$this->column_exists($table_name, 'os') || !$this->column_exists($table_name, 'os_version')) {
+            return;
+        }
+
+        $legacy_value = "TRIM(COALESCE(android_version, ''))";
+        $legacy_has_value = "{$legacy_value} <> '' AND {$legacy_value} <> '(unknown)'";
+        $legacy_major_expression = "SUBSTRING_INDEX(SUBSTRING_INDEX({$legacy_value}, '.', 1), '_', 1)";
+
+        $wpdb->query(
+            "UPDATE {$table_name}
+             SET os = CASE
+                    WHEN {$legacy_has_value}
+                         AND (os = '' OR os = '(unknown)')
+                    THEN 'Android'
+                    ELSE os
+                 END,
+                 os_version = CASE
+                    WHEN os_version <> '' AND os_version <> '(unknown)' THEN os_version
+                    WHEN {$legacy_has_value}
+                         AND {$legacy_value} REGEXP '^[1-9][0-9]?([._][0-9]+)*$'
+                    THEN {$legacy_major_expression}
+                    WHEN {$legacy_has_value} THEN '(unknown)'
+                    ELSE os_version
+                 END
+             WHERE {$legacy_has_value}"
+        );
+    }
+
+    private function drop_column_if_exists(string $table_name, string $column_name): void
+    {
+        global $wpdb;
+
+        if (!$this->column_exists($table_name, $column_name)) {
+            return;
+        }
+
+        $wpdb->query("ALTER TABLE {$table_name} DROP COLUMN {$column_name}");
+    }
+
+    private function column_exists(string $table_name, string $column_name): bool
+    {
+        global $wpdb;
+
+        $table_name = trim($table_name);
+        $column_name = trim($column_name);
+
+        if ($table_name === '' || $column_name === '') {
+            return false;
+        }
+
+        if (!is_object($wpdb)
+            || !method_exists($wpdb, 'get_var')
+            || !method_exists($wpdb, 'prepare')
+            || !method_exists($wpdb, 'query')
+        ) {
+            return false;
+        }
+
+        if (preg_match('/^[A-Za-z0-9_]+$/', $table_name) !== 1
+            || preg_match('/^[A-Za-z0-9_]+$/', $column_name) !== 1
+        ) {
+            return false;
+        }
+
+        $exists = $wpdb->get_var(
+            $wpdb->prepare(
+                "SHOW COLUMNS FROM {$table_name} LIKE %s",
+                $column_name
+            )
+        );
+
+        return !($exists === null || $exists === false || $exists === '');
     }
 
     protected function get_click_attribution_cleanup_limit(): int

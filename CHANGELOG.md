@@ -3,6 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-05-29:
+- [Landing Device Dimensions] Added a shared device-context normalizer plus exact model-to-brand map table for landing analytics. Landing sessions, sales snapshots, daily summary rows, Statistics filters, and CSV export now use normalized `device_brand`, `os`, `os_version`, and `browser` buckets instead of the legacy `android_version` summary dimension.
 - [Landing Analytics] Added canonical landing-session dimensions on `wp_kiwi_landing_page_sessions` for provider, flow, country, `pid`, `tksource`, `tkzone`, and normalized `browser_language`. Landing-session rows now preserve source parameters even without `click_id`, and the daily summary uses those session columns instead of repairing dimensions from engagement or handoff events.
 
 2026-05-28:

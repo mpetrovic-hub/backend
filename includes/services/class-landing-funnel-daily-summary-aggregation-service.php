@@ -128,8 +128,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $session_ip_version_expression = $this->build_client_ip_version_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
         $session_ip_prefix_expression = $this->build_client_ip_prefix_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
-        $session_device_brand_expression = $this->build_device_brand_case_expression('ua_ch_model', 'raw_user_agent', true);
-        $hidden_device_brand_expression = $this->build_device_brand_case_expression('sd.ua_ch_model', 'sd.raw_user_agent', true);
 
         $dimension_hash_expression = "SHA2(CONCAT_WS('|',
                     a.landing_key,
@@ -141,7 +139,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     a.tksource,
                     a.tkzone,
                     a.device_brand,
-                    a.android_version,
+                    a.os,
+                    a.os_version,
                     a.browser,
                     a.client_ip_version,
                     a.client_ip_prefix
@@ -158,7 +157,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 tksource,
                 tkzone,
                 device_brand,
-                android_version,
+                os,
+                os_version,
                 browser,
                 client_ip_version,
                 client_ip_prefix,
@@ -195,6 +195,10 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(pid, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS pid,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tksource, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS tksource,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tkzone, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS tkzone,
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(device_brand, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS device_brand,
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os,
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os_version,
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(browser, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS browser,
                     MAX(user_agent) AS user_agent,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(remote_ip, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS remote_ip
                 FROM {$landing_session_table}
@@ -287,12 +291,10 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(l.pid, ''), '(unknown)') AS pid,
                     COALESCE(NULLIF(l.tksource, ''), '(unknown)') AS tksource,
                     COALESCE(NULLIF(l.tkzone, ''), '(unknown)') AS tkzone,
-                    COALESCE(NULLIF(e.ua_ch_platform, ''), NULLIF(h.ua_ch_platform, ''), '') AS ua_ch_platform,
-                    COALESCE(NULLIF(e.ua_ch_platform_version, ''), NULLIF(h.ua_ch_platform_version, ''), '') AS ua_ch_platform_version,
-                    COALESCE(NULLIF(e.ua_ch_model, ''), NULLIF(h.ua_ch_model, ''), '') AS ua_ch_model,
-                    COALESCE(NULLIF(e.ua_ch_brands, ''), NULLIF(h.ua_ch_brands, ''), '') AS ua_ch_brands,
-                    COALESCE(NULLIF(e.ua_ch_full_version_list, ''), NULLIF(h.ua_ch_full_version_list, ''), '') AS ua_ch_full_version_list,
-                    COALESCE(NULLIF(e.user_agent, ''), NULLIF(h.user_agent, ''), NULLIF(l.user_agent, ''), '') AS raw_user_agent,
+                    COALESCE(NULLIF(l.device_brand, ''), '(unknown)') AS device_brand,
+                    COALESCE(NULLIF(l.os, ''), '(unknown)') AS os,
+                    COALESCE(NULLIF(l.os_version, ''), '(unknown)') AS os_version,
+                    COALESCE(NULLIF(l.browser, ''), '(unknown)') AS browser,
                     {$session_ip_version_expression} AS client_ip_version,
                     {$session_ip_prefix_expression} AS client_ip_prefix,
                     CASE WHEN sk.has_session_fact > 0 THEN 1 ELSE 0 END AS sessions,
@@ -330,19 +332,10 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     pid,
                     tksource,
                     tkzone,
-                    {$session_device_brand_expression} AS device_brand,
-                    CASE
-                        WHEN ua_ch_platform = 'Android' AND ua_ch_platform_version <> '' THEN ua_ch_platform_version
-                        WHEN raw_user_agent LIKE '%%Android %%' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(raw_user_agent, 'Android ', -1), ';', 1)
-                        ELSE '(unknown)'
-                    END AS android_version,
-                    CASE
-                        WHEN ua_ch_full_version_list LIKE '%%Microsoft Edge%%' OR ua_ch_brands LIKE '%%Microsoft Edge%%' OR raw_user_agent LIKE '%%Edg/%%' THEN 'Edge'
-                        WHEN ua_ch_full_version_list LIKE '%%Google Chrome%%' OR ua_ch_brands LIKE '%%Google Chrome%%' OR raw_user_agent LIKE '%%Chrome/%%' THEN 'Chrome'
-                        WHEN raw_user_agent LIKE '%%Firefox/%%' THEN 'Firefox'
-                        WHEN raw_user_agent LIKE '%%Safari/%%' THEN 'Safari'
-                        ELSE '(unknown)'
-                    END AS browser,
+                    device_brand,
+                    os,
+                    os_version,
+                    browser,
                     client_ip_version,
                     client_ip_prefix,
                     sessions,
@@ -373,19 +366,10 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     sd.pid,
                     sd.tksource,
                     sd.tkzone,
-                    {$hidden_device_brand_expression} AS device_brand,
-                    CASE
-                        WHEN sd.ua_ch_platform = 'Android' AND sd.ua_ch_platform_version <> '' THEN sd.ua_ch_platform_version
-                        WHEN sd.raw_user_agent LIKE '%%Android %%' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(sd.raw_user_agent, 'Android ', -1), ';', 1)
-                        ELSE '(unknown)'
-                    END AS android_version,
-                    CASE
-                        WHEN sd.ua_ch_full_version_list LIKE '%%Microsoft Edge%%' OR sd.ua_ch_brands LIKE '%%Microsoft Edge%%' OR sd.raw_user_agent LIKE '%%Edg/%%' THEN 'Edge'
-                        WHEN sd.ua_ch_full_version_list LIKE '%%Google Chrome%%' OR sd.ua_ch_brands LIKE '%%Google Chrome%%' OR sd.raw_user_agent LIKE '%%Chrome/%%' THEN 'Chrome'
-                        WHEN sd.raw_user_agent LIKE '%%Firefox/%%' THEN 'Firefox'
-                        WHEN sd.raw_user_agent LIKE '%%Safari/%%' THEN 'Safari'
-                        ELSE '(unknown)'
-                    END AS browser,
+                    sd.device_brand,
+                    sd.os,
+                    sd.os_version,
+                    sd.browser,
                     sd.client_ip_version,
                     sd.client_ip_prefix,
                     ROUND(h.elapsed_ms / 1000, 2) AS hidden_seconds
@@ -404,11 +388,11 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 SELECT
                     hidden_events.*,
                     ROW_NUMBER() OVER (
-                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
+                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
                         ORDER BY hidden_seconds
                     ) AS rn,
                     COUNT(*) OVER (
-                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
+                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
                     ) AS cnt
                 FROM hidden_events
             ),
@@ -424,7 +408,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     tksource,
                     tkzone,
                     device_brand,
-                    android_version,
+                    os,
+                    os_version,
                     browser,
                     client_ip_version,
                     client_ip_prefix,
@@ -436,7 +421,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                         END
                     ), 2) AS median_hidden_seconds
                 FROM hidden_ranked
-                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
+                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
             ),
             sales_facts AS (
                 SELECT
@@ -450,7 +435,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(s.tksource, ''), '(unknown)') AS tksource,
                     COALESCE(NULLIF(s.tkzone, ''), '(unknown)') AS tkzone,
                     COALESCE(NULLIF(s.device_brand, ''), '(unknown)') AS device_brand,
-                    COALESCE(NULLIF(s.android_version, ''), '(unknown)') AS android_version,
+                    COALESCE(NULLIF(s.os, ''), '(unknown)') AS os,
+                    COALESCE(NULLIF(s.os_version, ''), '(unknown)') AS os_version,
                     COALESCE(NULLIF(s.browser, ''), '(unknown)') AS browser,
                     COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)') AS client_ip_version,
                     COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix,
@@ -490,7 +476,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(s.tksource, ''), '(unknown)'),
                     COALESCE(NULLIF(s.tkzone, ''), '(unknown)'),
                     COALESCE(NULLIF(s.device_brand, ''), '(unknown)'),
-                    COALESCE(NULLIF(s.android_version, ''), '(unknown)'),
+                    COALESCE(NULLIF(s.os, ''), '(unknown)'),
+                    COALESCE(NULLIF(s.os_version, ''), '(unknown)'),
                     COALESCE(NULLIF(s.browser, ''), '(unknown)'),
                     COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)'),
                     COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)')
@@ -512,7 +499,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     tksource,
                     tkzone,
                     device_brand,
-                    android_version,
+                    os,
+                    os_version,
                     browser,
                     client_ip_version,
                     client_ip_prefix,
@@ -532,7 +520,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     SUM(sales) AS sales,
                     SUM(sales_amount_minor) AS sales_amount_minor
                 FROM all_facts
-                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix
+                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
             )
             SELECT
                 a.metric_date,
@@ -545,7 +533,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 a.tksource,
                 a.tkzone,
                 a.device_brand,
-                a.android_version,
+                a.os,
+                a.os_version,
                 a.browser,
                 a.client_ip_version,
                 a.client_ip_prefix,
@@ -581,7 +570,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
              AND hm.tksource = a.tksource
              AND hm.tkzone = a.tkzone
              AND hm.device_brand = a.device_brand
-             AND hm.android_version = a.android_version
+             AND hm.os = a.os
+             AND hm.os_version = a.os_version
              AND hm.browser = a.browser
              AND hm.client_ip_version = a.client_ip_version
              AND hm.client_ip_prefix = a.client_ip_prefix
@@ -671,20 +661,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         return "CASE
                         WHEN {$ipv4_condition} THEN 'ipv4'
                         WHEN {$ipv6_condition} THEN 'ipv6'
-                        ELSE '(unknown)'
-                    END";
-    }
-
-    private function build_device_brand_case_expression(string $model_column, string $user_agent_column, bool $escape_percent): string
-    {
-        $contains_wildcard = $escape_percent ? '%%' : '%';
-        $prefix_wildcard = $escape_percent ? '%%' : '%';
-
-        return "CASE
-                        WHEN {$model_column} LIKE 'SM-{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Samsung{$contains_wildcard}' THEN 'Samsung'
-                        WHEN {$model_column} LIKE 'Huawei{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Huawei{$contains_wildcard}' THEN 'Huawei'
-                        WHEN {$model_column} LIKE 'Xiaomi{$prefix_wildcard}' OR {$model_column} LIKE 'Redmi{$prefix_wildcard}' OR {$model_column} LIKE 'POCO{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Xiaomi{$contains_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Redmi{$contains_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}POCO{$contains_wildcard}' THEN 'Xiaomi'
-                        WHEN {$model_column} LIKE 'Pixel{$prefix_wildcard}' OR {$user_agent_column} LIKE '{$contains_wildcard}Pixel{$contains_wildcard}' THEN 'Google'
                         ELSE '(unknown)'
                     END";
     }

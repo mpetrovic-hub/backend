@@ -17,7 +17,8 @@ class Kiwi_Statistics_Shortcode
         'tksource' => 'TK Source',
         'tkzone' => 'TK Zone',
         'device_brand' => 'Device Brand',
-        'android_version' => 'Android',
+        'os' => 'OS',
+        'os_version' => 'OS Version',
         'browser' => 'Browser',
         'client_ip_version' => 'IP Version',
         'client_ip_prefix' => 'IP Prefix',
@@ -140,7 +141,8 @@ class Kiwi_Statistics_Shortcode
             'tksource' => '',
             'tkzone' => '',
             'device_brand' => '',
-            'android_version' => '',
+            'os' => '',
+            'os_version' => '',
             'browser' => '',
             'client_ip_version' => '',
             'client_ip_prefix' => '',
@@ -175,8 +177,14 @@ class Kiwi_Statistics_Shortcode
             $filters['device_brand'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_device_brand']));
         }
 
-        if (isset($_GET['kiwi_stats_android_version'])) {
-            $filters['android_version'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_android_version']));
+        if (isset($_GET['kiwi_stats_os'])) {
+            $filters['os'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_os']));
+        }
+
+        if (isset($_GET['kiwi_stats_os_version'])) {
+            $filters['os_version'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_os_version']));
+        } elseif (isset($_GET['kiwi_stats_android_version'])) {
+            $filters['os_version'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_android_version']));
         }
 
         if (isset($_GET['kiwi_stats_browser'])) {
@@ -206,7 +214,8 @@ class Kiwi_Statistics_Shortcode
         $tksource = (string) ($filters['tksource'] ?? '');
         $tkzone = (string) ($filters['tkzone'] ?? '');
         $device_brand = (string) ($filters['device_brand'] ?? '');
-        $android_version = (string) ($filters['android_version'] ?? '');
+        $os = (string) ($filters['os'] ?? '');
+        $os_version = (string) ($filters['os_version'] ?? '');
         $browser = (string) ($filters['browser'] ?? '');
         $client_ip_version = (string) ($filters['client_ip_version'] ?? '');
         $client_ip_prefix = (string) ($filters['client_ip_prefix'] ?? '');
@@ -228,7 +237,8 @@ class Kiwi_Statistics_Shortcode
         $output .= $this->render_select_filter('kiwi_stats_tksource', 'TK Source', $tksource, $this->get_filter_options_for_key($filter_options, 'tksources'));
         $output .= $this->render_select_filter('kiwi_stats_tkzone', 'TK Zone', $tkzone, $this->get_filter_options_for_key($filter_options, 'tkzones'));
         $output .= $this->render_select_filter('kiwi_stats_device_brand', 'Device Brand', $device_brand, $this->get_filter_options_for_key($filter_options, 'device_brands'));
-        $output .= $this->render_select_filter('kiwi_stats_android_version', 'Android', $android_version, $this->get_filter_options_for_key($filter_options, 'android_versions'));
+        $output .= $this->render_select_filter('kiwi_stats_os', 'OS', $os, $this->get_filter_options_for_key($filter_options, 'os_values'));
+        $output .= $this->render_select_filter('kiwi_stats_os_version', 'OS Version', $os_version, $this->get_filter_options_for_key($filter_options, 'os_versions'));
         $output .= $this->render_select_filter('kiwi_stats_browser', 'Browser', $browser, $this->get_filter_options_for_key($filter_options, 'browsers'));
         $output .= $this->render_select_filter('kiwi_stats_client_ip_version', 'IP Version', $client_ip_version, $this->get_filter_options_for_key($filter_options, 'client_ip_versions'));
         $output .= $this->render_select_filter('kiwi_stats_client_ip_prefix', 'IP Prefix', $client_ip_prefix, $this->get_filter_options_for_key($filter_options, 'client_ip_prefixes'));
@@ -257,7 +267,8 @@ class Kiwi_Statistics_Shortcode
             'kiwi_stats_tksource' => (string) ($filters['tksource'] ?? ''),
             'kiwi_stats_tkzone' => (string) ($filters['tkzone'] ?? ''),
             'kiwi_stats_device_brand' => (string) ($filters['device_brand'] ?? ''),
-            'kiwi_stats_android_version' => (string) ($filters['android_version'] ?? ''),
+            'kiwi_stats_os' => (string) ($filters['os'] ?? ''),
+            'kiwi_stats_os_version' => (string) ($filters['os_version'] ?? ''),
             'kiwi_stats_browser' => (string) ($filters['browser'] ?? ''),
             'kiwi_stats_client_ip_version' => (string) ($filters['client_ip_version'] ?? ''),
             'kiwi_stats_client_ip_prefix' => (string) ($filters['client_ip_prefix'] ?? ''),

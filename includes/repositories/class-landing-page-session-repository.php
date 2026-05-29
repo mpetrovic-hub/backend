@@ -32,6 +32,10 @@ class Kiwi_Landing_Page_Session_Repository
             tksource VARCHAR(191) NOT NULL DEFAULT '',
             tkzone VARCHAR(191) NOT NULL DEFAULT '',
             browser_language VARCHAR(20) NOT NULL DEFAULT '(unknown)',
+            device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)',
+            os VARCHAR(50) NOT NULL DEFAULT '(unknown)',
+            os_version VARCHAR(50) NOT NULL DEFAULT '(unknown)',
+            browser VARCHAR(100) NOT NULL DEFAULT '(unknown)',
             request_host VARCHAR(191) NOT NULL DEFAULT '',
             request_path VARCHAR(191) NOT NULL DEFAULT '',
             session_token VARCHAR(100) NOT NULL DEFAULT '',
@@ -51,6 +55,10 @@ class Kiwi_Landing_Page_Session_Repository
             KEY tksource (tksource),
             KEY tkzone (tkzone),
             KEY browser_language (browser_language),
+            KEY device_brand (device_brand),
+            KEY os (os),
+            KEY os_version (os_version),
+            KEY browser (browser),
             KEY session_token (session_token),
             KEY created_at (created_at),
             KEY created_landing_session (created_at, landing_key, session_token)
@@ -79,6 +87,10 @@ class Kiwi_Landing_Page_Session_Repository
                 'tksource' => $data['tksource'] ?? '',
                 'tkzone' => $data['tkzone'] ?? '',
                 'browser_language' => $data['browser_language'] ?? '(unknown)',
+                'device_brand' => $this->sanitize_text_dimension((string) ($data['device_brand'] ?? '(unknown)'), 100),
+                'os' => $this->sanitize_text_dimension((string) ($data['os'] ?? '(unknown)'), 50),
+                'os_version' => $this->sanitize_text_dimension((string) ($data['os_version'] ?? '(unknown)'), 50),
+                'browser' => $this->sanitize_text_dimension((string) ($data['browser'] ?? '(unknown)'), 100),
                 'request_host' => $data['request_host'] ?? '',
                 'request_path' => $data['request_path'] ?? '',
                 'session_token' => $data['session_token'] ?? '',
@@ -90,6 +102,10 @@ class Kiwi_Landing_Page_Session_Repository
                 'raw_context' => isset($data['raw_context']) ? wp_json_encode($data['raw_context']) : '',
             ],
             [
+                '%s',
+                '%s',
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -143,6 +159,77 @@ class Kiwi_Landing_Page_Session_Repository
         return is_array($row) ? $row : null;
     }
 
+    public function enrich_device_context_by_landing_session(
+        string $landing_key,
+        string $session_token,
+        array $device_context,
+        ?Kiwi_Device_Context_Normalizer $normalizer = null
+    ): bool {
+        global $wpdb;
+
+        $landing_key = trim($landing_key);
+        $session_token = trim($session_token);
+
+        if ($landing_key === '' || $session_token === '') {
+            return false;
+        }
+
+        $normalizer = $normalizer instanceof Kiwi_Device_Context_Normalizer
+            ? $normalizer
+            : new Kiwi_Device_Context_Normalizer();
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT id, device_brand, os, os_version, browser
+                 FROM {$this->get_table_name()}
+                 WHERE landing_key = %s
+                   AND session_token = %s
+                 ORDER BY id ASC",
+                $landing_key,
+                $session_token
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($rows) || empty($rows)) {
+            return false;
+        }
+
+        $updated = false;
+
+        foreach ($rows as $row) {
+            $merged = $normalizer->merge(is_array($row) ? $row : [], $device_context);
+            $fields = [];
+            $formats = [];
+
+            foreach (['device_brand', 'os', 'os_version', 'browser'] as $field) {
+                $value = $this->sanitize_text_dimension((string) ($merged[$field] ?? '(unknown)'), $field === 'device_brand' || $field === 'browser' ? 100 : 50);
+
+                if ($value === (string) ($row[$field] ?? '')) {
+                    continue;
+                }
+
+                $fields[$field] = $value;
+                $formats[] = '%s';
+            }
+
+            if (empty($fields)) {
+                continue;
+            }
+
+            $result = $wpdb->update(
+                $this->get_table_name(),
+                $fields,
+                ['id' => (int) ($row['id'] ?? 0)],
+                $formats,
+                ['%d']
+            );
+
+            $updated = $updated || $result !== false;
+        }
+
+        return $updated;
+    }
+
     public function find_by_session_token(string $session_token, string $service_key = ''): ?array
     {
         global $wpdb;
@@ -184,5 +271,21 @@ class Kiwi_Landing_Page_Session_Repository
         }
 
         return gmdate('Y-m-d H:i:s');
+    }
+
+    private function sanitize_text_dimension(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '(unknown)';
+        }
+
+        $value = preg_replace('/[^\P{C}\r\n\t]/u', '', $value);
+        $value = is_string($value) ? $value : '';
+        $value = preg_replace('/\s+/', ' ', $value);
+        $value = is_string($value) ? trim($value) : '';
+
+        return $value === '' ? '(unknown)' : substr($value, 0, max(1, $max_length));
     }
 }
