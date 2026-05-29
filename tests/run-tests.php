@@ -349,6 +349,7 @@ require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-enga
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
 require_once __DIR__ . '/../includes/repositories/interface-statistics-read-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-summary-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-tkzone-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-traffic-source-funnel-statistics-repository.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
@@ -371,6 +372,7 @@ require_once __DIR__ . '/../includes/services/class-landing-page-gallery-service
 require_once __DIR__ . '/../includes/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/../includes/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-summary-aggregation-service.php';
+require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-tkzone-summary-aggregation-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
@@ -1066,6 +1068,31 @@ class Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service extends Kiwi_Landin
     }
 }
 
+class Kiwi_Test_Landing_Funnel_Daily_Tkzone_Summary_Refresh_Service extends Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
+{
+    public $calls = [];
+    private $result;
+    private $last_error;
+
+    public function __construct(array $result, string $last_error = '')
+    {
+        $this->result = $result;
+        $this->last_error = $last_error;
+    }
+
+    public function refresh_range(string $from_date, string $to_date): array
+    {
+        $this->calls[] = [$from_date, $to_date];
+
+        return $this->result;
+    }
+
+    public function get_last_error(): string
+    {
+        return $this->last_error;
+    }
+}
+
 class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
 {
     public $current_business_date = '2026-05-26';
@@ -1073,16 +1100,33 @@ class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
     public $refresh_days = 7;
     public $logs = [];
     private $refresh_service;
+    private $tkzone_refresh_service;
 
-    public function __construct(Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service $refresh_service)
+    public function __construct(
+        Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service $refresh_service,
+        ?Kiwi_Test_Landing_Funnel_Daily_Tkzone_Summary_Refresh_Service $tkzone_refresh_service = null
+    )
     {
         parent::__construct(dirname(__DIR__), 'https://example.test/plugin/');
         $this->refresh_service = $refresh_service;
+        $this->tkzone_refresh_service = $tkzone_refresh_service instanceof Kiwi_Test_Landing_Funnel_Daily_Tkzone_Summary_Refresh_Service
+            ? $tkzone_refresh_service
+            : new Kiwi_Test_Landing_Funnel_Daily_Tkzone_Summary_Refresh_Service([
+                'success' => true,
+                'deleted' => 0,
+                'inserted' => 0,
+                'error' => '',
+            ]);
     }
 
     protected function build_landing_funnel_daily_summary_refresh_service(): Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
     {
         return $this->refresh_service;
+    }
+
+    protected function build_landing_funnel_daily_tkzone_summary_refresh_service(): Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
+    {
+        return $this->tkzone_refresh_service;
     }
 
     protected function get_current_business_date(): string
@@ -8957,6 +9001,267 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filt
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository creates slim tkzone schema-managed table', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository();
+    $repository->create_table();
+    $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+    kiwi_assert_contains('CREATE TABLE abc_kiwi_landing_funnel_daily_tkzone_summary', $sql, 'Expected tkzone summary schema to use the configured table prefix.');
+    foreach ([
+        'metric_date DATE NOT NULL',
+        "provider_key VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "flow_key VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "country VARCHAR(10) NOT NULL DEFAULT '(unknown)'",
+        "service_key VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "landing_key VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "tksource VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
+        "tkzone VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
+        'dimension_hash CHAR(64) NOT NULL',
+    ] as $column) {
+        kiwi_assert_contains($column, $sql, 'Expected required tkzone summary dimension column: ' . $column);
+    }
+    foreach ([
+        'sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'page_loaded_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta1_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta1_click_events BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta2_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta2_click_events BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta3_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'cta3_click_events BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_attempts BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_successes BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_fails BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'handoff_rate_pct DECIMAL(7,2) NOT NULL DEFAULT 0',
+        'sales BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'sales_amount_minor BIGINT(20) NOT NULL DEFAULT 0',
+    ] as $column) {
+        kiwi_assert_contains($column, $sql, 'Expected required tkzone summary metric column: ' . $column);
+    }
+    kiwi_assert_contains('UNIQUE KEY metric_date_dimension_hash (metric_date, dimension_hash)', $sql, 'Expected idempotent uniqueness by metric_date and dimension hash.');
+    foreach ([
+        'KEY provider_key (provider_key)',
+        'KEY flow_key (flow_key)',
+        'KEY country (country)',
+        'KEY service_key (service_key)',
+        'KEY landing_key (landing_key)',
+        'KEY tksource (tksource)',
+        'KEY tkzone (tkzone)',
+    ] as $index) {
+        kiwi_assert_contains($index, $sql, 'Expected filterable tkzone summary dimension index: ' . $index);
+    }
+    foreach ([
+        'pid VARCHAR',
+        'device_brand',
+        'os_version',
+        'browser VARCHAR',
+        'client_ip_version',
+        'client_ip_prefix',
+        'median_hidden_seconds',
+        'min_hidden_seconds',
+        'max_hidden_seconds',
+    ] as $excluded) {
+        kiwi_assert_true(strpos($sql, $excluded) === false, 'Expected tkzone summary schema to omit broad summary field: ' . $excluded);
+    }
+    kiwi_assert_true(strpos($sql, 'wp_kiwi_') === false, 'Expected tkzone summary schema not to hardcode wp_ table prefixes.');
+
+    $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service builds bounded canonical-session aggregate refresh', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository();
+    $service = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service($repository);
+    $result = $service->refresh_range('2026-05-22', '2026-05-22');
+    $service->refresh_range('2026-05-22', '2026-05-22');
+
+    kiwi_assert_true($result['success'], 'Expected tkzone aggregate refresh to succeed when delete and insert queries succeed.');
+    kiwi_assert_same(4, $result['deleted'], 'Expected tkzone refresh result to expose deleted row count.');
+    kiwi_assert_same(6, $result['inserted'], 'Expected tkzone refresh result to expose inserted row count.');
+
+    $prepared = $wpdb->prepared_statements;
+    kiwi_assert_same(['2026-05-22'], $prepared[0]['args'] ?? [], 'Expected tkzone refresh to delete the exact metric_date before inserting replacement rows.');
+    kiwi_assert_same(
+        [
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-24 00:00:00',
+            '2026-05-22',
+            '2026-05-22',
+            '2026-05-22',
+        ],
+        $prepared[1]['args'] ?? [],
+        'Expected tkzone insert to bind day-bounded sessions/sales and next-day handoff carryover.'
+    );
+    $insert_sql = (string) ($prepared[1]['query'] ?? '');
+    $normalized_insert_sql = str_replace("\r\n", "\n", $insert_sql);
+
+    kiwi_assert_contains('INSERT INTO abc_kiwi_landing_funnel_daily_tkzone_summary', $insert_sql, 'Expected refresh to populate the tkzone summary table.');
+    kiwi_assert_contains('FROM abc_kiwi_landing_page_sessions', $insert_sql, 'Expected tkzone refresh to aggregate canonical landing sessions.');
+    kiwi_assert_contains('LEFT JOIN engagement_sessions e', $insert_sql, 'Expected engagement metrics to join to landing sessions.');
+    kiwi_assert_contains('LEFT JOIN handoff_by_session h', $insert_sql, 'Expected handoff metrics to join to landing sessions.');
+    kiwi_assert_contains('FROM abc_kiwi_sales s', $insert_sql, 'Expected tkzone refresh to aggregate completed sales from durable sales snapshots.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tkzone, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS tkzone", $insert_sql, 'Expected tkzone dimensions to come from landing sessions for session facts.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.tkzone, ''), '(unknown)') AS tkzone", $insert_sql, 'Expected sales facts to use durable sale tkzone snapshots.');
+    kiwi_assert_contains('s.attribution_metric_date AS metric_date', $insert_sql, 'Expected sales metric date to use durable attribution metric date.');
+    kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use attribution metric date bounds.');
+    kiwi_assert_true(strpos($insert_sql, 'DATE(s.completed_at)') === false, 'Expected tkzone summary sales not to fall back to completion date.');
+    kiwi_assert_true(strpos($insert_sql, 'first_engagement_at AS metric_at') === false, 'Expected engagement-only sessions not to create tkzone session facts.');
+    kiwi_assert_true(strpos($insert_sql, 'session_keys') === false, 'Expected tkzone summary not to union engagement/handoff-only session keys.');
+    kiwi_assert_contains("SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to use event counts under the handoff uniqueness contract.');
+    kiwi_assert_contains('WHEN a.handoff_attempts <= 0 THEN 0', $insert_sql, 'Expected handoff rate to short-circuit when attempts are zero.');
+    kiwi_assert_contains("SHA2(CONCAT_WS('|',", $insert_sql, 'Expected stable tkzone dimension_hash computation.');
+    kiwi_assert_contains("a.provider_key,\n                    a.flow_key,\n                    a.country,\n                    a.service_key,\n                    a.landing_key,\n                    a.tksource,\n                    a.tkzone", $normalized_insert_sql, 'Expected tkzone dimension_hash to use only the tkzone summary dimension basis.');
+    foreach ([
+        'pid',
+        'device_brand',
+        'os_version',
+        'browser',
+        'client_ip',
+        'hidden_seconds',
+        'median_hidden_seconds',
+        'ua_ch_',
+        'user_agent',
+        'COUNT(DISTINCT',
+    ] as $excluded) {
+        kiwi_assert_true(strpos($insert_sql, $excluded) === false, 'Expected tkzone refresh SQL to omit broad or heavy summary expression: ' . $excluded);
+    }
+    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_tkzone_summary WHERE metric_date = %s', $prepared[0]['query'] ?? '', 'Expected first tkzone refresh statement to delete one metric_date.');
+    kiwi_assert_same('DELETE FROM abc_kiwi_landing_funnel_daily_tkzone_summary WHERE metric_date = %s', $prepared[2]['query'] ?? '', 'Expected repeated tkzone refresh to delete the same metric_date again.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository reads rows with only supported zone filters', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+    $wpdb->result_rows = [
+        [
+            'metric_date' => '2026-05-24',
+            'provider_key' => 'nth',
+            'flow_key' => 'one-off',
+            'country' => 'FR',
+            'service_key' => 'svc_a',
+            'landing_key' => 'lp2-fr',
+            'tksource' => 'src_a',
+            'tkzone' => 'zone_a',
+            'sessions' => 10,
+            'page_loaded_sessions' => 9,
+            'cta1_sessions' => 7,
+            'cta1_click_events' => 8,
+            'cta2_sessions' => 4,
+            'cta2_click_events' => 4,
+            'cta3_sessions' => 2,
+            'cta3_click_events' => 2,
+            'handoff_attempts' => 5,
+            'handoff_successes' => 4,
+            'handoff_fails' => 1,
+            'handoff_rate_pct' => '80.00',
+            'sales' => 2,
+            'sales_amount_minor' => 900,
+        ],
+    ];
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository();
+    $normalized = $repository->normalize_filters([
+        'from' => '2026-05-24T10:30:00',
+        'to' => '2026-05-25 23:59:59',
+        'provider_key' => 'nth',
+        'flow_key' => 'one-off',
+        'country' => 'FR',
+        'service_key' => 'svc_a',
+        'landing_key' => 'lp2-fr',
+        'tksource' => 'src_a',
+        'tkzone' => 'zone_a',
+        'device_brand' => 'Samsung',
+        'client_ip_prefix' => '203.0.113.0/24',
+    ]);
+    $rows = $repository->get_rows($normalized, 999);
+    $statement = $wpdb->prepared_statements[count($wpdb->prepared_statements) - 1] ?? [];
+    $query = (string) ($statement['query'] ?? '');
+
+    kiwi_assert_same($wpdb->result_rows, $rows, 'Expected tkzone summary repository to return database rows when the table is readable.');
+    kiwi_assert_true(!array_key_exists('device_brand', $normalized), 'Expected tkzone filters not to normalize unsupported device dimensions.');
+    kiwi_assert_true(!array_key_exists('client_ip_prefix', $normalized), 'Expected tkzone filters not to normalize unsupported IP dimensions.');
+    kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_tkzone_summary', $query, 'Expected tkzone query to read from the tkzone summary table.');
+    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND provider_key = %s AND flow_key = %s AND country = %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s', $query, 'Expected all supported tkzone filters to be applied.');
+    kiwi_assert_contains('handoff_rate_pct', $query, 'Expected tkzone query to expose handoff rate.');
+    kiwi_assert_contains('sales_amount_minor', $query, 'Expected tkzone query to expose sales amount metrics.');
+    foreach (['pid', 'device_brand', 'os_version', 'browser', 'client_ip_prefix', 'median_hidden_seconds'] as $excluded) {
+        kiwi_assert_true(strpos($query, $excluded) === false, 'Expected tkzone query not to expose unsupported field: ' . $excluded);
+    }
+    kiwi_assert_same(
+        ['2026-05-24', '2026-05-25', 'nth', 'one-off', 'FR', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 500],
+        $statement['args'] ?? [],
+        'Expected tkzone query args to normalize date filters and cap the limit to 500.'
+    );
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository exposes zone filter options only', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $wpdb->prefix = 'abc_';
+    $wpdb->result_rows_queue = [
+        [['provider_key' => 'nth'], ['provider_key' => 'dimoco']],
+        [['flow_key' => 'pin'], ['flow_key' => 'one-off']],
+        [['country' => 'PL'], ['country' => 'FR']],
+        [['service_key' => 'svc_b'], ['service_key' => 'svc_a']],
+        [['landing_key' => 'lp6-fr'], ['landing_key' => 'lp2-fr']],
+        [['tksource' => 'src_b'], ['tksource' => 'src_a']],
+        [['tkzone' => 'zone_b'], ['tkzone' => 'zone_a']],
+    ];
+
+    $repository = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository();
+    $options = $repository->get_filter_options([
+        'from' => '2026-05-24T10:30:00',
+        'to' => '2026-05-25 23:59:59',
+    ]);
+
+    kiwi_assert_same(['dimoco', 'nth'], $options['provider_keys'] ?? [], 'Expected provider filter options to be distinct and sorted.');
+    kiwi_assert_same(['one-off', 'pin'], $options['flow_keys'] ?? [], 'Expected flow filter options to be distinct and sorted.');
+    kiwi_assert_same(['FR', 'PL'], $options['countries'] ?? [], 'Expected country filter options to be distinct and sorted.');
+    kiwi_assert_same(['svc_a', 'svc_b'], $options['service_keys'] ?? [], 'Expected service filter options to be distinct and sorted.');
+    kiwi_assert_same(['lp2-fr', 'lp6-fr'], $options['landing_keys'] ?? [], 'Expected landing filter options to be distinct and sorted.');
+    kiwi_assert_same(['src_a', 'src_b'], $options['tksources'] ?? [], 'Expected source filter options to be distinct and sorted.');
+    kiwi_assert_same(['zone_a', 'zone_b'], $options['tkzones'] ?? [], 'Expected zone filter options to be distinct and sorted.');
+    foreach (['device_brands', 'os_values', 'os_versions', 'browsers', 'client_ip_versions', 'client_ip_prefixes'] as $excluded_option_key) {
+        kiwi_assert_true(!array_key_exists($excluded_option_key, $options), 'Expected tkzone filter options not to expose unsupported option set: ' . $excluded_option_key);
+    }
+    kiwi_assert_contains('SELECT DISTINCT provider_key', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected provider options to query distinct provider keys from the tkzone summary table.');
+    kiwi_assert_contains('SELECT DISTINCT tkzone', (string) ($wpdb->prepared_statements[12]['query'] ?? ''), 'Expected tkzone options to query distinct zones from the tkzone summary table.');
+    kiwi_assert_same(
+        ['2026-05-24', '2026-05-25'],
+        $wpdb->prepared_statements[0]['args'] ?? [],
+        'Expected tkzone options query to reuse normalized date filters.'
+    );
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-managed prefixed view', function (): void {
     global $wpdb;
 
@@ -9473,6 +9778,10 @@ kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema rep
         in_array(Kiwi_Landing_Funnel_Daily_Summary_Repository::class, $classes, true),
         'Expected schema migrations to include the landing funnel daily summary repository.'
     );
+    kiwi_assert_true(
+        in_array(Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository::class, $classes, true),
+        'Expected schema migrations to include the landing funnel daily tkzone summary repository.'
+    );
 });
 
 kiwi_run_test('Kiwi_Plugin backfills legacy Android version before dropping old columns', function (): void {
@@ -9556,7 +9865,7 @@ kiwi_run_test('Kiwi_Plugin backfills legacy Android version before dropping old 
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for normalized device dimensions', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for normalized device and tkzone summary dimensions', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -9568,7 +9877,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for normalized device dimensions
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-29-2', $schema_version, 'Expected schema version to be bumped for normalized device dimension migrations.');
+    kiwi_assert_same('2026-05-29-3', $schema_version, 'Expected schema version to be bumped for tkzone summary migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
@@ -9645,14 +9954,25 @@ kiwi_run_test('Kiwi_Plugin runs landing funnel daily summary refresh for the def
         'inserted' => 6,
         'error' => '',
     ]);
-    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+    $tkzone_service = new Kiwi_Test_Landing_Funnel_Daily_Tkzone_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-19',
+        'to_date' => '2026-05-26',
+        'deleted' => 1,
+        'inserted' => 2,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service, $tkzone_service);
 
     $result = $plugin->run_landing_funnel_daily_summary_refresh();
 
     kiwi_assert_true($result['success'], 'Expected the daily summary refresh wrapper to return the service success.');
     kiwi_assert_same([['2026-05-19', '2026-05-26']], $service->calls, 'Expected default refresh window to cover today minus seven lookback days through today.');
-    kiwi_assert_same(4, $result['deleted'], 'Expected refresh result to expose deleted rows.');
-    kiwi_assert_same(6, $result['inserted'], 'Expected refresh result to expose inserted rows.');
+    kiwi_assert_same([['2026-05-19', '2026-05-26']], $tkzone_service->calls, 'Expected tkzone summary refresh to use the same rolling window.');
+    kiwi_assert_same(5, $result['deleted'], 'Expected combined refresh result to expose deleted rows across both summaries.');
+    kiwi_assert_same(8, $result['inserted'], 'Expected combined refresh result to expose inserted rows across both summaries.');
+    kiwi_assert_same(4, $result['summaries']['main']['deleted'] ?? null, 'Expected persisted result to keep main summary refresh counters.');
+    kiwi_assert_same(2, $result['summaries']['tkzone']['inserted'] ?? null, 'Expected persisted result to keep tkzone summary refresh counters.');
     kiwi_assert_true(!isset($GLOBALS['kiwi_test_transients'][$lock_key]), 'Expected daily summary refresh lock to be cleared after normal completion.');
     kiwi_assert_same([$lock_key], $GLOBALS['kiwi_test_deleted_transients'], 'Expected normal completion to explicitly delete the refresh lock.');
     kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected last refresh result to be persisted as an option.');
@@ -9732,10 +10052,10 @@ kiwi_run_test('Kiwi_Plugin persists landing funnel daily summary refresh failure
     $result = $plugin->run_landing_funnel_daily_summary_refresh();
 
     kiwi_assert_true(!$result['success'], 'Expected failed aggregation service result to remain failed.');
-    kiwi_assert_same('summary insert failed', $result['error'], 'Expected failed refresh error to be retained.');
+    kiwi_assert_same('main: summary insert failed', $result['error'], 'Expected failed refresh error to name the failed summary.');
     kiwi_assert_true(!isset($GLOBALS['kiwi_test_transients'][$lock_key]), 'Expected refresh lock to be cleared after failed service completion.');
     kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected failed refresh result to be persisted for operations.');
-    kiwi_assert_contains('Refresh failed for 2026-05-19 to 2026-05-26: summary insert failed', implode("\n", $plugin->logs), 'Expected failed refresh to be visibly logged.');
+    kiwi_assert_contains('Refresh failed for 2026-05-19 to 2026-05-26: main: summary insert failed', implode("\n", $plugin->logs), 'Expected failed refresh to be visibly logged.');
 });
 
 kiwi_run_test('Kiwi_Plugin exports HLR rows from the transient identified by batch_id', function (): void {

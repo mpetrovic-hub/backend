@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-29-2';
+    private const DB_SCHEMA_VERSION = '2026-05-29-3';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -286,18 +286,23 @@ class Kiwi_Plugin
 
         try {
             $range = $this->build_landing_funnel_daily_summary_refresh_range();
-            $service = $this->build_landing_funnel_daily_summary_refresh_service();
-            $service_result = $service->refresh_range($range['from_date'], $range['to_date']);
-            $result = $this->normalize_landing_funnel_daily_summary_refresh_result(
-                $service_result,
+            $main_result = $this->run_landing_funnel_daily_refresh_service(
+                $this->build_landing_funnel_daily_summary_refresh_service(),
+                $range,
+                $started_at
+            );
+            $tkzone_result = $this->run_landing_funnel_daily_refresh_service(
+                $this->build_landing_funnel_daily_tkzone_summary_refresh_service(),
+                $range,
+                $started_at
+            );
+            $result = $this->combine_landing_funnel_daily_refresh_results(
+                $main_result,
+                $tkzone_result,
                 $range['from_date'],
                 $range['to_date'],
                 $started_at
             );
-
-            if (!$result['success'] && $result['error'] === '' && method_exists($service, 'get_last_error')) {
-                $result['error'] = (string) $service->get_last_error();
-            }
         } catch (Throwable $error) {
             $range = isset($range) && is_array($range) ? $range : ['from_date' => '', 'to_date' => ''];
             $result = [
@@ -877,6 +882,7 @@ TEXT;
             new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
             new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
             new Kiwi_Landing_Funnel_Daily_Summary_Repository(),
+            new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository(),
             new Kiwi_Traffic_Source_Funnel_Statistics_Repository(),
         ];
     }
@@ -992,6 +998,11 @@ TEXT;
         return new Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service();
     }
 
+    protected function build_landing_funnel_daily_tkzone_summary_refresh_service(): Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
+    {
+        return new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service();
+    }
+
     protected function get_current_business_date(): string
     {
         if (function_exists('current_time')) {
@@ -1084,6 +1095,97 @@ TEXT;
         }
 
         return $normalized;
+    }
+
+    private function run_landing_funnel_daily_refresh_service($service, array $range, string $started_at): array
+    {
+        try {
+            if (!is_object($service) || !method_exists($service, 'refresh_range')) {
+                throw new RuntimeException('Landing funnel daily refresh service is not callable.');
+            }
+
+            $service_result = $service->refresh_range(
+                (string) ($range['from_date'] ?? ''),
+                (string) ($range['to_date'] ?? '')
+            );
+            $result = $this->normalize_landing_funnel_daily_summary_refresh_result(
+                is_array($service_result) ? $service_result : [],
+                (string) ($range['from_date'] ?? ''),
+                (string) ($range['to_date'] ?? ''),
+                $started_at
+            );
+
+            if (!$result['success'] && $result['error'] === '' && method_exists($service, 'get_last_error')) {
+                $result['error'] = (string) $service->get_last_error();
+            }
+
+            return $result;
+        } catch (Throwable $error) {
+            return [
+                'success' => false,
+                'from_date' => (string) ($range['from_date'] ?? ''),
+                'to_date' => (string) ($range['to_date'] ?? ''),
+                'deleted' => 0,
+                'inserted' => 0,
+                'error' => $error->getMessage(),
+                'started_at' => $started_at,
+                'finished_at' => $this->get_current_time_mysql(),
+                'skipped_due_to_lock' => false,
+            ];
+        }
+    }
+
+    private function combine_landing_funnel_daily_refresh_results(
+        array $main_result,
+        array $tkzone_result,
+        string $from_date,
+        string $to_date,
+        string $started_at
+    ): array {
+        $errors = [];
+
+        if (!($main_result['success'] ?? false)) {
+            $errors[] = 'main: ' . $this->format_landing_funnel_daily_refresh_error($main_result);
+        }
+
+        if (!($tkzone_result['success'] ?? false)) {
+            $errors[] = 'tkzone: ' . $this->format_landing_funnel_daily_refresh_error($tkzone_result);
+        }
+
+        return [
+            'success' => empty($errors),
+            'from_date' => $from_date,
+            'to_date' => $to_date,
+            'deleted' => (int) ($main_result['deleted'] ?? 0) + (int) ($tkzone_result['deleted'] ?? 0),
+            'inserted' => (int) ($main_result['inserted'] ?? 0) + (int) ($tkzone_result['inserted'] ?? 0),
+            'error' => implode('; ', $errors),
+            'started_at' => $started_at,
+            'finished_at' => $this->get_current_time_mysql(),
+            'skipped_due_to_lock' => false,
+            'summaries' => [
+                'main' => $this->compact_landing_funnel_daily_refresh_result($main_result),
+                'tkzone' => $this->compact_landing_funnel_daily_refresh_result($tkzone_result),
+            ],
+        ];
+    }
+
+    private function compact_landing_funnel_daily_refresh_result(array $result): array
+    {
+        return [
+            'success' => (bool) ($result['success'] ?? false),
+            'from_date' => (string) ($result['from_date'] ?? ''),
+            'to_date' => (string) ($result['to_date'] ?? ''),
+            'deleted' => (int) ($result['deleted'] ?? 0),
+            'inserted' => (int) ($result['inserted'] ?? 0),
+            'error' => (string) ($result['error'] ?? ''),
+        ];
+    }
+
+    private function format_landing_funnel_daily_refresh_error(array $result): string
+    {
+        $error = trim((string) ($result['error'] ?? ''));
+
+        return $error !== '' ? $error : 'failed without error detail';
     }
 
     private function has_landing_funnel_daily_summary_refresh_lock(): bool
