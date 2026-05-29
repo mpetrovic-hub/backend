@@ -257,7 +257,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
             $event_type
         );
 
-        if (!empty($record) && $event_type === 'page_loaded') {
+        if (!empty($record)) {
             $this->enrich_landing_session_device_context($landing_key, $session_token, $ua_context);
         }
 
@@ -270,6 +270,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
             return;
         }
 
+        // Keep UA parsing at the PHP boundary so reporting SQL reads normalized buckets.
         $device_context = $this->device_context_normalizer->normalize($ua_context);
         $this->landing_page_session_repository->enrich_device_context_by_landing_session(
             $landing_key,
@@ -329,6 +330,10 @@ class Kiwi_Landing_Kpi_Rest_Routes
                 'ua_client_hints' => $ua_client_hints,
             ],
         ]);
+
+        if (is_array($result['row'] ?? null)) {
+            $this->enrich_landing_session_device_context($landing_key, $session_token, $ua_context);
+        }
 
         return is_array($result['row'] ?? null);
     }

@@ -5751,6 +5751,78 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes enriches landing session device cont
     }
 });
 
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes enriches landing session device context on CTA click', function (): void {
+    $landing_pages = [
+        'lp2-fr' => [
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+        ],
+    ];
+    $previous_user_agent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+    $_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (Linux; Android 16; SM-S921B) AppleWebKit/537.36 Chrome/147.0.0.0 Mobile Safari/537.36';
+
+    try {
+        $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+        $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
+        $landing_session_repository->insert([
+            'landing_key' => 'lp2-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'session_token' => 'sess-device-onclick',
+        ]);
+        $config = new Kiwi_Test_Landing_Ua_Config('onclick', $landing_pages);
+        $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+        $routes = new Kiwi_Landing_Kpi_Rest_Routes(
+            $config,
+            $service,
+            $engagement_repository,
+            null,
+            null,
+            null,
+            $landing_session_repository,
+            new Kiwi_Device_Context_Normalizer()
+        );
+
+        $routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-device-onclick',
+            'event_type' => 'page_loaded',
+            'ua_ch_supported' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_model' => 'SM-S921B',
+        ]));
+        $after_load = $landing_session_repository->find_by_landing_session('lp2-fr', 'sess-device-onclick') ?? [];
+
+        $routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-device-onclick',
+            'event_type' => 'cta_click',
+            'cta_step' => 'cta1',
+            'ua_ch_supported' => 1,
+            'ua_ch_mobile' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_platform_version' => '16.0.0',
+            'ua_ch_model' => 'SM-S921B',
+            'ua_ch_brands' => 'Google Chrome 147',
+            'ua_ch_full_version_list' => 'Google Chrome 147.0.0.0',
+        ]));
+        $after_click = $landing_session_repository->find_by_landing_session('lp2-fr', 'sess-device-onclick') ?? [];
+
+        kiwi_assert_same('(unknown)', (string) ($after_load['device_brand'] ?? ''), 'Expected onclick page_loaded events not to enrich landing-session device buckets.');
+        kiwi_assert_same('Samsung', (string) ($after_click['device_brand'] ?? ''), 'Expected onclick CTA UA context to enrich the landing-session device brand.');
+        kiwi_assert_same('Android', (string) ($after_click['os'] ?? ''), 'Expected onclick CTA UA context to enrich the landing-session OS.');
+        kiwi_assert_same('16', (string) ($after_click['os_version'] ?? ''), 'Expected onclick CTA UA context to enrich the landing-session OS version.');
+        kiwi_assert_same('Chrome', (string) ($after_click['browser'] ?? ''), 'Expected onclick CTA UA context to enrich the landing-session browser.');
+    } finally {
+        if ($previous_user_agent === null) {
+            unset($_SERVER['HTTP_USER_AGENT']);
+        } else {
+            $_SERVER['HTTP_USER_AGENT'] = $previous_user_agent;
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes gates UA context by landing tracking mode', function (): void {
     $landing_pages = [
         'lp2-fr' => [
@@ -6179,13 +6251,22 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
     );
     $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
     $handoff_repository = new Kiwi_Test_Landing_Handoff_Event_Repository();
+    $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
+    $landing_session_repository->insert([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'session_token' => 'sess-handoff-2',
+    ]);
     $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
     $routes = new Kiwi_Landing_Kpi_Rest_Routes(
         $config,
         $service,
         null,
         null,
-        $handoff_repository
+        $handoff_repository,
+        null,
+        $landing_session_repository,
+        new Kiwi_Device_Context_Normalizer()
     );
 
     $attempt = $routes->handle_event(new WP_REST_Request([], [
@@ -6241,6 +6322,11 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without c
     kiwi_assert_same('Pixel 8', (string) ($handoff_repository->rows[1]['ua_ch_model'] ?? ''), 'Expected handoff events to persist UA Client Hints model from REST payload.');
     kiwi_assert_same('Google Chrome 147.0.7727.138', (string) ($handoff_repository->rows[1]['ua_ch_full_version_list'] ?? ''), 'Expected handoff events to persist UA Client Hints full version list from REST payload.');
     kiwi_assert_same('Pixel 8', (string) ($handoff_repository->rows[1]['raw_context']['ua_client_hints']['ua_ch_model'] ?? ''), 'Expected handoff raw context to include a compact UA Client Hints snapshot.');
+    $enriched_session = $landing_session_repository->find_by_landing_session('lp2-fr', 'sess-handoff-2') ?? [];
+    kiwi_assert_same('Google', (string) ($enriched_session['device_brand'] ?? ''), 'Expected handoff UA context to enrich the landing-session device brand.');
+    kiwi_assert_same('Android', (string) ($enriched_session['os'] ?? ''), 'Expected handoff UA context to enrich the landing-session OS.');
+    kiwi_assert_same('15', (string) ($enriched_session['os_version'] ?? ''), 'Expected handoff UA context to enrich the landing-session OS version.');
+    kiwi_assert_same('Chrome', (string) ($enriched_session['browser'] ?? ''), 'Expected handoff UA context to enrich the landing-session browser.');
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected handoff-only events not to mutate KPI CTA counters.');
     kiwi_assert_same(400, $invalid->status, 'Expected unknown handoff event types to be rejected.');
 
