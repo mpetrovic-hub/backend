@@ -95,7 +95,7 @@ Tracking/cookie note:
 
 High-level flow:
 
-1. Landing captures attribution context server-side.
+1. Landing captures attribution context server-side and stores canonical session dimensions on `wp_kiwi_landing_page_sessions`.
 2. Provider callbacks are normalized at provider boundary.
 3. Confirmed conversions are resolved against attribution state using stable references (transaction/message/session/external refs).
 4. Successful one-off sales are persisted in `wp_kiwi_sales`.
@@ -108,6 +108,7 @@ Important boundary:
 - Incoming provider callback validation is provider-specific.
 - Outgoing affiliate secret/signature applies only to outbound postbacks.
 - Client IP stored on sales must come from `wp_kiwi_landing_page_sessions.remote_ip`; provider/aggregator callback `REMOTE_ADDR` is not a user-IP source.
+- Traffic and campaign dimensions stored on landing sessions come from landing metadata, service context, query parameters, and `HTTP_ACCEPT_LANGUAGE`; `country` is the campaign/service country, not a Geo-IP lookup.
 
 ## Landing-page KPI tracking
 
@@ -188,6 +189,12 @@ Notes:
 
 ## Key tables and what they mean
 
+- `wp_kiwi_landing_page_sessions`
+  - canonical landing-session facts captured by the server-side router
+  - stores `provider_key`, `flow_key`, campaign/service `country`, `pid`, `tksource`, `tkzone`, and normalized primary `browser_language`
+  - stores `pid`, `tksource`, and `tkzone` directly from query parameters even when no `click_id` is present
+  - keeps raw request context separately in `query_params`/`raw_context`; reporting should use the first-class dimension columns
+
 - `wp_kiwi_click_attributions`
   - temporary server-side attribution state
   - click ID, internal `transaction_id`, refs, postback audit, TTL expiry
@@ -243,7 +250,8 @@ Notes:
 - `wp_kiwi_landing_funnel_daily_summary`
   - plugin-managed persistent table for daily funnel aggregates
   - groups by `metric_date`, `landing_key`, `service_key`, `provider_key`, `flow_key`, `country`, `pid`, `tksource`, `tkzone`, `device_brand`, `android_version`, `browser`, `client_ip_version`, and coarse `client_ip_prefix`
-  - derives session IP buckets from `wp_kiwi_landing_page_sessions.remote_ip`; completed-sales rows reuse durable `wp_kiwi_sales.client_ip_version` and `wp_kiwi_sales.client_ip_prefix`
+  - derives session provider/flow/country/source dimensions and IP buckets from `wp_kiwi_landing_page_sessions`; engagement and handoff rows contribute metrics but do not repair missing session dimensions
+  - completed-sales rows reuse durable `wp_kiwi_sales.client_ip_version` and `wp_kiwi_sales.client_ip_prefix`
   - stores IPv4 prefixes as `/24`, IPv6 prefixes as `/48`, and missing or invalid IP values as `(unknown)`; it does not store raw `client_ip` or `client_ip_hash`
   - stores a stable `dimension_hash` with a unique key on `metric_date + dimension_hash`
   - exposes distinct sessions, page-loaded sessions, CTA1/CTA2/CTA3 session and event counts, handoff attempts/successes/fails/rate, hidden-time min/median/max, sales, and `sales_amount_minor`
@@ -317,14 +325,16 @@ When validating a landing-page flow in production or staging, verify:
 8. User journey stays on one public hostname and does not redirect to a backend origin hostname.
 9. Fraud tool (`[kiwi_premium_sms_fraud]`) shows expected MO/engagement rows, source fields (`pid`, `click_id`, `tksource`, `tkzone`), and engagement delta (`Load -> First CTA`) where both timestamps exist.
 10. UA tracking mode behaves as configured: `disabled` stores no UA context, `onclick` stores it only near CTA/handoff events, and `onload` stores it on `page_loaded` when browser hints are available.
-11. Statistics tool (`[kiwi_statistics]`) reads `wp_kiwi_landing_funnel_daily_summary`, defaults to `2026-05-12`, supports date, service, landing, TK-source, TK-zone, device-brand, Android-version, browser, IP-version, and IP-prefix filters, and exports the same filtered rows to CSV without raw `client_ip` or `client_ip_hash`. The legacy `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view should still exist for debug analysis.
-12. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
-13. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`; completed sales should still count when their durable `landing_key/session_ref` snapshot is present.
-14. Confirm WP-Cron has scheduled `kiwi_landing_funnel_daily_summary_refresh`; manually trigger it in staging with `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS=0`, then with the default lookback, and verify the range is processed one day at a time. With `0`, the hourly result should still show yesterday through today as the effective carryover window.
-15. Check `kiwi_landing_funnel_daily_summary_refresh_last_result` after success, failure, and simulated lock cases; errors should also be visible through the `[kiwi-landing-funnel-daily-summary-refresh]` log prefix. If WordPress does not expose a concrete database error, the refresh result should still include a fallback prepare/query diagnostic naming the failed metric date and summary step.
-16. For a controlled date range, run the landing funnel daily summary refresh and compare `wp_kiwi_landing_funnel_daily_summary` against raw landing/session, engagement, handoff, and sales rows. Include IPv4, IPv6, and missing/invalid-IP samples to confirm `client_ip_version` and `/24` or `/48` `client_ip_prefix` buckets. A second refresh for the same date range should keep row counts and totals unchanged, and normal success logs should not contain large SQL dumps.
-17. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
-18. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis, and use the daily summary/Statistics export when only coarse `client_ip_version` and `client_ip_prefix` reporting is needed.
+11. Create a landing-session sample with `pid`, `tksource`, `tkzone`, and a non-default `Accept-Language`; verify `wp_kiwi_landing_page_sessions` stores provider, flow, country, the source parameters, and normalized `browser_language` even without `click_id`.
+12. Create a landing-session sample without source parameters and with an invalid/empty `Accept-Language`; verify source columns stay empty while `browser_language` stores `(unknown)`.
+13. Statistics tool (`[kiwi_statistics]`) reads `wp_kiwi_landing_funnel_daily_summary`, defaults to `2026-05-12`, supports date, service, landing, TK-source, TK-zone, device-brand, Android-version, browser, IP-version, and IP-prefix filters, and exports the same filtered rows to CSV without raw `client_ip` or `client_ip_hash`. The legacy `wp_kiwi_v_load_to_cta_by_tksource_tkzone` view should still exist for debug analysis.
+14. CTA1/CTA2/CTA3 engagement columns increase only for matching `cta_step` payloads while legacy `cta_click_count` still increases for every valid `cta_click`.
+15. `wp_kiwi_v_one_for_all` can be queried/pivoted by `device_brand`, `android_version`, `browser`, `tksource`, and `tkzone`; completed sales should still count when their durable `landing_key/session_ref` snapshot is present.
+16. Confirm WP-Cron has scheduled `kiwi_landing_funnel_daily_summary_refresh`; manually trigger it in staging with `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS=0`, then with the default lookback, and verify the range is processed one day at a time. With `0`, the hourly result should still show yesterday through today as the effective carryover window.
+17. Check `kiwi_landing_funnel_daily_summary_refresh_last_result` after success, failure, and simulated lock cases; errors should also be visible through the `[kiwi-landing-funnel-daily-summary-refresh]` log prefix. If WordPress does not expose a concrete database error, the refresh result should still include a fallback prepare/query diagnostic naming the failed metric date and summary step.
+18. For a controlled date range, run the landing funnel daily summary refresh and compare `wp_kiwi_landing_funnel_daily_summary` against raw landing/session, engagement, handoff, and sales rows. Include sessions whose landing rows have missing provider/source dimensions but whose engagement or handoff rows contain them; the summary should keep those session dimensions in `(unknown)` instead of repairing from later event rows. Include IPv4, IPv6, and missing/invalid-IP samples to confirm `client_ip_version` and `/24` or `/48` `client_ip_prefix` buckets. A second refresh for the same date range should keep row counts and totals unchanged, and normal success logs should not contain large SQL dumps.
+19. If the gallery/statistics tools are auth-protected, verify the response still carries the no-cache headers through CDN/LiteSpeed or any reverse proxy layer.
+20. For a test sale with attribution, verify `wp_kiwi_sales.client_ip` equals the landing-session IP and not the provider callback source IP; prefer `client_ip_prefix`/`client_ip_hash` for broad analysis, and use the daily summary/Statistics export when only coarse `client_ip_version` and `client_ip_prefix` reporting is needed.
 
 ## Troubleshooting quick map
 

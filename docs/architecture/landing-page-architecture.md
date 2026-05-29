@@ -288,8 +288,9 @@ At runtime, the application should:
 1. determine the requested landing-page key or campaign mapping using existing request logic
 2. resolve the landing page from the filesystem registry
 3. read the associated flow and provider metadata
-4. render the landing-page HTML/CSS using the resolved folder
-5. continue using existing integration, billing, callback, and provider logic for the resolved flow
+4. persist a landing-session row with canonical provider, flow, campaign/service country, traffic-source parameters, and normalized primary browser language
+5. render the landing-page HTML/CSS using the resolved folder
+6. continue using existing integration, billing, callback, and provider logic for the resolved flow
 
 ### Important boundary
 
@@ -304,6 +305,7 @@ The core application continues to own:
 
 - request parsing
 - traffic or campaign resolution
+- canonical session-dimension capture in `wp_kiwi_landing_page_sessions`
 - provider execution logic
 - billing submission
 - callback handling
