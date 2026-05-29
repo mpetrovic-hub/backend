@@ -8,13 +8,18 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
 {
     private $landing_page_session_repository;
     private $landing_engagement_repository;
+    private $device_context_normalizer;
 
     public function __construct(
         ?Kiwi_Landing_Page_Session_Repository $landing_page_session_repository = null,
-        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null
+        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null,
+        ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null
     ) {
         $this->landing_page_session_repository = $landing_page_session_repository;
         $this->landing_engagement_repository = $landing_engagement_repository;
+        $this->device_context_normalizer = $device_context_normalizer instanceof Kiwi_Device_Context_Normalizer
+            ? $device_context_normalizer
+            : new Kiwi_Device_Context_Normalizer();
     }
 
     public function build(array $attribution_row, array $sale = [], array $conversion = []): array
@@ -61,7 +66,8 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
                 $sale['tkzone'] ?? '',
             ])),
             'device_brand' => $device['device_brand'],
-            'android_version' => $device['android_version'],
+            'os' => $device['os'],
+            'os_version' => $device['os_version'],
             'browser' => $device['browser'],
             'attribution_metric_date' => $metric_date,
             'client_ip' => $ip_snapshot['client_ip'],
@@ -103,6 +109,10 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
                 'session_token',
                 'remote_ip',
                 'user_agent',
+                'device_brand',
+                'os',
+                'os_version',
+                'browser',
             ]),
             'engagement' => $this->compact_snapshot_row($engagement, [
                 'id',
@@ -136,7 +146,7 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
                     ? 'landing_page_session.remote_ip'
                     : '',
                 'metric_date_source' => $this->resolve_metric_date_source($attribution_row, $engagement, $landing_session, $sale, $conversion),
-                'device_source' => is_array($engagement) ? 'landing_engagement' : (is_array($landing_session) ? 'landing_page_session' : ''),
+                'device_source' => $this->resolve_device_source($engagement, $landing_session),
             ],
         ];
 
@@ -245,6 +255,7 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
 
     private function normalize_device_dimensions(?array $engagement, ?array $landing_session): array
     {
+        $landing_device = $this->extract_normalized_device_dimensions($landing_session);
         $source = is_array($engagement) ? $engagement : [];
         $fallback_user_agent = is_array($landing_session) ? (string) ($landing_session['user_agent'] ?? '') : '';
         $user_agent = trim((string) ($source['user_agent'] ?? ''));
@@ -258,86 +269,47 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
         $ua_ch_platform_version = trim((string) ($source['ua_ch_platform_version'] ?? ''));
         $ua_ch_brands = trim((string) ($source['ua_ch_brands'] ?? ''));
         $ua_ch_full_version_list = trim((string) ($source['ua_ch_full_version_list'] ?? ''));
-        $has_ua_context = $user_agent !== ''
-            || $ua_ch_model !== ''
-            || $ua_ch_platform !== ''
-            || $ua_ch_platform_version !== ''
-            || $ua_ch_brands !== ''
-            || $ua_ch_full_version_list !== '';
+        $normalized = $this->device_context_normalizer->normalize([
+            'user_agent' => $user_agent,
+            'ua_ch_platform' => $ua_ch_platform,
+            'ua_ch_platform_version' => $ua_ch_platform_version,
+            'ua_ch_model' => $ua_ch_model,
+            'ua_ch_brands' => $ua_ch_brands,
+            'ua_ch_full_version_list' => $ua_ch_full_version_list,
+        ]);
+
+        return $this->device_context_normalizer->merge($landing_device, $normalized);
+    }
+
+    private function extract_normalized_device_dimensions(?array $landing_session): array
+    {
+        if (!is_array($landing_session)) {
+            return [];
+        }
 
         return [
-            'device_brand' => $this->resolve_device_brand($ua_ch_model, $user_agent, $has_ua_context),
-            'android_version' => $this->resolve_android_version($ua_ch_platform, $ua_ch_platform_version, $user_agent, $has_ua_context),
-            'browser' => $this->resolve_browser($ua_ch_brands, $ua_ch_full_version_list, $user_agent, $has_ua_context),
+            'device_brand' => (string) ($landing_session['device_brand'] ?? ''),
+            'os' => (string) ($landing_session['os'] ?? ''),
+            'os_version' => (string) ($landing_session['os_version'] ?? ''),
+            'browser' => (string) ($landing_session['browser'] ?? ''),
         ];
     }
 
-    private function resolve_device_brand(string $ua_ch_model, string $user_agent, bool $has_ua_context): string
+    private function resolve_device_source(?array $engagement, ?array $landing_session): string
     {
-        if (stripos($ua_ch_model, 'SM-') === 0 || stripos($user_agent, 'Samsung') !== false) {
-            return 'Samsung';
+        $landing_device = $this->extract_normalized_device_dimensions($landing_session);
+
+        foreach ($landing_device as $value) {
+            if (trim((string) $value) !== '' && trim((string) $value) !== '(unknown)') {
+                return 'landing_page_session';
+            }
         }
 
-        if (stripos($user_agent, 'Huawei') !== false || stripos($ua_ch_model, 'Huawei') === 0) {
-            return 'Huawei';
+        if (is_array($engagement)) {
+            return 'landing_engagement';
         }
 
-        if (
-            stripos($user_agent, 'Xiaomi') !== false
-            || stripos($user_agent, 'Redmi') !== false
-            || stripos($user_agent, 'POCO') !== false
-            || stripos($ua_ch_model, 'Xiaomi') === 0
-            || stripos($ua_ch_model, 'Redmi') === 0
-            || stripos($ua_ch_model, 'POCO') === 0
-        ) {
-            return 'Xiaomi';
-        }
-
-        if (stripos($user_agent, 'Pixel') !== false || stripos($ua_ch_model, 'Pixel') === 0) {
-            return 'Google';
-        }
-
-        return $has_ua_context ? '(unknown)' : '';
-    }
-
-    private function resolve_android_version(
-        string $ua_ch_platform,
-        string $ua_ch_platform_version,
-        string $user_agent,
-        bool $has_ua_context
-    ): string {
-        if (strcasecmp($ua_ch_platform, 'Android') === 0 && $ua_ch_platform_version !== '') {
-            return $this->sanitize_text_dimension($ua_ch_platform_version, 50);
-        }
-
-        if (preg_match('/Android\s+([^;\)]+)/i', $user_agent, $matches) === 1) {
-            return $this->sanitize_text_dimension((string) ($matches[1] ?? ''), 50);
-        }
-
-        return $has_ua_context ? '(unknown)' : '';
-    }
-
-    private function resolve_browser(string $ua_ch_brands, string $ua_ch_full_version_list, string $user_agent, bool $has_ua_context): string
-    {
-        $browser_source = $ua_ch_full_version_list . ' ' . $ua_ch_brands . ' ' . $user_agent;
-
-        if (stripos($browser_source, 'Microsoft Edge') !== false || stripos($user_agent, 'Edg/') !== false) {
-            return 'Edge';
-        }
-
-        if (stripos($browser_source, 'Google Chrome') !== false || stripos($user_agent, 'Chrome/') !== false) {
-            return 'Chrome';
-        }
-
-        if (stripos($user_agent, 'Firefox/') !== false) {
-            return 'Firefox';
-        }
-
-        if (stripos($user_agent, 'Safari/') !== false) {
-            return 'Safari';
-        }
-
-        return $has_ua_context ? '(unknown)' : '';
+        return is_array($landing_session) ? 'landing_page_session' : '';
     }
 
     private function resolve_metric_date(array $attribution_row, ?array $engagement, ?array $landing_session, array $sale, array $conversion): string

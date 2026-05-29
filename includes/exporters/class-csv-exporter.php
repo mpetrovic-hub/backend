@@ -89,7 +89,7 @@ class Kiwi_Csv_Exporter
             $csv_row = [];
 
             foreach (array_keys($columns) as $field) {
-                $csv_row[] = $row[$field] ?? '';
+                $csv_row[] = $this->format_column_value($field, $row[$field] ?? '');
             }
 
             fputcsv($output, $csv_row, ';');
@@ -97,5 +97,20 @@ class Kiwi_Csv_Exporter
 
         fclose($output);
         exit;
+    }
+
+    private function format_column_value(string $field, $value)
+    {
+        if ($field !== 'os_version') {
+            return $value ?? '';
+        }
+
+        $value = trim((string) ($value ?? ''));
+
+        if ($value === '' || $value === '(unknown)') {
+            return $value;
+        }
+
+        return '="' . str_replace('"', '', $value) . '"';
     }
 }

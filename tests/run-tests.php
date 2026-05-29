@@ -335,6 +335,8 @@ require_once __DIR__ . '/../includes/providers/dimoco/class-dimoco-callback-veri
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-blacklist-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-operator-lookup-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-refund-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-device-model-brand-map-repository.php';
+require_once __DIR__ . '/../includes/services/class-device-context-normalizer.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-page-session-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-nth-event-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-repository.php';
@@ -2601,7 +2603,8 @@ class Kiwi_Test_Landing_Funnel_Daily_Summary_Repository extends Kiwi_Landing_Fun
         'tksources' => [],
         'tkzones' => [],
         'device_brands' => [],
-        'android_versions' => [],
+        'os_values' => [],
+        'os_versions' => [],
         'browsers' => [],
         'client_ip_versions' => [],
         'client_ip_prefixes' => [],
@@ -2866,6 +2869,10 @@ class Kiwi_Test_Landing_Page_Session_Repository extends Kiwi_Landing_Page_Sessio
                 'tksource' => '',
                 'tkzone' => '',
                 'browser_language' => '(unknown)',
+                'device_brand' => '(unknown)',
+                'os' => '(unknown)',
+                'os_version' => '(unknown)',
+                'browser' => '(unknown)',
                 'request_host' => '',
                 'request_path' => '',
                 'session_token' => '',
@@ -2915,6 +2922,53 @@ class Kiwi_Test_Landing_Page_Session_Repository extends Kiwi_Landing_Page_Sessio
         }
 
         return null;
+    }
+
+    public function enrich_device_context_by_landing_session(
+        string $landing_key,
+        string $session_token,
+        array $device_context,
+        ?Kiwi_Device_Context_Normalizer $normalizer = null
+    ): bool {
+        $normalizer = $normalizer instanceof Kiwi_Device_Context_Normalizer
+            ? $normalizer
+            : new Kiwi_Device_Context_Normalizer();
+        $updated = false;
+
+        foreach ($this->rows as $id => $row) {
+            if ((string) ($row['landing_key'] ?? '') !== $landing_key) {
+                continue;
+            }
+
+            if ((string) ($row['session_token'] ?? '') !== $session_token) {
+                continue;
+            }
+
+            $merged = $normalizer->merge($row, $device_context);
+
+            foreach (['device_brand', 'os', 'os_version', 'browser'] as $field) {
+                if ((string) ($this->rows[$id][$field] ?? '') === (string) ($merged[$field] ?? '')) {
+                    continue;
+                }
+
+                $this->rows[$id][$field] = (string) ($merged[$field] ?? '(unknown)');
+                $updated = true;
+            }
+        }
+
+        return $updated;
+    }
+}
+
+class Kiwi_Test_Device_Model_Brand_Map_Repository extends Kiwi_Device_Model_Brand_Map_Repository
+{
+    public $brands_by_model_key = [];
+
+    public function find_brand_for_model(string $model): string
+    {
+        $model_key = $this->normalize_model_key($model);
+
+        return (string) ($this->brands_by_model_key[$model_key] ?? '');
     }
 }
 
@@ -5173,7 +5227,8 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists sales attribution s
     kiwi_assert_same('203.0.113.0/24', (string) ($sale['client_ip_prefix'] ?? ''), 'Expected IPv4 /24 prefix.');
     kiwi_assert_same(64, strlen((string) ($sale['client_ip_hash'] ?? '')), 'Expected client IP hash to be persisted.');
     kiwi_assert_same('Samsung', (string) ($sale['device_brand'] ?? ''), 'Expected UA context to normalize device brand.');
-    kiwi_assert_same('14.0.0', (string) ($sale['android_version'] ?? ''), 'Expected UA context to normalize Android version.');
+    kiwi_assert_same('Android', (string) ($sale['os'] ?? ''), 'Expected UA context to normalize OS.');
+    kiwi_assert_same('14', (string) ($sale['os_version'] ?? ''), 'Expected UA context to normalize OS version.');
     kiwi_assert_same('Chrome', (string) ($sale['browser'] ?? ''), 'Expected UA context to normalize browser.');
     kiwi_assert_same('delivered', (string) ($sale['context_json']['report_event']['status'] ?? ''), 'Expected existing provider report context to be preserved.');
     kiwi_assert_same(
@@ -5183,6 +5238,48 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists sales attribution s
     );
 
     unset($_SERVER['REMOTE_ADDR']);
+});
+
+kiwi_run_test('Kiwi_Device_Context_Normalizer normalizes durable device OS and browser buckets', function (): void {
+    $brand_map = new Kiwi_Test_Device_Model_Brand_Map_Repository();
+    $brand_map->brands_by_model_key['MOTO G POWER'] = 'Motorola Mobility';
+    $normalizer = new Kiwi_Device_Context_Normalizer($brand_map);
+
+    $android = $normalizer->normalize([
+        'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '14.0.0',
+        'ua_ch_model' => 'SM-S921B',
+        'ua_ch_brands' => 'Google Chrome 125',
+        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+        'user_agent' => 'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36',
+    ]);
+    $mapped = $normalizer->normalize([
+        'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '13.0.0',
+        'ua_ch_model' => 'Moto G Power',
+        'ua_ch_brands' => 'Google Chrome 125',
+        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+        'user_agent' => 'Mozilla/5.0 (Linux; Android 13; Moto G Power Build/T1) AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36',
+    ]);
+    $ios = $normalizer->normalize([
+        'user_agent' => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1',
+    ]);
+    $merged = $normalizer->merge(
+        ['device_brand' => 'Samsung', 'os' => 'Android', 'os_version' => '14', 'browser' => 'Chrome'],
+        ['device_brand' => '(unknown)', 'os' => '(unknown)', 'os_version' => '(unknown)', 'browser' => 'Samsung Internet']
+    );
+
+    kiwi_assert_same('Samsung', $android['device_brand'] ?? '', 'Expected Samsung model buckets to normalize to Samsung.');
+    kiwi_assert_same('Android', $android['os'] ?? '', 'Expected Android OS bucket from UA-CH.');
+    kiwi_assert_same('14', $android['os_version'] ?? '', 'Expected Android version bucket to use the major version.');
+    kiwi_assert_same('Chrome', $android['browser'] ?? '', 'Expected Chrome browser bucket from UA-CH.');
+    kiwi_assert_same('Motorola Mobility', $mapped['device_brand'] ?? '', 'Expected exact model map entries to supply brands before heuristic rules.');
+    kiwi_assert_same('Apple', $ios['device_brand'] ?? '', 'Expected iOS devices to normalize to Apple.');
+    kiwi_assert_same('iOS', $ios['os'] ?? '', 'Expected iOS OS bucket from user agent.');
+    kiwi_assert_same('17.5', $ios['os_version'] ?? '', 'Expected iOS version to preserve dotted precision.');
+    kiwi_assert_same('Safari', $ios['browser'] ?? '', 'Expected Safari browser bucket from user agent.');
+    kiwi_assert_same('Samsung', $merged['device_brand'] ?? '', 'Expected unknown incoming values not to overwrite known existing buckets.');
+    kiwi_assert_same('Samsung Internet', $merged['browser'] ?? '', 'Expected more specific browser buckets to replace generic Chrome.');
 });
 
 kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder restricts device brands to known rules', function (): void {
@@ -5574,6 +5671,76 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
     kiwi_assert_same('10766952', (string) ($row['tkzone'] ?? ''), 'Expected landing engagement storage to persist tkzone from KPI event payload.');
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected engagement-only events not to mutate KPI CTA counters.');
     kiwi_assert_same(0, (int) ($summary_repository->rows['lp2-fr']['cta2'] ?? 0), 'Expected cta_step engagement metadata not to double-increment KPI CTA2 counters.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes enriches landing session device context on page load', function (): void {
+    $landing_pages = [
+        'lp2-fr' => [
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+        ],
+    ];
+    $previous_user_agent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+    $_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (Linux; Android 16; SM-S921B) AppleWebKit/537.36 Chrome/147.0.0.0 Mobile Safari/537.36';
+
+    try {
+        $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+        $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
+        $landing_session_repository->insert([
+            'landing_key' => 'lp2-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'session_token' => 'sess-device-enrich',
+        ]);
+        $config = new Kiwi_Test_Landing_Ua_Config('onload', $landing_pages);
+        $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
+        $routes = new Kiwi_Landing_Kpi_Rest_Routes(
+            $config,
+            $service,
+            $engagement_repository,
+            null,
+            null,
+            null,
+            $landing_session_repository,
+            new Kiwi_Device_Context_Normalizer()
+        );
+
+        $routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-device-enrich',
+            'event_type' => 'page_loaded',
+            'ua_ch_supported' => 1,
+            'ua_ch_mobile' => 1,
+            'ua_ch_platform' => 'Android',
+            'ua_ch_platform_version' => '16.0.0',
+            'ua_ch_model' => 'SM-S921B',
+            'ua_ch_brands' => 'Google Chrome 147',
+            'ua_ch_full_version_list' => 'Google Chrome 147.0.0.0',
+        ]));
+        $enriched = $landing_session_repository->find_by_landing_session('lp2-fr', 'sess-device-enrich') ?? [];
+
+        unset($_SERVER['HTTP_USER_AGENT']);
+        $routes->handle_event(new WP_REST_Request([], [
+            'landing_key' => 'lp2-fr',
+            'session_token' => 'sess-device-enrich',
+            'event_type' => 'page_loaded',
+        ]));
+        $after_unknown = $landing_session_repository->find_by_landing_session('lp2-fr', 'sess-device-enrich') ?? [];
+
+        kiwi_assert_same('Samsung', (string) ($enriched['device_brand'] ?? ''), 'Expected page_loaded UA context to enrich the landing-session device brand.');
+        kiwi_assert_same('Android', (string) ($enriched['os'] ?? ''), 'Expected page_loaded UA context to enrich the landing-session OS.');
+        kiwi_assert_same('16', (string) ($enriched['os_version'] ?? ''), 'Expected page_loaded UA context to enrich the landing-session OS version.');
+        kiwi_assert_same('Chrome', (string) ($enriched['browser'] ?? ''), 'Expected page_loaded UA context to enrich the landing-session browser.');
+        kiwi_assert_same('Samsung', (string) ($after_unknown['device_brand'] ?? ''), 'Expected unknown follow-up context not to overwrite known landing-session device data.');
+        kiwi_assert_same('Android', (string) ($after_unknown['os'] ?? ''), 'Expected unknown follow-up context not to overwrite known OS data.');
+    } finally {
+        if ($previous_user_agent === null) {
+            unset($_SERVER['HTTP_USER_AGENT']);
+        } else {
+            $_SERVER['HTTP_USER_AGENT'] = $previous_user_agent;
+        }
+    }
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes gates UA context by landing tracking mode', function (): void {
@@ -6915,6 +7082,10 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository creates canonical dimension 
         'tksource VARCHAR(191) NOT NULL DEFAULT \'\'',
         'tkzone VARCHAR(191) NOT NULL DEFAULT \'\'',
         "browser_language VARCHAR(20) NOT NULL DEFAULT '(unknown)'",
+        "device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "os VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "os_version VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "browser VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
     ] as $column) {
         kiwi_assert_contains($column, $sql, 'Expected canonical landing-session dimension column: ' . $column);
     }
@@ -6927,9 +7098,42 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository creates canonical dimension 
         'KEY tksource (tksource)',
         'KEY tkzone (tkzone)',
         'KEY browser_language (browser_language)',
+        'KEY device_brand (device_brand)',
+        'KEY os (os)',
+        'KEY os_version (os_version)',
+        'KEY browser (browser)',
     ] as $index) {
         kiwi_assert_contains($index, $sql, 'Expected canonical landing-session dimension index: ' . $index);
     }
+
+    $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Device_Model_Brand_Map_Repository creates exact model map schema', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+    };
+
+    (new Kiwi_Device_Model_Brand_Map_Repository())->create_table();
+    $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+    kiwi_assert_contains('CREATE TABLE abc_kiwi_device_model_brand_map', $sql, 'Expected model brand map schema to use the configured prefix.');
+    kiwi_assert_contains('model_key VARCHAR(191) NOT NULL DEFAULT \'\'', $sql, 'Expected exact model map schema to store normalized model keys.');
+    kiwi_assert_contains('brand VARCHAR(100) NOT NULL DEFAULT \'\'', $sql, 'Expected exact model map schema to store normalized brands.');
+    kiwi_assert_contains('source VARCHAR(100) NOT NULL DEFAULT \'\'', $sql, 'Expected exact model map schema to keep source metadata.');
+    kiwi_assert_contains('UNIQUE KEY model_key (model_key)', $sql, 'Expected model keys to be unique for exact lookups.');
+    kiwi_assert_contains('KEY brand (brand)', $sql, 'Expected model map schema to index brand values.');
 
     $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
     $wpdb = $previous_wpdb;
@@ -6966,6 +7170,10 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository persists canonical dimension
         'tksource' => 'src-a',
         'tkzone' => 'zone-b',
         'browser_language' => 'fr',
+        'device_brand' => 'Samsung',
+        'os' => 'Android',
+        'os_version' => '14',
+        'browser' => 'Chrome',
         'session_token' => 'sess-canonical',
     ]);
 
@@ -6978,6 +7186,10 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository persists canonical dimension
     kiwi_assert_same('src-a', $wpdb->inserted_data['tksource'] ?? '', 'Expected tksource to be passed to wpdb insert.');
     kiwi_assert_same('zone-b', $wpdb->inserted_data['tkzone'] ?? '', 'Expected tkzone to be passed to wpdb insert.');
     kiwi_assert_same('fr', $wpdb->inserted_data['browser_language'] ?? '', 'Expected browser_language to be passed to wpdb insert.');
+    kiwi_assert_same('Samsung', $wpdb->inserted_data['device_brand'] ?? '', 'Expected device_brand to be passed to wpdb insert.');
+    kiwi_assert_same('Android', $wpdb->inserted_data['os'] ?? '', 'Expected os to be passed to wpdb insert.');
+    kiwi_assert_same('14', $wpdb->inserted_data['os_version'] ?? '', 'Expected os_version to be passed to wpdb insert.');
+    kiwi_assert_same('Chrome', $wpdb->inserted_data['browser'] ?? '', 'Expected browser to be passed to wpdb insert.');
     kiwi_assert_same(count($wpdb->inserted_data), count($wpdb->inserted_formats), 'Expected insert formats to cover every landing-session column.');
 
     $wpdb = $previous_wpdb;
@@ -8242,7 +8454,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository creates schema-manag
         "tksource VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
         "tkzone VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
         "device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
-        "android_version VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "os VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
+        "os_version VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
         "browser VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
         "client_ip_version VARCHAR(10) NOT NULL DEFAULT '(unknown)'",
         "client_ip_prefix VARCHAR(120) NOT NULL DEFAULT '(unknown)'",
@@ -8274,7 +8487,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository creates schema-manag
     kiwi_assert_contains('UNIQUE KEY metric_date_dimension_hash (metric_date, dimension_hash)', $sql, 'Expected idempotent uniqueness by metric_date and dimension hash.');
     foreach ([
         'KEY device_brand (device_brand)',
-        'KEY android_version (android_version)',
+        'KEY os (os)',
+        'KEY os_version (os_version)',
         'KEY browser (browser)',
         'KEY client_ip_version (client_ip_version)',
         'KEY client_ip_prefix (client_ip_prefix)',
@@ -8356,16 +8570,23 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_true(strpos($insert_sql, "'(unknown)' AS country") === false, 'Expected country to use the canonical session column instead of a hardcoded unknown bucket.');
     kiwi_assert_contains('client_ip_version', $insert_sql, 'Expected daily summary refresh to carry client IP version as a coarse dimension.');
     kiwi_assert_contains('client_ip_prefix', $insert_sql, 'Expected daily summary refresh to carry client IP prefix as a coarse dimension.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(device_brand, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS device_brand", $insert_sql, 'Expected landing loads to read normalized device brands from landing sessions.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os", $insert_sql, 'Expected landing loads to read normalized OS buckets from landing sessions.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os_version", $insert_sql, 'Expected landing loads to read normalized OS versions from landing sessions.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(browser, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS browser", $insert_sql, 'Expected landing loads to read normalized browser buckets from landing sessions.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.device_brand, ''), '(unknown)') AS device_brand", $insert_sql, 'Expected session facts to use normalized landing-session device brands.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.os, ''), '(unknown)') AS os", $insert_sql, 'Expected session facts to use normalized landing-session OS buckets.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.os_version, ''), '(unknown)') AS os_version", $insert_sql, 'Expected session facts to use normalized landing-session OS versions.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.browser, ''), '(unknown)') AS browser", $insert_sql, 'Expected session facts to use normalized landing-session browsers.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.os, ''), '(unknown)') AS os", $insert_sql, 'Expected sales facts to use durable sale OS snapshots.');
+    kiwi_assert_contains("COALESCE(NULLIF(s.os_version, ''), '(unknown)') AS os_version", $insert_sql, 'Expected sales facts to use durable sale OS version snapshots.');
     kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)') AS client_ip_version", $insert_sql, 'Expected sales facts to use durable sale IP version snapshots with unknown fallback.');
     kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix", $insert_sql, 'Expected sales facts to use durable sale IP prefix snapshots with unknown fallback.');
     kiwi_assert_contains("'.0/24'", $insert_sql, 'Expected session IP aggregation to bucket IPv4 addresses as /24 prefixes.');
     kiwi_assert_contains("'::/48'", $insert_sql, 'Expected session IP aggregation to bucket IPv6 addresses as /48 prefixes.');
-    kiwi_assert_true(strpos($insert_sql, "WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)") === false, 'Expected summary session brand logic not to promote unknown model tokens to device brands.');
-    kiwi_assert_true(strpos($insert_sql, "WHEN sd.ua_ch_model <> '' THEN SUBSTRING_INDEX(sd.ua_ch_model, ' ', 1)") === false, 'Expected hidden median brand logic not to promote unknown model tokens to device brands.');
-    kiwi_assert_contains("WHEN ua_ch_model LIKE 'SM-%%' OR raw_user_agent LIKE '%%Samsung%%' THEN 'Samsung'", $insert_sql, 'Expected summary session facts to keep Samsung brand rules.');
-    kiwi_assert_contains("WHEN ua_ch_model LIKE 'Xiaomi%%' OR ua_ch_model LIKE 'Redmi%%' OR ua_ch_model LIKE 'POCO%%'", $insert_sql, 'Expected summary session facts to group Xiaomi-family models defensively.');
-    kiwi_assert_contains("WHEN ua_ch_model LIKE 'Pixel%%' OR raw_user_agent LIKE '%%Pixel%%' THEN 'Google'", $insert_sql, 'Expected summary session facts to keep Pixel as Google.');
-    kiwi_assert_contains("WHEN sd.ua_ch_model LIKE 'Xiaomi%%' OR sd.ua_ch_model LIKE 'Redmi%%' OR sd.ua_ch_model LIKE 'POCO%%'", $insert_sql, 'Expected hidden median facts to use the same Xiaomi-family brand rules.');
+    kiwi_assert_true(strpos($insert_sql, 'ua_ch_model LIKE') === false, 'Expected daily summary aggregation not to parse device brands from UA-CH in SQL.');
+    kiwi_assert_true(strpos($insert_sql, "raw_user_agent LIKE '%%Android %%'") === false, 'Expected daily summary aggregation not to parse OS versions from user agents in SQL.');
+    kiwi_assert_true(strpos($insert_sql, 'android_version') === false, 'Expected daily summary aggregation to use os/os_version instead of the legacy android_version dimension.');
     kiwi_assert_true(strpos($insert_sql, 's.client_ip,') === false, 'Expected daily summary refresh not to select raw sale IPs.');
     kiwi_assert_true(strpos($insert_sql, 's.client_ip_hash') === false, 'Expected daily summary refresh not to select sale IP hashes.');
     kiwi_assert_contains('MAX(has_session_fact) AS has_session_fact', $insert_sql, 'Expected distinct landing/session counting to collapse landing plus engagement rows.');
@@ -8383,7 +8604,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     );
     kiwi_assert_contains('INNER JOIN handoff_by_session hs', $insert_sql, 'Expected hidden median rows to use the same target-date handoff grouping.');
     kiwi_assert_contains('ROW_NUMBER() OVER (', $insert_sql, 'Expected hidden-time median to use a window-function ranking query.');
-    kiwi_assert_contains('PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, android_version, browser, client_ip_version, client_ip_prefix', $insert_sql, 'Expected hidden medians to partition by IP dimensions.');
+    kiwi_assert_contains('PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix', $insert_sql, 'Expected hidden medians to partition by normalized device and IP dimensions.');
     kiwi_assert_contains('COALESCE(s.attribution_metric_date, DATE(s.completed_at)) AS metric_date', $insert_sql, 'Expected sales metric date to prefer durable attribution snapshots with completion-date fallback.');
     kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use an indexable attribution metric date filter.');
     kiwi_assert_contains('s.completed_at >= %s', $insert_sql, 'Expected legacy sales fallback to use an indexable completed_at lower bound.');
@@ -8395,9 +8616,6 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('SHA2(CONCAT_WS', $insert_sql, 'Expected stable dimension_hash computation from normalized dimension fields.');
     kiwi_assert_true(strpos($insert_sql, 'landing_page_aufrufe') === false, 'Expected aggregate refresh not to emit old landing_page_aufrufe metric.');
     kiwi_assert_true(strpos($insert_sql, 'engaged_sessions') === false, 'Expected aggregate refresh not to emit engaged_sessions.');
-    kiwi_assert_contains("LIKE '%%Samsung%%'", $insert_sql, 'Expected literal summary LIKE wildcards to be escaped for wpdb prepare.');
-    kiwi_assert_contains("LIKE 'SM-%%'", $insert_sql, 'Expected prefix summary LIKE wildcards to be escaped for wpdb prepare.');
-
     preg_match_all("/LIKE\\s+'([^']*%[^']*)'/", $insert_sql, $like_matches);
     foreach ($like_matches[1] as $like_pattern) {
         $length = strlen($like_pattern);
@@ -8533,7 +8751,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
             'tksource' => 'src_a',
             'tkzone' => 'zone_a',
             'device_brand' => 'Samsung',
-            'android_version' => '14',
+            'os' => 'Android',
+            'os_version' => '14',
             'browser' => 'Chrome',
             'client_ip_version' => 'ipv4',
             'client_ip_prefix' => '203.0.113.0/24',
@@ -8566,7 +8785,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
         'tksource' => 'src_a',
         'tkzone' => 'zone_a',
         'device_brand' => 'Samsung',
-        'android_version' => '14',
+        'os' => 'Android',
+        'os_version' => '14',
         'browser' => 'Chrome',
         'client_ip_version' => 'ipv4',
         'client_ip_prefix' => '203.0.113.0/24',
@@ -8576,7 +8796,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
 
     kiwi_assert_same($wpdb->result_rows, $rows, 'Expected summary repository to return database rows when the summary table is readable.');
     kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_summary', $query, 'Expected statistics query to read from the daily summary table.');
-    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s AND device_brand = %s AND android_version = %s AND browser = %s AND client_ip_version = %s AND client_ip_prefix = %s', $query, 'Expected all supported UI filters to be applied to summary rows.');
+    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s AND device_brand = %s AND os = %s AND os_version = %s AND browser = %s AND client_ip_version = %s AND client_ip_prefix = %s', $query, 'Expected all supported UI filters to be applied to summary rows.');
     kiwi_assert_contains('cta1_sessions', $query, 'Expected query to expose CTA1 metrics.');
     kiwi_assert_contains('cta2_sessions', $query, 'Expected query to expose CTA2 metrics.');
     kiwi_assert_contains('cta3_sessions', $query, 'Expected query to expose CTA3 metrics.');
@@ -8584,7 +8804,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
     kiwi_assert_contains('sales_amount_minor', $query, 'Expected query to expose sales amount metrics.');
     kiwi_assert_true(strpos($query, 'successful_sale_ids') === false, 'Expected summary read path not to expose legacy drilldown sale IDs.');
     kiwi_assert_same(
-        ['2026-05-24', '2026-05-25', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 'ipv4', '203.0.113.0/24', 500],
+        ['2026-05-24', '2026-05-25', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', 'Android', '14', 'Chrome', 'ipv4', '203.0.113.0/24', 500],
         $statement['args'] ?? [],
         'Expected repository query args to normalize date filters and cap the limit to 500.'
     );
@@ -8607,7 +8827,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filt
         [['tksource' => 'src_b'], ['tksource' => 'src_a']],
         [['tkzone' => 'zone_b'], ['tkzone' => 'zone_a']],
         [['device_brand' => 'Samsung'], ['device_brand' => 'Google']],
-        [['android_version' => '14'], ['android_version' => '13']],
+        [['os' => 'iOS'], ['os' => 'Android']],
+        [['os_version' => '14'], ['os_version' => '13']],
         [['browser' => 'Chrome'], ['browser' => 'Safari']],
         [['client_ip_version' => 'ipv6'], ['client_ip_version' => 'ipv4'], ['client_ip_version' => '(unknown)']],
         [['client_ip_prefix' => '203.0.113.0/24'], ['client_ip_prefix' => '2001:db8:85a3::/48']],
@@ -8624,14 +8845,15 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filt
     kiwi_assert_same(['src_a', 'src_b'], $options['tksources'] ?? [], 'Expected TK source filter options to be distinct and sorted.');
     kiwi_assert_same(['zone_a', 'zone_b'], $options['tkzones'] ?? [], 'Expected TK zone filter options to be distinct and sorted.');
     kiwi_assert_same(['Google', 'Samsung'], $options['device_brands'] ?? [], 'Expected device-brand filter options to be distinct and sorted.');
-    kiwi_assert_same(['13', '14'], $options['android_versions'] ?? [], 'Expected Android filter options to be distinct and sorted.');
+    kiwi_assert_same(['Android', 'iOS'], $options['os_values'] ?? [], 'Expected OS filter options to be distinct and sorted.');
+    kiwi_assert_same(['13', '14'], $options['os_versions'] ?? [], 'Expected OS version filter options to be distinct and sorted.');
     kiwi_assert_same(['Chrome', 'Safari'], $options['browsers'] ?? [], 'Expected browser filter options to be distinct and sorted.');
     kiwi_assert_same(['(unknown)', 'ipv4', 'ipv6'], $options['client_ip_versions'] ?? [], 'Expected IP version filter options to be distinct and sorted.');
     kiwi_assert_same(['2001:db8:85a3::/48', '203.0.113.0/24'], $options['client_ip_prefixes'] ?? [], 'Expected IP prefix filter options to preserve slash suffixes.');
     kiwi_assert_contains('SELECT DISTINCT service_key', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected service options to query distinct service keys from the summary table.');
-    kiwi_assert_contains('SELECT DISTINCT browser', (string) ($wpdb->prepared_statements[12]['query'] ?? ''), 'Expected browser options to query distinct browsers from the summary table.');
-    kiwi_assert_contains('SELECT DISTINCT client_ip_version', (string) ($wpdb->prepared_statements[14]['query'] ?? ''), 'Expected IP version options to query distinct values from the summary table.');
-    kiwi_assert_contains('SELECT DISTINCT client_ip_prefix', (string) ($wpdb->prepared_statements[16]['query'] ?? ''), 'Expected IP prefix options to query distinct values from the summary table.');
+    kiwi_assert_contains('SELECT DISTINCT browser', (string) ($wpdb->prepared_statements[14]['query'] ?? ''), 'Expected browser options to query distinct browsers from the summary table.');
+    kiwi_assert_contains('SELECT DISTINCT client_ip_version', (string) ($wpdb->prepared_statements[16]['query'] ?? ''), 'Expected IP version options to query distinct values from the summary table.');
+    kiwi_assert_contains('SELECT DISTINCT client_ip_prefix', (string) ($wpdb->prepared_statements[18]['query'] ?? ''), 'Expected IP prefix options to query distinct values from the summary table.');
     kiwi_assert_same(
         ['2026-05-24', '2026-05-25'],
         $wpdb->prepared_statements[0]['args'] ?? [],
@@ -8847,7 +9069,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
         'kiwi_stats_tksource' => 'src_a',
         'kiwi_stats_tkzone' => 'zone_a',
         'kiwi_stats_device_brand' => 'Samsung',
-        'kiwi_stats_android_version' => '14',
+        'kiwi_stats_os' => 'Android',
+        'kiwi_stats_os_version' => '14',
         'kiwi_stats_browser' => 'Chrome',
         'kiwi_stats_client_ip_version' => 'ipv4',
         'kiwi_stats_client_ip_prefix' => '203.0.113.0/24',
@@ -8861,7 +9084,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
         'tksources' => ['src_a', 'src_b'],
         'tkzones' => ['zone_a', 'zone_b'],
         'device_brands' => ['Google', 'Samsung'],
-        'android_versions' => ['13', '14'],
+        'os_values' => ['Android', 'iOS'],
+        'os_versions' => ['13', '14'],
         'browsers' => ['Chrome', 'Safari'],
         'client_ip_versions' => ['ipv4', 'ipv6'],
         'client_ip_prefixes' => ['2001:db8:85a3::/48', '203.0.113.0/24'],
@@ -8878,7 +9102,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
             'tksource' => 'src_a',
             'tkzone' => 'zone_a',
             'device_brand' => 'Samsung',
-            'android_version' => '14',
+            'os' => 'Android',
+            'os_version' => '14',
             'browser' => 'Chrome',
             'client_ip_version' => 'ipv4',
             'client_ip_prefix' => '203.0.113.0/24',
@@ -8914,7 +9139,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
     kiwi_assert_contains('<option value="">all</option><option value="src_a" selected="selected">src_a</option><option value="src_b">src_b</option>', $output, 'Expected TK Source select to include all plus dynamic selected options.');
     kiwi_assert_contains('<select id="kiwi_stats_tkzone" class="kiwi-select kiwi-width-small" name="kiwi_stats_tkzone">', $output, 'Expected TK Zone filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_device_brand" class="kiwi-select kiwi-width-small" name="kiwi_stats_device_brand">', $output, 'Expected Device Brand filter to render as a select.');
-    kiwi_assert_contains('<select id="kiwi_stats_android_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_android_version">', $output, 'Expected Android filter to render as a select.');
+    kiwi_assert_contains('<select id="kiwi_stats_os" class="kiwi-select kiwi-width-small" name="kiwi_stats_os">', $output, 'Expected OS filter to render as a select.');
+    kiwi_assert_contains('<select id="kiwi_stats_os_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_os_version">', $output, 'Expected OS Version filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_browser" class="kiwi-select kiwi-width-small" name="kiwi_stats_browser">', $output, 'Expected Browser filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_client_ip_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_client_ip_version">', $output, 'Expected IP version filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_client_ip_prefix" class="kiwi-select kiwi-width-small" name="kiwi_stats_client_ip_prefix">', $output, 'Expected IP prefix filter to render as a select.');
@@ -8937,7 +9163,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
     kiwi_assert_same('src_a', $repository->calls[0]['filters']['tksource'] ?? '', 'Expected shortcode to pass tksource filter to repository.');
     kiwi_assert_same('zone_a', $repository->calls[0]['filters']['tkzone'] ?? '', 'Expected shortcode to pass tkzone filter to repository.');
     kiwi_assert_same('Samsung', $repository->calls[0]['filters']['device_brand'] ?? '', 'Expected shortcode to pass device_brand filter to repository.');
-    kiwi_assert_same('14', $repository->calls[0]['filters']['android_version'] ?? '', 'Expected shortcode to pass android_version filter to repository.');
+    kiwi_assert_same('Android', $repository->calls[0]['filters']['os'] ?? '', 'Expected shortcode to pass os filter to repository.');
+    kiwi_assert_same('14', $repository->calls[0]['filters']['os_version'] ?? '', 'Expected shortcode to pass os_version filter to repository.');
     kiwi_assert_same('Chrome', $repository->calls[0]['filters']['browser'] ?? '', 'Expected shortcode to pass browser filter to repository.');
     kiwi_assert_same('ipv4', $repository->calls[0]['filters']['client_ip_version'] ?? '', 'Expected shortcode to pass IP version filter to repository.');
     kiwi_assert_same('203.0.113.0/24', $repository->calls[0]['filters']['client_ip_prefix'] ?? '', 'Expected shortcode to pass IP prefix filter to repository.');
@@ -8947,7 +9174,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
     kiwi_assert_contains('kiwi_stats_tksource=src_a', $output, 'Expected CSV export URL to preserve TK source filter.');
     kiwi_assert_contains('kiwi_stats_tkzone=zone_a', $output, 'Expected CSV export URL to preserve TK zone filter.');
     kiwi_assert_contains('kiwi_stats_device_brand=Samsung', $output, 'Expected CSV export URL to preserve device-brand filter.');
-    kiwi_assert_contains('kiwi_stats_android_version=14', $output, 'Expected CSV export URL to preserve Android filter.');
+    kiwi_assert_contains('kiwi_stats_os=Android', $output, 'Expected CSV export URL to preserve OS filter.');
+    kiwi_assert_contains('kiwi_stats_os_version=14', $output, 'Expected CSV export URL to preserve OS version filter.');
     kiwi_assert_contains('kiwi_stats_browser=Chrome', $output, 'Expected CSV export URL to preserve browser filter.');
     kiwi_assert_contains('kiwi_stats_client_ip_version=ipv4', $output, 'Expected CSV export URL to preserve IP version filter.');
     kiwi_assert_contains('kiwi_stats_client_ip_prefix=203.0.113.0%2F24', $output, 'Expected CSV export URL to preserve encoded IP prefix filter.');
@@ -8983,7 +9211,8 @@ kiwi_run_test('Kiwi_Plugin statistics CSV export reads the daily summary with th
             'tksource' => 'src_a',
             'tkzone' => 'zone_a',
             'device_brand' => 'Samsung',
-            'android_version' => '14',
+            'os' => 'Android',
+            'os_version' => '14',
             'browser' => 'Chrome',
             'client_ip_version' => 'ipv4',
             'client_ip_prefix' => '203.0.113.0/24',
@@ -9002,7 +9231,8 @@ kiwi_run_test('Kiwi_Plugin statistics CSV export reads the daily summary with th
         'kiwi_stats_tksource' => 'src_a',
         'kiwi_stats_tkzone' => 'zone_a',
         'kiwi_stats_device_brand' => 'Samsung',
-        'kiwi_stats_android_version' => '14',
+        'kiwi_stats_os' => 'Android',
+        'kiwi_stats_os_version' => '14',
         'kiwi_stats_browser' => 'Chrome',
         'kiwi_stats_client_ip_version' => 'ipv4',
         'kiwi_stats_client_ip_prefix' => '203.0.113.0/24',
@@ -9016,7 +9246,7 @@ kiwi_run_test('Kiwi_Plugin statistics CSV export reads the daily summary with th
     kiwi_assert_same($wpdb->result_rows, $plugin->exported_statistics_rows, 'Expected Statistics CSV export to return summary rows.');
     kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_summary', (string) ($statement['query'] ?? ''), 'Expected CSV export to read from the summary table.');
     kiwi_assert_same(
-        ['2026-05-13', '2026-05-14', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', '14', 'Chrome', 'ipv4', '203.0.113.0/24', 50],
+        ['2026-05-13', '2026-05-14', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 'Samsung', 'Android', '14', 'Chrome', 'ipv4', '203.0.113.0/24', 50],
         $statement['args'] ?? [],
         'Expected CSV export filters to match shortcode request filters.'
     );
@@ -9134,6 +9364,10 @@ kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema rep
         'Expected schema migrations to include the landing handoff event repository.'
     );
     kiwi_assert_true(
+        in_array(Kiwi_Device_Model_Brand_Map_Repository::class, $classes, true),
+        'Expected schema migrations to include the device model brand map repository.'
+    );
+    kiwi_assert_true(
         in_array(Kiwi_Sms_Body_Variant_Repository::class, $classes, true),
         'Expected schema migrations to include the SMS body variant repository.'
     );
@@ -9147,7 +9381,7 @@ kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema rep
     );
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for canonical landing session dimensions', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for normalized device dimensions', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -9159,7 +9393,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for canonical landing session di
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-29-1', $schema_version, 'Expected schema version to be bumped for canonical landing-session dimension migrations.');
+    kiwi_assert_same('2026-05-29-2', $schema_version, 'Expected schema version to be bumped for normalized device dimension migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,

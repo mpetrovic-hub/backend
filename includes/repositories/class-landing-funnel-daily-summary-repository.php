@@ -14,7 +14,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         'tksource' => 'tksources',
         'tkzone' => 'tkzones',
         'device_brand' => 'device_brands',
-        'android_version' => 'android_versions',
+        'os' => 'os_values',
+        'os_version' => 'os_versions',
         'browser' => 'browsers',
         'client_ip_version' => 'client_ip_versions',
         'client_ip_prefix' => 'client_ip_prefixes',
@@ -48,7 +49,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             tksource VARCHAR(191) NOT NULL DEFAULT '(unknown)',
             tkzone VARCHAR(191) NOT NULL DEFAULT '(unknown)',
             device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)',
-            android_version VARCHAR(50) NOT NULL DEFAULT '(unknown)',
+            os VARCHAR(50) NOT NULL DEFAULT '(unknown)',
+            os_version VARCHAR(50) NOT NULL DEFAULT '(unknown)',
             browser VARCHAR(100) NOT NULL DEFAULT '(unknown)',
             client_ip_version VARCHAR(10) NOT NULL DEFAULT '(unknown)',
             client_ip_prefix VARCHAR(120) NOT NULL DEFAULT '(unknown)',
@@ -84,7 +86,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             KEY tksource (tksource),
             KEY tkzone (tkzone),
             KEY device_brand (device_brand),
-            KEY android_version (android_version),
+            KEY os (os),
+            KEY os_version (os_version),
             KEY browser (browser),
             KEY client_ip_version (client_ip_version),
             KEY client_ip_prefix (client_ip_prefix),
@@ -166,7 +169,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
                     tksource,
                     tkzone,
                     device_brand,
-                    android_version,
+                    os,
+                    os_version,
                     browser,
                     client_ip_version,
                     client_ip_prefix,
@@ -387,12 +391,16 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             return $value;
         }
 
-        $pattern = $field === 'client_ip_prefix'
-            ? '/[^A-Za-z0-9._~:\/-]/'
-            : '/[^A-Za-z0-9._~:-]/';
-        $max_length = $field === 'client_ip_prefix'
-            ? 120
-            : ($field === 'client_ip_version' ? 10 : 191);
+        if ($field === 'client_ip_prefix') {
+            $pattern = '/[^A-Za-z0-9._~:\/-]/';
+            $max_length = 120;
+        } elseif (in_array($field, ['device_brand', 'os', 'os_version', 'browser'], true)) {
+            $pattern = '/[^A-Za-z0-9._~: -]/';
+            $max_length = $field === 'device_brand' || $field === 'browser' ? 100 : 50;
+        } else {
+            $pattern = '/[^A-Za-z0-9._~:-]/';
+            $max_length = $field === 'client_ip_version' ? 10 : 191;
+        }
         $value = preg_replace($pattern, '', $value);
         $value = is_string($value) ? $value : '';
 

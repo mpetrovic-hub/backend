@@ -15,6 +15,7 @@ class Kiwi_Landing_Page_Router
     private $tracking_capture_service;
     private $primary_cta_resolver;
     private $landing_kpi_service;
+    private $device_context_normalizer;
 
     public function __construct(
         Kiwi_Config $config,
@@ -22,7 +23,8 @@ class Kiwi_Landing_Page_Router
         string $plugin_base_url,
         ?Kiwi_Tracking_Capture_Service $tracking_capture_service = null,
         ?Kiwi_Landing_Primary_Cta_Resolver $primary_cta_resolver = null,
-        ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null
+        ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null,
+        ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null
     ) {
         $this->config = $config;
         $this->landing_page_session_repository = $landing_page_session_repository;
@@ -30,6 +32,9 @@ class Kiwi_Landing_Page_Router
         $this->tracking_capture_service = $tracking_capture_service;
         $this->primary_cta_resolver = $primary_cta_resolver;
         $this->landing_kpi_service = $landing_kpi_service;
+        $this->device_context_normalizer = $device_context_normalizer instanceof Kiwi_Device_Context_Normalizer
+            ? $device_context_normalizer
+            : new Kiwi_Device_Context_Normalizer();
     }
 
     public function maybe_render_current_request(): bool
@@ -71,12 +76,16 @@ class Kiwi_Landing_Page_Router
             $primary_cta_href
         );
         $click_to_sms_uri = (string) ($landing_page['cta_href'] ?? '#');
+        $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
         $session_dimensions = $this->build_session_dimension_context(
             $landing_page,
             $service,
             is_array($_GET) ? $_GET : [],
             isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? (string) $_SERVER['HTTP_ACCEPT_LANGUAGE'] : ''
         );
+        $device_context = $this->device_context_normalizer->normalize([
+            'user_agent' => $user_agent,
+        ]);
 
         $this->landing_page_session_repository->insert([
             'landing_key' => $match['landing_key'],
@@ -88,12 +97,16 @@ class Kiwi_Landing_Page_Router
             'tksource' => $session_dimensions['tksource'],
             'tkzone' => $session_dimensions['tkzone'],
             'browser_language' => $session_dimensions['browser_language'],
+            'device_brand' => $device_context['device_brand'],
+            'os' => $device_context['os'],
+            'os_version' => $device_context['os_version'],
+            'browser' => $device_context['browser'],
             'request_host' => $host,
             'request_path' => $match['request_path'],
             'session_token' => $session_token,
             'click_to_sms_uri' => $click_to_sms_uri,
             'referer' => isset($_SERVER['HTTP_REFERER']) ? (string) $_SERVER['HTTP_REFERER'] : '',
-            'user_agent' => isset($_SERVER['HTTP_USER_AGENT']) ? (string) $_SERVER['HTTP_USER_AGENT'] : '',
+            'user_agent' => $user_agent,
             'remote_ip' => isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '',
             'query_params' => $_GET,
             'raw_context' => [
@@ -101,6 +114,7 @@ class Kiwi_Landing_Page_Router
                 'request_uri' => $request_uri,
                 'landing_page' => $landing_page,
                 'session_dimensions' => $session_dimensions,
+                'device_context' => $device_context,
             ],
         ]);
 
