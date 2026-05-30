@@ -12,7 +12,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         'service_key' => 'service_keys',
         'landing_key' => 'landing_keys',
         'tksource' => 'tksources',
-        'tkzone' => 'tkzones',
         'device_brand' => 'device_brands',
         'os' => 'os_values',
         'os_version' => 'os_versions',
@@ -24,7 +23,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         'service_key' => 'service_keys',
         'landing_key' => 'landing_keys',
         'tksource' => 'tksources',
-        'tkzone' => 'tkzones',
         'device_brand' => 'device_brands',
         'os' => 'os_values',
         'os_version' => 'os_versions',
@@ -57,7 +55,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             country VARCHAR(10) NOT NULL DEFAULT '(unknown)',
             pid VARCHAR(191) NOT NULL DEFAULT '(unknown)',
             tksource VARCHAR(191) NOT NULL DEFAULT '(unknown)',
-            tkzone VARCHAR(191) NOT NULL DEFAULT '(unknown)',
             device_brand VARCHAR(100) NOT NULL DEFAULT '(unknown)',
             os VARCHAR(50) NOT NULL DEFAULT '(unknown)',
             os_version VARCHAR(50) NOT NULL DEFAULT '(unknown)',
@@ -77,7 +74,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             handoff_successes BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             handoff_fails BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             handoff_rate_pct DECIMAL(7,2) NOT NULL DEFAULT 0,
-            median_hidden_seconds DECIMAL(12,2) NULL,
             min_hidden_seconds DECIMAL(12,2) NULL,
             max_hidden_seconds DECIMAL(12,2) NULL,
             sales BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
@@ -94,7 +90,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
             KEY country (country),
             KEY pid (pid),
             KEY tksource (tksource),
-            KEY tkzone (tkzone),
             KEY device_brand (device_brand),
             KEY os (os),
             KEY os_version (os_version),
@@ -177,7 +172,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
                     country,
                     pid,
                     tksource,
-                    tkzone,
                     device_brand,
                     os,
                     os_version,
@@ -197,13 +191,12 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
                     handoff_fails,
                     handoff_rate_pct,
                     min_hidden_seconds,
-                    median_hidden_seconds,
                     max_hidden_seconds,
                     sales,
                     sales_amount_minor
                 FROM {$table_name}
                 WHERE {$where_clause}
-                ORDER BY metric_date DESC, sessions DESC, sales DESC, landing_key ASC, service_key ASC, tksource ASC, tkzone ASC
+                ORDER BY metric_date DESC, sessions DESC, sales DESC, landing_key ASC, service_key ASC, tksource ASC
                 LIMIT %d";
 
         $rows = $wpdb->get_results(

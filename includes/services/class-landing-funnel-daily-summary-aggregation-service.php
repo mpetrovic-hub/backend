@@ -66,7 +66,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
 
         $from_datetime = $metric_date . ' 00:00:00';
         $to_exclusive_datetime = $this->next_date($metric_date) . ' 00:00:00';
-        $handoff_from_datetime = $this->previous_date($metric_date) . ' 00:00:00';
         $handoff_to_exclusive_datetime = $this->next_date($this->next_date($metric_date)) . ' 00:00:00';
 
         $this->run_statement('START TRANSACTION');
@@ -86,16 +85,12 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 $to_exclusive_datetime,
                 $from_datetime,
                 $to_exclusive_datetime,
-                $handoff_from_datetime,
-                $handoff_to_exclusive_datetime,
                 $from_datetime,
-                $to_exclusive_datetime,
+                $handoff_to_exclusive_datetime,
                 $from_datetime,
                 $handoff_to_exclusive_datetime,
                 $metric_date,
                 $metric_date,
-                $from_datetime,
-                $to_exclusive_datetime,
                 $metric_date,
             ]
         );
@@ -135,7 +130,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     a.country,
                     a.pid,
                     a.tksource,
-                    a.tkzone,
                     a.device_brand,
                     a.os,
                     a.os_version,
@@ -153,7 +147,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 country,
                 pid,
                 tksource,
-                tkzone,
                 device_brand,
                 os,
                 os_version,
@@ -173,7 +166,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 handoff_successes,
                 handoff_fails,
                 handoff_rate_pct,
-                median_hidden_seconds,
                 min_hidden_seconds,
                 max_hidden_seconds,
                 sales,
@@ -186,13 +178,12 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     landing_key,
                     session_token,
                     MIN(created_at) AS first_landing_at,
-                    MAX(service_key) AS service_key,
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(service_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS service_key,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(provider_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS provider_key,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(flow_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS flow_key,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(country, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS country,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(pid, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS pid,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tksource, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS tksource,
-                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tkzone, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS tkzone,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(device_brand, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS device_brand,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os_version,
@@ -210,21 +201,13 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 SELECT
                     landing_key,
                     session_token,
-                    MIN(created_at) AS first_engagement_at,
-                    MAX(service_key) AS service_key,
                     MAX(CASE WHEN page_loaded_at IS NOT NULL THEN 1 ELSE 0 END) AS page_loaded_sessions,
                     MAX(CASE WHEN first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta1_sessions,
                     SUM(cta1_click_count) AS cta1_click_events,
                     MAX(CASE WHEN first_cta2_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta2_sessions,
                     SUM(cta2_click_count) AS cta2_click_events,
                     MAX(CASE WHEN first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta3_sessions,
-                    SUM(cta3_click_count) AS cta3_click_events,
-                    MAX(ua_ch_platform) AS ua_ch_platform,
-                    MAX(ua_ch_platform_version) AS ua_ch_platform_version,
-                    MAX(ua_ch_model) AS ua_ch_model,
-                    MAX(ua_ch_brands) AS ua_ch_brands,
-                    MAX(ua_ch_full_version_list) AS ua_ch_full_version_list,
-                    MAX(user_agent) AS user_agent
+                    SUM(cta3_click_count) AS cta3_click_events
                 FROM {$engagement_table}
                 WHERE created_at >= %s
                   AND created_at < %s
@@ -232,70 +215,58 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
             ),
+            handoff_origin_events AS (
+                SELECT
+                    h.landing_key,
+                    h.session_token,
+                    DATE(MAX(ls.created_at)) AS metric_date,
+                    h.event_type,
+                    h.elapsed_ms
+                FROM {$handoff_table} h
+                INNER JOIN {$landing_session_table} ls
+                  ON ls.landing_key = h.landing_key
+                 AND ls.session_token = h.session_token
+                 AND ls.created_at >= %s
+                 AND ls.created_at < %s
+                 AND ls.created_at <= h.created_at
+                 AND ls.landing_key <> ''
+                 AND ls.session_token <> ''
+                WHERE h.created_at >= %s
+                  AND h.created_at < %s
+                  AND h.landing_key <> ''
+                  AND h.session_token <> ''
+                GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms
+            ),
             handoff_by_session AS (
                 SELECT
+                    metric_date,
                     landing_key,
                     session_token,
-                    MIN(created_at) AS first_handoff_at,
-                    MAX(service_key) AS service_key,
-                    COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_attempted' THEN handoff_id ELSE NULL END) AS handoff_attempts,
-                    COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_hidden' THEN handoff_id ELSE NULL END) AS handoff_successes,
-                    COUNT(DISTINCT CASE WHEN event_type = 'sms_handoff_no_hide' THEN handoff_id ELSE NULL END) AS handoff_fails,
+                    SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
+                    SUM(CASE WHEN event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
+                    SUM(CASE WHEN event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails,
                     MIN(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS min_hidden_seconds,
-                    MAX(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS max_hidden_seconds,
-                    MAX(ua_ch_platform) AS ua_ch_platform,
-                    MAX(ua_ch_platform_version) AS ua_ch_platform_version,
-                    MAX(ua_ch_model) AS ua_ch_model,
-                    MAX(ua_ch_brands) AS ua_ch_brands,
-                    MAX(ua_ch_full_version_list) AS ua_ch_full_version_list,
-                    MAX(user_agent) AS user_agent
-                FROM {$handoff_table}
-                WHERE created_at >= %s
-                  AND created_at < %s
-                  AND landing_key <> ''
-                  AND session_token <> ''
-                GROUP BY landing_key, session_token
-                HAVING first_handoff_at >= %s
-                   AND first_handoff_at < %s
+                    MAX(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS max_hidden_seconds
+                FROM handoff_origin_events
+                GROUP BY metric_date, landing_key, session_token
             ),
-            session_keys AS (
+            session_facts AS (
                 SELECT
-                    landing_key,
-                    session_token,
-                    MIN(metric_at) AS metric_at,
-                    MAX(has_session_fact) AS has_session_fact
-                FROM (
-                    SELECT landing_key, session_token, first_landing_at AS metric_at, 1 AS has_session_fact
-                    FROM landing_loads
-                    UNION ALL
-                    SELECT landing_key, session_token, first_engagement_at AS metric_at, 1 AS has_session_fact
-                    FROM engagement_sessions
-                    UNION ALL
-                    SELECT landing_key, session_token, first_handoff_at AS metric_at, 0 AS has_session_fact
-                    FROM handoff_by_session
-                ) source_sessions
-                GROUP BY landing_key, session_token
-            ),
-            session_dimensions AS (
-                SELECT
-                    DATE(sk.metric_at) AS metric_date,
-                    COALESCE(NULLIF(sk.landing_key, ''), '(unknown)') AS landing_key,
-                    sk.landing_key AS raw_landing_key,
-                    sk.session_token,
-                    COALESCE(NULLIF(l.service_key, ''), NULLIF(e.service_key, ''), NULLIF(h.service_key, ''), '(unknown)') AS service_key,
+                    DATE(l.first_landing_at) AS metric_date,
+                    COALESCE(NULLIF(l.landing_key, ''), '(unknown)') AS landing_key,
+                    COALESCE(NULLIF(l.service_key, ''), '(unknown)') AS service_key,
                     COALESCE(NULLIF(l.provider_key, ''), '(unknown)') AS provider_key,
                     COALESCE(NULLIF(l.flow_key, ''), '(unknown)') AS flow_key,
                     COALESCE(NULLIF(l.country, ''), '(unknown)') AS country,
                     COALESCE(NULLIF(l.pid, ''), '(unknown)') AS pid,
                     COALESCE(NULLIF(l.tksource, ''), '(unknown)') AS tksource,
-                    COALESCE(NULLIF(l.tkzone, ''), '(unknown)') AS tkzone,
                     COALESCE(NULLIF(l.device_brand, ''), '(unknown)') AS device_brand,
                     COALESCE(NULLIF(l.os, ''), '(unknown)') AS os,
                     COALESCE(NULLIF(l.os_version, ''), '(unknown)') AS os_version,
                     COALESCE(NULLIF(l.browser, ''), '(unknown)') AS browser,
                     COALESCE(NULLIF(l.client_ip_version, ''), '(unknown)') AS client_ip_version,
                     COALESCE(NULLIF(l.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix,
-                    CASE WHEN sk.has_session_fact > 0 THEN 1 ELSE 0 END AS sessions,
+                    1 AS sessions,
                     COALESCE(e.page_loaded_sessions, 0) AS page_loaded_sessions,
                     COALESCE(e.cta1_sessions, 0) AS cta1_sessions,
                     COALESCE(e.cta1_click_events, 0) AS cta1_click_events,
@@ -307,123 +278,21 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(h.handoff_successes, 0) AS handoff_successes,
                     COALESCE(h.handoff_fails, 0) AS handoff_fails,
                     h.min_hidden_seconds,
-                    h.max_hidden_seconds
-                FROM session_keys sk
-                LEFT JOIN landing_loads l
-                  ON l.landing_key = sk.landing_key
-                 AND l.session_token = sk.session_token
-                LEFT JOIN engagement_sessions e
-                  ON e.landing_key = sk.landing_key
-                 AND e.session_token = sk.session_token
-                LEFT JOIN handoff_by_session h
-                  ON h.landing_key = sk.landing_key
-                 AND h.session_token = sk.session_token
-            ),
-            session_facts AS (
-                SELECT
-                    metric_date,
-                    landing_key,
-                    service_key,
-                    provider_key,
-                    flow_key,
-                    country,
-                    pid,
-                    tksource,
-                    tkzone,
-                    device_brand,
-                    os,
-                    os_version,
-                    browser,
-                    client_ip_version,
-                    client_ip_prefix,
-                    sessions,
-                    page_loaded_sessions,
-                    cta1_sessions,
-                    cta1_click_events,
-                    cta2_sessions,
-                    cta2_click_events,
-                    cta3_sessions,
-                    cta3_click_events,
-                    handoff_attempts,
-                    handoff_successes,
-                    handoff_fails,
-                    min_hidden_seconds,
-                    max_hidden_seconds,
+                    h.max_hidden_seconds,
                     0 AS sales,
                     0 AS sales_amount_minor
-                FROM session_dimensions
-            ),
-            hidden_events AS (
-                SELECT
-                    sd.metric_date,
-                    sd.landing_key,
-                    sd.service_key,
-                    sd.provider_key,
-                    sd.flow_key,
-                    sd.country,
-                    sd.pid,
-                    sd.tksource,
-                    sd.tkzone,
-                    sd.device_brand,
-                    sd.os,
-                    sd.os_version,
-                    sd.browser,
-                    sd.client_ip_version,
-                    sd.client_ip_prefix,
-                    ROUND(h.elapsed_ms / 1000, 2) AS hidden_seconds
-                FROM session_dimensions sd
-                INNER JOIN handoff_by_session hs
-                  ON hs.landing_key = sd.raw_landing_key
-                 AND hs.session_token = sd.session_token
-                INNER JOIN {$handoff_table} h
-                  ON h.landing_key = sd.raw_landing_key
-                 AND h.session_token = sd.session_token
-                WHERE h.event_type = 'sms_handoff_hidden'
-                  AND h.created_at >= %s
-                  AND h.created_at < %s
-            ),
-            hidden_ranked AS (
-                SELECT
-                    hidden_events.*,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
-                        ORDER BY hidden_seconds
-                    ) AS rn,
-                    COUNT(*) OVER (
-                        PARTITION BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
-                    ) AS cnt
-                FROM hidden_events
-            ),
-            hidden_medians AS (
-                SELECT
-                    metric_date,
-                    landing_key,
-                    service_key,
-                    provider_key,
-                    flow_key,
-                    country,
-                    pid,
-                    tksource,
-                    tkzone,
-                    device_brand,
-                    os,
-                    os_version,
-                    browser,
-                    client_ip_version,
-                    client_ip_prefix,
-                    ROUND(AVG(
-                        CASE
-                            WHEN rn IN (FLOOR((cnt + 1) / 2), FLOOR((cnt + 2) / 2))
-                            THEN hidden_seconds
-                            ELSE NULL
-                        END
-                    ), 2) AS median_hidden_seconds
-                FROM hidden_ranked
-                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
+                FROM landing_loads l
+                LEFT JOIN engagement_sessions e
+                  ON e.landing_key = l.landing_key
+                 AND e.session_token = l.session_token
+                LEFT JOIN handoff_by_session h
+                  ON h.landing_key = l.landing_key
+                 AND h.session_token = l.session_token
+                 AND h.metric_date = DATE(l.first_landing_at)
             ),
             sales_facts AS (
                 SELECT
-                    COALESCE(s.attribution_metric_date, DATE(s.completed_at)) AS metric_date,
+                    s.attribution_metric_date AS metric_date,
                     COALESCE(NULLIF(s.landing_key, ''), '(unknown)') AS landing_key,
                     COALESCE(NULLIF(s.service_key, ''), '(unknown)') AS service_key,
                     COALESCE(NULLIF(s.provider_key, ''), '(unknown)') AS provider_key,
@@ -431,7 +300,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(s.country, ''), '(unknown)') AS country,
                     COALESCE(NULLIF(s.pid, ''), '(unknown)') AS pid,
                     COALESCE(NULLIF(s.tksource, ''), '(unknown)') AS tksource,
-                    COALESCE(NULLIF(s.tkzone, ''), '(unknown)') AS tkzone,
                     COALESCE(NULLIF(s.device_brand, ''), '(unknown)') AS device_brand,
                     COALESCE(NULLIF(s.os, ''), '(unknown)') AS os,
                     COALESCE(NULLIF(s.os_version, ''), '(unknown)') AS os_version,
@@ -451,20 +319,13 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     0 AS handoff_fails,
                     NULL AS min_hidden_seconds,
                     NULL AS max_hidden_seconds,
-                    COUNT(DISTINCT s.id) AS sales,
+                    COUNT(*) AS sales,
                     COALESCE(SUM(s.amount_minor), 0) AS sales_amount_minor
                 FROM {$sales_table} s
                 WHERE s.status = 'completed'
-                  AND (
-                      s.attribution_metric_date BETWEEN %s AND %s
-                      OR (
-                          s.attribution_metric_date IS NULL
-                          AND s.completed_at >= %s
-                          AND s.completed_at < %s
-                      )
-                  )
+                  AND s.attribution_metric_date BETWEEN %s AND %s
                 GROUP BY
-                    COALESCE(s.attribution_metric_date, DATE(s.completed_at)),
+                    s.attribution_metric_date,
                     COALESCE(NULLIF(s.landing_key, ''), '(unknown)'),
                     COALESCE(NULLIF(s.service_key, ''), '(unknown)'),
                     COALESCE(NULLIF(s.provider_key, ''), '(unknown)'),
@@ -472,7 +333,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(s.country, ''), '(unknown)'),
                     COALESCE(NULLIF(s.pid, ''), '(unknown)'),
                     COALESCE(NULLIF(s.tksource, ''), '(unknown)'),
-                    COALESCE(NULLIF(s.tkzone, ''), '(unknown)'),
                     COALESCE(NULLIF(s.device_brand, ''), '(unknown)'),
                     COALESCE(NULLIF(s.os, ''), '(unknown)'),
                     COALESCE(NULLIF(s.os_version, ''), '(unknown)'),
@@ -495,7 +355,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     country,
                     pid,
                     tksource,
-                    tkzone,
                     device_brand,
                     os,
                     os_version,
@@ -518,7 +377,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     SUM(sales) AS sales,
                     SUM(sales_amount_minor) AS sales_amount_minor
                 FROM all_facts
-                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, tkzone, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
+                GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix
             )
             SELECT
                 a.metric_date,
@@ -529,7 +388,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 a.country,
                 a.pid,
                 a.tksource,
-                a.tkzone,
                 a.device_brand,
                 a.os,
                 a.os_version,
@@ -548,8 +406,10 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 a.handoff_attempts,
                 a.handoff_successes,
                 a.handoff_fails,
-                COALESCE(ROUND(a.handoff_successes / NULLIF(a.handoff_attempts, 0) * 100, 2), 0) AS handoff_rate_pct,
-                hm.median_hidden_seconds,
+                CASE
+                    WHEN a.handoff_attempts <= 0 THEN 0
+                    ELSE ROUND(a.handoff_successes / a.handoff_attempts * 100, 2)
+                END AS handoff_rate_pct,
                 a.min_hidden_seconds,
                 a.max_hidden_seconds,
                 a.sales,
@@ -557,22 +417,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 CURRENT_TIMESTAMP AS created_at,
                 CURRENT_TIMESTAMP AS updated_at
             FROM aggregated a
-            LEFT JOIN hidden_medians hm
-              ON hm.metric_date = a.metric_date
-             AND hm.landing_key = a.landing_key
-             AND hm.service_key = a.service_key
-             AND hm.provider_key = a.provider_key
-             AND hm.flow_key = a.flow_key
-             AND hm.country = a.country
-             AND hm.pid = a.pid
-             AND hm.tksource = a.tksource
-             AND hm.tkzone = a.tkzone
-             AND hm.device_brand = a.device_brand
-             AND hm.os = a.os
-             AND hm.os_version = a.os_version
-             AND hm.browser = a.browser
-             AND hm.client_ip_version = a.client_ip_version
-             AND hm.client_ip_prefix = a.client_ip_prefix
             WHERE a.metric_date = %s
               AND (
                   a.sessions > 0
@@ -675,13 +519,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
     private function next_date(string $date): string
     {
         $timestamp = strtotime($date . ' +1 day');
-
-        return $timestamp === false ? $date : gmdate('Y-m-d', $timestamp);
-    }
-
-    private function previous_date(string $date): string
-    {
-        $timestamp = strtotime($date . ' -1 day');
 
         return $timestamp === false ? $date : gmdate('Y-m-d', $timestamp);
     }

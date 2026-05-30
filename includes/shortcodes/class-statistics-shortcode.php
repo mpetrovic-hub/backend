@@ -15,7 +15,6 @@ class Kiwi_Statistics_Shortcode
         'country' => 'Country',
         'pid' => 'PID',
         'tksource' => 'TK Source',
-        'tkzone' => 'TK Zone',
         'device_brand' => 'Device Brand',
         'os' => 'OS',
         'os_version' => 'OS Version',
@@ -35,7 +34,6 @@ class Kiwi_Statistics_Shortcode
         'handoff_fails' => 'Handoff Fails',
         'handoff_rate_pct' => 'Handoff Rate %',
         'min_hidden_seconds' => 'Min Hidden s',
-        'median_hidden_seconds' => 'Median Hidden s',
         'max_hidden_seconds' => 'Max Hidden s',
         'sales' => 'Sales',
         'sales_amount_minor' => 'Sales Amount Minor',
@@ -139,7 +137,6 @@ class Kiwi_Statistics_Shortcode
             'service_key' => '',
             'landing_key' => '',
             'tksource' => '',
-            'tkzone' => '',
             'device_brand' => '',
             'os' => '',
             'os_version' => '',
@@ -167,10 +164,6 @@ class Kiwi_Statistics_Shortcode
 
         if (isset($_GET['kiwi_stats_tksource'])) {
             $filters['tksource'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_tksource']));
-        }
-
-        if (isset($_GET['kiwi_stats_tkzone'])) {
-            $filters['tkzone'] = sanitize_text_field(wp_unslash($_GET['kiwi_stats_tkzone']));
         }
 
         if (isset($_GET['kiwi_stats_device_brand'])) {
@@ -212,7 +205,6 @@ class Kiwi_Statistics_Shortcode
         $service_key = (string) ($filters['service_key'] ?? '');
         $landing_key = (string) ($filters['landing_key'] ?? '');
         $tksource = (string) ($filters['tksource'] ?? '');
-        $tkzone = (string) ($filters['tkzone'] ?? '');
         $device_brand = (string) ($filters['device_brand'] ?? '');
         $os = (string) ($filters['os'] ?? '');
         $os_version = (string) ($filters['os_version'] ?? '');
@@ -233,7 +225,6 @@ class Kiwi_Statistics_Shortcode
         $output .= $this->render_select_filter('kiwi_stats_service_key', 'Service Key', $service_key, $this->get_filter_options_for_key($filter_options, 'service_keys'));
         $output .= $this->render_select_filter('kiwi_stats_landing_key', 'Landing Key', $landing_key, $this->get_filter_options_for_key($filter_options, 'landing_keys'));
         $output .= $this->render_select_filter('kiwi_stats_tksource', 'TK Source', $tksource, $this->get_filter_options_for_key($filter_options, 'tksources'));
-        $output .= $this->render_select_filter('kiwi_stats_tkzone', 'TK Zone', $tkzone, $this->get_filter_options_for_key($filter_options, 'tkzones'));
         $output .= $this->render_select_filter('kiwi_stats_device_brand', 'Device Brand', $device_brand, $this->get_filter_options_for_key($filter_options, 'device_brands'));
         $output .= $this->render_select_filter('kiwi_stats_os', 'OS', $os, $this->get_filter_options_for_key($filter_options, 'os_values'));
         $output .= $this->render_select_filter('kiwi_stats_os_version', 'OS Version', $os_version, $this->get_filter_options_for_key($filter_options, 'os_versions'));
@@ -261,7 +252,6 @@ class Kiwi_Statistics_Shortcode
             'kiwi_stats_service_key' => (string) ($filters['service_key'] ?? ''),
             'kiwi_stats_landing_key' => (string) ($filters['landing_key'] ?? ''),
             'kiwi_stats_tksource' => (string) ($filters['tksource'] ?? ''),
-            'kiwi_stats_tkzone' => (string) ($filters['tkzone'] ?? ''),
             'kiwi_stats_device_brand' => (string) ($filters['device_brand'] ?? ''),
             'kiwi_stats_os' => (string) ($filters['os'] ?? ''),
             'kiwi_stats_os_version' => (string) ($filters['os_version'] ?? ''),
