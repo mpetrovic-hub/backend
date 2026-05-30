@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-30-2';
+    private const DB_SCHEMA_VERSION = '2026-05-31-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -904,9 +904,140 @@ TEXT;
     {
         $table_name = (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->get_table_name();
 
+        $this->consolidate_slim_landing_funnel_daily_summary_rows($table_name);
+
         foreach (['tkzone', 'median_hidden_seconds'] as $column_name) {
             $this->drop_column_if_exists($table_name, $column_name);
         }
+    }
+
+    private function consolidate_slim_landing_funnel_daily_summary_rows(string $table_name): void
+    {
+        global $wpdb;
+
+        if (preg_match('/^[A-Za-z0-9_]+$/', $table_name) !== 1) {
+            return;
+        }
+
+        $temp_table_name = $table_name . '_slim_rollup_tmp';
+
+        $dimension_columns = [
+            'metric_date',
+            'landing_key',
+            'service_key',
+            'provider_key',
+            'flow_key',
+            'country',
+            'pid',
+            'tksource',
+            'device_brand',
+            'os',
+            'os_version',
+            'browser',
+            'client_ip_version',
+            'client_ip_prefix',
+        ];
+        $dimension_select = implode(",\n                ", $dimension_columns);
+        $dimension_group_by = implode(', ', $dimension_columns);
+        $dimension_hash_expression = "SHA2(CONCAT_WS('|',
+                landing_key,
+                service_key,
+                provider_key,
+                flow_key,
+                country,
+                pid,
+                tksource,
+                device_brand,
+                os,
+                os_version,
+                browser,
+                client_ip_version,
+                client_ip_prefix
+            ), 256)";
+        $metric_columns = [
+            'sessions',
+            'page_loaded_sessions',
+            'cta1_sessions',
+            'cta1_click_events',
+            'cta2_sessions',
+            'cta2_click_events',
+            'cta3_sessions',
+            'cta3_click_events',
+            'handoff_attempts',
+            'handoff_successes',
+            'handoff_fails',
+            'sales',
+            'sales_amount_minor',
+        ];
+        $insert_columns = array_merge(
+            $dimension_columns,
+            ['dimension_hash'],
+            $metric_columns,
+            ['handoff_rate_pct', 'min_hidden_seconds', 'max_hidden_seconds', 'created_at', 'updated_at']
+        );
+
+        $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
+        $wpdb->query('START TRANSACTION');
+        $created_temp_table = $wpdb->query(
+            "CREATE TEMPORARY TABLE {$temp_table_name} AS
+            SELECT
+                {$dimension_select},
+                {$dimension_hash_expression} AS dimension_hash,
+                SUM(sessions) AS sessions,
+                SUM(page_loaded_sessions) AS page_loaded_sessions,
+                SUM(cta1_sessions) AS cta1_sessions,
+                SUM(cta1_click_events) AS cta1_click_events,
+                SUM(cta2_sessions) AS cta2_sessions,
+                SUM(cta2_click_events) AS cta2_click_events,
+                SUM(cta3_sessions) AS cta3_sessions,
+                SUM(cta3_click_events) AS cta3_click_events,
+                SUM(handoff_attempts) AS handoff_attempts,
+                SUM(handoff_successes) AS handoff_successes,
+                SUM(handoff_fails) AS handoff_fails,
+                SUM(sales) AS sales,
+                SUM(sales_amount_minor) AS sales_amount_minor,
+                CASE
+                    WHEN SUM(handoff_attempts) <= 0 THEN 0
+                    ELSE ROUND(SUM(handoff_successes) / SUM(handoff_attempts) * 100, 2)
+                END AS handoff_rate_pct,
+                MIN(min_hidden_seconds) AS min_hidden_seconds,
+                MAX(max_hidden_seconds) AS max_hidden_seconds,
+                MIN(created_at) AS created_at,
+                MAX(updated_at) AS updated_at
+            FROM {$table_name}
+            GROUP BY {$dimension_group_by}"
+        );
+
+        if ($created_temp_table === false) {
+            $wpdb->query('ROLLBACK');
+            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
+
+            return;
+        }
+
+        $deleted_rows = $wpdb->query("DELETE FROM {$table_name}");
+        if ($deleted_rows === false) {
+            $wpdb->query('ROLLBACK');
+            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
+
+            return;
+        }
+
+        $inserted_rows = $wpdb->query(
+            "INSERT INTO {$table_name} (" . implode(', ', $insert_columns) . ")
+             SELECT " . implode(', ', $insert_columns) . "
+             FROM {$temp_table_name}"
+        );
+
+        if ($inserted_rows === false) {
+            $wpdb->query('ROLLBACK');
+            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
+
+            return;
+        }
+
+        $wpdb->query('COMMIT');
+        $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
     }
 
     private function backfill_legacy_android_version_column(string $table_name): void

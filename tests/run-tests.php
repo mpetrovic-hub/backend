@@ -10020,7 +10020,7 @@ kiwi_run_test('Kiwi_Plugin backfills legacy Android version before dropping old 
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Plugin drops retired main daily summary columns during schema migration', function (): void {
+kiwi_run_test('Kiwi_Plugin consolidates and drops retired main daily summary columns during schema migration', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
@@ -10078,6 +10078,22 @@ kiwi_run_test('Kiwi_Plugin drops retired main daily summary columns during schem
     $plugin->run_slim_daily_summary_migration_for_test();
     $sql = implode("\n", $wpdb->queries);
 
+    $rollup_position = strpos($sql, 'CREATE TEMPORARY TABLE abc_kiwi_landing_funnel_daily_summary_slim_rollup_tmp AS');
+    $delete_position = strpos($sql, 'DELETE FROM abc_kiwi_landing_funnel_daily_summary');
+    $insert_position = strpos($sql, 'INSERT INTO abc_kiwi_landing_funnel_daily_summary (metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix, dimension_hash');
+    $drop_tkzone_position = strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN tkzone');
+
+    kiwi_assert_true(is_int($rollup_position), 'Expected migration to roll existing rows into a slim-dimension temporary table before dropping tkzone.');
+    kiwi_assert_true(is_int($delete_position) && $delete_position > $rollup_position, 'Expected migration to clear old rows only after creating the slim rollup table.');
+    kiwi_assert_true(is_int($insert_position) && $insert_position > $delete_position, 'Expected migration to restore consolidated slim rows before dropping retired columns.');
+    kiwi_assert_true(is_int($drop_tkzone_position) && $drop_tkzone_position > $insert_position, 'Expected migration to drop tkzone only after existing rows were consolidated.');
+    kiwi_assert_contains("SHA2(CONCAT_WS('|',", $sql, 'Expected migration to recompute the slim summary dimension hash.');
+    kiwi_assert_contains('GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix', $sql, 'Expected migration to consolidate rows by the slim main summary dimensions.');
+    kiwi_assert_contains('SUM(sessions) AS sessions', $sql, 'Expected migration to preserve session totals when rolling up legacy tkzone-split rows.');
+    kiwi_assert_contains('SUM(handoff_attempts) AS handoff_attempts', $sql, 'Expected migration to preserve handoff totals when rolling up legacy tkzone-split rows.');
+    kiwi_assert_contains('WHEN SUM(handoff_attempts) <= 0 THEN 0', $sql, 'Expected migration to recalculate handoff rate from rolled-up totals.');
+    kiwi_assert_contains('START TRANSACTION', $sql, 'Expected migration to protect the delete/reinsert rollup with a transaction.');
+    kiwi_assert_contains('COMMIT', $sql, 'Expected migration to commit the successful summary rollup before dropping columns.');
     kiwi_assert_contains('ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN tkzone', $sql, 'Expected migration to drop retired tkzone from the main summary table.');
     kiwi_assert_contains('ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN median_hidden_seconds', $sql, 'Expected migration to drop retired hidden median from the main summary table.');
 
@@ -10096,7 +10112,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary cont
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-30-2', $schema_version, 'Expected schema version to be bumped for the slim main daily summary contract.');
+    kiwi_assert_same('2026-05-31-1', $schema_version, 'Expected schema version to be bumped for the slim main daily summary contract.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
