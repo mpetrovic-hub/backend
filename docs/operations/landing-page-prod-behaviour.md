@@ -109,7 +109,7 @@ Important boundary:
 - Incoming provider callback validation is provider-specific.
 - Outgoing affiliate secret/signature applies only to outbound postbacks.
 - Client IP stored on sales must come from the resolved landing-session context in `wp_kiwi_landing_page_sessions`; provider/aggregator callback `REMOTE_ADDR` is not a user-IP source.
-- `Kiwi_Client_Ip_Resolver` accepts forwarded headers only when the direct peer matches `KIWI_TRUSTED_PROXY_CIDRS`. Without that explicit trust, `X-Forwarded-For`, `Forwarded`, and `X-Real-IP` are ignored to avoid spoofed client-IP buckets.
+- `Kiwi_Client_Ip_Resolver` accepts forwarded headers only when the direct peer matches `KIWI_TRUSTED_PROXY_CIDRS`. Without that explicit trust, `X-Forwarded-For`, `Forwarded`, and `X-Real-IP` are ignored to avoid spoofed client-IP buckets. If a trusted proxy request has no usable forwarded client candidate, the IP bucket remains `(unknown)` instead of bucketing the proxy itself.
 - Traffic and campaign dimensions stored on landing sessions come from landing metadata, service context, query parameters, and `HTTP_ACCEPT_LANGUAGE`; `country` is the campaign/service country, not a Geo-IP lookup.
 
 ## Landing-page KPI tracking

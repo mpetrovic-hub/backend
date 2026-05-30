@@ -3857,11 +3857,24 @@ kiwi_run_test('Kiwi_Client_Ip_Resolver uses trusted proxy chains defensively', f
         'REMOTE_ADDR' => '10.0.0.8',
         'HTTP_X_FORWARDED_FOR' => '192.0.2.9, 203.0.113.44, 10.0.0.7',
     ], ['10.0.0.0/24']);
+    $missing_forwarded = $resolver->resolve([
+        'REMOTE_ADDR' => '10.0.0.8',
+    ], ['10.0.0.0/24']);
+    $trusted_only_forwarded = $resolver->resolve([
+        'REMOTE_ADDR' => '10.0.0.8',
+        'HTTP_X_FORWARDED_FOR' => '10.0.0.7',
+    ], ['10.0.0.0/24']);
 
     kiwi_assert_same('203.0.113.44', $result['client_ip'] ?? '', 'Expected the right-most non-trusted forwarded IP to win.');
     kiwi_assert_same('203.0.113.0/24', $result['client_ip_prefix'] ?? '', 'Expected trusted XFF client to be bucketed as IPv4 /24.');
     kiwi_assert_same('x_forwarded_for', $result['source'] ?? '', 'Expected X-Forwarded-For to be recorded as the resolution source.');
     kiwi_assert_true((bool) ($result['peer_trusted'] ?? false), 'Expected direct peer to be marked trusted.');
+    kiwi_assert_same('', $missing_forwarded['client_ip'] ?? '', 'Expected trusted proxy peers without forwarded clients not to be bucketed as clients.');
+    kiwi_assert_same('(unknown)', $missing_forwarded['client_ip_version'] ?? '', 'Expected trusted proxy peers without forwarded clients to use unknown IP version.');
+    kiwi_assert_same('(unknown)', $missing_forwarded['client_ip_prefix'] ?? '', 'Expected trusted proxy peers without forwarded clients to use unknown IP prefix.');
+    kiwi_assert_same('trusted_proxy_missing_forwarded_client', $missing_forwarded['source'] ?? '', 'Expected trusted proxy missing forwarded source marker.');
+    kiwi_assert_true((bool) ($missing_forwarded['peer_trusted'] ?? false), 'Expected missing forwarded snapshot to keep trusted peer marker.');
+    kiwi_assert_same('', $trusted_only_forwarded['client_ip'] ?? '', 'Expected trusted-only forwarded chains not to bucket the proxy as client.');
 });
 
 kiwi_run_test('Kiwi_Client_Ip_Resolver accepts RFC Forwarded header only from trusted peers', function (): void {

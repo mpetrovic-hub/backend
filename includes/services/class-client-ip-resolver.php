@@ -27,6 +27,8 @@ class Kiwi_Client_Ip_Resolver
 
                 return $forwarded;
             }
+
+            return $this->empty_ip_snapshot('trusted_proxy_missing_forwarded_client', true);
         }
 
         $snapshot = $this->normalize_ip($peer_ip);
