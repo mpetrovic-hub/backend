@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-30-1';
+    private const DB_SCHEMA_VERSION = '2026-05-30-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -863,6 +863,7 @@ TEXT;
         }
 
         $this->migrate_legacy_android_version_columns();
+        $this->migrate_slim_landing_funnel_daily_summary_columns();
     }
 
     protected function build_schema_repositories(): array
@@ -896,6 +897,15 @@ TEXT;
         ] as $table_name) {
             $this->backfill_legacy_android_version_column($table_name);
             $this->drop_column_if_exists($table_name, 'android_version');
+        }
+    }
+
+    protected function migrate_slim_landing_funnel_daily_summary_columns(): void
+    {
+        $table_name = (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->get_table_name();
+
+        foreach (['tkzone', 'median_hidden_seconds'] as $column_name) {
+            $this->drop_column_if_exists($table_name, $column_name);
         }
     }
 

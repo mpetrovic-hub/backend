@@ -3,6 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-05-30:
+- [Landing Funnel Daily Summary] Slimmed the main `wp_kiwi_landing_funnel_daily_summary` contract around canonical landing-session facts. The main summary no longer stores or filters by `tkzone`, no longer calculates `median_hidden_seconds`, counts handoff metrics with the handoff event uniqueness contract, and includes completed sales only through `wp_kiwi_sales.attribution_metric_date`; affected days need to be recomputed through the existing refresh flow so the new `dimension_hash` basis is not mixed with old rows.
 - [Landing Analytics] Added a trusted-proxy client-IP resolver controlled by `KIWI_TRUSTED_PROXY_CIDRS`. Landing sessions now persist coarse `client_ip_version` and `client_ip_prefix` buckets from the resolved client IP, sales snapshots copy only those stored buckets, and daily summary refreshes read stored session buckets instead of parsing raw IPs in SQL. Trusted proxy requests without a usable forwarded client and legacy sessions without stored buckets remain `(unknown)` for sales and summary IP dimensions. The Statistics table and CSV still expose only coarse buckets, while normal IP dropdown filters were removed.
 
 2026-05-29:
