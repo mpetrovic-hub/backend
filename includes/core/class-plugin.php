@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-29-3';
+    private const DB_SCHEMA_VERSION = '2026-05-30-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -361,7 +361,8 @@ class Kiwi_Plugin
             $tracking_capture_service,
             $primary_cta_resolver,
             $landing_kpi_service,
-            $device_normalizer
+            $device_normalizer,
+            new Kiwi_Client_Ip_Resolver()
         );
 
         $router->maybe_render_current_request();

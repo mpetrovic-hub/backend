@@ -9,17 +9,22 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
     private $landing_page_session_repository;
     private $landing_engagement_repository;
     private $device_context_normalizer;
+    private $client_ip_resolver;
 
     public function __construct(
         ?Kiwi_Landing_Page_Session_Repository $landing_page_session_repository = null,
         ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null,
-        ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null
+        ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null,
+        ?Kiwi_Client_Ip_Resolver $client_ip_resolver = null
     ) {
         $this->landing_page_session_repository = $landing_page_session_repository;
         $this->landing_engagement_repository = $landing_engagement_repository;
         $this->device_context_normalizer = $device_context_normalizer instanceof Kiwi_Device_Context_Normalizer
             ? $device_context_normalizer
             : new Kiwi_Device_Context_Normalizer();
+        $this->client_ip_resolver = $client_ip_resolver instanceof Kiwi_Client_Ip_Resolver
+            ? $client_ip_resolver
+            : new Kiwi_Client_Ip_Resolver();
     }
 
     public function build(array $attribution_row, array $sale = [], array $conversion = []): array
@@ -43,7 +48,7 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
         $landing_session = $this->find_landing_session($landing_key, $session_ref, $service_key);
         $engagement = $this->find_landing_engagement($landing_key, $session_ref);
         $device = $this->normalize_device_dimensions($engagement, $landing_session);
-        $ip_snapshot = $this->normalize_client_ip((string) ($landing_session['remote_ip'] ?? ''));
+        $ip_snapshot = $this->build_client_ip_snapshot($landing_session);
         $metric_date = $this->resolve_metric_date($attribution_row, $engagement, $landing_session, $sale, $conversion);
 
         $snapshot = [
@@ -108,6 +113,8 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
                 'request_path',
                 'session_token',
                 'remote_ip',
+                'client_ip_version',
+                'client_ip_prefix',
                 'user_agent',
                 'device_brand',
                 'os',
@@ -142,9 +149,7 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
             ]),
             'normalized' => $snapshot,
             'debug' => [
-                'ip_source' => is_array($landing_session) && trim((string) ($landing_session['remote_ip'] ?? '')) !== ''
-                    ? 'landing_page_session.remote_ip'
-                    : '',
+                'ip_source' => $ip_snapshot['snapshot_source'] ?? '',
                 'metric_date_source' => $this->resolve_metric_date_source($attribution_row, $engagement, $landing_session, $sale, $conversion),
                 'device_source' => $this->resolve_device_source($engagement, $landing_session),
             ],
@@ -193,63 +198,43 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
         return is_array($row) ? $row : null;
     }
 
-    private function normalize_client_ip(string $remote_ip): array
+    private function build_client_ip_snapshot(?array $landing_session): array
     {
-        $remote_ip = trim($remote_ip);
-
-        if ($remote_ip === '') {
+        if (!is_array($landing_session)) {
             return $this->empty_ip_snapshot();
         }
 
-        $remote_ip = trim($remote_ip, "[] \t\n\r\0\x0B");
-        $packed = @inet_pton($remote_ip);
+        $remote_ip_snapshot = $this->client_ip_resolver->normalize_ip((string) ($landing_session['remote_ip'] ?? ''));
+        $client_ip_version = $this->normalize_ip_version((string) ($landing_session['client_ip_version'] ?? ''));
+        $client_ip_prefix = $this->sanitize_text_dimension((string) ($landing_session['client_ip_prefix'] ?? ''), 120);
 
-        if ($packed === false || filter_var($remote_ip, FILTER_VALIDATE_IP) === false) {
-            return $this->empty_ip_snapshot();
-        }
-
-        $normalized_ip = strtolower((string) inet_ntop($packed));
-
-        if (filter_var($normalized_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            $parts = explode('.', $normalized_ip);
-            $prefix = count($parts) === 4
-                ? implode('.', [$parts[0], $parts[1], $parts[2], '0']) . '/24'
-                : '';
-
+        if ($client_ip_version !== '' && $client_ip_version !== '(unknown)'
+            && $client_ip_prefix !== '' && $client_ip_prefix !== '(unknown)'
+        ) {
             return [
-                'client_ip' => $normalized_ip,
-                'client_ip_version' => 'ipv4',
-                'client_ip_prefix' => $prefix,
-                'client_ip_hash' => hash('sha256', $normalized_ip),
+                'client_ip' => (string) ($remote_ip_snapshot['client_ip'] ?? ''),
+                'client_ip_version' => $client_ip_version,
+                'client_ip_prefix' => $client_ip_prefix,
+                'client_ip_hash' => (string) ($remote_ip_snapshot['client_ip_hash'] ?? ''),
+                'snapshot_source' => 'landing_page_session.client_ip_buckets',
             ];
         }
 
-        if (filter_var($normalized_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-            $bytes = array_values(unpack('C*', $packed) ?: []);
-            $groups = [];
+        $remote_ip_snapshot['snapshot_source'] = trim((string) ($landing_session['remote_ip'] ?? '')) !== ''
+            ? 'landing_page_session.remote_ip'
+            : '';
 
-            for ($index = 0; $index < 6; $index += 2) {
-                $groups[] = sprintf('%x', (($bytes[$index] ?? 0) << 8) + ($bytes[$index + 1] ?? 0));
-            }
-
-            return [
-                'client_ip' => $normalized_ip,
-                'client_ip_version' => 'ipv6',
-                'client_ip_prefix' => implode(':', $groups) . '::/48',
-                'client_ip_hash' => hash('sha256', $normalized_ip),
-            ];
-        }
-
-        return $this->empty_ip_snapshot();
+        return $remote_ip_snapshot;
     }
 
     private function empty_ip_snapshot(): array
     {
         return [
             'client_ip' => '',
-            'client_ip_version' => '',
-            'client_ip_prefix' => '',
+            'client_ip_version' => '(unknown)',
+            'client_ip_prefix' => '(unknown)',
             'client_ip_hash' => '',
+            'snapshot_source' => '',
         ];
     }
 
@@ -426,6 +411,21 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
     private function sanitize_source_value(string $value): string
     {
         return $this->sanitize_key($value, 191);
+    }
+
+    private function normalize_ip_version(string $value): string
+    {
+        $value = strtolower(trim($value));
+
+        if ($value === '4') {
+            return 'ipv4';
+        }
+
+        if ($value === '6') {
+            return 'ipv6';
+        }
+
+        return in_array($value, ['ipv4', 'ipv6', '(unknown)'], true) ? $value : '';
     }
 
     private function sanitize_text_dimension(string $value, int $max_length): string

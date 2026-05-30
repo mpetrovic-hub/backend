@@ -574,7 +574,15 @@ class Kiwi_Sales_Repository
     {
         $value = strtolower(trim($value));
 
-        return in_array($value, ['ipv4', 'ipv6'], true) ? $value : '';
+        if ($value === '4') {
+            return 'ipv4';
+        }
+
+        if ($value === '6') {
+            return 'ipv6';
+        }
+
+        return in_array($value, ['ipv4', 'ipv6', '(unknown)'], true) ? $value : '';
     }
 
     private function sanitize_hash(string $value): string

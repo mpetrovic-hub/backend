@@ -337,6 +337,7 @@ require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-operator
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-refund-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-device-model-brand-map-repository.php';
 require_once __DIR__ . '/../includes/services/class-device-context-normalizer.php';
+require_once __DIR__ . '/../includes/services/class-client-ip-resolver.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-page-session-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-nth-event-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-nth-flow-transaction-repository.php';
@@ -731,6 +732,22 @@ class Kiwi_Test_Landing_Ua_Config extends Kiwi_Test_Config
         return in_array($this->landing_ua_tracking_mode, ['disabled', 'onclick', 'onload'], true)
             ? $this->landing_ua_tracking_mode
             : 'onload';
+    }
+}
+
+class Kiwi_Test_Trusted_Proxy_Config extends Kiwi_Test_Config
+{
+    private $trusted_proxy_cidrs;
+
+    public function __construct(array $trusted_proxy_cidrs, array $landing_pages = [])
+    {
+        parent::__construct(100, 0, 0, [], [], [], $landing_pages);
+        $this->trusted_proxy_cidrs = $trusted_proxy_cidrs;
+    }
+
+    public function get_trusted_proxy_cidrs(): array
+    {
+        return $this->trusted_proxy_cidrs;
     }
 }
 
@@ -2658,8 +2675,6 @@ class Kiwi_Test_Landing_Funnel_Daily_Summary_Repository extends Kiwi_Landing_Fun
         'os_values' => [],
         'os_versions' => [],
         'browsers' => [],
-        'client_ip_versions' => [],
-        'client_ip_prefixes' => [],
     ];
     public $error = '';
     public $source_name = 'wp_kiwi_landing_funnel_daily_summary';
@@ -2932,6 +2947,8 @@ class Kiwi_Test_Landing_Page_Session_Repository extends Kiwi_Landing_Page_Sessio
                 'referer' => '',
                 'user_agent' => '',
                 'remote_ip' => '',
+                'client_ip_version' => '(unknown)',
+                'client_ip_prefix' => '(unknown)',
                 'query_params' => [],
                 'raw_context' => [],
             ],
@@ -3821,6 +3838,65 @@ kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', 
     kiwi_assert_true($config->is_landing_handoff_ua_client_hints_enabled(), 'Expected landing handoff UA Client Hints telemetry to default to enabled.');
 });
 
+kiwi_run_test('Kiwi_Client_Ip_Resolver ignores forwarded headers without a trusted proxy', function (): void {
+    $resolver = new Kiwi_Client_Ip_Resolver();
+    $result = $resolver->resolve([
+        'REMOTE_ADDR' => '198.51.100.77',
+        'HTTP_X_FORWARDED_FOR' => '203.0.113.44',
+    ], []);
+
+    kiwi_assert_same('198.51.100.77', $result['client_ip'] ?? '', 'Expected untrusted forwarded headers to be ignored.');
+    kiwi_assert_same('ipv4', $result['client_ip_version'] ?? '', 'Expected direct IPv4 peer to be normalized.');
+    kiwi_assert_same('198.51.100.0/24', $result['client_ip_prefix'] ?? '', 'Expected direct IPv4 peer to be bucketed as /24.');
+    kiwi_assert_same('remote_addr', $result['source'] ?? '', 'Expected source to remain REMOTE_ADDR when no trusted proxy is configured.');
+});
+
+kiwi_run_test('Kiwi_Client_Ip_Resolver uses trusted proxy chains defensively', function (): void {
+    $resolver = new Kiwi_Client_Ip_Resolver();
+    $result = $resolver->resolve([
+        'REMOTE_ADDR' => '10.0.0.8',
+        'HTTP_X_FORWARDED_FOR' => '192.0.2.9, 203.0.113.44, 10.0.0.7',
+    ], ['10.0.0.0/24']);
+
+    kiwi_assert_same('203.0.113.44', $result['client_ip'] ?? '', 'Expected the right-most non-trusted forwarded IP to win.');
+    kiwi_assert_same('203.0.113.0/24', $result['client_ip_prefix'] ?? '', 'Expected trusted XFF client to be bucketed as IPv4 /24.');
+    kiwi_assert_same('x_forwarded_for', $result['source'] ?? '', 'Expected X-Forwarded-For to be recorded as the resolution source.');
+    kiwi_assert_true((bool) ($result['peer_trusted'] ?? false), 'Expected direct peer to be marked trusted.');
+});
+
+kiwi_run_test('Kiwi_Client_Ip_Resolver accepts RFC Forwarded header only from trusted peers', function (): void {
+    $resolver = new Kiwi_Client_Ip_Resolver();
+    $trusted = $resolver->resolve([
+        'REMOTE_ADDR' => '2001:db8:ffff::10',
+        'HTTP_FORWARDED' => 'for="[2001:db8:85a3::8a2e:370:7334]";proto=https',
+    ], ['2001:db8:ffff::/48']);
+    $untrusted = $resolver->resolve([
+        'REMOTE_ADDR' => '2001:db8:ffff::10',
+        'HTTP_FORWARDED' => 'for=203.0.113.44;proto=https',
+    ], []);
+
+    kiwi_assert_same('2001:db8:85a3::8a2e:370:7334', $trusted['client_ip'] ?? '', 'Expected trusted Forwarded header to resolve IPv6 client.');
+    kiwi_assert_same('forwarded', $trusted['source'] ?? '', 'Expected Forwarded header source to be recorded.');
+    kiwi_assert_same('2001:db8:ffff::10', $untrusted['client_ip'] ?? '', 'Expected untrusted Forwarded headers to be ignored.');
+});
+
+kiwi_run_test('Kiwi_Client_Ip_Resolver normalizes IPv6 and unknown IP buckets', function (): void {
+    $resolver = new Kiwi_Client_Ip_Resolver();
+    $ipv6 = $resolver->resolve([
+        'REMOTE_ADDR' => '2001:db8:85a3::8a2e:370:7334',
+    ], []);
+    $unknown = $resolver->resolve([
+        'REMOTE_ADDR' => '',
+        'HTTP_X_FORWARDED_FOR' => '203.0.113.44',
+    ], ['10.0.0.0/24']);
+
+    kiwi_assert_same('ipv6', $ipv6['client_ip_version'] ?? '', 'Expected IPv6 version marker.');
+    kiwi_assert_same('2001:db8:85a3::/48', $ipv6['client_ip_prefix'] ?? '', 'Expected IPv6 /48 prefix.');
+    kiwi_assert_same('', $unknown['client_ip'] ?? '', 'Expected missing direct peer to avoid trusting forwarded headers.');
+    kiwi_assert_same('(unknown)', $unknown['client_ip_version'] ?? '', 'Expected missing IP version to use the unknown bucket.');
+    kiwi_assert_same('(unknown)', $unknown['client_ip_prefix'] ?? '', 'Expected missing IP prefix to use the unknown bucket.');
+});
+
 kiwi_run_test('Kiwi_Landing_Page_Registry discovers folder landing pages and parses metadata', function (): void {
     $project_root = kiwi_create_temp_directory('kiwi_lp_registry');
 
@@ -4483,6 +4559,28 @@ kiwi_run_test('Kiwi_Landing_Page_Router builds canonical session dimensions from
     kiwi_assert_same('', $unknown_dimensions['pid'] ?? '', 'Expected array query values to be ignored for source dimensions.');
     kiwi_assert_same('', $unknown_dimensions['tksource'] ?? '', 'Expected empty source values to stay empty at capture time.');
     kiwi_assert_same('(unknown)', $unknown_dimensions['browser_language'] ?? '', 'Expected invalid Accept-Language values to use the unknown bucket.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router resolves client IP context through trusted proxy config', function (): void {
+    $router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Trusted_Proxy_Config(['10.0.0.0/24']),
+        new Kiwi_Test_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+    $method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_client_ip_context');
+
+    $trusted = $method->invoke($router, [
+        'REMOTE_ADDR' => '10.0.0.8',
+        'HTTP_X_FORWARDED_FOR' => '203.0.113.44',
+    ]);
+    $spoofed = $method->invoke($router, [
+        'REMOTE_ADDR' => '198.51.100.77',
+        'HTTP_X_FORWARDED_FOR' => '203.0.113.44',
+    ]);
+
+    kiwi_assert_same('203.0.113.44', $trusted['client_ip'] ?? '', 'Expected trusted proxy config to allow X-Forwarded-For client resolution.');
+    kiwi_assert_same('203.0.113.0/24', $trusted['client_ip_prefix'] ?? '', 'Expected router IP context to include the stored landing-session prefix.');
+    kiwi_assert_same('198.51.100.77', $spoofed['client_ip'] ?? '', 'Expected untrusted direct peers to ignore spoofed X-Forwarded-For headers.');
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing variants without legacy fallback', function (): void {
@@ -5196,6 +5294,8 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists sales attribution s
         'service_key' => 'nth_fr_one_off_jplay',
         'session_token' => 'sess-snapshot-1',
         'remote_ip' => '203.0.113.44',
+        'client_ip_version' => 'ipv4',
+        'client_ip_prefix' => '203.0.113.0/24',
         'user_agent' => 'Mozilla/5.0 (Linux; Android 14; SM-A536B) AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36',
     ]);
     $engagement_repository->upsert_event([
@@ -5284,7 +5384,7 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists sales attribution s
     kiwi_assert_same('Chrome', (string) ($sale['browser'] ?? ''), 'Expected UA context to normalize browser.');
     kiwi_assert_same('delivered', (string) ($sale['context_json']['report_event']['status'] ?? ''), 'Expected existing provider report context to be preserved.');
     kiwi_assert_same(
-        'landing_page_session.remote_ip',
+        'landing_page_session.client_ip_buckets',
         (string) ($sale['context_json']['attribution_snapshot']['debug']['ip_source'] ?? ''),
         'Expected context_json attribution_snapshot debug data to record the IP source.'
     );
@@ -5397,7 +5497,32 @@ kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder normalizes IPv6 and rejec
     kiwi_assert_same('ipv6', (string) ($ipv6_snapshot['client_ip_version'] ?? ''), 'Expected IPv6 version marker.');
     kiwi_assert_same('2001:db8:85a3::/48', (string) ($ipv6_snapshot['client_ip_prefix'] ?? ''), 'Expected IPv6 /48 prefix.');
     kiwi_assert_same('', (string) ($invalid_snapshot['client_ip'] ?? ''), 'Expected invalid IP values to stay empty.');
-    kiwi_assert_same('', (string) ($invalid_snapshot['client_ip_prefix'] ?? ''), 'Expected invalid IP prefixes to stay empty.');
+    kiwi_assert_same('(unknown)', (string) ($invalid_snapshot['client_ip_version'] ?? ''), 'Expected invalid IP versions to use the unknown bucket.');
+    kiwi_assert_same('(unknown)', (string) ($invalid_snapshot['client_ip_prefix'] ?? ''), 'Expected invalid IP prefixes to use the unknown bucket.');
+});
+
+kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder copies stored landing-session IP buckets before legacy fallback', function (): void {
+    $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
+    $builder = new Kiwi_Sales_Attribution_Snapshot_Builder($landing_session_repository);
+
+    $landing_session_repository->insert([
+        'landing_key' => 'lp-stored-ip',
+        'service_key' => 'svc-stored-ip',
+        'session_token' => 'sess-stored-ip',
+        'remote_ip' => '198.51.100.77',
+        'client_ip_version' => 'ipv4',
+        'client_ip_prefix' => '203.0.113.0/24',
+    ]);
+
+    $snapshot = $builder->build([
+        'landing_page_key' => 'lp-stored-ip',
+        'service_key' => 'svc-stored-ip',
+        'session_ref' => 'sess-stored-ip',
+    ]);
+
+    kiwi_assert_same('198.51.100.77', (string) ($snapshot['client_ip'] ?? ''), 'Expected raw sale IP to remain copied from the landing session.');
+    kiwi_assert_same('203.0.113.0/24', (string) ($snapshot['client_ip_prefix'] ?? ''), 'Expected sales snapshot to use stored landing-session IP buckets instead of re-deriving from remote_ip.');
+    kiwi_assert_same('landing_page_session.client_ip_buckets', (string) ($snapshot['attribution_snapshot']['debug']['ip_source'] ?? ''), 'Expected debug data to show stored landing-session bucket usage.');
 });
 
 kiwi_run_test('Kiwi_Shared_Sales_Recorder writes transaction_id to sales records when provided', function (): void {
@@ -7224,6 +7349,8 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository creates canonical dimension 
         "os VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
         "os_version VARCHAR(50) NOT NULL DEFAULT '(unknown)'",
         "browser VARCHAR(100) NOT NULL DEFAULT '(unknown)'",
+        "client_ip_version VARCHAR(10) NOT NULL DEFAULT '(unknown)'",
+        "client_ip_prefix VARCHAR(120) NOT NULL DEFAULT '(unknown)'",
     ] as $column) {
         kiwi_assert_contains($column, $sql, 'Expected canonical landing-session dimension column: ' . $column);
     }
@@ -7240,6 +7367,8 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository creates canonical dimension 
         'KEY os (os)',
         'KEY os_version (os_version)',
         'KEY browser (browser)',
+        'KEY client_ip_version (client_ip_version)',
+        'KEY client_ip_prefix (client_ip_prefix)',
     ] as $index) {
         kiwi_assert_contains($index, $sql, 'Expected canonical landing-session dimension index: ' . $index);
     }
@@ -7312,6 +7441,9 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository persists canonical dimension
         'os' => 'Android',
         'os_version' => '14',
         'browser' => 'Chrome',
+        'remote_ip' => '203.0.113.44',
+        'client_ip_version' => 'ipv4',
+        'client_ip_prefix' => '203.0.113.0/24',
         'session_token' => 'sess-canonical',
     ]);
 
@@ -7328,6 +7460,9 @@ kiwi_run_test('Kiwi_Landing_Page_Session_Repository persists canonical dimension
     kiwi_assert_same('Android', $wpdb->inserted_data['os'] ?? '', 'Expected os to be passed to wpdb insert.');
     kiwi_assert_same('14', $wpdb->inserted_data['os_version'] ?? '', 'Expected os_version to be passed to wpdb insert.');
     kiwi_assert_same('Chrome', $wpdb->inserted_data['browser'] ?? '', 'Expected browser to be passed to wpdb insert.');
+    kiwi_assert_same('203.0.113.44', $wpdb->inserted_data['remote_ip'] ?? '', 'Expected resolved landing client IP to be passed to wpdb insert.');
+    kiwi_assert_same('ipv4', $wpdb->inserted_data['client_ip_version'] ?? '', 'Expected client_ip_version to be passed to wpdb insert.');
+    kiwi_assert_same('203.0.113.0/24', $wpdb->inserted_data['client_ip_prefix'] ?? '', 'Expected client_ip_prefix to be passed to wpdb insert.');
     kiwi_assert_same(count($wpdb->inserted_data), count($wpdb->inserted_formats), 'Expected insert formats to cover every landing-session column.');
 
     $wpdb = $previous_wpdb;
@@ -8712,16 +8847,20 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os", $insert_sql, 'Expected landing loads to read normalized OS buckets from landing sessions.');
     kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os_version", $insert_sql, 'Expected landing loads to read normalized OS versions from landing sessions.');
     kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(browser, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS browser", $insert_sql, 'Expected landing loads to read normalized browser buckets from landing sessions.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(client_ip_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS client_ip_version", $insert_sql, 'Expected landing loads to read stored client IP versions from landing sessions.');
+    kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(client_ip_prefix, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS client_ip_prefix", $insert_sql, 'Expected landing loads to read stored client IP prefixes from landing sessions.');
     kiwi_assert_contains("COALESCE(NULLIF(l.device_brand, ''), '(unknown)') AS device_brand", $insert_sql, 'Expected session facts to use normalized landing-session device brands.');
     kiwi_assert_contains("COALESCE(NULLIF(l.os, ''), '(unknown)') AS os", $insert_sql, 'Expected session facts to use normalized landing-session OS buckets.');
     kiwi_assert_contains("COALESCE(NULLIF(l.os_version, ''), '(unknown)') AS os_version", $insert_sql, 'Expected session facts to use normalized landing-session OS versions.');
     kiwi_assert_contains("COALESCE(NULLIF(l.browser, ''), '(unknown)') AS browser", $insert_sql, 'Expected session facts to use normalized landing-session browsers.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.client_ip_version, ''), '(unknown)') AS client_ip_version", $insert_sql, 'Expected session facts to use stored landing-session IP version buckets.');
+    kiwi_assert_contains("COALESCE(NULLIF(l.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix", $insert_sql, 'Expected session facts to use stored landing-session IP prefix buckets.');
     kiwi_assert_contains("COALESCE(NULLIF(s.os, ''), '(unknown)') AS os", $insert_sql, 'Expected sales facts to use durable sale OS snapshots.');
     kiwi_assert_contains("COALESCE(NULLIF(s.os_version, ''), '(unknown)') AS os_version", $insert_sql, 'Expected sales facts to use durable sale OS version snapshots.');
     kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)') AS client_ip_version", $insert_sql, 'Expected sales facts to use durable sale IP version snapshots with unknown fallback.');
     kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix", $insert_sql, 'Expected sales facts to use durable sale IP prefix snapshots with unknown fallback.');
-    kiwi_assert_contains("'.0/24'", $insert_sql, 'Expected session IP aggregation to bucket IPv4 addresses as /24 prefixes.');
-    kiwi_assert_contains("'::/48'", $insert_sql, 'Expected session IP aggregation to bucket IPv6 addresses as /48 prefixes.');
+    kiwi_assert_true(strpos($insert_sql, 'l.remote_ip') === false, 'Expected session IP aggregation not to parse raw landing-session IPs.');
+    kiwi_assert_true(strpos($insert_sql, 'INET6_ATON') === false, 'Expected daily summary aggregation not to normalize IPs in SQL.');
     kiwi_assert_true(strpos($insert_sql, 'ua_ch_model LIKE') === false, 'Expected daily summary aggregation not to parse device brands from UA-CH in SQL.');
     kiwi_assert_true(strpos($insert_sql, "raw_user_agent LIKE '%%Android %%'") === false, 'Expected daily summary aggregation not to parse OS versions from user agents in SQL.');
     kiwi_assert_true(strpos($insert_sql, 'android_version') === false, 'Expected daily summary aggregation to use os/os_version instead of the legacy android_version dimension.');
@@ -8934,7 +9073,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository reads filtered stati
 
     kiwi_assert_same($wpdb->result_rows, $rows, 'Expected summary repository to return database rows when the summary table is readable.');
     kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_summary', $query, 'Expected statistics query to read from the daily summary table.');
-    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s AND device_brand = %s AND os = %s AND os_version = %s AND browser = %s AND client_ip_version = %s AND client_ip_prefix = %s', $query, 'Expected all supported UI filters to be applied to summary rows.');
+    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s AND device_brand = %s AND os = %s AND os_version = %s AND browser = %s AND client_ip_version = %s AND client_ip_prefix = %s', $query, 'Expected supported repository filters to be applied to summary rows.');
     kiwi_assert_contains('cta1_sessions', $query, 'Expected query to expose CTA1 metrics.');
     kiwi_assert_contains('cta2_sessions', $query, 'Expected query to expose CTA2 metrics.');
     kiwi_assert_contains('cta3_sessions', $query, 'Expected query to expose CTA3 metrics.');
@@ -8968,8 +9107,6 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filt
         [['os' => 'iOS'], ['os' => 'Android']],
         [['os_version' => '14'], ['os_version' => '13']],
         [['browser' => 'Chrome'], ['browser' => 'Safari']],
-        [['client_ip_version' => 'ipv6'], ['client_ip_version' => 'ipv4'], ['client_ip_version' => '(unknown)']],
-        [['client_ip_prefix' => '203.0.113.0/24'], ['client_ip_prefix' => '2001:db8:85a3::/48']],
     ];
 
     $repository = new Kiwi_Landing_Funnel_Daily_Summary_Repository();
@@ -8986,12 +9123,11 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Repository exposes summary filt
     kiwi_assert_same(['Android', 'iOS'], $options['os_values'] ?? [], 'Expected OS filter options to be distinct and sorted.');
     kiwi_assert_same(['13', '14'], $options['os_versions'] ?? [], 'Expected OS version filter options to be distinct and sorted.');
     kiwi_assert_same(['Chrome', 'Safari'], $options['browsers'] ?? [], 'Expected browser filter options to be distinct and sorted.');
-    kiwi_assert_same(['(unknown)', 'ipv4', 'ipv6'], $options['client_ip_versions'] ?? [], 'Expected IP version filter options to be distinct and sorted.');
-    kiwi_assert_same(['2001:db8:85a3::/48', '203.0.113.0/24'], $options['client_ip_prefixes'] ?? [], 'Expected IP prefix filter options to preserve slash suffixes.');
+    kiwi_assert_true(!array_key_exists('client_ip_versions', $options), 'Expected IP version values not to be exposed as normal dropdown options.');
+    kiwi_assert_true(!array_key_exists('client_ip_prefixes', $options), 'Expected IP prefix values not to be exposed as normal dropdown options.');
     kiwi_assert_contains('SELECT DISTINCT service_key', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected service options to query distinct service keys from the summary table.');
     kiwi_assert_contains('SELECT DISTINCT browser', (string) ($wpdb->prepared_statements[14]['query'] ?? ''), 'Expected browser options to query distinct browsers from the summary table.');
-    kiwi_assert_contains('SELECT DISTINCT client_ip_version', (string) ($wpdb->prepared_statements[16]['query'] ?? ''), 'Expected IP version options to query distinct values from the summary table.');
-    kiwi_assert_contains('SELECT DISTINCT client_ip_prefix', (string) ($wpdb->prepared_statements[18]['query'] ?? ''), 'Expected IP prefix options to query distinct values from the summary table.');
+    kiwi_assert_same(16, count($wpdb->prepared_statements), 'Expected normal filter option queries to exclude IP dimensions.');
     kiwi_assert_same(
         ['2026-05-24', '2026-05-25'],
         $wpdb->prepared_statements[0]['args'] ?? [],
@@ -9486,8 +9622,6 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
         'os_values' => ['Android', 'iOS'],
         'os_versions' => ['13', '14'],
         'browsers' => ['Chrome', 'Safari'],
-        'client_ip_versions' => ['ipv4', 'ipv6'],
-        'client_ip_prefixes' => ['2001:db8:85a3::/48', '203.0.113.0/24'],
     ];
     $repository->rows = [
         [
@@ -9541,8 +9675,8 @@ kiwi_run_test('Kiwi_Statistics_Shortcode renders summary filters, CTA metrics, h
     kiwi_assert_contains('<select id="kiwi_stats_os" class="kiwi-select kiwi-width-small" name="kiwi_stats_os">', $output, 'Expected OS filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_os_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_os_version">', $output, 'Expected OS Version filter to render as a select.');
     kiwi_assert_contains('<select id="kiwi_stats_browser" class="kiwi-select kiwi-width-small" name="kiwi_stats_browser">', $output, 'Expected Browser filter to render as a select.');
-    kiwi_assert_contains('<select id="kiwi_stats_client_ip_version" class="kiwi-select kiwi-width-small" name="kiwi_stats_client_ip_version">', $output, 'Expected IP version filter to render as a select.');
-    kiwi_assert_contains('<select id="kiwi_stats_client_ip_prefix" class="kiwi-select kiwi-width-small" name="kiwi_stats_client_ip_prefix">', $output, 'Expected IP prefix filter to render as a select.');
+    kiwi_assert_true(strpos($output, 'id="kiwi_stats_client_ip_version"') === false, 'Expected IP version not to render as a normal dropdown filter.');
+    kiwi_assert_true(strpos($output, 'id="kiwi_stats_client_ip_prefix"') === false, 'Expected IP prefix not to render as a normal dropdown filter.');
     kiwi_assert_contains('kiwi-table kiwi-table--statistics', $output, 'Expected statistics table modifier for compact scrolling layout.');
     kiwi_assert_contains('title="CTA1 Sessions">CTA1 Sessions</th>', $output, 'Expected statistics table to render CTA1 summary column.');
     kiwi_assert_contains('title="CTA2 Sessions">CTA2 Sessions</th>', $output, 'Expected statistics table to render CTA2 summary column.');
@@ -9865,7 +9999,7 @@ kiwi_run_test('Kiwi_Plugin backfills legacy Android version before dropping old 
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Plugin bumps schema version for normalized device and tkzone summary dimensions', function (): void {
+kiwi_run_test('Kiwi_Plugin bumps schema version for landing-session client IP buckets', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
     $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
@@ -9877,7 +10011,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for normalized device and tkzone
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-29-3', $schema_version, 'Expected schema version to be bumped for tkzone summary migrations.');
+    kiwi_assert_same('2026-05-30-1', $schema_version, 'Expected schema version to be bumped for landing-session IP bucket migrations.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,

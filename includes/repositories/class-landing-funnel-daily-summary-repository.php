@@ -20,6 +20,16 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
         'client_ip_version' => 'client_ip_versions',
         'client_ip_prefix' => 'client_ip_prefixes',
     ];
+    private const FILTER_OPTION_FIELDS = [
+        'service_key' => 'service_keys',
+        'landing_key' => 'landing_keys',
+        'tksource' => 'tksources',
+        'tkzone' => 'tkzones',
+        'device_brand' => 'device_brands',
+        'os' => 'os_values',
+        'os_version' => 'os_versions',
+        'browser' => 'browsers',
+    ];
 
     private $last_error = '';
 
@@ -212,7 +222,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
     {
         $options = [];
 
-        foreach (self::FILTER_FIELDS as $field => $option_key) {
+        foreach (self::FILTER_OPTION_FIELDS as $field => $option_key) {
             $options[$option_key] = $this->get_distinct_filter_values($field, $filters);
         }
 
@@ -300,7 +310,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Repository implements Kiwi_Statistics_Re
     {
         global $wpdb;
 
-        if (!array_key_exists($field, self::FILTER_FIELDS)) {
+        if (!array_key_exists($field, self::FILTER_OPTION_FIELDS)) {
             return [];
         }
 

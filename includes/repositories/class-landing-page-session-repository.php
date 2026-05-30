@@ -43,6 +43,8 @@ class Kiwi_Landing_Page_Session_Repository
             referer TEXT NULL,
             user_agent TEXT NULL,
             remote_ip VARCHAR(100) NOT NULL DEFAULT '',
+            client_ip_version VARCHAR(10) NOT NULL DEFAULT '(unknown)',
+            client_ip_prefix VARCHAR(120) NOT NULL DEFAULT '(unknown)',
             query_params LONGTEXT NULL,
             raw_context LONGTEXT NULL,
             PRIMARY KEY (id),
@@ -59,6 +61,8 @@ class Kiwi_Landing_Page_Session_Repository
             KEY os (os),
             KEY os_version (os_version),
             KEY browser (browser),
+            KEY client_ip_version (client_ip_version),
+            KEY client_ip_prefix (client_ip_prefix),
             KEY session_token (session_token),
             KEY created_at (created_at),
             KEY created_landing_session (created_at, landing_key, session_token)
@@ -98,10 +102,14 @@ class Kiwi_Landing_Page_Session_Repository
                 'referer' => $data['referer'] ?? '',
                 'user_agent' => $data['user_agent'] ?? '',
                 'remote_ip' => $data['remote_ip'] ?? '',
+                'client_ip_version' => $this->sanitize_ip_version((string) ($data['client_ip_version'] ?? '(unknown)')),
+                'client_ip_prefix' => $this->sanitize_text_dimension((string) ($data['client_ip_prefix'] ?? '(unknown)'), 120),
                 'query_params' => isset($data['query_params']) ? wp_json_encode($data['query_params']) : '',
                 'raw_context' => isset($data['raw_context']) ? wp_json_encode($data['raw_context']) : '',
             ],
             [
+                '%s',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -287,5 +295,20 @@ class Kiwi_Landing_Page_Session_Repository
         $value = is_string($value) ? trim($value) : '';
 
         return $value === '' ? '(unknown)' : substr($value, 0, max(1, $max_length));
+    }
+
+    private function sanitize_ip_version(string $value): string
+    {
+        $value = strtolower(trim($value));
+
+        if ($value === '4') {
+            return 'ipv4';
+        }
+
+        if ($value === '6') {
+            return 'ipv6';
+        }
+
+        return in_array($value, ['ipv4', 'ipv6', '(unknown)'], true) ? $value : '(unknown)';
     }
 }
