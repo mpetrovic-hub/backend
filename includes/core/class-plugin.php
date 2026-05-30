@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-31-1';
+    private const DB_SCHEMA_VERSION = '2026-05-31-2';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -904,19 +904,21 @@ TEXT;
     {
         $table_name = (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->get_table_name();
 
-        $this->consolidate_slim_landing_funnel_daily_summary_rows($table_name);
+        if (!$this->consolidate_slim_landing_funnel_daily_summary_rows($table_name)) {
+            return;
+        }
 
         foreach (['tkzone', 'median_hidden_seconds'] as $column_name) {
             $this->drop_column_if_exists($table_name, $column_name);
         }
     }
 
-    private function consolidate_slim_landing_funnel_daily_summary_rows(string $table_name): void
+    private function consolidate_slim_landing_funnel_daily_summary_rows(string $table_name): bool
     {
         global $wpdb;
 
         if (preg_match('/^[A-Za-z0-9_]+$/', $table_name) !== 1) {
-            return;
+            return false;
         }
 
         $temp_table_name = $table_name . '_slim_rollup_tmp';
@@ -976,8 +978,16 @@ TEXT;
             ['handoff_rate_pct', 'min_hidden_seconds', 'max_hidden_seconds', 'created_at', 'updated_at']
         );
 
-        $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
-        $wpdb->query('START TRANSACTION');
+        if ($wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}") === false) {
+            return false;
+        }
+
+        if ($wpdb->query('START TRANSACTION') === false) {
+            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
+
+            return false;
+        }
+
         $created_temp_table = $wpdb->query(
             "CREATE TEMPORARY TABLE {$temp_table_name} AS
             SELECT
@@ -1012,7 +1022,7 @@ TEXT;
             $wpdb->query('ROLLBACK');
             $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
 
-            return;
+            return false;
         }
 
         $deleted_rows = $wpdb->query("DELETE FROM {$table_name}");
@@ -1020,7 +1030,7 @@ TEXT;
             $wpdb->query('ROLLBACK');
             $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
 
-            return;
+            return false;
         }
 
         $inserted_rows = $wpdb->query(
@@ -1033,11 +1043,19 @@ TEXT;
             $wpdb->query('ROLLBACK');
             $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
 
-            return;
+            return false;
         }
 
-        $wpdb->query('COMMIT');
+        if ($wpdb->query('COMMIT') === false) {
+            $wpdb->query('ROLLBACK');
+            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
+
+            return false;
+        }
+
         $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
+
+        return true;
     }
 
     private function backfill_legacy_android_version_column(string $table_name): void

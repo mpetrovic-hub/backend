@@ -10100,6 +10100,78 @@ kiwi_run_test('Kiwi_Plugin consolidates and drops retired main daily summary col
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Plugin keeps retired main daily summary columns when slim rollup fails', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $queries = [];
+        public $columns = [
+            'abc_kiwi_landing_funnel_daily_summary' => [
+                'tkzone' => true,
+                'median_hidden_seconds' => true,
+            ],
+        ];
+
+        public function prepare($query, ...$args)
+        {
+            if (count($args) === 1 && is_array($args[0])) {
+                $args = $args[0];
+            }
+
+            return [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+        }
+
+        public function get_var($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+
+            if (preg_match('/SHOW COLUMNS FROM ([A-Za-z0-9_]+) LIKE %s/', $query, $matches) !== 1) {
+                return null;
+            }
+
+            $table_name = (string) ($matches[1] ?? '');
+            $column_name = (string) ($args[0] ?? '');
+
+            return !empty($this->columns[$table_name][$column_name]) ? $column_name : null;
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $this->queries[] = $query;
+
+            if (strpos($query, 'CREATE TEMPORARY TABLE abc_kiwi_landing_funnel_daily_summary_slim_rollup_tmp AS') === 0) {
+                return false;
+            }
+
+            if (preg_match('/ALTER TABLE ([A-Za-z0-9_]+) DROP COLUMN ([A-Za-z0-9_]+)/', $query, $matches) === 1) {
+                unset($this->columns[(string) ($matches[1] ?? '')][(string) ($matches[2] ?? '')]);
+            }
+
+            return 1;
+        }
+    };
+
+    $plugin = new Kiwi_Test_Plugin_Device_Dimension_Migration(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->run_slim_daily_summary_migration_for_test();
+    $sql = implode("\n", $wpdb->queries);
+
+    kiwi_assert_contains('CREATE TEMPORARY TABLE abc_kiwi_landing_funnel_daily_summary_slim_rollup_tmp AS', $sql, 'Expected migration to attempt the slim rollup before deciding whether to drop retired columns.');
+    kiwi_assert_contains('ROLLBACK', $sql, 'Expected migration to roll back when slim summary consolidation fails.');
+    kiwi_assert_true(strpos($sql, 'DELETE FROM abc_kiwi_landing_funnel_daily_summary') === false, 'Expected migration not to clear existing rows after a failed slim rollup.');
+    kiwi_assert_true(strpos($sql, 'INSERT INTO abc_kiwi_landing_funnel_daily_summary') === false, 'Expected migration not to reinsert rollup rows after a failed slim rollup.');
+    kiwi_assert_true(strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN tkzone') === false, 'Expected migration to keep tkzone when row consolidation fails.');
+    kiwi_assert_true(strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN median_hidden_seconds') === false, 'Expected migration to keep median_hidden_seconds when row consolidation fails.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary contract', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
@@ -10112,7 +10184,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary cont
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-31-1', $schema_version, 'Expected schema version to be bumped for the slim main daily summary contract.');
+    kiwi_assert_same('2026-05-31-2', $schema_version, 'Expected schema version to be bumped for the slim main daily summary contract.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,

@@ -271,7 +271,7 @@ Notes:
   - stores the last refresh or lock-skip result in WordPress option `kiwi_landing_funnel_daily_summary_refresh_last_result`; refresh results include aggregate counts and can include compact `daily_results` entries for per-day diagnostics
   - reports failing chunks with the metric date and step, for example `2026-05-23 delete: ...` or `2026-05-23 insert aggregate rows: ...`
   - keeps same-session cross-midnight handoff attempts and hidden/success events together by scanning next-day handoff rows, then assigning each event to the latest matching landing-session row at or before the handoff event so reused tokens are not counted for multiple days
-  - does not run an automatic historical raw-source full backfill when the hash/dimension contract changes; the slim main-summary schema migration consolidates existing rows by the new main dimensions so legacy `tkzone` splits do not remain as duplicate visible rows after the column is removed
+  - does not run an automatic historical raw-source full backfill when the hash/dimension contract changes; the slim main-summary schema migration consolidates existing rows by the new main dimensions before removing retired columns, and keeps those columns if consolidation fails so the rollup can be retried
   - uses composite indexes on the raw landing-session, engagement, handoff, and sales snapshot tables to keep day chunks inside production database limits
   - is the primary read source for the protected `[kiwi_statistics]` shortcode and its CSV export; raw-table cleanup still remains separate
 
