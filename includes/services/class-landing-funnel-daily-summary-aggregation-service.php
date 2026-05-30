@@ -87,6 +87,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 $to_exclusive_datetime,
                 $from_datetime,
                 $handoff_to_exclusive_datetime,
+                $from_datetime,
+                $handoff_to_exclusive_datetime,
                 $metric_date,
                 $metric_date,
                 $metric_date,
@@ -213,8 +215,31 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
             ),
+            handoff_origin_events AS (
+                SELECT
+                    h.landing_key,
+                    h.session_token,
+                    DATE(MAX(ls.created_at)) AS metric_date,
+                    h.event_type,
+                    h.elapsed_ms
+                FROM {$handoff_table} h
+                INNER JOIN {$landing_session_table} ls
+                  ON ls.landing_key = h.landing_key
+                 AND ls.session_token = h.session_token
+                 AND ls.created_at >= %s
+                 AND ls.created_at < %s
+                 AND ls.created_at <= h.created_at
+                 AND ls.landing_key <> ''
+                 AND ls.session_token <> ''
+                WHERE h.created_at >= %s
+                  AND h.created_at < %s
+                  AND h.landing_key <> ''
+                  AND h.session_token <> ''
+                GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms
+            ),
             handoff_by_session AS (
                 SELECT
+                    metric_date,
                     landing_key,
                     session_token,
                     SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
@@ -222,12 +247,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     SUM(CASE WHEN event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails,
                     MIN(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS min_hidden_seconds,
                     MAX(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS max_hidden_seconds
-                FROM {$handoff_table}
-                WHERE created_at >= %s
-                  AND created_at < %s
-                  AND landing_key <> ''
-                  AND session_token <> ''
-                GROUP BY landing_key, session_token
+                FROM handoff_origin_events
+                GROUP BY metric_date, landing_key, session_token
             ),
             session_facts AS (
                 SELECT
@@ -267,6 +288,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 LEFT JOIN handoff_by_session h
                   ON h.landing_key = l.landing_key
                  AND h.session_token = l.session_token
+                 AND h.metric_date = DATE(l.first_landing_at)
             ),
             sales_facts AS (
                 SELECT

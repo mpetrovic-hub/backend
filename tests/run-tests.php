@@ -8828,12 +8828,14 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
             '2026-05-23 00:00:00',
             '2026-05-22 00:00:00',
             '2026-05-24 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-24 00:00:00',
             '2026-05-22',
             '2026-05-22',
             '2026-05-22',
         ],
         $prepared[1]['args'] ?? [],
-        'Expected refresh insert to bind day-bounded sessions/sales and next-day handoff carryover.'
+        'Expected refresh insert to bind day-bounded sessions/sales plus next-day handoff origin carryover.'
     );
     $insert_sql = (string) ($prepared[1]['query'] ?? '');
     $normalized_insert_sql = str_replace("\r\n", "\n", $insert_sql);
@@ -8893,6 +8895,11 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains("SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to use event counts under the handoff uniqueness contract.');
     kiwi_assert_contains('MIN(CASE WHEN event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected min hidden seconds to remain as a light aggregate.');
     kiwi_assert_contains('MAX(CASE WHEN event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected max hidden seconds to remain as a light aggregate.');
+    kiwi_assert_contains('handoff_origin_events AS', $insert_sql, 'Expected handoffs to resolve an origin landing-session day before aggregation.');
+    kiwi_assert_contains('DATE(MAX(ls.created_at)) AS metric_date', $insert_sql, 'Expected handoff carryover to use the latest matching landing row before the event as the origin metric date.');
+    kiwi_assert_contains('AND ls.created_at <= h.created_at', $insert_sql, 'Expected handoffs not to attach to landing rows that happened after the handoff event.');
+    kiwi_assert_contains('GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms', $insert_sql, 'Expected each handoff event to be assigned to one origin day before session aggregation.');
+    kiwi_assert_contains('AND h.metric_date = DATE(l.first_landing_at)', $insert_sql, 'Expected handoff metrics to join only to the landing-session day they originated from.');
     kiwi_assert_contains('s.attribution_metric_date AS metric_date', $insert_sql, 'Expected sales metric date to use durable attribution metric date only.');
     kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use attribution metric date bounds.');
     kiwi_assert_contains('COUNT(*) AS sales', $insert_sql, 'Expected completed sales to use COUNT(*) without join multiplication.');
@@ -8970,12 +8977,14 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service chunks mult
             '2026-05-22 00:00:00',
             '2026-05-21 00:00:00',
             '2026-05-23 00:00:00',
+            '2026-05-21 00:00:00',
+            '2026-05-23 00:00:00',
             '2026-05-21',
             '2026-05-21',
             '2026-05-21',
         ],
         $prepared[3]['args'] ?? [],
-        'Expected each chunk insert to bind only its own metric day while keeping next-day handoff carryover.'
+        'Expected each chunk insert to bind only its own metric day while keeping next-day handoff origin carryover.'
     );
 
     $wpdb = $previous_wpdb;
