@@ -5466,7 +5466,7 @@ kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder restricts device brands t
     $assert_brand('Xiaomi', 'sess-brand-poco', 'POCO F6');
 });
 
-kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder normalizes IPv6 and rejects invalid IPs', function (): void {
+kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder uses stored IP buckets and rejects legacy-only IPs', function (): void {
     $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
     $builder = new Kiwi_Sales_Attribution_Snapshot_Builder($landing_session_repository);
 
@@ -5475,6 +5475,8 @@ kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder normalizes IPv6 and rejec
         'service_key' => 'svc-v6',
         'session_token' => 'sess-v6',
         'remote_ip' => '2001:db8:85a3::8a2e:370:7334',
+        'client_ip_version' => 'ipv6',
+        'client_ip_prefix' => '2001:db8:85a3::/48',
     ]);
     $ipv6_snapshot = $builder->build([
         'landing_page_key' => 'lp-v6',
@@ -5483,25 +5485,26 @@ kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder normalizes IPv6 and rejec
     ]);
 
     $landing_session_repository->insert([
-        'landing_key' => 'lp-bad-ip',
-        'service_key' => 'svc-bad-ip',
-        'session_token' => 'sess-bad-ip',
-        'remote_ip' => 'not-an-ip',
+        'landing_key' => 'lp-legacy-ip',
+        'service_key' => 'svc-legacy-ip',
+        'session_token' => 'sess-legacy-ip',
+        'remote_ip' => '203.0.113.44',
     ]);
-    $invalid_snapshot = $builder->build([
-        'landing_page_key' => 'lp-bad-ip',
-        'service_key' => 'svc-bad-ip',
-        'session_ref' => 'sess-bad-ip',
+    $legacy_snapshot = $builder->build([
+        'landing_page_key' => 'lp-legacy-ip',
+        'service_key' => 'svc-legacy-ip',
+        'session_ref' => 'sess-legacy-ip',
     ]);
 
     kiwi_assert_same('ipv6', (string) ($ipv6_snapshot['client_ip_version'] ?? ''), 'Expected IPv6 version marker.');
     kiwi_assert_same('2001:db8:85a3::/48', (string) ($ipv6_snapshot['client_ip_prefix'] ?? ''), 'Expected IPv6 /48 prefix.');
-    kiwi_assert_same('', (string) ($invalid_snapshot['client_ip'] ?? ''), 'Expected invalid IP values to stay empty.');
-    kiwi_assert_same('(unknown)', (string) ($invalid_snapshot['client_ip_version'] ?? ''), 'Expected invalid IP versions to use the unknown bucket.');
-    kiwi_assert_same('(unknown)', (string) ($invalid_snapshot['client_ip_prefix'] ?? ''), 'Expected invalid IP prefixes to use the unknown bucket.');
+    kiwi_assert_same('', (string) ($legacy_snapshot['client_ip'] ?? ''), 'Expected legacy-only remote_ip values not to be promoted into sales snapshots.');
+    kiwi_assert_same('(unknown)', (string) ($legacy_snapshot['client_ip_version'] ?? ''), 'Expected missing stored IP versions to use the unknown bucket.');
+    kiwi_assert_same('(unknown)', (string) ($legacy_snapshot['client_ip_prefix'] ?? ''), 'Expected missing stored IP prefixes to use the unknown bucket.');
+    kiwi_assert_same('landing_page_session.client_ip_buckets_unknown', (string) ($legacy_snapshot['attribution_snapshot']['debug']['ip_source'] ?? ''), 'Expected debug data to show the unknown stored bucket path.');
 });
 
-kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder copies stored landing-session IP buckets before legacy fallback', function (): void {
+kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder copies stored landing-session IP buckets', function (): void {
     $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
     $builder = new Kiwi_Sales_Attribution_Snapshot_Builder($landing_session_repository);
 

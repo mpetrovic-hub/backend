@@ -139,7 +139,7 @@ Do not store real values for these secrets in repository docs.
 
 ## Sales attribution snapshot data handling
 
-Confirmed sales may store `client_ip`, `client_ip_prefix`, and `client_ip_hash` in `wp_kiwi_sales` from the landing-session row. This is operational analytics data, not an aggregator credential. It must not be populated from provider callback request metadata, because callback source IPs usually belong to the provider or aggregator. Landing sessions store coarse `client_ip_version` and `client_ip_prefix` buckets from the trusted-proxy resolver, and sales snapshots copy those buckets when available.
+Confirmed sales may store `client_ip`, `client_ip_prefix`, and `client_ip_hash` in `wp_kiwi_sales` from the landing-session row. This is operational analytics data, not an aggregator credential. It must not be populated from provider callback request metadata, because callback source IPs usually belong to the provider or aggregator. Landing sessions store coarse `client_ip_version` and `client_ip_prefix` buckets from the trusted-proxy resolver, and sales snapshots copy those buckets when available. Sales snapshots do not reconstruct missing buckets from legacy `remote_ip`; pre-migration sessions without stored buckets remain `(unknown)`.
 
 Use `client_ip_prefix` or `client_ip_hash` for broad analysis/export where raw IP is not required. The landing funnel daily summary and protected Statistics CSV expose only coarse `client_ip_version` and `client_ip_prefix` buckets, not raw IP or IP hashes. IP buckets are not offered as normal Statistics dropdown filters. No real IP examples or customer data should be added to repository docs.
 

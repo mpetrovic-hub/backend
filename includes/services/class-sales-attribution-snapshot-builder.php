@@ -204,13 +204,14 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
             return $this->empty_ip_snapshot();
         }
 
-        $remote_ip_snapshot = $this->client_ip_resolver->normalize_ip((string) ($landing_session['remote_ip'] ?? ''));
         $client_ip_version = $this->normalize_ip_version((string) ($landing_session['client_ip_version'] ?? ''));
         $client_ip_prefix = $this->sanitize_text_dimension((string) ($landing_session['client_ip_prefix'] ?? ''), 120);
 
         if ($client_ip_version !== '' && $client_ip_version !== '(unknown)'
             && $client_ip_prefix !== '' && $client_ip_prefix !== '(unknown)'
         ) {
+            $remote_ip_snapshot = $this->client_ip_resolver->normalize_ip((string) ($landing_session['remote_ip'] ?? ''));
+
             return [
                 'client_ip' => (string) ($remote_ip_snapshot['client_ip'] ?? ''),
                 'client_ip_version' => $client_ip_version,
@@ -220,11 +221,10 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
             ];
         }
 
-        $remote_ip_snapshot['snapshot_source'] = trim((string) ($landing_session['remote_ip'] ?? '')) !== ''
-            ? 'landing_page_session.remote_ip'
-            : '';
+        $snapshot = $this->empty_ip_snapshot();
+        $snapshot['snapshot_source'] = is_array($landing_session) ? 'landing_page_session.client_ip_buckets_unknown' : '';
 
-        return $remote_ip_snapshot;
+        return $snapshot;
     }
 
     private function empty_ip_snapshot(): array

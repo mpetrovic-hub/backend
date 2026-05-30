@@ -3,7 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-05-30:
-- [Landing Analytics] Added a trusted-proxy client-IP resolver controlled by `KIWI_TRUSTED_PROXY_CIDRS`. Landing sessions now persist coarse `client_ip_version` and `client_ip_prefix` buckets from the resolved client IP, sales snapshots prefer those stored buckets, and daily summary refreshes read stored session buckets instead of parsing raw IPs in SQL. The Statistics table and CSV still expose only coarse buckets, while normal IP dropdown filters were removed.
+- [Landing Analytics] Added a trusted-proxy client-IP resolver controlled by `KIWI_TRUSTED_PROXY_CIDRS`. Landing sessions now persist coarse `client_ip_version` and `client_ip_prefix` buckets from the resolved client IP, sales snapshots copy only those stored buckets, and daily summary refreshes read stored session buckets instead of parsing raw IPs in SQL. Legacy sessions without stored buckets remain `(unknown)` for sales and summary IP dimensions. The Statistics table and CSV still expose only coarse buckets, while normal IP dropdown filters were removed.
 
 2026-05-29:
 - [Landing Device Dimensions] Added a shared device-context normalizer plus exact model-to-brand map table for landing analytics. Landing sessions, sales snapshots, daily summary rows, Statistics filters, and CSV export now use normalized `device_brand`, `os`, `os_version`, and `browser` buckets instead of the legacy `android_version` summary dimension.
