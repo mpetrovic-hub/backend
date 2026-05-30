@@ -16,6 +16,7 @@ class Kiwi_Landing_Page_Router
     private $primary_cta_resolver;
     private $landing_kpi_service;
     private $device_context_normalizer;
+    private $client_ip_resolver;
 
     public function __construct(
         Kiwi_Config $config,
@@ -24,7 +25,8 @@ class Kiwi_Landing_Page_Router
         ?Kiwi_Tracking_Capture_Service $tracking_capture_service = null,
         ?Kiwi_Landing_Primary_Cta_Resolver $primary_cta_resolver = null,
         ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null,
-        ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null
+        ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null,
+        ?Kiwi_Client_Ip_Resolver $client_ip_resolver = null
     ) {
         $this->config = $config;
         $this->landing_page_session_repository = $landing_page_session_repository;
@@ -35,6 +37,9 @@ class Kiwi_Landing_Page_Router
         $this->device_context_normalizer = $device_context_normalizer instanceof Kiwi_Device_Context_Normalizer
             ? $device_context_normalizer
             : new Kiwi_Device_Context_Normalizer();
+        $this->client_ip_resolver = $client_ip_resolver instanceof Kiwi_Client_Ip_Resolver
+            ? $client_ip_resolver
+            : new Kiwi_Client_Ip_Resolver();
     }
 
     public function maybe_render_current_request(): bool
@@ -86,6 +91,7 @@ class Kiwi_Landing_Page_Router
         $device_context = $this->device_context_normalizer->normalize([
             'user_agent' => $user_agent,
         ]);
+        $client_ip_context = $this->resolve_client_ip_context(is_array($_SERVER) ? $_SERVER : []);
 
         $this->landing_page_session_repository->insert([
             'landing_key' => $match['landing_key'],
@@ -107,7 +113,9 @@ class Kiwi_Landing_Page_Router
             'click_to_sms_uri' => $click_to_sms_uri,
             'referer' => isset($_SERVER['HTTP_REFERER']) ? (string) $_SERVER['HTTP_REFERER'] : '',
             'user_agent' => $user_agent,
-            'remote_ip' => isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '',
+            'remote_ip' => $client_ip_context['client_ip'],
+            'client_ip_version' => $client_ip_context['client_ip_version'],
+            'client_ip_prefix' => $client_ip_context['client_ip_prefix'],
             'query_params' => $_GET,
             'raw_context' => [
                 'host' => $host,
@@ -115,6 +123,10 @@ class Kiwi_Landing_Page_Router
                 'landing_page' => $landing_page,
                 'session_dimensions' => $session_dimensions,
                 'device_context' => $device_context,
+                'client_ip_resolution' => [
+                    'source' => $client_ip_context['source'],
+                    'peer_trusted' => $client_ip_context['peer_trusted'],
+                ],
             ],
         ]);
 
@@ -520,6 +532,14 @@ class Kiwi_Landing_Page_Router
         }
 
         return '(unknown)';
+    }
+
+    private function resolve_client_ip_context(array $server): array
+    {
+        return $this->client_ip_resolver->resolve(
+            $server,
+            $this->config->get_trusted_proxy_cidrs()
+        );
     }
 
     private function maybe_record_kpi_click(string $landing_key, array $landing_page): void

@@ -217,8 +217,6 @@ class Kiwi_Statistics_Shortcode
         $os = (string) ($filters['os'] ?? '');
         $os_version = (string) ($filters['os_version'] ?? '');
         $browser = (string) ($filters['browser'] ?? '');
-        $client_ip_version = (string) ($filters['client_ip_version'] ?? '');
-        $client_ip_prefix = (string) ($filters['client_ip_prefix'] ?? '');
 
         $output = '';
 
@@ -240,8 +238,6 @@ class Kiwi_Statistics_Shortcode
         $output .= $this->render_select_filter('kiwi_stats_os', 'OS', $os, $this->get_filter_options_for_key($filter_options, 'os_values'));
         $output .= $this->render_select_filter('kiwi_stats_os_version', 'OS Version', $os_version, $this->get_filter_options_for_key($filter_options, 'os_versions'));
         $output .= $this->render_select_filter('kiwi_stats_browser', 'Browser', $browser, $this->get_filter_options_for_key($filter_options, 'browsers'));
-        $output .= $this->render_select_filter('kiwi_stats_client_ip_version', 'IP Version', $client_ip_version, $this->get_filter_options_for_key($filter_options, 'client_ip_versions'));
-        $output .= $this->render_select_filter('kiwi_stats_client_ip_prefix', 'IP Prefix', $client_ip_prefix, $this->get_filter_options_for_key($filter_options, 'client_ip_prefixes'));
         $output .= '<div class="kiwi-field kiwi-field--compact">';
         $output .= '<label class="kiwi-field-label" for="kiwi_stats_limit">Limit</label>';
         $output .= '<input id="kiwi_stats_limit" class="kiwi-input kiwi-width-small" type="number" min="1" max="500" name="kiwi_stats_limit" value="' . esc_attr((string) ($filters['limit'] ?? 100)) . '">';
@@ -270,10 +266,16 @@ class Kiwi_Statistics_Shortcode
             'kiwi_stats_os' => (string) ($filters['os'] ?? ''),
             'kiwi_stats_os_version' => (string) ($filters['os_version'] ?? ''),
             'kiwi_stats_browser' => (string) ($filters['browser'] ?? ''),
-            'kiwi_stats_client_ip_version' => (string) ($filters['client_ip_version'] ?? ''),
-            'kiwi_stats_client_ip_prefix' => (string) ($filters['client_ip_prefix'] ?? ''),
             'kiwi_stats_limit' => (string) ($filters['limit'] ?? 100),
         ];
+
+        if ((string) ($filters['client_ip_version'] ?? '') !== '') {
+            $params['kiwi_stats_client_ip_version'] = (string) $filters['client_ip_version'];
+        }
+
+        if ((string) ($filters['client_ip_prefix'] ?? '') !== '') {
+            $params['kiwi_stats_client_ip_prefix'] = (string) $filters['client_ip_prefix'];
+        }
 
         $query = http_build_query($params, '', '&');
 

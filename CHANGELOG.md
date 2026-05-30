@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-05-30:
+- [Landing Analytics] Added a trusted-proxy client-IP resolver controlled by `KIWI_TRUSTED_PROXY_CIDRS`. Landing sessions now persist coarse `client_ip_version` and `client_ip_prefix` buckets from the resolved client IP, sales snapshots copy only those stored buckets, and daily summary refreshes read stored session buckets instead of parsing raw IPs in SQL. Trusted proxy requests without a usable forwarded client and legacy sessions without stored buckets remain `(unknown)` for sales and summary IP dimensions. The Statistics table and CSV still expose only coarse buckets, while normal IP dropdown filters were removed.
+
 2026-05-29:
 - [Landing Device Dimensions] Added a shared device-context normalizer plus exact model-to-brand map table for landing analytics. Landing sessions, sales snapshots, daily summary rows, Statistics filters, and CSV export now use normalized `device_brand`, `os`, `os_version`, and `browser` buckets instead of the legacy `android_version` summary dimension.
 - [Landing Analytics] Added canonical landing-session dimensions on `wp_kiwi_landing_page_sessions` for provider, flow, country, `pid`, `tksource`, `tkzone`, and normalized `browser_language`. Landing-session rows now preserve source parameters even without `click_id`, and the daily summary uses those session columns instead of repairing dimensions from engagement or handoff events.

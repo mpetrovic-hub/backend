@@ -287,6 +287,35 @@ class Kiwi_Config
             : 7;
     }
 
+    public function get_trusted_proxy_cidrs(): array
+    {
+        if (!defined('KIWI_TRUSTED_PROXY_CIDRS')) {
+            return [];
+        }
+
+        $trusted_proxies = KIWI_TRUSTED_PROXY_CIDRS;
+
+        if (is_string($trusted_proxies)) {
+            $trusted_proxies = preg_split('/[\s,]+/', $trusted_proxies);
+        }
+
+        if (!is_array($trusted_proxies)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($trusted_proxies as $trusted_proxy) {
+            $trusted_proxy = trim((string) $trusted_proxy);
+
+            if ($trusted_proxy !== '') {
+                $normalized[] = $trusted_proxy;
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
     public function is_landing_handoff_ua_client_hints_enabled(): bool
     {
         return $this->get_landing_ua_tracking_mode() !== 'disabled';

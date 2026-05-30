@@ -103,6 +103,17 @@ The daily landing-funnel summary refresh is operational configuration, not an ag
   - the selected window is processed internally as per-day chunks, so the default value remains usable on production data without one multi-day aggregate statement
   - hourly WP-Cron refreshes apply an effective one-day minimum, so `0` refreshes yesterday through today to preserve cross-midnight handoff completions
 
+## Trusted proxy client-IP resolution
+
+Client-IP resolution for landing analytics is operational edge configuration, not an aggregator credential. It is read from `wp-config.php` through `Kiwi_Config`.
+
+- `KIWI_TRUSTED_PROXY_CIDRS`
+  - explicit allowlist of direct reverse proxies whose `X-Forwarded-For`, `Forwarded`, or `X-Real-IP` headers may be trusted
+  - accepts an array or a comma/whitespace-separated string of exact IPs and CIDRs
+  - default: empty, so forwarded client-IP headers are ignored and the direct peer is used
+
+Only add proxy IPs or CIDRs that are controlled by the deployment edge. Do not document real customer IPs or provider secrets here.
+
 Supported postback parameters/placeholders:
 
 - `clickid` / `click_id`
@@ -128,9 +139,9 @@ Do not store real values for these secrets in repository docs.
 
 ## Sales attribution snapshot data handling
 
-Confirmed sales may store `client_ip`, `client_ip_prefix`, and `client_ip_hash` in `wp_kiwi_sales` from the landing-session row. This is operational analytics data, not an aggregator credential. It must not be populated from provider callback request metadata, because callback source IPs usually belong to the provider or aggregator.
+Confirmed sales may store `client_ip`, `client_ip_prefix`, and `client_ip_hash` in `wp_kiwi_sales` from the landing-session row. This is operational analytics data, not an aggregator credential. It must not be populated from provider callback request metadata, because callback source IPs usually belong to the provider or aggregator. Landing sessions store coarse `client_ip_version` and `client_ip_prefix` buckets from the trusted-proxy resolver, and sales snapshots copy those buckets when available. Sales snapshots do not reconstruct missing buckets from legacy `remote_ip`; pre-migration sessions without stored buckets remain `(unknown)`.
 
-Use `client_ip_prefix` or `client_ip_hash` for broad analysis/export where raw IP is not required. The landing funnel daily summary and protected Statistics CSV expose only coarse `client_ip_version` and `client_ip_prefix` buckets, not raw IP or IP hashes. No real IP examples or customer data should be added to repository docs.
+Use `client_ip_prefix` or `client_ip_hash` for broad analysis/export where raw IP is not required. The landing funnel daily summary and protected Statistics CSV expose only coarse `client_ip_version` and `client_ip_prefix` buckets, not raw IP or IP hashes. IP buckets are not offered as normal Statistics dropdown filters. No real IP examples or customer data should be added to repository docs.
 
 ## NTH callback logging toggles
 

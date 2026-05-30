@@ -126,8 +126,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
-        $session_ip_version_expression = $this->build_client_ip_version_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
-        $session_ip_prefix_expression = $this->build_client_ip_prefix_expression("COALESCE(NULLIF(l.remote_ip, ''), '')");
 
         $dimension_hash_expression = "SHA2(CONCAT_WS('|',
                     a.landing_key,
@@ -199,8 +197,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS os_version,
                     SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(browser, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS browser,
-                    MAX(user_agent) AS user_agent,
-                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(remote_ip, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS remote_ip
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(client_ip_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS client_ip_version,
+                    SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(client_ip_prefix, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS client_ip_prefix
                 FROM {$landing_session_table}
                 WHERE created_at >= %s
                   AND created_at < %s
@@ -295,8 +293,8 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(l.os, ''), '(unknown)') AS os,
                     COALESCE(NULLIF(l.os_version, ''), '(unknown)') AS os_version,
                     COALESCE(NULLIF(l.browser, ''), '(unknown)') AS browser,
-                    {$session_ip_version_expression} AS client_ip_version,
-                    {$session_ip_prefix_expression} AS client_ip_prefix,
+                    COALESCE(NULLIF(l.client_ip_version, ''), '(unknown)') AS client_ip_version,
+                    COALESCE(NULLIF(l.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix,
                     CASE WHEN sk.has_session_fact > 0 THEN 1 ELSE 0 END AS sessions,
                     COALESCE(e.page_loaded_sessions, 0) AS page_loaded_sessions,
                     COALESCE(e.cta1_sessions, 0) AS cta1_sessions,
@@ -651,65 +649,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
         }
 
         return $metric_date . ' ' . $step . ': ' . $error;
-    }
-
-    private function build_client_ip_version_expression(string $column): string
-    {
-        $ipv4_condition = $this->build_ipv4_condition_expression($column);
-        $ipv6_condition = $this->build_ipv6_condition_expression($column);
-
-        return "CASE
-                        WHEN {$ipv4_condition} THEN 'ipv4'
-                        WHEN {$ipv6_condition} THEN 'ipv6'
-                        ELSE '(unknown)'
-                    END";
-    }
-
-    private function build_client_ip_prefix_expression(string $column): string
-    {
-        $ip = $this->build_client_ip_value_expression($column);
-        $ipv4_condition = $this->build_ipv4_condition_expression($column);
-        $ipv6_condition = $this->build_ipv6_condition_expression($column);
-        $hex = "HEX(INET6_ATON({$ip}))";
-        $ipv6_group_1 = "COALESCE(NULLIF(LOWER(TRIM(LEADING '0' FROM SUBSTRING({$hex}, 1, 4))), ''), '0')";
-        $ipv6_group_2 = "COALESCE(NULLIF(LOWER(TRIM(LEADING '0' FROM SUBSTRING({$hex}, 5, 4))), ''), '0')";
-        $ipv6_group_3 = "COALESCE(NULLIF(LOWER(TRIM(LEADING '0' FROM SUBSTRING({$hex}, 9, 4))), ''), '0')";
-
-        return "CASE
-                        WHEN {$ipv4_condition} THEN CONCAT(
-                            CAST(SUBSTRING_INDEX({$ip}, '.', 1) AS UNSIGNED),
-                            '.',
-                            CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 2), '.', -1) AS UNSIGNED),
-                            '.',
-                            CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 3), '.', -1) AS UNSIGNED),
-                            '.0/24'
-                        )
-                        WHEN {$ipv6_condition} THEN CONCAT({$ipv6_group_1}, ':', {$ipv6_group_2}, ':', {$ipv6_group_3}, '::/48')
-                        ELSE '(unknown)'
-                    END";
-    }
-
-    private function build_client_ip_value_expression(string $column): string
-    {
-        return "TRIM(BOTH ']' FROM TRIM(BOTH '[' FROM TRIM({$column})))";
-    }
-
-    private function build_ipv4_condition_expression(string $column): string
-    {
-        $ip = $this->build_client_ip_value_expression($column);
-
-        return "({$ip} REGEXP '^[0-9]{1,3}([.][0-9]{1,3}){3}$'
-                        AND CAST(SUBSTRING_INDEX({$ip}, '.', 1) AS UNSIGNED) BETWEEN 0 AND 255
-                        AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 2), '.', -1) AS UNSIGNED) BETWEEN 0 AND 255
-                        AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({$ip}, '.', 3), '.', -1) AS UNSIGNED) BETWEEN 0 AND 255
-                        AND CAST(SUBSTRING_INDEX({$ip}, '.', -1) AS UNSIGNED) BETWEEN 0 AND 255)";
-    }
-
-    private function build_ipv6_condition_expression(string $column): string
-    {
-        $ip = $this->build_client_ip_value_expression($column);
-
-        return "({$ip} LIKE '%%:%%' AND INET6_ATON({$ip}) IS NOT NULL)";
     }
 
     private function normalize_date(string $value): string
