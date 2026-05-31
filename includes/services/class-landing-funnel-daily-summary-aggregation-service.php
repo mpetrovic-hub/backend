@@ -84,11 +84,11 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 $from_datetime,
                 $to_exclusive_datetime,
                 $from_datetime,
+                $handoff_to_exclusive_datetime,
+                $from_datetime,
+                $handoff_to_exclusive_datetime,
+                $from_datetime,
                 $to_exclusive_datetime,
-                $from_datetime,
-                $handoff_to_exclusive_datetime,
-                $from_datetime,
-                $handoff_to_exclusive_datetime,
                 $metric_date,
                 $metric_date,
                 $metric_date,
@@ -197,24 +197,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
             ),
-            engagement_sessions AS (
-                SELECT
-                    landing_key,
-                    session_token,
-                    MAX(CASE WHEN page_loaded_at IS NOT NULL THEN 1 ELSE 0 END) AS page_loaded_sessions,
-                    MAX(CASE WHEN first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta1_sessions,
-                    SUM(cta1_click_count) AS cta1_click_events,
-                    MAX(CASE WHEN first_cta2_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta2_sessions,
-                    SUM(cta2_click_count) AS cta2_click_events,
-                    MAX(CASE WHEN first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta3_sessions,
-                    SUM(cta3_click_count) AS cta3_click_events
-                FROM {$engagement_table}
-                WHERE created_at >= %s
-                  AND created_at < %s
-                  AND landing_key <> ''
-                  AND session_token <> ''
-                GROUP BY landing_key, session_token
-            ),
             handoff_origin_events AS (
                 SELECT
                     h.landing_key,
@@ -267,13 +249,13 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(NULLIF(l.client_ip_version, ''), '(unknown)') AS client_ip_version,
                     COALESCE(NULLIF(l.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix,
                     1 AS sessions,
-                    COALESCE(e.page_loaded_sessions, 0) AS page_loaded_sessions,
-                    COALESCE(e.cta1_sessions, 0) AS cta1_sessions,
-                    COALESCE(e.cta1_click_events, 0) AS cta1_click_events,
-                    COALESCE(e.cta2_sessions, 0) AS cta2_sessions,
-                    COALESCE(e.cta2_click_events, 0) AS cta2_click_events,
-                    COALESCE(e.cta3_sessions, 0) AS cta3_sessions,
-                    COALESCE(e.cta3_click_events, 0) AS cta3_click_events,
+                    CASE WHEN e.page_loaded_at IS NOT NULL THEN 1 ELSE 0 END AS page_loaded_sessions,
+                    CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta1_sessions,
+                    COALESCE(e.cta1_click_count, 0) AS cta1_click_events,
+                    CASE WHEN e.first_cta2_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta2_sessions,
+                    COALESCE(e.cta2_click_count, 0) AS cta2_click_events,
+                    CASE WHEN e.first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta3_sessions,
+                    COALESCE(e.cta3_click_count, 0) AS cta3_click_events,
                     COALESCE(h.handoff_attempts, 0) AS handoff_attempts,
                     COALESCE(h.handoff_successes, 0) AS handoff_successes,
                     COALESCE(h.handoff_fails, 0) AS handoff_fails,
@@ -282,9 +264,13 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     0 AS sales,
                     0 AS sales_amount_minor
                 FROM landing_loads l
-                LEFT JOIN engagement_sessions e
+                LEFT JOIN {$engagement_table} e
                   ON e.landing_key = l.landing_key
                  AND e.session_token = l.session_token
+                 AND e.created_at >= %s
+                 AND e.created_at < %s
+                 AND e.landing_key <> ''
+                 AND e.session_token <> ''
                 LEFT JOIN handoff_by_session h
                   ON h.landing_key = l.landing_key
                  AND h.session_token = l.session_token

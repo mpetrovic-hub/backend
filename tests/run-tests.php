@@ -8908,11 +8908,11 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
             '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
             '2026-05-22 00:00:00',
+            '2026-05-24 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-24 00:00:00',
+            '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
-            '2026-05-22 00:00:00',
-            '2026-05-24 00:00:00',
-            '2026-05-22 00:00:00',
-            '2026-05-24 00:00:00',
             '2026-05-22',
             '2026-05-22',
             '2026-05-22',
@@ -8925,7 +8925,10 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
 
     kiwi_assert_contains('INSERT INTO abc_kiwi_landing_funnel_daily_summary', $insert_sql, 'Expected refresh to populate the persistent summary table.');
     kiwi_assert_contains('FROM abc_kiwi_landing_page_sessions', $insert_sql, 'Expected refresh to aggregate canonical landing sessions.');
-    kiwi_assert_contains('LEFT JOIN engagement_sessions e', $insert_sql, 'Expected engagement metrics to join to landing sessions.');
+    kiwi_assert_true(strpos($insert_sql, 'engagement_sessions AS') === false, 'Expected main summary refresh not to materialize engagement sessions before joining.');
+    kiwi_assert_contains('LEFT JOIN abc_kiwi_premium_sms_landing_engagements e', $insert_sql, 'Expected engagement metrics to join directly to landing sessions.');
+    kiwi_assert_contains('AND e.created_at >= %s', $insert_sql, 'Expected direct engagement joins to keep the refresh day lower bound.');
+    kiwi_assert_contains('AND e.created_at < %s', $insert_sql, 'Expected direct engagement joins to keep the refresh day upper bound.');
     kiwi_assert_contains('LEFT JOIN handoff_by_session h', $insert_sql, 'Expected handoff metrics to join to landing sessions.');
     kiwi_assert_contains('FROM abc_kiwi_sales s', $insert_sql, 'Expected refresh to aggregate completed sales from durable sales snapshots.');
     kiwi_assert_true(strpos($insert_sql, 'abc_kiwi_click_attributions') === false, 'Expected daily summary sales aggregation not to depend on temporary click attribution rows.');
@@ -8958,6 +8961,9 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains("COALESCE(NULLIF(l.browser, ''), '(unknown)') AS browser", $insert_sql, 'Expected session facts to use normalized landing-session browsers.');
     kiwi_assert_contains("COALESCE(NULLIF(l.client_ip_version, ''), '(unknown)') AS client_ip_version", $insert_sql, 'Expected session facts to use stored landing-session IP version buckets.');
     kiwi_assert_contains("COALESCE(NULLIF(l.client_ip_prefix, ''), '(unknown)') AS client_ip_prefix", $insert_sql, 'Expected session facts to use stored landing-session IP prefix buckets.');
+    kiwi_assert_contains('CASE WHEN e.page_loaded_at IS NOT NULL THEN 1 ELSE 0 END AS page_loaded_sessions', $insert_sql, 'Expected page-loaded metrics to read from the directly joined engagement row.');
+    kiwi_assert_contains('CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta1_sessions', $insert_sql, 'Expected CTA session metrics to read from the directly joined engagement row.');
+    kiwi_assert_contains('COALESCE(e.cta1_click_count, 0) AS cta1_click_events', $insert_sql, 'Expected CTA event metrics to read from the directly joined engagement row.');
     kiwi_assert_contains("COALESCE(NULLIF(s.os, ''), '(unknown)') AS os", $insert_sql, 'Expected sales facts to use durable sale OS snapshots.');
     kiwi_assert_contains("COALESCE(NULLIF(s.os_version, ''), '(unknown)') AS os_version", $insert_sql, 'Expected sales facts to use durable sale OS version snapshots.');
     kiwi_assert_contains("COALESCE(NULLIF(s.client_ip_version, ''), '(unknown)') AS client_ip_version", $insert_sql, 'Expected sales facts to use durable sale IP version snapshots with unknown fallback.');
@@ -8972,9 +8978,9 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_true(strpos($insert_sql, 'first_engagement_at AS metric_at') === false, 'Expected engagement-only sessions not to create main summary session facts.');
     kiwi_assert_true(strpos($insert_sql, 'session_keys') === false, 'Expected main summary not to union engagement/handoff-only session keys.');
     kiwi_assert_true(strpos($insert_sql, 'has_session_fact') === false, 'Expected main summary session counts to come only from canonical landing sessions.');
-    kiwi_assert_contains('SUM(cta1_click_count) AS cta1_click_events', $insert_sql, 'Expected CTA1 events to use step-specific engagement counts.');
-    kiwi_assert_contains('SUM(cta2_click_count) AS cta2_click_events', $insert_sql, 'Expected CTA2 events to use step-specific engagement counts.');
-    kiwi_assert_contains('SUM(cta3_click_count) AS cta3_click_events', $insert_sql, 'Expected CTA3 events to use step-specific engagement counts.');
+    kiwi_assert_contains('COALESCE(e.cta1_click_count, 0) AS cta1_click_events', $insert_sql, 'Expected CTA1 events to use step-specific engagement counts from the direct session lookup.');
+    kiwi_assert_contains('COALESCE(e.cta2_click_count, 0) AS cta2_click_events', $insert_sql, 'Expected CTA2 events to use step-specific engagement counts from the direct session lookup.');
+    kiwi_assert_contains('COALESCE(e.cta3_click_count, 0) AS cta3_click_events', $insert_sql, 'Expected CTA3 events to use step-specific engagement counts from the direct session lookup.');
     kiwi_assert_contains("SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to use event counts under the handoff uniqueness contract.');
     kiwi_assert_contains('MIN(CASE WHEN event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected min hidden seconds to remain as a light aggregate.');
     kiwi_assert_contains('MAX(CASE WHEN event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected max hidden seconds to remain as a light aggregate.');
@@ -9057,11 +9063,11 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service chunks mult
             '2026-05-21 00:00:00',
             '2026-05-22 00:00:00',
             '2026-05-21 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-21 00:00:00',
+            '2026-05-23 00:00:00',
+            '2026-05-21 00:00:00',
             '2026-05-22 00:00:00',
-            '2026-05-21 00:00:00',
-            '2026-05-23 00:00:00',
-            '2026-05-21 00:00:00',
-            '2026-05-23 00:00:00',
             '2026-05-21',
             '2026-05-21',
             '2026-05-21',
