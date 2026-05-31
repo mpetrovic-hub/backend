@@ -91,7 +91,8 @@ class Kiwi_Landing_Page_Router
         $device_context = $this->device_context_normalizer->normalize([
             'user_agent' => $user_agent,
         ]);
-        $client_ip_context = $this->resolve_client_ip_context(is_array($_SERVER) ? $_SERVER : []);
+        $server_context = is_array($_SERVER) ? $_SERVER : [];
+        $client_ip_context = $this->resolve_client_ip_context($server_context);
 
         $this->landing_page_session_repository->insert([
             'landing_key' => $match['landing_key'],
@@ -123,10 +124,7 @@ class Kiwi_Landing_Page_Router
                 'landing_page' => $landing_page,
                 'session_dimensions' => $session_dimensions,
                 'device_context' => $device_context,
-                'client_ip_resolution' => [
-                    'source' => $client_ip_context['source'],
-                    'peer_trusted' => $client_ip_context['peer_trusted'],
-                ],
+                'client_ip_resolution' => $this->build_client_ip_resolution_context($server_context, $client_ip_context),
             ],
         ]);
 
@@ -539,6 +537,26 @@ class Kiwi_Landing_Page_Router
         return $this->client_ip_resolver->resolve(
             $server,
             $this->config->get_trusted_proxy_cidrs()
+        );
+    }
+
+    private function build_client_ip_resolution_context(array $server, array $client_ip_context): array
+    {
+        $context = [
+            'source' => (string) ($client_ip_context['source'] ?? ''),
+            'peer_trusted' => (bool) ($client_ip_context['peer_trusted'] ?? false),
+        ];
+
+        if (!$this->config->is_client_ip_resolution_debug_enabled()) {
+            return $context;
+        }
+
+        return array_merge(
+            $context,
+            $this->client_ip_resolver->build_debug_context(
+                $server,
+                $this->config->get_trusted_proxy_cidrs()
+            )
         );
     }
 

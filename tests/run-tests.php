@@ -751,6 +751,22 @@ class Kiwi_Test_Trusted_Proxy_Config extends Kiwi_Test_Config
     }
 }
 
+class Kiwi_Test_Trusted_Proxy_Debug_Config extends Kiwi_Test_Trusted_Proxy_Config
+{
+    private $client_ip_resolution_debug_enabled;
+
+    public function __construct(array $trusted_proxy_cidrs, bool $client_ip_resolution_debug_enabled, array $landing_pages = [])
+    {
+        parent::__construct($trusted_proxy_cidrs, $landing_pages);
+        $this->client_ip_resolution_debug_enabled = $client_ip_resolution_debug_enabled;
+    }
+
+    public function is_client_ip_resolution_debug_enabled(): bool
+    {
+        return $this->client_ip_resolution_debug_enabled;
+    }
+}
+
 class Kiwi_Test_Runtime_Config extends Kiwi_Config
 {
     private $landing_pages_root;
@@ -3840,6 +3856,7 @@ kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', 
     kiwi_assert_same('/lp/fr/myjoyplay', $config->get_landing_page('lp2-fr')['backend_path'], 'Expected landing page config to be returned by key.');
     kiwi_assert_same(240, $config->get_nth_submit_timeout(), 'Expected the configured NTH timeout to be returned.');
     kiwi_assert_true($config->is_landing_handoff_ua_client_hints_enabled(), 'Expected landing handoff UA Client Hints telemetry to default to enabled.');
+    kiwi_assert_true($config->is_client_ip_resolution_debug_enabled(), 'Expected client IP resolution debug diagnostics to be temporarily enabled by default.');
 });
 
 kiwi_run_test('Kiwi_Client_Ip_Resolver ignores forwarded headers without a trusted proxy', function (): void {
@@ -3879,6 +3896,37 @@ kiwi_run_test('Kiwi_Client_Ip_Resolver uses trusted proxy chains defensively', f
     kiwi_assert_same('trusted_proxy_missing_forwarded_client', $missing_forwarded['source'] ?? '', 'Expected trusted proxy missing forwarded source marker.');
     kiwi_assert_true((bool) ($missing_forwarded['peer_trusted'] ?? false), 'Expected missing forwarded snapshot to keep trusted peer marker.');
     kiwi_assert_same('', $trusted_only_forwarded['client_ip'] ?? '', 'Expected trusted-only forwarded chains not to bucket the proxy as client.');
+});
+
+kiwi_run_test('Kiwi_Client_Ip_Resolver trusts exact IPv6 proxy rules and exposes safe diagnostics', function (): void {
+    $resolver = new Kiwi_Client_Ip_Resolver();
+    $result = $resolver->resolve([
+        'REMOTE_ADDR' => '2a02:4780:79:a1e9::1',
+        'HTTP_X_FORWARDED_FOR' => '203.0.113.44, 2a02:4780:79:a1e9::1',
+    ], ['2a02:4780:79:a1e9::1']);
+    $diagnostic = $resolver->build_debug_context([
+        'REMOTE_ADDR' => '2a02:4780:79:a1e9::1',
+        'HTTP_X_FORWARDED_FOR' => '203.0.113.44, 2a02:4780:79:a1e9::1',
+        'HTTP_FORWARDED' => 'for=198.51.100.12;proto=https',
+        'HTTP_X_REAL_IP' => '192.0.2.77',
+        'HTTP_CF_CONNECTING_IP' => '198.51.100.25',
+        'HTTP_TRUE_CLIENT_IP' => '198.51.100.26',
+    ], ['2a02:4780:79:a1e9::1']);
+    $encoded_diagnostic = json_encode($diagnostic);
+    $encoded_diagnostic = is_string($encoded_diagnostic) ? $encoded_diagnostic : '';
+
+    kiwi_assert_same('203.0.113.44', $result['client_ip'] ?? '', 'Expected exact Hostinger-style IPv6 proxy trust to allow X-Forwarded-For client resolution.');
+    kiwi_assert_same('203.0.113.0/24', $result['client_ip_prefix'] ?? '', 'Expected exact IPv6 proxy trust to keep coarse IPv4 client buckets.');
+    kiwi_assert_true((bool) ($result['peer_trusted'] ?? false), 'Expected exact IPv6 proxy rule to mark the direct peer trusted.');
+    kiwi_assert_same(true, $diagnostic['trusted_proxy_configured'] ?? null, 'Expected debug context to report configured trusted proxies.');
+    kiwi_assert_same(['x_forwarded_for', 'forwarded', 'x_real_ip'], $diagnostic['forwarded_headers_present'] ?? [], 'Expected debug context to expose only supported header names.');
+    kiwi_assert_same(['cf_connecting_ip', 'true_client_ip'], $diagnostic['other_client_ip_headers_present'] ?? [], 'Expected debug context to expose unsupported client-IP header names only.');
+    kiwi_assert_same(4, $diagnostic['forwarded_candidate_count'] ?? null, 'Expected debug context to count valid forwarded IP candidates without storing them.');
+    kiwi_assert_same('resolved_from_forwarded_header', $diagnostic['resolution_reason'] ?? '', 'Expected debug context to explain forwarded-header resolution.');
+    kiwi_assert_true(strpos($encoded_diagnostic, '203.0.113.44') === false, 'Expected debug context not to store raw forwarded client IPs.');
+    kiwi_assert_true(strpos($encoded_diagnostic, '2a02:4780:79:a1e9::1') === false, 'Expected debug context not to store raw proxy IPs.');
+    kiwi_assert_true(strpos($encoded_diagnostic, '198.51.100.12') === false, 'Expected debug context not to store raw RFC Forwarded values.');
+    kiwi_assert_true(strpos($encoded_diagnostic, '198.51.100.25') === false, 'Expected debug context not to store raw unsupported client-IP header values.');
 });
 
 kiwi_run_test('Kiwi_Client_Ip_Resolver accepts RFC Forwarded header only from trusted peers', function (): void {
@@ -4598,6 +4646,41 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves client IP context through trust
     kiwi_assert_same('203.0.113.44', $trusted['client_ip'] ?? '', 'Expected trusted proxy config to allow X-Forwarded-For client resolution.');
     kiwi_assert_same('203.0.113.0/24', $trusted['client_ip_prefix'] ?? '', 'Expected router IP context to include the stored landing-session prefix.');
     kiwi_assert_same('198.51.100.77', $spoofed['client_ip'] ?? '', 'Expected untrusted direct peers to ignore spoofed X-Forwarded-For headers.');
+});
+
+kiwi_run_test('Kiwi_Landing_Page_Router stores client IP debug diagnostics only behind flag', function (): void {
+    $server = [
+        'REMOTE_ADDR' => '2a02:4780:79:a1e9::1',
+        'HTTP_X_FORWARDED_FOR' => '203.0.113.44',
+    ];
+    $debug_off_router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Trusted_Proxy_Debug_Config(['2a02:4780:79:a1e9::1'], false),
+        new Kiwi_Test_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+    $debug_on_router = new Kiwi_Landing_Page_Router(
+        new Kiwi_Test_Trusted_Proxy_Debug_Config(['2a02:4780:79:a1e9::1'], true),
+        new Kiwi_Test_Landing_Page_Session_Repository(),
+        'https://example.test/plugin/'
+    );
+    $resolve_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_client_ip_context');
+    $raw_context_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'build_client_ip_resolution_context');
+    $client_ip_context = $resolve_method->invoke($debug_off_router, $server);
+    $debug_off = $raw_context_method->invoke($debug_off_router, $server, $client_ip_context);
+    $debug_on = $raw_context_method->invoke($debug_on_router, $server, $client_ip_context);
+    $encoded_debug_on = json_encode($debug_on);
+    $encoded_debug_on = is_string($encoded_debug_on) ? $encoded_debug_on : '';
+
+    kiwi_assert_same([
+        'source' => 'x_forwarded_for',
+        'peer_trusted' => true,
+    ], $debug_off, 'Expected default raw context to keep client IP resolution diagnostics compact.');
+    kiwi_assert_same(true, $debug_on['trusted_proxy_configured'] ?? null, 'Expected debug raw context to show trusted proxy config presence.');
+    kiwi_assert_same(['x_forwarded_for'], $debug_on['forwarded_headers_present'] ?? [], 'Expected debug raw context to show forwarded header names only.');
+    kiwi_assert_same(1, $debug_on['forwarded_candidate_count'] ?? null, 'Expected debug raw context to count forwarded candidates.');
+    kiwi_assert_same('resolved_from_forwarded_header', $debug_on['resolution_reason'] ?? '', 'Expected debug raw context to explain the resolution path.');
+    kiwi_assert_true(strpos($encoded_debug_on, '203.0.113.44') === false, 'Expected debug raw context not to include raw forwarded client IPs.');
+    kiwi_assert_true(strpos($encoded_debug_on, '2a02:4780:79:a1e9::1') === false, 'Expected debug raw context not to include raw proxy IPs.');
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing variants without legacy fallback', function (): void {

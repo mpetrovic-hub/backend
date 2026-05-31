@@ -316,6 +316,13 @@ class Kiwi_Config
         return array_values(array_unique($normalized));
     }
 
+    public function is_client_ip_resolution_debug_enabled(): bool
+    {
+        return defined('KIWI_CLIENT_IP_RESOLUTION_DEBUG')
+            ? (bool) KIWI_CLIENT_IP_RESOLUTION_DEBUG
+            : true;
+    }
+
     public function is_landing_handoff_ua_client_hints_enabled(): bool
     {
         return $this->get_landing_ua_tracking_mode() !== 'disabled';

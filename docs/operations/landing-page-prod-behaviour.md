@@ -82,6 +82,7 @@ Proxy/edge requirements:
 - terminate TLS with a valid certificate for each public hostname
 - preserve original `Host` and forward standard `X-Forwarded-*` headers
 - configure `KIWI_TRUSTED_PROXY_CIDRS` with only the direct reverse-proxy or edge CIDRs whose forwarded headers may be trusted; the default empty configuration ignores forwarded IP headers
+- start with exact direct proxy IPs when possible; for example, production exports on 2026-05-31 showed `REMOTE_ADDR=2a02:4780:79:a1e9::1`, so prefer `['2a02:4780:79:a1e9::1']` over broadly trusting `2a02:4780:79::/48` unless the whole range is confirmed as controlled edge infrastructure
 - forward request paths unchanged (no path rewrites for landing routes)
 - avoid exposing non-canonical backend origin hosts to end users when possible
 
@@ -109,7 +110,7 @@ Important boundary:
 - Incoming provider callback validation is provider-specific.
 - Outgoing affiliate secret/signature applies only to outbound postbacks.
 - Client IP stored on sales must come from the resolved landing-session context in `wp_kiwi_landing_page_sessions`; provider/aggregator callback `REMOTE_ADDR` is not a user-IP source.
-- `Kiwi_Client_Ip_Resolver` accepts forwarded headers only when the direct peer matches `KIWI_TRUSTED_PROXY_CIDRS`. Without that explicit trust, `X-Forwarded-For`, `Forwarded`, and `X-Real-IP` are ignored to avoid spoofed client-IP buckets. If a trusted proxy request has no usable forwarded client candidate, the IP bucket remains `(unknown)` instead of bucketing the proxy itself.
+- `Kiwi_Client_Ip_Resolver` accepts forwarded headers only when the direct peer matches `KIWI_TRUSTED_PROXY_CIDRS`. Without that explicit trust, `X-Forwarded-For`, `Forwarded`, and `X-Real-IP` are ignored to avoid spoofed client-IP buckets. If a trusted proxy request has no usable forwarded client candidate, the IP bucket remains `(unknown)` instead of bucketing the proxy itself. Temporary diagnostics can be enabled with `KIWI_CLIENT_IP_RESOLUTION_DEBUG`; the debug context stores only header names/counts and resolution reasons, never raw forwarded header values or candidate IPs. It can also report unsupported client-IP header names such as `CF-Connecting-IP` or `True-Client-IP` when present, but those headers are not trusted or parsed by this resolver.
 - Traffic and campaign dimensions stored on landing sessions come from landing metadata, service context, query parameters, and `HTTP_ACCEPT_LANGUAGE`; `country` is the campaign/service country, not a Geo-IP lookup.
 
 ## Landing-page KPI tracking
@@ -316,6 +317,12 @@ Notes:
   - explicit allowlist for direct reverse proxies whose forwarded client-IP headers may be trusted
   - accepts an array or comma/whitespace-separated string of exact IPs and CIDRs
   - default: empty, which means forwarded IP headers are ignored
+  - for the observed Hostinger edge peer, start with `['2a02:4780:79:a1e9::1']` and widen only after infrastructure confirmation
+- `KIWI_CLIENT_IP_RESOLUTION_DEBUG`
+  - temporary landing-session diagnostics for trusted-proxy rollout
+  - temporary default: `true` while validating the Hostinger/proxy rollout; set the constant to `false` to disable
+  - when enabled, `raw_context.client_ip_resolution` includes trusted-proxy config presence, supported forwarded header names, unsupported client-IP header names, candidate count, and resolution reason
+  - remove the temporary default-on behavior after rollout; it is intentionally data-sparse but still operational debug metadata
 - `KIWI_AFFILIATE_POSTBACK_URL_TEMPLATE`
 - `KIWI_AFFILIATE_POSTBACK_SECRET`
 - `KIWI_AFFILIATE_POSTBACK_SIGNATURE_PARAMETER`
