@@ -4587,7 +4587,6 @@ kiwi_run_test('Kiwi_Landing_Page_Router builds canonical session dimensions from
         'https://example.test/plugin/'
     );
     $method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'build_session_dimension_context');
-    $method->setAccessible(true);
 
     $dimensions = $method->invoke($router, [
         'provider' => 'nth',
@@ -6834,9 +6833,7 @@ kiwi_run_test('Kiwi_Landing_Page_Router injects same-origin SMS handoff telemetr
         'https://example.test/plugin/'
     );
     $endpoint_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'resolve_kpi_event_endpoint');
-    $endpoint_method->setAccessible(true);
     $inject_method = new ReflectionMethod(Kiwi_Landing_Page_Router::class, 'inject_kpi_tracker_script');
-    $inject_method->setAccessible(true);
 
     $endpoint = $endpoint_method->invoke($router);
     $html = '<!doctype html><html><body><a class="cta" href="sms:84072?body=JPLAY%20txn_demo_12345678">CTA</a></body></html>';
@@ -9996,7 +9993,6 @@ kiwi_run_test('Kiwi_Plugin runs schema migrations once and persists schema versi
 kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema repository list', function (): void {
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $method = new ReflectionMethod(Kiwi_Plugin::class, 'build_schema_repositories');
-    $method->setAccessible(true);
     $repositories = $method->invoke($plugin);
     $classes = array_map(static function ($repository): string {
         return is_object($repository) ? get_class($repository) : '';
