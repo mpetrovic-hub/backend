@@ -111,6 +111,11 @@ Client-IP resolution for landing analytics is operational edge configuration, no
   - explicit allowlist of direct reverse proxies whose `X-Forwarded-For`, `Forwarded`, or `X-Real-IP` headers may be trusted
   - accepts an array or a comma/whitespace-separated string of exact IPs and CIDRs
   - default: empty, so forwarded client-IP headers are ignored and the direct peer is used
+- `KIWI_CLIENT_IP_RESOLUTION_DEBUG`
+  - temporary diagnostics for validating trusted proxy rollout
+  - stores only supported forwarded header names, unsupported client-IP header names, counts, and resolution reason in landing-session raw context
+  - temporary default: `true` while validating the Hostinger/proxy rollout; set to `false` to disable
+  - remove the temporary default-on behavior after rollout
 
 Only add proxy IPs or CIDRs that are controlled by the deployment edge. Do not document real customer IPs or provider secrets here.
 

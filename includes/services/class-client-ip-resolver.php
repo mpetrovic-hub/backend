@@ -120,6 +120,20 @@ class Kiwi_Client_Ip_Resolver
         return false;
     }
 
+    public function build_debug_context(array $server, array $trusted_proxy_cidrs = []): array
+    {
+        $trusted_proxy_cidrs = $this->normalize_trusted_proxy_cidrs($trusted_proxy_cidrs);
+        $snapshot = $this->resolve($server, $trusted_proxy_cidrs);
+
+        return [
+            'trusted_proxy_configured' => !empty($trusted_proxy_cidrs),
+            'forwarded_headers_present' => $this->detect_forwarded_headers($server),
+            'other_client_ip_headers_present' => $this->detect_other_client_ip_headers($server),
+            'forwarded_candidate_count' => $this->count_forwarded_candidates($server),
+            'resolution_reason' => $this->resolve_debug_reason($snapshot),
+        ];
+    }
+
     private function resolve_forwarded_candidate(array $server, array $trusted_proxy_cidrs): ?array
     {
         foreach ($this->extract_forwarded_chains($server) as $chain) {
@@ -188,6 +202,89 @@ class Kiwi_Client_Ip_Resolver
         }
 
         return $chains;
+    }
+
+    private function detect_forwarded_headers(array $server): array
+    {
+        $headers = [];
+
+        if (trim((string) ($server['HTTP_X_FORWARDED_FOR'] ?? '')) !== '') {
+            $headers[] = 'x_forwarded_for';
+        }
+
+        if (trim((string) ($server['HTTP_FORWARDED'] ?? '')) !== '') {
+            $headers[] = 'forwarded';
+        }
+
+        if (trim((string) ($server['HTTP_X_REAL_IP'] ?? '')) !== '') {
+            $headers[] = 'x_real_ip';
+        }
+
+        return $headers;
+    }
+
+    private function detect_other_client_ip_headers(array $server): array
+    {
+        $headers = [];
+        $candidates = [
+            'HTTP_CF_CONNECTING_IP' => 'cf_connecting_ip',
+            'HTTP_TRUE_CLIENT_IP' => 'true_client_ip',
+            'HTTP_X_CLIENT_IP' => 'x_client_ip',
+            'HTTP_X_CLUSTER_CLIENT_IP' => 'x_cluster_client_ip',
+            'HTTP_FASTLY_CLIENT_IP' => 'fastly_client_ip',
+        ];
+
+        foreach ($candidates as $server_key => $header_name) {
+            if (trim((string) ($server[$server_key] ?? '')) !== '') {
+                $headers[] = $header_name;
+            }
+        }
+
+        return $headers;
+    }
+
+    private function count_forwarded_candidates(array $server): int
+    {
+        $count = 0;
+
+        foreach ($this->extract_forwarded_chains($server) as $chain) {
+            foreach ($chain['values'] as $value) {
+                if ($this->normalize_ip_value((string) $value) !== '') {
+                    $count++;
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    private function resolve_debug_reason(array $snapshot): string
+    {
+        $source = (string) ($snapshot['source'] ?? '');
+
+        if ($source === 'remote_addr') {
+            return !empty($snapshot['peer_trusted'])
+                ? 'resolved_from_trusted_remote_addr'
+                : 'peer_not_trusted';
+        }
+
+        if (in_array($source, ['x_forwarded_for', 'forwarded', 'x_real_ip'], true)) {
+            return 'resolved_from_forwarded_header';
+        }
+
+        if ($source === 'trusted_proxy_missing_forwarded_client') {
+            return 'trusted_proxy_missing_forwarded_client';
+        }
+
+        if ($source === 'none') {
+            return 'missing_remote_addr';
+        }
+
+        if ($source === 'invalid') {
+            return 'invalid_client_ip';
+        }
+
+        return $source !== '' ? $source : 'unknown';
     }
 
     private function normalize_ip_value(string $value): string

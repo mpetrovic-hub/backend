@@ -26,6 +26,7 @@ Mögliche Config-Kandidaten aus der aktuellen Codebase:
 
 - `KIWI_LANDING_UA_TRACKING_MODE` (`disabled`, `onclick`, `onload`)
 - `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED` (Legacy-Kompatibilität)
+- `KIWI_CLIENT_IP_RESOLUTION_DEBUG` (temporaer default-on fuer Trusted-Proxy-Rollout; spaeter wieder default-off/entfernen)
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED`
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
 - `KIWI_LANDING_PAGES_FILESYSTEM_ENABLED`
@@ -155,14 +156,24 @@ Erst Analyse/Plan erstellen. Mögliche Strategie: neue generische View/Alias-Sch
 
 - [ ] Bestehende Fraud-/Statistics-/Landing-Reports nach Refactor prüfen
 
-## 3. Debug-/SQL-Dump-Logging nach Summary-Fix wieder entschaerfen
+## 3. Temporaere Debug-/Logging-Experimente wieder entfernen
 
-### Reminder
+### Ziel
 
-Das grosse SQL-Dump-Logging fuer den Landing-Funnel-Daily-Summary-Refresh war zur Diagnose von `max_statement_time exceeded` hilfreich, soll aber nicht dauerhaft noisy in Production bleiben. PR-Referenz: https://github.com/mpetrovic-hub/backend/pull/42
+Kurzfristige Diagnose- und Logging-Experimente sammeln, damit sie nach der jeweiligen Prod-Diagnose wieder entfernt oder zurueckgedreht werden.
 
-### Status
+### Aktuelle Experimente
 
-- Erledigt mit Issue #43: der Refresh laeuft intern pro `metric_date` und normales Erfolgs-/Fehlerlogging bleibt kurz.
-- Keine dauerhaften grossen Summary-SQL-Dumps sind Teil des normalen Refresh-Pfads. Falls spaeter wieder SQL-Diagnosen noetig werden, muessen sie hinter einen expliziten Debug-Schalter und gekuerzt bleiben.
+- [x] Landing-Funnel-Daily-Summary SQL-Dump-Logging aus PR #42 wieder entschaerft.
+  - Erledigt mit Issue #43: der Refresh laeuft intern pro `metric_date` und normales Erfolgs-/Fehlerlogging bleibt kurz.
+  - Keine dauerhaften grossen Summary-SQL-Dumps sind Teil des normalen Refresh-Pfads.
+- [ ] `KIWI_CLIENT_IP_RESOLUTION_DEBUG` nach Trusted-Proxy-Rollout wieder default-off setzen oder entfernen.
+  - Eingefuehrt/erweitert in PR #61 fuer Issue #55.
+  - Zweck: kurz pruefen, ob `X-Forwarded-For`, `Forwarded`, `X-Real-IP` oder andere Client-IP-Header bei PHP ankommen und ob der direkte Peer trusted ist.
+  - Debug-Kontext bleibt datensparsam: Header-Namen, Candidate-Count, Trust-/Resolution-Reason; keine rohen Headerwerte oder Kandidaten-IPs.
+  - Nach erfolgreicher Prod-Pruefung wieder raus aus dem Default-Pfad.
+
+### Regel
+
+Neue SQL-/Header-/Payload-Diagnosen nur temporaer, hinter explizitem Schalter und ohne rohe personenbezogene oder geheime Werte dauerhaft zu speichern.
 
