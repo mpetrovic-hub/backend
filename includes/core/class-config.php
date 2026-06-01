@@ -321,6 +321,13 @@ class Kiwi_Config
         return array_values(array_unique($normalized));
     }
 
+    public function get_device_model_brand_harvest_min_daily_sessions(): int
+    {
+        return defined('KIWI_DEVICE_MODEL_BRAND_HARVEST_MIN_DAILY_SESSIONS')
+            ? max(1, (int) KIWI_DEVICE_MODEL_BRAND_HARVEST_MIN_DAILY_SESSIONS)
+            : 5;
+    }
+
     public function get_trusted_proxy_cidrs(): array
     {
         if (!defined('KIWI_TRUSTED_PROXY_CIDRS')) {

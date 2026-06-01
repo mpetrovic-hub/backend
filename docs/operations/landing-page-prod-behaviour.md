@@ -202,6 +202,8 @@ Notes:
 - `wp_kiwi_device_model_brand_map`
   - optional exact model-to-brand map used by the shared device-context normalizer before heuristic brand rules
   - stores normalized `model_key` values with a sanitized `brand`, plus source/notes for auditability
+  - default seed rows are installed by schema migration; a daily harvester can add frequently observed unknown `ua_ch_model` keys as `(unknown)` review placeholders when they meet `KIWI_DEVICE_MODEL_BRAND_HARVEST_MIN_DAILY_SESSIONS`
+  - `(unknown)` map entries do not stop the normalizer from trying safe built-in heuristics
 
 - `wp_kiwi_click_attributions`
   - temporary server-side attribution state

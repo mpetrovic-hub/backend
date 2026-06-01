@@ -27,6 +27,7 @@ Mögliche Config-Kandidaten aus der aktuellen Codebase:
 - `KIWI_LANDING_UA_TRACKING_MODE` (`disabled`, `onclick`, `onload`)
 - `KIWI_LANDING_HANDOFF_UA_CLIENT_HINTS_ENABLED` (Legacy-Kompatibilität)
 - `KIWI_CLIENT_IP_RESOLUTION_DEBUG` (temporaer default-on fuer Trusted-Proxy-Rollout; spaeter wieder default-off/entfernen)
+- `KIWI_DEVICE_MODEL_BRAND_HARVEST_MIN_DAILY_SESSIONS` (Daily-Harvester-Schwelle fuer observed `(unknown)` Device-Model-Keys)
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED`
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
 - `KIWI_LANDING_FUNNEL_TKZONE_SUMMARY_PIDS` (editable PID-Allowlist fuer Tkzone-Summary; Default `106`)
