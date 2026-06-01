@@ -7,13 +7,17 @@ if (!defined('ABSPATH')) {
 class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
 {
     private $repository;
+    private $config;
     private $last_error = '';
 
-    public function __construct(?Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository $repository = null)
-    {
+    public function __construct(
+        ?Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository $repository = null,
+        ?Kiwi_Config $config = null
+    ) {
         $this->repository = $repository instanceof Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository
             ? $repository
             : new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository();
+        $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
     }
 
     public function refresh_range(string $from_date, string $to_date): array
@@ -78,19 +82,23 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
             return $this->build_daily_result(false, $metric_date, 0, 0);
         }
 
+        $tkzone_summary_pids = $this->config->get_landing_funnel_tkzone_summary_pids();
+
+        if (empty($tkzone_summary_pids)) {
+            $this->run_statement('COMMIT');
+
+            return $this->build_daily_result(true, $metric_date, $deleted, 0);
+        }
+
         $inserted = $this->repository->insert_aggregate_rows(
-            $this->build_refresh_insert_sql(),
-            [
+            $this->build_refresh_insert_sql($tkzone_summary_pids),
+            $this->build_refresh_insert_params(
+                $metric_date,
                 $from_datetime,
                 $to_exclusive_datetime,
-                $from_datetime,
-                $to_exclusive_datetime,
-                $from_datetime,
                 $handoff_to_exclusive_datetime,
-                $metric_date,
-                $metric_date,
-                $metric_date,
-            ]
+                $tkzone_summary_pids
+            )
         );
 
         if ($inserted < 0) {
@@ -110,15 +118,25 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
         return $this->last_error;
     }
 
-    public function build_refresh_insert_sql(): string
+    public function build_refresh_insert_sql(?array $tkzone_summary_pids = null): string
     {
         global $wpdb;
 
+        $tkzone_summary_pids = $tkzone_summary_pids === null
+            ? $this->config->get_landing_funnel_tkzone_summary_pids()
+            : $tkzone_summary_pids;
         $summary_table = $this->repository->get_table_name();
         $landing_session_table = $wpdb->prefix . 'kiwi_landing_page_sessions';
         $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
+        $pid_placeholders = $this->build_placeholder_list(count($tkzone_summary_pids));
+        $landing_pid_filter_sql = $pid_placeholders !== ''
+            ? "AND pid IN ({$pid_placeholders})"
+            : 'AND 1 = 0';
+        $sales_pid_filter_sql = $pid_placeholders !== ''
+            ? "AND s.pid IN ({$pid_placeholders})"
+            : 'AND 1 = 0';
 
         $dimension_hash_expression = "SHA2(CONCAT_WS('|',
                     a.provider_key,
@@ -171,24 +189,7 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
                 FROM {$landing_session_table}
                 WHERE created_at >= %s
                   AND created_at < %s
-                  AND landing_key <> ''
-                  AND session_token <> ''
-                GROUP BY landing_key, session_token
-            ),
-            engagement_sessions AS (
-                SELECT
-                    landing_key,
-                    session_token,
-                    MAX(CASE WHEN page_loaded_at IS NOT NULL THEN 1 ELSE 0 END) AS page_loaded_sessions,
-                    MAX(CASE WHEN first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta1_sessions,
-                    SUM(cta1_click_count) AS cta1_click_events,
-                    MAX(CASE WHEN first_cta2_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta2_sessions,
-                    SUM(cta2_click_count) AS cta2_click_events,
-                    MAX(CASE WHEN first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta3_sessions,
-                    SUM(cta3_click_count) AS cta3_click_events
-                FROM {$engagement_table}
-                WHERE created_at >= %s
-                  AND created_at < %s
+                  {$landing_pid_filter_sql}
                   AND landing_key <> ''
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
@@ -218,22 +219,26 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
                     COALESCE(NULLIF(l.tksource, ''), '(unknown)') AS tksource,
                     COALESCE(NULLIF(l.tkzone, ''), '(unknown)') AS tkzone,
                     1 AS sessions,
-                    COALESCE(e.page_loaded_sessions, 0) AS page_loaded_sessions,
-                    COALESCE(e.cta1_sessions, 0) AS cta1_sessions,
-                    COALESCE(e.cta1_click_events, 0) AS cta1_click_events,
-                    COALESCE(e.cta2_sessions, 0) AS cta2_sessions,
-                    COALESCE(e.cta2_click_events, 0) AS cta2_click_events,
-                    COALESCE(e.cta3_sessions, 0) AS cta3_sessions,
-                    COALESCE(e.cta3_click_events, 0) AS cta3_click_events,
+                    CASE WHEN e.page_loaded_at IS NOT NULL THEN 1 ELSE 0 END AS page_loaded_sessions,
+                    CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta1_sessions,
+                    COALESCE(e.cta1_click_count, 0) AS cta1_click_events,
+                    CASE WHEN e.first_cta2_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta2_sessions,
+                    COALESCE(e.cta2_click_count, 0) AS cta2_click_events,
+                    CASE WHEN e.first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta3_sessions,
+                    COALESCE(e.cta3_click_count, 0) AS cta3_click_events,
                     COALESCE(h.handoff_attempts, 0) AS handoff_attempts,
                     COALESCE(h.handoff_successes, 0) AS handoff_successes,
                     COALESCE(h.handoff_fails, 0) AS handoff_fails,
                     0 AS sales,
                     0 AS sales_amount_minor
                 FROM landing_loads l
-                LEFT JOIN engagement_sessions e
+                LEFT JOIN {$engagement_table} e
                   ON e.landing_key = l.landing_key
                  AND e.session_token = l.session_token
+                 AND e.created_at >= %s
+                 AND e.created_at < %s
+                 AND e.landing_key <> ''
+                 AND e.session_token <> ''
                 LEFT JOIN handoff_by_session h
                   ON h.landing_key = l.landing_key
                  AND h.session_token = l.session_token
@@ -264,6 +269,7 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
                 FROM {$sales_table} s
                 WHERE s.status = 'completed'
                   AND s.attribution_metric_date BETWEEN %s AND %s
+                  {$sales_pid_filter_sql}
                 GROUP BY
                     s.attribution_metric_date,
                     COALESCE(NULLIF(s.provider_key, ''), '(unknown)'),
@@ -347,6 +353,43 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
                   OR a.handoff_fails > 0
                   OR a.sales > 0
               )";
+    }
+
+    private function build_refresh_insert_params(
+        string $metric_date,
+        string $from_datetime,
+        string $to_exclusive_datetime,
+        string $handoff_to_exclusive_datetime,
+        array $tkzone_summary_pids
+    ): array {
+        return array_merge(
+            [
+                $from_datetime,
+                $to_exclusive_datetime,
+            ],
+            $tkzone_summary_pids,
+            [
+                $from_datetime,
+                $handoff_to_exclusive_datetime,
+                $from_datetime,
+                $to_exclusive_datetime,
+                $metric_date,
+                $metric_date,
+            ],
+            $tkzone_summary_pids,
+            [
+                $metric_date,
+            ]
+        );
+    }
+
+    private function build_placeholder_list(int $count): string
+    {
+        if ($count <= 0) {
+            return '';
+        }
+
+        return implode(', ', array_fill(0, $count, '%s'));
     }
 
     private function build_result(

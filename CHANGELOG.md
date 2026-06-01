@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-06-01:
+- [Landing Funnel Daily Tkzone Summary Refresh] Changed the tkzone daily summary refresh to join engagement rows directly by canonical `landing_key` and `session_token` instead of materializing an `engagement_sessions` CTE. Production read-only timing on a large day dropped from roughly 109 seconds to roughly 3 seconds with identical aggregate totals. Tkzone refreshes now also use the `KIWI_LANDING_FUNNEL_TKZONE_SUMMARY_PIDS` allow-list, defaulting to pid `106`, so affiliate traffic without zones is excluded by design.
+
 2026-05-31:
 - [Landing Funnel Daily Summary Refresh] Changed the main daily summary refresh to join engagement rows directly by canonical `landing_key` and `session_token` instead of materializing an `engagement_sessions` CTE. On production-sized day chunks this lets MariaDB use the existing landing-session engagement lookup and avoids the slow derived-table join that could exceed `max_statement_time`.
 
