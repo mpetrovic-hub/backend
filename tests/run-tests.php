@@ -9331,7 +9331,20 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service buil
     $wpdb->prefix = 'abc_';
 
     $repository = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository();
-    $service = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service($repository);
+    $config = new class(['106', '207']) extends Kiwi_Config {
+        private $tkzone_summary_pids;
+
+        public function __construct(array $tkzone_summary_pids)
+        {
+            $this->tkzone_summary_pids = $tkzone_summary_pids;
+        }
+
+        public function get_landing_funnel_tkzone_summary_pids(): array
+        {
+            return $this->tkzone_summary_pids;
+        }
+    };
+    $service = new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service($repository, $config);
     $result = $service->refresh_range('2026-05-22', '2026-05-22');
     $service->refresh_range('2026-05-22', '2026-05-22');
 
@@ -9345,38 +9358,49 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service buil
         [
             '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
-            '2026-05-22 00:00:00',
-            '2026-05-23 00:00:00',
+            '106',
+            '207',
             '2026-05-22 00:00:00',
             '2026-05-24 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-23 00:00:00',
             '2026-05-22',
             '2026-05-22',
+            '106',
+            '207',
             '2026-05-22',
         ],
         $prepared[1]['args'] ?? [],
-        'Expected tkzone insert to bind day-bounded sessions/sales and next-day handoff carryover.'
+        'Expected tkzone insert to bind day-bounded sessions/sales, allowed PIDs, and next-day handoff carryover.'
     );
     $insert_sql = (string) ($prepared[1]['query'] ?? '');
     $normalized_insert_sql = str_replace("\r\n", "\n", $insert_sql);
 
     kiwi_assert_contains('INSERT INTO abc_kiwi_landing_funnel_daily_tkzone_summary', $insert_sql, 'Expected refresh to populate the tkzone summary table.');
     kiwi_assert_contains('FROM abc_kiwi_landing_page_sessions', $insert_sql, 'Expected tkzone refresh to aggregate canonical landing sessions.');
-    kiwi_assert_contains('LEFT JOIN engagement_sessions e', $insert_sql, 'Expected engagement metrics to join to landing sessions.');
+    kiwi_assert_contains('AND pid IN (%s, %s)', $insert_sql, 'Expected tkzone session facts to be limited to configured PIDs.');
+    kiwi_assert_true(strpos($insert_sql, 'engagement_sessions AS') === false, 'Expected tkzone summary refresh not to materialize engagement sessions before joining.');
+    kiwi_assert_contains('LEFT JOIN abc_kiwi_premium_sms_landing_engagements e', $insert_sql, 'Expected engagement metrics to join directly to landing sessions.');
+    kiwi_assert_contains('AND e.created_at >= %s', $insert_sql, 'Expected direct tkzone engagement joins to keep the refresh day lower bound.');
+    kiwi_assert_contains('AND e.created_at < %s', $insert_sql, 'Expected direct tkzone engagement joins to keep the refresh day upper bound.');
     kiwi_assert_contains('LEFT JOIN handoff_by_session h', $insert_sql, 'Expected handoff metrics to join to landing sessions.');
     kiwi_assert_contains('FROM abc_kiwi_sales s', $insert_sql, 'Expected tkzone refresh to aggregate completed sales from durable sales snapshots.');
     kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tkzone, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS tkzone", $insert_sql, 'Expected tkzone dimensions to come from landing sessions for session facts.');
     kiwi_assert_contains("COALESCE(NULLIF(s.tkzone, ''), '(unknown)') AS tkzone", $insert_sql, 'Expected sales facts to use durable sale tkzone snapshots.');
     kiwi_assert_contains('s.attribution_metric_date AS metric_date', $insert_sql, 'Expected sales metric date to use durable attribution metric date.');
     kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use attribution metric date bounds.');
+    kiwi_assert_contains('AND s.pid IN (%s, %s)', $insert_sql, 'Expected tkzone sales facts to be limited to configured PIDs.');
     kiwi_assert_true(strpos($insert_sql, 'DATE(s.completed_at)') === false, 'Expected tkzone summary sales not to fall back to completion date.');
     kiwi_assert_true(strpos($insert_sql, 'first_engagement_at AS metric_at') === false, 'Expected engagement-only sessions not to create tkzone session facts.');
     kiwi_assert_true(strpos($insert_sql, 'session_keys') === false, 'Expected tkzone summary not to union engagement/handoff-only session keys.');
+    kiwi_assert_contains('CASE WHEN e.page_loaded_at IS NOT NULL THEN 1 ELSE 0 END AS page_loaded_sessions', $insert_sql, 'Expected tkzone page-loaded metrics to read from the directly joined engagement row.');
+    kiwi_assert_contains('CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta1_sessions', $insert_sql, 'Expected tkzone CTA session metrics to read from the directly joined engagement row.');
+    kiwi_assert_contains('COALESCE(e.cta1_click_count, 0) AS cta1_click_events', $insert_sql, 'Expected tkzone CTA event metrics to read from the directly joined engagement row.');
     kiwi_assert_contains("SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to use event counts under the handoff uniqueness contract.');
     kiwi_assert_contains('WHEN a.handoff_attempts <= 0 THEN 0', $insert_sql, 'Expected handoff rate to short-circuit when attempts are zero.');
     kiwi_assert_contains("SHA2(CONCAT_WS('|',", $insert_sql, 'Expected stable tkzone dimension_hash computation.');
     kiwi_assert_contains("a.provider_key,\n                    a.flow_key,\n                    a.country,\n                    a.service_key,\n                    a.landing_key,\n                    a.tksource,\n                    a.tkzone", $normalized_insert_sql, 'Expected tkzone dimension_hash to use only the tkzone summary dimension basis.');
     foreach ([
-        'pid',
         'device_brand',
         'os_version',
         'browser',
@@ -12517,4 +12541,16 @@ kiwi_run_test('Kiwi_Config exposes landing funnel daily summary refresh days', f
     }
 
     kiwi_assert_same(0, $config->get_landing_funnel_summary_refresh_days(), 'Expected negative daily summary refresh windows to be clamped to zero.');
+});
+
+kiwi_run_test('Kiwi_Config exposes tkzone summary PID allow-list', function (): void {
+    $config = new Kiwi_Config();
+
+    kiwi_assert_same(['106'], $config->get_landing_funnel_tkzone_summary_pids(), 'Expected tkzone summary PID allow-list to default to pid 106.');
+
+    if (!defined('KIWI_LANDING_FUNNEL_TKZONE_SUMMARY_PIDS')) {
+        define('KIWI_LANDING_FUNNEL_TKZONE_SUMMARY_PIDS', ['106', ' 207 ', 'bad pid', '']);
+    }
+
+    kiwi_assert_same(['106', '207', 'badpid'], $config->get_landing_funnel_tkzone_summary_pids(), 'Expected tkzone summary PID allow-list to sanitize configured PID values.');
 });

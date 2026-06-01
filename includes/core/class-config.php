@@ -287,6 +287,40 @@ class Kiwi_Config
             : 7;
     }
 
+    public function get_landing_funnel_tkzone_summary_pids(): array
+    {
+        $pids = defined('KIWI_LANDING_FUNNEL_TKZONE_SUMMARY_PIDS')
+            ? KIWI_LANDING_FUNNEL_TKZONE_SUMMARY_PIDS
+            : ['106'];
+
+        if (is_string($pids)) {
+            $pids = preg_split('/[\s,]+/', $pids);
+        }
+
+        if (!is_array($pids)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($pids as $pid) {
+            $pid = trim((string) $pid);
+
+            if ($pid === '') {
+                continue;
+            }
+
+            $pid = preg_replace('/[^A-Za-z0-9._~:-]/', '', $pid);
+            $pid = is_string($pid) ? substr($pid, 0, 191) : '';
+
+            if ($pid !== '') {
+                $normalized[] = $pid;
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
     public function get_trusted_proxy_cidrs(): array
     {
         if (!defined('KIWI_TRUSTED_PROXY_CIDRS')) {
