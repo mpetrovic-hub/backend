@@ -337,6 +337,7 @@ require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-operator
 require_once __DIR__ . '/../includes/repositories/class-dimoco-callback-refund-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-device-model-brand-map-repository.php';
 require_once __DIR__ . '/../includes/services/class-device-context-normalizer.php';
+require_once __DIR__ . '/../includes/services/class-device-model-brand-harvest-service.php';
 require_once __DIR__ . '/../includes/services/class-client-ip-resolver.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-page-session-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-nth-event-repository.php';
@@ -5533,6 +5534,147 @@ kiwi_run_test('Kiwi_Device_Context_Normalizer normalizes durable device OS and b
     kiwi_assert_same('Samsung Internet', $merged['browser'] ?? '', 'Expected more specific browser buckets to replace generic Chrome.');
 });
 
+kiwi_run_test('Kiwi_Device_Model_Brand_Harvest_Service inserts frequent unknown UA-CH models only', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $result_rows_queue = [];
+        public $inserted = [];
+
+        public function __construct()
+        {
+            $this->result_rows_queue = [
+                [
+                    [
+                        'landing_key' => 'lp-a',
+                        'session_token' => 'sess-1',
+                        'ua_ch_platform' => 'Android',
+                        'ua_ch_platform_version' => '14.0.0',
+                        'ua_ch_model' => 'CPH9999',
+                        'ua_ch_brands' => 'Google Chrome 125',
+                        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+                        'user_agent' => '',
+                    ],
+                    [
+                        'landing_key' => 'lp-a',
+                        'session_token' => 'sess-2',
+                        'ua_ch_platform' => 'Android',
+                        'ua_ch_platform_version' => '14.0.0',
+                        'ua_ch_model' => 'CPH9999',
+                        'ua_ch_brands' => 'Google Chrome 125',
+                        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+                        'user_agent' => '',
+                    ],
+                    [
+                        'landing_key' => 'lp-a',
+                        'session_token' => 'sess-known',
+                        'ua_ch_platform' => 'Android',
+                        'ua_ch_platform_version' => '14.0.0',
+                        'ua_ch_model' => 'SM-S921B',
+                        'ua_ch_brands' => 'Google Chrome 125',
+                        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+                        'user_agent' => '',
+                    ],
+                    [
+                        'landing_key' => 'lp-a',
+                        'session_token' => 'sess-low',
+                        'ua_ch_platform' => 'Android',
+                        'ua_ch_platform_version' => '14.0.0',
+                        'ua_ch_model' => 'NX711J',
+                        'ua_ch_brands' => 'Google Chrome 125',
+                        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+                        'user_agent' => '',
+                    ],
+                ],
+                [
+                    [
+                        'landing_key' => 'lp-a',
+                        'session_token' => 'sess-2',
+                        'ua_ch_platform' => 'Android',
+                        'ua_ch_platform_version' => '14.0.0',
+                        'ua_ch_model' => 'CPH9999',
+                        'ua_ch_brands' => 'Google Chrome 125',
+                        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+                        'user_agent' => '',
+                    ],
+                    [
+                        'landing_key' => 'lp-a',
+                        'session_token' => 'sess-3',
+                        'ua_ch_platform' => 'Android',
+                        'ua_ch_platform_version' => '14.0.0',
+                        'ua_ch_model' => 'CPH9999',
+                        'ua_ch_brands' => 'Google Chrome 125',
+                        'ua_ch_full_version_list' => 'Google Chrome 125.0.0.0',
+                        'user_agent' => '',
+                    ],
+                ],
+            ];
+        }
+
+        public function prepare($query, ...$args)
+        {
+            if (count($args) === 1 && is_array($args[0])) {
+                $args = $args[0];
+            }
+
+            return [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            return array_shift($this->result_rows_queue) ?? [];
+        }
+
+        public function get_row($statement, $output = null)
+        {
+            return null;
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+
+            if (stripos($query, 'INSERT IGNORE INTO') === 0) {
+                $this->inserted[] = $args;
+
+                return 1;
+            }
+
+            return 0;
+        }
+    };
+    $config = new class extends Kiwi_Config {
+        public function get_device_model_brand_harvest_min_daily_sessions(): int
+        {
+            return 2;
+        }
+    };
+    $repository = new Kiwi_Device_Model_Brand_Map_Repository();
+    $service = new Kiwi_Device_Model_Brand_Harvest_Service(
+        $config,
+        $repository,
+        new Kiwi_Device_Context_Normalizer($repository)
+    );
+
+    $result = $service->harvest_date('2026-05-31');
+
+    kiwi_assert_true($result['success'], 'Expected device model harvest to succeed for a valid date.');
+    kiwi_assert_same(2, $result['unknown_model_keys'], 'Expected frequent and below-threshold unknown model keys to be counted.');
+    kiwi_assert_same(1, $result['eligible_model_keys'], 'Expected only unknown models meeting the distinct-session threshold to be eligible.');
+    kiwi_assert_same(1, $result['inserted'], 'Expected only one observed unknown model key to be inserted.');
+    kiwi_assert_same('CPH9999', $wpdb->inserted[0][0] ?? '', 'Expected the frequent unknown model key to be inserted.');
+    kiwi_assert_same('(unknown)', $wpdb->inserted[0][1] ?? '', 'Expected harvested unknown models to remain review placeholders.');
+    kiwi_assert_same('observed', $wpdb->inserted[0][2] ?? '', 'Expected harvested rows to identify the observed source.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder restricts device brands to known rules', function (): void {
     $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
     $builder = new Kiwi_Sales_Attribution_Snapshot_Builder(null, $engagement_repository);
@@ -7503,6 +7645,120 @@ kiwi_run_test('Kiwi_Device_Model_Brand_Map_Repository creates exact model map sc
     kiwi_assert_contains('KEY brand (brand)', $sql, 'Expected model map schema to index brand values.');
 
     $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Device_Model_Brand_Map_Repository caches lookups and lets unknown rows fall through', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $get_row_calls = 0;
+        public $rows = [
+            'CPH2609' => ['brand' => '(unknown)'],
+            'LE2113' => ['brand' => 'OnePlus'],
+        ];
+
+        public function prepare($query, ...$args)
+        {
+            if (count($args) === 1 && is_array($args[0])) {
+                $args = $args[0];
+            }
+
+            return [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+        }
+
+        public function get_row($statement, $output = null)
+        {
+            $this->get_row_calls++;
+            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+            $model_key = (string) ($args[0] ?? '');
+
+            return $this->rows[$model_key] ?? null;
+        }
+    };
+
+    $repository = new Kiwi_Device_Model_Brand_Map_Repository();
+
+    kiwi_assert_same('', $repository->find_brand_for_model('CPH2609'), 'Expected observed unknown mappings not to block normalizer heuristics.');
+    kiwi_assert_same('', $repository->find_brand_for_model('CPH2609'), 'Expected cached observed unknown mappings to remain fall-through values.');
+    kiwi_assert_same('OnePlus', $repository->find_brand_for_model('LE2113'), 'Expected known exact mappings to be returned.');
+    kiwi_assert_same('OnePlus', $repository->find_brand_for_model('LE2113'), 'Expected known exact mappings to be cached.');
+    kiwi_assert_same(2, $wpdb->get_row_calls, 'Expected each model key to hit the database only once per repository instance.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Device_Model_Brand_Map_Repository seeds defaults without overwriting known manual mappings', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $rows = [
+            'M2102K1G' => ['brand' => '(unknown)', 'source' => 'observed'],
+            'LE2113' => ['brand' => 'ManualBrand', 'source' => 'manual'],
+        ];
+
+        public function prepare($query, ...$args)
+        {
+            if (count($args) === 1 && is_array($args[0])) {
+                $args = $args[0];
+            }
+
+            return [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+        }
+
+        public function get_row($statement, $output = null)
+        {
+            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+            $model_key = (string) ($args[0] ?? '');
+
+            return $this->rows[$model_key] ?? null;
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+
+            if (stripos($query, 'INSERT INTO') === 0) {
+                $this->rows[(string) ($args[0] ?? '')] = [
+                    'brand' => (string) ($args[1] ?? ''),
+                    'source' => (string) ($args[2] ?? ''),
+                ];
+
+                return 1;
+            }
+
+            if (stripos($query, 'UPDATE') === 0) {
+                $this->rows[(string) ($args[3] ?? '')] = [
+                    'brand' => (string) ($args[0] ?? ''),
+                    'source' => (string) ($args[1] ?? ''),
+                ];
+
+                return 1;
+            }
+
+            return 0;
+        }
+    };
+
+    $repository = new Kiwi_Device_Model_Brand_Map_Repository();
+    $seeded = $repository->seed_default_mappings();
+
+    kiwi_assert_true($seeded > 0, 'Expected default model-brand seeds to insert or promote rows.');
+    kiwi_assert_same('Xiaomi', $wpdb->rows['M2102K1G']['brand'] ?? '', 'Expected seed mappings to promote observed unknown rows.');
+    kiwi_assert_same('ManualBrand', $wpdb->rows['LE2113']['brand'] ?? '', 'Expected seed mappings not to overwrite known manual rows.');
+    kiwi_assert_same('Honor', $wpdb->rows['NTH-NX9']['brand'] ?? '', 'Expected missing seed mappings to be inserted.');
+
     $wpdb = $previous_wpdb;
 });
 
@@ -9943,6 +10199,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'ensure_sales_table',
             'cleanup_expired_click_attributions',
             'schedule_landing_funnel_daily_summary_refresh',
+            'schedule_device_model_brand_harvest',
             'maybe_export_statistics',
             'maybe_export_hlr_results',
             'maybe_run_dimoco_test',
@@ -9956,6 +10213,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
 
     kiwi_assert_same(1, count($GLOBALS['kiwi_test_hooks']['template_redirect'] ?? []), 'Expected one landing-page routing hook.');
     kiwi_assert_same('maybe_render_landing_page', $GLOBALS['kiwi_test_hooks']['template_redirect'][0][1] ?? null, 'Expected the landing-page router hook to remain explicit.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_device_model_brand_harvest']), 'Expected device model brand harvest cron hook to be registered.');
 
     $enqueue_callback = $GLOBALS['kiwi_test_hooks']['wp_enqueue_scripts'][0];
     $enqueue_callback();
@@ -10293,7 +10551,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary cont
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-05-31-2', $schema_version, 'Expected schema version to be bumped for the slim main daily summary contract.');
+    kiwi_assert_same('2026-06-01-1', $schema_version, 'Expected schema version to be bumped for the device model brand map seed and harvester contract.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
@@ -12553,4 +12811,16 @@ kiwi_run_test('Kiwi_Config exposes tkzone summary PID allow-list', function (): 
     }
 
     kiwi_assert_same(['106', '207', 'badpid'], $config->get_landing_funnel_tkzone_summary_pids(), 'Expected tkzone summary PID allow-list to sanitize configured PID values.');
+});
+
+kiwi_run_test('Kiwi_Config exposes device model brand harvest threshold', function (): void {
+    $config = new Kiwi_Config();
+
+    kiwi_assert_same(5, $config->get_device_model_brand_harvest_min_daily_sessions(), 'Expected device model brand harvester to default to five distinct sessions.');
+
+    if (!defined('KIWI_DEVICE_MODEL_BRAND_HARVEST_MIN_DAILY_SESSIONS')) {
+        define('KIWI_DEVICE_MODEL_BRAND_HARVEST_MIN_DAILY_SESSIONS', 0);
+    }
+
+    kiwi_assert_same(1, $config->get_device_model_brand_harvest_min_daily_sessions(), 'Expected configured harvester thresholds to be clamped to at least one.');
 });

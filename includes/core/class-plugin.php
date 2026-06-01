@@ -11,13 +11,14 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-05-31-2';
+    private const DB_SCHEMA_VERSION = '2026-06-01-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY = 'kiwi_landing_funnel_daily_summary_refresh_lock';
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS = 1800;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_summary_refresh_last_result';
+    private const DEVICE_MODEL_BRAND_HARVEST_HOOK = 'kiwi_device_model_brand_harvest';
 
     private $plugin_root_path;
     private $plugin_base_url;
@@ -52,7 +53,9 @@ class Kiwi_Plugin
         add_action('init', [$this, 'ensure_sales_table']);
         add_action('init', [$this, 'cleanup_expired_click_attributions']);
         add_action('init', [$this, 'schedule_landing_funnel_daily_summary_refresh']);
+        add_action('init', [$this, 'schedule_device_model_brand_harvest']);
         add_action(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_summary_refresh']);
+        add_action(self::DEVICE_MODEL_BRAND_HARVEST_HOOK, [$this, 'run_device_model_brand_harvest']);
         add_action('init', [$this, 'maybe_export_statistics']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
@@ -258,6 +261,54 @@ class Kiwi_Plugin
             'hourly',
             self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK
         );
+    }
+
+    public function schedule_device_model_brand_harvest(): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+
+        if (wp_next_scheduled(self::DEVICE_MODEL_BRAND_HARVEST_HOOK) !== false) {
+            return;
+        }
+
+        wp_schedule_event(
+            time(),
+            'daily',
+            self::DEVICE_MODEL_BRAND_HARVEST_HOOK
+        );
+    }
+
+    public function run_device_model_brand_harvest(): array
+    {
+        $date = $this->get_previous_business_date();
+        $service = $this->build_device_model_brand_harvest_service();
+        $result = $service->harvest_date($date);
+
+        if (!is_array($result)) {
+            $result = [
+                'success' => false,
+                'date' => $date,
+                'unknown_model_keys' => 0,
+                'eligible_model_keys' => 0,
+                'inserted' => 0,
+                'threshold' => $this->get_device_model_brand_harvest_min_daily_sessions(),
+                'error' => 'Device model brand harvest service returned an invalid result.',
+            ];
+        }
+
+        if (!($result['success'] ?? false) && trim((string) ($result['error'] ?? '')) === '' && method_exists($service, 'get_last_error')) {
+            $result['error'] = (string) $service->get_last_error();
+        }
+
+        $this->log_device_model_brand_harvest(
+            ($result['success'] ?? false)
+                ? 'Harvest succeeded for ' . (string) ($result['date'] ?? $date) . '; unknown_model_keys=' . (int) ($result['unknown_model_keys'] ?? 0) . '; eligible=' . (int) ($result['eligible_model_keys'] ?? 0) . '; inserted=' . (int) ($result['inserted'] ?? 0) . '.'
+                : 'Harvest failed for ' . $date . ': ' . (string) ($result['error'] ?? 'failed without error detail')
+        );
+
+        return $result;
     }
 
     public function run_landing_funnel_daily_summary_refresh(): array
@@ -864,6 +915,7 @@ TEXT;
 
         $this->migrate_legacy_android_version_columns();
         $this->migrate_slim_landing_funnel_daily_summary_columns();
+        $this->seed_device_model_brand_map();
     }
 
     protected function build_schema_repositories(): array
@@ -887,6 +939,11 @@ TEXT;
             new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository(),
             new Kiwi_Traffic_Source_Funnel_Statistics_Repository(),
         ];
+    }
+
+    protected function seed_device_model_brand_map(): int
+    {
+        return (new Kiwi_Device_Model_Brand_Map_Repository())->seed_default_mappings();
     }
 
     protected function migrate_legacy_android_version_columns(): void
@@ -1163,6 +1220,11 @@ TEXT;
         return new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service();
     }
 
+    protected function build_device_model_brand_harvest_service(): Kiwi_Device_Model_Brand_Harvest_Service
+    {
+        return new Kiwi_Device_Model_Brand_Harvest_Service();
+    }
+
     protected function get_current_business_date(): string
     {
         if (function_exists('current_time')) {
@@ -1174,6 +1236,14 @@ TEXT;
         }
 
         return date('Y-m-d', $this->get_current_timestamp());
+    }
+
+    protected function get_previous_business_date(): string
+    {
+        $current_date = $this->get_current_business_date();
+        $timestamp = strtotime($current_date . ' -1 day');
+
+        return $timestamp === false ? $current_date : date('Y-m-d', $timestamp);
     }
 
     protected function get_current_time_mysql(): string
@@ -1192,6 +1262,16 @@ TEXT;
     protected function log_landing_funnel_daily_summary_refresh(string $message): void
     {
         error_log('[kiwi-landing-funnel-daily-summary-refresh] ' . $message);
+    }
+
+    protected function log_device_model_brand_harvest(string $message): void
+    {
+        error_log('[kiwi-device-model-brand-harvest] ' . $message);
+    }
+
+    protected function get_device_model_brand_harvest_min_daily_sessions(): int
+    {
+        return (new Kiwi_Config())->get_device_model_brand_harvest_min_daily_sessions();
     }
 
     private function should_run_click_attribution_cleanup(): bool

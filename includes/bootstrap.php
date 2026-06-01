@@ -56,6 +56,7 @@ require_once __DIR__ . '/services/class-operator-lookup-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-refund-batch-service.php';
 require_once __DIR__ . '/services/class-dimoco-blacklist-batch-service.php';
 require_once __DIR__ . '/services/class-device-context-normalizer.php';
+require_once __DIR__ . '/services/class-device-model-brand-harvest-service.php';
 require_once __DIR__ . '/services/class-client-ip-resolver.php';
 require_once __DIR__ . '/services/class-shared-sales-recorder.php';
 require_once __DIR__ . '/services/class-sales-attribution-snapshot-builder.php';
