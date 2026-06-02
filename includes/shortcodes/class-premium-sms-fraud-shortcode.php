@@ -475,55 +475,24 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             return [];
         }
 
-        $rows = $this->landing_engagement_repository->get_recent([
+        $limit = max(1, min(500, (int) ($filters['limit'] ?? 100)));
+
+        return $this->landing_engagement_repository->get_recent([
             'service_key' => (string) ($filters['service_key'] ?? ''),
             'provider_key' => (string) ($filters['provider_key'] ?? ''),
             'flow_key' => (string) ($filters['flow_key'] ?? ''),
             'pid' => (string) ($filters['pid'] ?? ''),
             'tksource' => (string) ($filters['tksource'] ?? ''),
             'tkzone' => (string) ($filters['tkzone'] ?? ''),
-        ], (int) ($filters['limit'] ?? 100));
-
-        if (empty($filters['flagged_only'])) {
-            return $rows;
-        }
-
-        return array_values(array_filter($rows, function (array $row): bool {
-            $result = $this->resolve_engagement_soft_flag($row);
-
-            return !empty($result['is_soft_flag']);
-        }));
+            'flagged_only' => !empty($filters['flagged_only']),
+        ], $limit);
     }
 
     private function resolve_engagement_soft_flag(array $row): array
     {
-        $reasons = [];
-        $page_loaded_at = trim((string) ($row['page_loaded_at'] ?? ''));
-        $first_cta_click_at = trim((string) ($row['first_cta_click_at'] ?? ''));
-        $last_cta_click_at = trim((string) ($row['last_cta_click_at'] ?? ''));
-        $cta_click_count = max(0, (int) ($row['cta_click_count'] ?? 0));
-        $has_click_signal = $cta_click_count > 0 || $first_cta_click_at !== '' || $last_cta_click_at !== '';
-
-        if ($has_click_signal && $page_loaded_at === '') {
-            $reasons[] = 'missing_load';
-        }
-
-        if ($page_loaded_at !== '' && $first_cta_click_at !== '') {
-            $delta_seconds = $this->seconds_delta($page_loaded_at, $first_cta_click_at);
-            $min_seconds = max(0, (int) $this->config->get_premium_sms_fraud_mo_min_seconds_after_load());
-
-            if ($delta_seconds !== null && $delta_seconds < 0) {
-                $reasons[] = 'click_before_load';
-            } elseif ($delta_seconds !== null && $delta_seconds < $min_seconds) {
-                $reasons[] = 'fast_click';
-            }
-        }
-
-        $reasons = array_values(array_unique($reasons));
-
         return [
-            'is_soft_flag' => !empty($reasons),
-            'soft_flag_reason' => implode(' OR ', $reasons),
+            'is_soft_flag' => !empty($row['is_soft_flag']),
+            'soft_flag_reason' => trim((string) ($row['soft_flag_reason'] ?? '')),
         ];
     }
 

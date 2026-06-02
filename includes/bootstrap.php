@@ -70,6 +70,7 @@ require_once __DIR__ . '/services/class-landing-funnel-daily-summary-aggregation
 require_once __DIR__ . '/services/class-landing-funnel-daily-tkzone-summary-aggregation-service.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
+require_once __DIR__ . '/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/services/class-premium-sms-mo-engagement-evaluator-service.php';
 require_once __DIR__ . '/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/services/class-sms-body-variant-service.php';

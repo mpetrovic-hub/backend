@@ -75,8 +75,11 @@ No provider-specific callback shape should leak into shared attribution code.
 - step-specific CTA1/CTA2/CTA3 timestamps and counts (`first_cta1_click_at`, `last_cta1_click_at`, `cta1_click_count`, and matching CTA2/CTA3 columns), populated only from valid engagement `cta_step` values
 - source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 - raw UA context (`ua_ch_supported`, `ua_ch_mobile`, `ua_ch_platform`, `ua_ch_platform_version`, `ua_ch_model`, browser-brand lists, `user_agent`) when the landing UA tracking mode allows it
+- landing-engagement soft-flag snapshot fields (`is_soft_flag`, `soft_flag_reason`, `soft_flag_rule_key`, `soft_flag_evaluated_at`) for the protected fraud-monitor UI
 
 The legacy generic CTA columns stay populated as a compatibility layer for existing fraud checks and current traffic-source statistics views. The step-specific columns are additive storage for future daily summary/statistics work; they do not change provider callback contracts.
+
+Landing-engagement soft flags are evaluated when a landing engagement row is inserted or updated. The current rule key captures UI-level engagement anomalies (`missing_load`, `click_before_load`, `fast_click`) and is separate from inbound-MO fraud-monitor reasons such as `missing_cta_click` or `mo_too_fast_after_load<1s`. Schema rollout does not run a historical backfill: rows created before this storage contract keep default unflagged values until a later engagement update reevaluates them.
 
 `wp_kiwi_landing_handoff_events` stores click-to-SMS handoff diagnostics, including:
 
@@ -116,7 +119,7 @@ The legacy generic CTA columns stay populated as a compatibility layer for exist
 The shared attribution layer now feeds downstream fraud-monitoring context:
 
 1. Landing entry capture stores `click_id` (required) and optional `pid`, `tksource`, and `tkzone` in `wp_kiwi_click_attributions`.
-2. Landing KPI engagement events (`page_loaded`, `cta_click`) resolve and persist `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_landing_engagements`.
+2. Landing KPI engagement events (`page_loaded`, `cta_click`) resolve and persist `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_landing_engagements`, then persist the current landing-engagement soft-flag snapshot for that row.
 3. SMS-body variant assignment stores the visible token shown in the user SMS app while preserving the internal `transaction_id`.
 4. Landing handoff events (`sms_handoff_*`) preserve click-to-SMS transition evidence for operations analysis without altering KPI counters; optional UA Client Hints are best-effort and controlled by `KIWI_LANDING_UA_TRACKING_MODE`.
 5. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_fraud_signals`.

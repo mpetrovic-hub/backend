@@ -8,6 +8,15 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 {
     private const CTA_STEPS = ['cta1', 'cta2', 'cta3'];
 
+    private $soft_flag_service;
+
+    public function __construct(?Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service $soft_flag_service = null)
+    {
+        $this->soft_flag_service = $soft_flag_service instanceof Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service
+            ? $soft_flag_service
+            : new Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service();
+    }
+
     private function get_table_name(): string
     {
         global $wpdb;
@@ -57,6 +66,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             ua_ch_full_version_list TEXT NULL,
             user_agent TEXT NULL,
             last_event_at DATETIME NOT NULL,
+            is_soft_flag TINYINT(1) NOT NULL DEFAULT 0,
+            soft_flag_reason VARCHAR(191) NOT NULL DEFAULT '',
+            soft_flag_rule_key VARCHAR(100) NOT NULL DEFAULT '',
+            soft_flag_evaluated_at DATETIME NULL,
             PRIMARY KEY (id),
             UNIQUE KEY landing_session (landing_key, session_token),
             KEY service_key (service_key),
@@ -67,6 +80,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             KEY tksource (tksource),
             KEY tkzone (tkzone),
             KEY updated_at (updated_at),
+            KEY is_soft_flag_updated (is_soft_flag, updated_at, id),
             KEY created_landing_session (created_at, landing_key, session_token)
         ) {$charset_collate};";
 
@@ -132,6 +146,8 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 $this->apply_cta_step_initial_values($initial_row, $cta_step, $occurred_at);
             }
 
+            $initial_row = array_merge($initial_row, $this->build_soft_flag_data($initial_row, $now));
+
             $this->insert_row($initial_row);
 
             return $this->get_by_landing_session($landing_key, $session_token) ?? [];
@@ -188,6 +204,9 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             $update_data['cta_click_count'] = max(0, (int) ($row['cta_click_count'] ?? 0)) + 1;
             $this->apply_cta_step_update_values($update_data, $row, $cta_step, $occurred_at);
         }
+
+        $candidate_row = array_merge($row, $update_data);
+        $update_data = array_merge($update_data, $this->build_soft_flag_data($candidate_row, $now));
 
         $this->update_by_id((int) ($row['id'] ?? 0), $update_data);
 
@@ -283,6 +302,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             $params[] = $session_token;
         }
 
+        if (!empty($filters['flagged_only'])) {
+            $where_sql[] = 'is_soft_flag = 1';
+        }
+
         $params[] = $limit;
 
         $sql = "SELECT *
@@ -339,6 +362,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 'ua_ch_full_version_list' => $this->sanitize_client_hint_text((string) ($data['ua_ch_full_version_list'] ?? ''), 1000),
                 'user_agent' => $this->sanitize_client_hint_text((string) ($data['user_agent'] ?? ''), 1000),
                 'last_event_at' => (string) ($data['last_event_at'] ?? $this->current_time_mysql()),
+                'is_soft_flag' => !empty($data['is_soft_flag']) ? 1 : 0,
+                'soft_flag_reason' => $this->sanitize_soft_flag_reason((string) ($data['soft_flag_reason'] ?? '')),
+                'soft_flag_rule_key' => $this->sanitize_soft_flag_rule_key((string) ($data['soft_flag_rule_key'] ?? '')),
+                'soft_flag_evaluated_at' => $this->normalize_nullable_datetime($data['soft_flag_evaluated_at'] ?? null),
             ],
             [
                 '%s',
@@ -371,6 +398,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
                 '%s',
                 '%s',
                 '%s',
+                '%s',
+                '%s',
+                '%s',
+                '%d',
                 '%s',
                 '%s',
                 '%s',
@@ -421,6 +452,10 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'ua_ch_full_version_list' => '%s',
             'user_agent' => '%s',
             'last_event_at' => '%s',
+            'is_soft_flag' => '%d',
+            'soft_flag_reason' => '%s',
+            'soft_flag_rule_key' => '%s',
+            'soft_flag_evaluated_at' => '%s',
         ];
 
         foreach ($allowed_fields as $field => $format) {
@@ -464,6 +499,18 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
             if (in_array($field, ['ua_ch_brands', 'ua_ch_full_version_list', 'user_agent'], true)) {
                 $value = $this->sanitize_client_hint_text((string) $value, 1000);
+            }
+
+            if ($field === 'is_soft_flag') {
+                $value = !empty($value) ? 1 : 0;
+            }
+
+            if ($field === 'soft_flag_reason') {
+                $value = $this->sanitize_soft_flag_reason((string) $value);
+            }
+
+            if ($field === 'soft_flag_rule_key') {
+                $value = $this->sanitize_soft_flag_rule_key((string) $value);
             }
 
             $fields[$field] = $value;
@@ -568,6 +615,7 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
             'last_cta2_click_at',
             'first_cta3_click_at',
             'last_cta3_click_at',
+            'soft_flag_evaluated_at',
         ];
     }
 
@@ -645,6 +693,18 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
         return $updates;
     }
 
+    private function build_soft_flag_data(array $row, string $evaluated_at): array
+    {
+        $result = $this->soft_flag_service->evaluate($row);
+
+        return [
+            'is_soft_flag' => !empty($result['is_soft_flag']) ? 1 : 0,
+            'soft_flag_reason' => $this->sanitize_soft_flag_reason((string) ($result['soft_flag_reason'] ?? '')),
+            'soft_flag_rule_key' => $this->sanitize_soft_flag_rule_key((string) ($result['soft_flag_rule_key'] ?? '')),
+            'soft_flag_evaluated_at' => $this->normalize_mysql_datetime($evaluated_at),
+        ];
+    }
+
     private function sanitize_client_hint_token(string $value, int $max_length): string
     {
         $value = trim($value);
@@ -685,6 +745,34 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
         $pid = is_string($pid) ? $pid : '';
 
         return substr($pid, 0, 191);
+    }
+
+    private function sanitize_soft_flag_reason(string $reason): string
+    {
+        $reason = trim($reason);
+
+        if ($reason === '') {
+            return '';
+        }
+
+        $reason = preg_replace('/[^A-Za-z0-9_<>:=| .-]/', '', $reason);
+        $reason = is_string($reason) ? $reason : '';
+
+        return substr($reason, 0, 191);
+    }
+
+    private function sanitize_soft_flag_rule_key(string $rule_key): string
+    {
+        $rule_key = trim($rule_key);
+
+        if ($rule_key === '') {
+            return '';
+        }
+
+        $rule_key = preg_replace('/[^A-Za-z0-9_.:-]/', '', $rule_key);
+        $rule_key = is_string($rule_key) ? $rule_key : '';
+
+        return substr($rule_key, 0, 100);
     }
 
     private function sanitize_click_id(string $click_id): string
