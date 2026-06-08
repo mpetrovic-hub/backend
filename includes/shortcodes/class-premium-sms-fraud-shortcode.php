@@ -88,6 +88,13 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
             $output .= '<th>Total</th>';
             $output .= '<th>Soft Flag</th>';
             $output .= '<th>Reason</th>';
+            $output .= '<th>Billing Outcome</th>';
+            $output .= '<th>Outcome At</th>';
+            $output .= '<th>Transaction ID</th>';
+            $output .= '<th>Sale ID</th>';
+            $output .= '<th>Sale Completed</th>';
+            $output .= '<th>Aggregator Code</th>';
+            $output .= '<th>Aggregator Text</th>';
             $output .= '</tr></thead><tbody>';
 
             foreach ($rows as $row) {
@@ -110,6 +117,13 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
                 $output .= '<td>' . esc_html((string) ($row['count_total'] ?? '0')) . '</td>';
                 $output .= '<td class="' . esc_attr($flag_class) . '">' . esc_html($flag_text) . '</td>';
                 $output .= '<td>' . esc_html((string) ($mo_soft_flag['soft_flag_reason'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['billing_outcome'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['billing_outcome_at'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['billing_transaction_id'] ?? '0')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['sale_id'] ?? '0')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['sale_completed_at'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['aggregator_status_code'] ?? '')) . '</td>';
+                $output .= '<td>' . esc_html((string) ($row['aggregator_status_text'] ?? '')) . '</td>';
                 $output .= '</tr>';
             }
 

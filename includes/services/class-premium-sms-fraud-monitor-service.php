@@ -52,7 +52,6 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
 
         $identity_candidates = [
             'subscriber' => trim((string) ($signal_context['subscriber_reference'] ?? '')),
-            'session' => trim((string) ($signal_context['session_ref'] ?? '')),
         ];
 
         $signals = [];
@@ -104,6 +103,9 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
                     'threshold_1h' => $threshold_1h,
                     'threshold_24h' => $threshold_24h,
                     'engagement_mode' => $engagement_mode,
+                    'session_ref' => trim((string) ($signal_context['session_ref'] ?? '')),
+                    'transaction_id' => trim((string) ($signal_context['transaction_id'] ?? '')),
+                    'reference_hint' => trim((string) ($signal_context['reference_hint'] ?? '')),
                     'engagement' => $engagement_evaluation,
                 ],
             ]);
@@ -136,6 +138,15 @@ class Kiwi_Premium_Sms_Fraud_Monitor_Service
             'tksource' => $tksource,
             'tkzone' => $tkzone,
         ];
+    }
+
+    public function update_subscriber_billing_outcome(string $source_event_key, array $outcome): bool
+    {
+        return $this->repository->update_billing_outcome_by_source_event_identity(
+            $source_event_key,
+            'subscriber',
+            $outcome
+        );
     }
 
     private function build_count_threshold_reasons(

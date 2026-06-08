@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-06-02-1';
+    private const DB_SCHEMA_VERSION = '2026-06-08-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -633,6 +633,9 @@ TEXT;
             $premium_sms_fraud_signal_repository,
             $premium_sms_mo_engagement_evaluator
         );
+        $completed_sale_cooldown_service = new Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service(
+            $sales_repository
+        );
         $conversion_attribution_resolver = new Kiwi_Conversion_Attribution_Resolver(
             $click_attribution_repository,
             $affiliate_postback_dispatcher,
@@ -650,7 +653,8 @@ TEXT;
             $sales_recorder,
             $conversion_attribution_resolver,
             $premium_sms_fraud_monitor_service,
-            $sms_body_variant_service
+            $sms_body_variant_service,
+            $completed_sale_cooldown_service
         );
 
         return [
@@ -672,6 +676,7 @@ TEXT;
             'premium_sms_fraud_signal_repository' => $premium_sms_fraud_signal_repository,
             'premium_sms_mo_engagement_evaluator' => $premium_sms_mo_engagement_evaluator,
             'premium_sms_fraud_monitor_service' => $premium_sms_fraud_monitor_service,
+            'completed_sale_cooldown_service' => $completed_sale_cooldown_service,
             'nth_fr_one_off_service' => $nth_fr_one_off_service,
         ];
     }

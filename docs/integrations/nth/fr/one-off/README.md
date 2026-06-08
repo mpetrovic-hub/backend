@@ -197,6 +197,14 @@ These rules affect at minimum:
 - one-off purchase tracking
 - any logic that expects a stable user identifier
 
+Repository implementation note:
+
+- `session_validity_hours` is a technical correlation window for still-pending MT attempts, not a blanket "one MO per 24h" business rule.
+- A second MO from the same encrypted MSISDN/service/shortcode/keyword is ignored only while an earlier MT attempt is still non-terminal within that window.
+- Terminal failed delivery reports allow a new billing attempt, even if they arrive inside the technical correlation window.
+- A completed one-off sale blocks new billing attempts for `completed_sale_cooldown_days` days. The default is `7`; `0` disables this completed-sale cooldown.
+- This cooldown is not a subscription renewal or rebilling rule. It protects one-off billing attempts after a confirmed completed sale.
+
 ### Orange-specific rule
 
 Orange has a market-specific billing caveat:
@@ -468,7 +476,8 @@ Implementation focus points:
 - keyword parsing
 - shortcode validation
 - operator data handling
-- session tracking within the 24-hour validity window
+- pending MT correlation within the technical session validity window
+- completed-sale cooldown checks before sending another billed MT
 
 The callback endpoint is shared with delivery reports and dispatches by callback command.
 
@@ -567,7 +576,9 @@ When implementing or reviewing this FR one-off flow, verify at minimum:
 - correct `price` parameter value: `450`
 - correct NWC value per operator
 - correct handling of encrypted MSISDN
-- correct handling of 24-hour session validity
+- correct handling of technical pending MT/session validity
+- correct retry behavior after terminal failed delivery reports
+- correct completed-sale cooldown behavior via `completed_sale_cooldown_days`
 - correct FR landing-page wording and CTA behavior
 - correct FR content-message wording
 - correct explicit “not a subscription” wording
@@ -603,7 +614,8 @@ The key implementation facts are:
 - MT submission URL: `http://mobilegate58.nth.ch:9099`
 - encrypted MSISDN is used instead of the real MSISDN
 - encrypted MSISDN validity: `2 months`
-- session validity: `24 hours`
+- session validity: `24 hours` as technical pending/correlation window
+- completed-sale cooldown: `completed_sale_cooldown_days`, default `7`
 - Orange uses MO-side reservation and confirms billing with premium MT
 - the MT content message must clearly state that the service is **not a subscription**
 - callback endpoint URLs remain unresolved unless confirmed elsewhere

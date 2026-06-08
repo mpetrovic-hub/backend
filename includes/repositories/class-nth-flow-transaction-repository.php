@@ -241,6 +241,42 @@ class Kiwi_Nth_Flow_Transaction_Repository
         return is_array($row) ? $row : null;
     }
 
+    public function find_pending_by_subscriber_context(
+        string $service_key,
+        string $subscriber_reference,
+        string $shortcode,
+        string $keyword,
+        int $hours
+    ): ?array {
+        global $wpdb;
+
+        $hours = max(1, $hours);
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT *
+                 FROM {$this->get_table_name()}
+                 WHERE service_key = %s
+                   AND subscriber_reference = %s
+                   AND shortcode = %s
+                   AND keyword = %s
+                   AND is_terminal = 0
+                   AND updated_at >= DATE_SUB(%s, INTERVAL %d HOUR)
+                 ORDER BY id DESC
+                 LIMIT 1",
+                $service_key,
+                $subscriber_reference,
+                $shortcode,
+                $keyword,
+                $this->current_time_mysql(),
+                $hours
+            ),
+            ARRAY_A
+        );
+
+        return is_array($row) ? $row : null;
+    }
+
     public function find_recent_by_external_references(string $service_key, array $references): ?array
     {
         global $wpdb;

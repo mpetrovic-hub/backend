@@ -15,6 +15,7 @@ class Kiwi_Nth_Fr_One_Off_Service
     private $conversion_attribution_resolver;
     private $premium_sms_fraud_monitor_service;
     private $sms_body_variant_service;
+    private $completed_sale_cooldown_service;
 
     public function __construct(
         Kiwi_Config $config,
@@ -25,7 +26,8 @@ class Kiwi_Nth_Fr_One_Off_Service
         Kiwi_Shared_Sales_Recorder $sales_recorder,
         ?Kiwi_Conversion_Attribution_Resolver $conversion_attribution_resolver = null,
         ?Kiwi_Premium_Sms_Fraud_Monitor_Service $premium_sms_fraud_monitor_service = null,
-        ?Kiwi_Sms_Body_Variant_Service $sms_body_variant_service = null
+        ?Kiwi_Sms_Body_Variant_Service $sms_body_variant_service = null,
+        ?Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service $completed_sale_cooldown_service = null
     ) {
         $this->config = $config;
         $this->normalizer = $normalizer;
@@ -36,6 +38,7 @@ class Kiwi_Nth_Fr_One_Off_Service
         $this->conversion_attribution_resolver = $conversion_attribution_resolver;
         $this->premium_sms_fraud_monitor_service = $premium_sms_fraud_monitor_service;
         $this->sms_body_variant_service = $sms_body_variant_service;
+        $this->completed_sale_cooldown_service = $completed_sale_cooldown_service;
     }
 
     public function handle_inbound_mo(string $service_key, array $payload): array
@@ -71,6 +74,7 @@ class Kiwi_Nth_Fr_One_Off_Service
             $attribution_transaction_id = $this->resolve_attribution_transaction_id($service_key, $reference_hint);
         }
 
+        $fraud_source_event_key = $this->resolve_fraud_source_event_key($normalized_event, $event_record);
         $fraud_capture_result = $this->capture_fraud_signal_non_blocking(
             $service_key,
             $service,
@@ -78,7 +82,8 @@ class Kiwi_Nth_Fr_One_Off_Service
             $event_record,
             $session_ref,
             $attribution_transaction_id,
-            $reference_hint
+            $reference_hint,
+            $fraud_source_event_key
         );
 
         $subscriber_reference = trim((string) ($normalized_event['subscriber_reference'] ?? ''));
@@ -93,7 +98,33 @@ class Kiwi_Nth_Fr_One_Off_Service
             ];
         }
 
-        $existing_transaction = $this->flow_transaction_repository->find_active_by_subscriber_context(
+        $blocking_sale = $this->find_completed_sale_cooldown_block(
+            $service,
+            [
+                'service_key' => $service_key,
+                'subscriber_reference' => $subscriber_reference,
+                'shortcode' => $shortcode,
+                'keyword' => $keyword,
+            ]
+        );
+
+        if (is_array($blocking_sale)) {
+            $this->update_fraud_billing_outcome_non_blocking($fraud_source_event_key, [
+                'billing_outcome' => 'sale_cooldown_ignored',
+                'billing_outcome_at' => (string) ($normalized_event['occurred_at'] ?? ''),
+                'sale_id' => (int) ($blocking_sale['id'] ?? 0),
+                'sale_completed_at' => (string) ($blocking_sale['completed_at'] ?? ''),
+            ]);
+
+            return [
+                'success' => true,
+                'message' => 'sale_cooldown_ignored',
+                'event' => $event_record['row'],
+                'sale' => $blocking_sale,
+            ];
+        }
+
+        $existing_transaction = $this->flow_transaction_repository->find_pending_by_subscriber_context(
             $service_key,
             $subscriber_reference,
             $shortcode,
@@ -101,15 +132,16 @@ class Kiwi_Nth_Fr_One_Off_Service
             (int) ($service['session_validity_hours'] ?? 24)
         );
 
-        if (is_array($existing_transaction) && trim((string) ($existing_transaction['external_message_id'] ?? '')) !== '') {
-            $this->flow_transaction_repository->update((int) $existing_transaction['id'], [
-                'last_event_id' => (int) ($event_record['row']['id'] ?? 0),
-                'current_status' => 'duplicate_mo_ignored',
+        if (is_array($existing_transaction)) {
+            $this->update_fraud_billing_outcome_non_blocking($fraud_source_event_key, [
+                'billing_outcome' => 'duplicate_pending_ignored',
+                'billing_outcome_at' => (string) ($normalized_event['occurred_at'] ?? ''),
+                'billing_transaction_id' => (int) ($existing_transaction['id'] ?? 0),
             ]);
 
             return [
                 'success' => true,
-                'message' => 'Active one-off transaction already exists for this subscriber context.',
+                'message' => 'duplicate_pending_ignored',
                 'event' => $event_record['row'],
                 'transaction' => $existing_transaction,
             ];
@@ -151,6 +183,7 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'initial_event' => $normalized_event,
                 'attribution_transaction_id' => $attribution_transaction_id,
                 'session_id' => $session_id,
+                'fraud_source_event_key' => $fraud_source_event_key,
                 'fraud_monitor' => $fraud_capture_result,
             ],
         ];
@@ -200,6 +233,11 @@ class Kiwi_Nth_Fr_One_Off_Service
                     'fraud_monitor' => $fraud_capture_result,
                 ]),
             ]);
+            $this->update_fraud_billing_outcome_non_blocking($fraud_source_event_key, [
+                'billing_outcome' => (string) $blocked_event['status'],
+                'billing_outcome_at' => (string) ($blocked_event['occurred_at'] ?? ''),
+                'billing_transaction_id' => $transaction_id,
+            ]);
 
             return [
                 'success' => false,
@@ -225,6 +263,13 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'initial_event' => $normalized_event,
                 'submit_event' => $submit_event,
             ]),
+        ]);
+        $this->update_fraud_billing_outcome_non_blocking($fraud_source_event_key, [
+            'billing_outcome' => $this->resolve_submit_billing_outcome($submit_event),
+            'billing_outcome_at' => (string) ($submit_event['occurred_at'] ?? ''),
+            'billing_transaction_id' => $transaction_id,
+            'aggregator_status_code' => (string) ($submit_event['aggregator_status_code'] ?? ''),
+            'aggregator_status_text' => (string) ($submit_event['aggregator_status_text'] ?? ''),
         ]);
 
         $transaction_after_submit = $this->flow_transaction_repository->get_by_id($transaction_id);
@@ -287,6 +332,7 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         $sale = null;
+        $fraud_source_event_key = $this->resolve_transaction_fraud_source_event_key($transaction);
 
         if (!empty($normalized_event['is_terminal']) && !empty($normalized_event['is_success'])) {
             $sale = $this->sales_recorder->record_successful_one_off_sale($transaction, $normalized_event);
@@ -294,6 +340,10 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         $this->flow_transaction_repository->update((int) $transaction['id'], $update_data);
+        $this->update_fraud_billing_outcome_non_blocking(
+            $fraud_source_event_key,
+            $this->build_notification_fraud_outcome($transaction, $normalized_event, $sale)
+        );
         $attribution_result = $this->maybe_handle_conversion_attribution(
             $service_key,
             $transaction,
@@ -307,6 +357,62 @@ class Kiwi_Nth_Fr_One_Off_Service
             'transaction' => $this->flow_transaction_repository->get_by_id((int) $transaction['id']),
             'sale' => $sale,
             'attribution' => $attribution_result,
+        ];
+    }
+
+    private function find_completed_sale_cooldown_block(array $service, array $context): ?array
+    {
+        if (!$this->completed_sale_cooldown_service instanceof Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service) {
+            return null;
+        }
+
+        $cooldown_days = $this->resolve_completed_sale_cooldown_days($service);
+
+        return $this->completed_sale_cooldown_service->find_blocking_sale($context, $cooldown_days);
+    }
+
+    private function resolve_completed_sale_cooldown_days(array $service): int
+    {
+        if (!array_key_exists('completed_sale_cooldown_days', $service)) {
+            return 7;
+        }
+
+        return max(0, (int) $service['completed_sale_cooldown_days']);
+    }
+
+    private function resolve_submit_billing_outcome(array $submit_event): string
+    {
+        if (!empty($submit_event['is_terminal']) && empty($submit_event['is_success'])) {
+            return 'failed';
+        }
+
+        if (!empty($submit_event['is_terminal']) && !empty($submit_event['is_success'])) {
+            return 'completed';
+        }
+
+        return 'pending';
+    }
+
+    private function build_notification_fraud_outcome(array $transaction, array $normalized_event, ?array $sale): array
+    {
+        $billing_outcome = 'pending';
+
+        if (!empty($normalized_event['is_terminal']) && !empty($normalized_event['is_success'])) {
+            $billing_outcome = 'completed';
+        } elseif (!empty($normalized_event['is_terminal'])) {
+            $billing_outcome = 'failed';
+        }
+
+        return [
+            'billing_outcome' => $billing_outcome,
+            'billing_outcome_at' => (string) ($normalized_event['occurred_at'] ?? ''),
+            'billing_transaction_id' => (int) ($transaction['id'] ?? 0),
+            'sale_id' => (int) ($sale['id'] ?? ($transaction['sale_id'] ?? 0)),
+            'sale_completed_at' => !empty($sale)
+                ? (string) ($sale['completed_at'] ?? ($normalized_event['occurred_at'] ?? ''))
+                : '',
+            'aggregator_status_code' => (string) ($normalized_event['aggregator_status_code'] ?? ''),
+            'aggregator_status_text' => (string) ($normalized_event['aggregator_status_text'] ?? ''),
         ];
     }
 
@@ -742,6 +848,54 @@ class Kiwi_Nth_Fr_One_Off_Service
         return gmdate('Y-m-d H:i:s');
     }
 
+    private function update_fraud_billing_outcome_non_blocking(string $source_event_key, array $outcome): void
+    {
+        $source_event_key = trim($source_event_key);
+
+        if (
+            $source_event_key === ''
+            || !$this->premium_sms_fraud_monitor_service instanceof Kiwi_Premium_Sms_Fraud_Monitor_Service
+        ) {
+            return;
+        }
+
+        try {
+            $this->premium_sms_fraud_monitor_service->update_subscriber_billing_outcome(
+                $source_event_key,
+                $outcome
+            );
+        } catch (Throwable $error) {
+            error_log('[kiwi-premium-sms-fraud] outcome update failed source_event_key=' . $source_event_key . ' reason=' . $error->getMessage());
+        }
+    }
+
+    private function resolve_transaction_fraud_source_event_key(array $transaction): string
+    {
+        $meta = $this->decode_meta_json($transaction['meta_json'] ?? null);
+
+        if (is_array($meta)) {
+            $source_event_key = trim((string) ($meta['fraud_source_event_key'] ?? ''));
+
+            if ($source_event_key !== '') {
+                return $source_event_key;
+            }
+        }
+
+        $mo_event_id = (int) ($transaction['mo_event_id'] ?? 0);
+
+        if ($mo_event_id <= 0 || !method_exists($this->event_repository, 'get_by_id')) {
+            return '';
+        }
+
+        $event = $this->event_repository->get_by_id($mo_event_id);
+
+        if (!is_array($event)) {
+            return '';
+        }
+
+        return $this->resolve_fraud_source_event_key($event, ['row' => $event]);
+    }
+
     private function capture_fraud_signal_non_blocking(
         string $service_key,
         array $service,
@@ -749,7 +903,8 @@ class Kiwi_Nth_Fr_One_Off_Service
         array $event_record,
         string $session_ref,
         string $transaction_id = '',
-        string $reference_hint = ''
+        string $reference_hint = '',
+        string $source_event_key = ''
     ): array {
         $default_result = [
             'signals' => [],
@@ -770,7 +925,9 @@ class Kiwi_Nth_Fr_One_Off_Service
                 'service_key' => $service_key,
                 'flow_key' => (string) ($normalized_event['flow_key'] ?? ($service['flow'] ?? '')),
                 'country' => (string) ($normalized_event['country'] ?? ($service['country'] ?? '')),
-                'source_event_key' => $this->resolve_fraud_source_event_key($normalized_event, $event_record),
+                'source_event_key' => $source_event_key !== ''
+                    ? $source_event_key
+                    : $this->resolve_fraud_source_event_key($normalized_event, $event_record),
                 'occurred_at' => (string) ($normalized_event['occurred_at'] ?? ''),
                 'pid' => (string) ($normalized_event['pid'] ?? ''),
                 'click_id' => (string) ($normalized_event['click_id'] ?? ($normalized_event['clickid'] ?? '')),
