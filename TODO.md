@@ -196,7 +196,7 @@ In manchen response-Fällen wird von nth keine operator-info im payload übergeb
 ### Akzeptanzkriterien
 
 - [ ] Möglichst alle Felder mit 'operator_code' und 'operator_name' haben die korrekte Info über den operator
-- [ ] Spalte mit dem response-code des Aggregators (z.B. "2" bei erfolgreich delivered billings oder "-9" bei "Delivery failed")
+- [ ] Spalte mit dem response-code des Aggregators (z.B. "2" bei erfolgreich delivered billings oder "-9" bei "Delivery failed") und eine Spalte "response_meaning" (?)
 
 
 ### Nicht-Ziele
