@@ -179,3 +179,24 @@ Kurzfristige Diagnose- und Logging-Experimente sammeln, damit sie nach der jewei
 
 Neue SQL-/Header-/Payload-Diagnosen nur temporaer, hinter explizitem Schalter und ohne rohe personenbezogene oder geheime Werte dauerhaft zu speichern.
 
+## 4. 'nth_events' Tabelle - 'operator_code' und 'operator_name" Anreicherung + 'response_code' Spalte
+
+### Ziel
+
+Soviele Zeilen wie möglich mit 'operator_code' und 'operator_name' Info füllen.
+Eine Spalte mit response-code des Aggregators
+
+### Hintergrund
+
+In manchen response-Fällen wird von nth keine operator-info im payload übergeben. Diese sollte, wenn möglich, durch einen Match auf die 'subscriber_reference' erfolgen.
+
+### Akzeptanzkriterien
+
+- [ ] Möglichst alle Felder mit 'operator_code' und 'operator_name' haben die korrekte Info über den operator
+- [ ] Spalte mit dem response-code des Aggregators (z.B. "2" bei erfolgreich delivered billings oder "-9" bei "Delivery failed")
+
+
+### Nicht-Ziele
+
+- Keine neue Tabelle
+- Keine Änderungen an der Flow-Logik, NTH-Integration oder irgendeiner anderen User-Flow/Billing Integration
