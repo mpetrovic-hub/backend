@@ -196,27 +196,10 @@ In manchen response-Fällen wird von nth keine operator-info im payload übergeb
 ### Akzeptanzkriterien
 
 - [ ] Möglichst alle Felder mit 'operator_code' und 'operator_name' haben die korrekte Info über den operator
-- [ ] Spalte mit dem response-code des Aggregators (z.B. "2" bei erfolgreich delivered billings oder "-9" bei "Delivery failed") und eine Spalte "response_meaning" (?)
+- [ ] Spalte mit dem response-code des Aggregators (z.B. "2" bei erfolgreich delivered billings oder "-9" bei "Delivery failed") und eine Spalte "response_meaning" 
 
 
 ### Nicht-Ziele
 
 - Keine neue Tabelle
 - Keine Änderungen an der Flow-Logik, NTH-Integration oder irgendeiner anderen User-Flow/Billing Integration
-
-## 5. Premium-SMS-Fraud-Signale: `identity_type=session` entfernen
-
-### Ziel
-
-`identity_type=session` nicht mehr in `wp_kiwi_premium_sms_fraud_signals` schreiben.
-
-### Hintergrund
-
-Business-technisch und fuer die Fraud-Analyse interessieren vor allem echte Subscriber-/Sales-Signale. Bei NTH FR vergibt NTH pro `mo_callback` / `deliverMessage` eine neue `sessionId`; dadurch ist der Session-Count praktisch immer `1` und als Frequenz-/Duplicate-Fraud-Signal wenig aussagekraeftig.
-
-### Erwartetes Verhalten
-
-- Fraud-Signale werden weiterhin fuer `identity_type=subscriber` geschrieben.
-- Reine NTH-Session-Identities werden nicht mehr als eigene Fraud-Signal-Identity persistiert.
-- Falls Session-IDs fuer Audit/Debug wichtig bleiben, sollen sie nur als Kontext/Meta erhalten bleiben, nicht als zaehlende Fraud-Identity.
-- Fraud-Signale sollen den Billing-Ausgang als Snapshot enthalten (`billing_outcome`, `billing_outcome_at`, `billing_transaction_id`, `sale_id`, `sale_completed_at`, `aggregator_status_code`, `aggregator_status_text`), damit Subscriber-Cases direkt gegen Sales und terminale Aggregator-Reports geprueft werden koennen.
