@@ -40,6 +40,13 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
             count_total INT UNSIGNED NOT NULL DEFAULT 0,
             is_soft_flag TINYINT(1) NOT NULL DEFAULT 0,
             soft_flag_reason VARCHAR(191) NOT NULL DEFAULT '',
+            billing_outcome VARCHAR(50) NOT NULL DEFAULT 'mo_received',
+            billing_outcome_at DATETIME NULL,
+            billing_transaction_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+            sale_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+            sale_completed_at DATETIME NULL,
+            aggregator_status_code VARCHAR(50) NOT NULL DEFAULT '',
+            aggregator_status_text VARCHAR(191) NOT NULL DEFAULT '',
             meta_json LONGTEXT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY source_event_identity (source_event_key, identity_type),
@@ -51,11 +58,16 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
             KEY tksource (tksource),
             KEY tkzone (tkzone),
             KEY identity_lookup (service_key, identity_type, identity_value),
+            KEY billing_outcome (billing_outcome),
+            KEY billing_transaction_id (billing_transaction_id),
+            KEY sale_id (sale_id),
             KEY occurred_at (occurred_at),
             KEY is_soft_flag (is_soft_flag)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 
@@ -103,6 +115,13 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
                 'count_total' => max(0, (int) ($data['count_total'] ?? 0)),
                 'is_soft_flag' => !empty($data['is_soft_flag']) ? 1 : 0,
                 'soft_flag_reason' => substr(trim((string) ($data['soft_flag_reason'] ?? '')), 0, 191),
+                'billing_outcome' => $this->sanitize_key((string) ($data['billing_outcome'] ?? 'mo_received'), 50),
+                'billing_outcome_at' => $this->normalize_nullable_mysql_datetime((string) ($data['billing_outcome_at'] ?? ($data['occurred_at'] ?? ''))),
+                'billing_transaction_id' => max(0, (int) ($data['billing_transaction_id'] ?? 0)),
+                'sale_id' => max(0, (int) ($data['sale_id'] ?? 0)),
+                'sale_completed_at' => $this->normalize_nullable_mysql_datetime((string) ($data['sale_completed_at'] ?? '')),
+                'aggregator_status_code' => $this->sanitize_key((string) ($data['aggregator_status_code'] ?? ''), 50),
+                'aggregator_status_text' => $this->sanitize_text_dimension((string) ($data['aggregator_status_text'] ?? ''), 191),
                 'meta_json' => isset($data['meta_json']) ? wp_json_encode($data['meta_json']) : '',
             ],
             [
@@ -125,6 +144,13 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
                 '%d',
                 '%s',
                 '%s',
+                '%s',
+                '%d',
+                '%d',
+                '%s',
+                '%s',
+                '%s',
+                '%s',
             ]
         );
 
@@ -141,6 +167,60 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
             'inserted' => true,
             'row' => $this->get_by_id((int) $wpdb->insert_id),
         ];
+    }
+
+    public function update_billing_outcome_by_source_event_identity(
+        string $source_event_key,
+        string $identity_type,
+        array $data
+    ): bool {
+        global $wpdb;
+
+        $source_event_key = trim($source_event_key);
+        $identity_type = trim($identity_type);
+
+        if ($source_event_key === '' || $identity_type === '') {
+            return false;
+        }
+
+        $fields = [];
+        $formats = [];
+
+        $allowed_fields = [
+            'billing_outcome' => '%s',
+            'billing_outcome_at' => '%s',
+            'billing_transaction_id' => '%d',
+            'sale_id' => '%d',
+            'sale_completed_at' => '%s',
+            'aggregator_status_code' => '%s',
+            'aggregator_status_text' => '%s',
+        ];
+
+        foreach ($allowed_fields as $field => $format) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+
+            $fields[$field] = $this->normalize_billing_outcome_field($field, $data[$field]);
+            $formats[] = $format;
+        }
+
+        if (empty($fields)) {
+            return true;
+        }
+
+        $result = $wpdb->update(
+            $this->get_table_name(),
+            $fields,
+            [
+                'source_event_key' => $source_event_key,
+                'identity_type' => $identity_type,
+            ],
+            $formats,
+            ['%s', '%s']
+        );
+
+        return $result !== false;
     }
 
     public function build_counts_snapshot(
@@ -385,6 +465,75 @@ class Kiwi_Premium_Sms_Fraud_Signal_Repository
         }
 
         return gmdate('Y-m-d H:i:s', $timestamp);
+    }
+
+    protected function normalize_nullable_mysql_datetime(string $value): ?string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return null;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $value)) {
+            return $value;
+        }
+
+        $timestamp = strtotime($value);
+
+        return $timestamp === false ? null : gmdate('Y-m-d H:i:s', $timestamp);
+    }
+
+    protected function normalize_billing_outcome_field(string $field, $value)
+    {
+        switch ($field) {
+            case 'billing_outcome':
+            case 'aggregator_status_code':
+                return $this->sanitize_key((string) $value, 50);
+
+            case 'billing_outcome_at':
+            case 'sale_completed_at':
+                return $this->normalize_nullable_mysql_datetime((string) $value);
+
+            case 'billing_transaction_id':
+            case 'sale_id':
+                return max(0, (int) $value);
+
+            case 'aggregator_status_text':
+                return $this->sanitize_text_dimension((string) $value, 191);
+        }
+
+        return is_scalar($value) ? (string) $value : '';
+    }
+
+    protected function sanitize_key(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9._~:-]/', '', $value);
+        $value = is_string($value) ? $value : '';
+
+        return substr($value, 0, max(1, $max_length));
+    }
+
+    protected function sanitize_text_dimension(string $value, int $max_length): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = preg_replace('/[^\P{C}\r\n\t]/u', '', $value);
+        $value = is_string($value) ? $value : '';
+        $value = preg_replace('/\s+/', ' ', $value);
+        $value = is_string($value) ? trim($value) : '';
+
+        return substr($value, 0, max(1, $max_length));
     }
 
     protected function sanitize_pid(string $pid): string

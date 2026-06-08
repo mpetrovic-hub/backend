@@ -366,6 +366,7 @@ require_once __DIR__ . '/../includes/services/class-affiliate-postback-dispatche
 require_once __DIR__ . '/../includes/services/class-conversion-attribution-resolver.php';
 require_once __DIR__ . '/../includes/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-mo-engagement-evaluator-service.php';
+require_once __DIR__ . '/../includes/services/class-premium-sms-completed-sale-cooldown-service.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/../includes/services/class-landing-primary-cta-resolver.php';
@@ -1762,6 +1763,13 @@ class Kiwi_Test_Premium_Sms_Fraud_Signal_Repository extends Kiwi_Premium_Sms_Fra
             'count_total' => (int) ($data['count_total'] ?? 0),
             'is_soft_flag' => !empty($data['is_soft_flag']) ? 1 : 0,
             'soft_flag_reason' => (string) ($data['soft_flag_reason'] ?? ''),
+            'billing_outcome' => (string) ($data['billing_outcome'] ?? 'mo_received'),
+            'billing_outcome_at' => (string) ($data['billing_outcome_at'] ?? ($data['occurred_at'] ?? '2026-04-01 12:00:00')),
+            'billing_transaction_id' => (int) ($data['billing_transaction_id'] ?? 0),
+            'sale_id' => (int) ($data['sale_id'] ?? 0),
+            'sale_completed_at' => (string) ($data['sale_completed_at'] ?? ''),
+            'aggregator_status_code' => (string) ($data['aggregator_status_code'] ?? ''),
+            'aggregator_status_text' => (string) ($data['aggregator_status_text'] ?? ''),
             'meta_json' => isset($data['meta_json']) ? json_encode($data['meta_json']) : '',
         ];
 
@@ -1771,6 +1779,47 @@ class Kiwi_Test_Premium_Sms_Fraud_Signal_Repository extends Kiwi_Premium_Sms_Fra
             'inserted' => true,
             'row' => $row,
         ];
+    }
+
+    public function update_billing_outcome_by_source_event_identity(
+        string $source_event_key,
+        string $identity_type,
+        array $data
+    ): bool {
+        $source_event_key = trim($source_event_key);
+        $identity_type = trim($identity_type);
+
+        if ($source_event_key === '' || $identity_type === '') {
+            return false;
+        }
+
+        foreach ($this->rows as $index => $row) {
+            if (($row['source_event_key'] ?? '') !== $source_event_key) {
+                continue;
+            }
+
+            if (($row['identity_type'] ?? '') !== $identity_type) {
+                continue;
+            }
+
+            foreach ([
+                'billing_outcome',
+                'billing_outcome_at',
+                'billing_transaction_id',
+                'sale_id',
+                'sale_completed_at',
+                'aggregator_status_code',
+                'aggregator_status_text',
+            ] as $field) {
+                if (array_key_exists($field, $data)) {
+                    $this->rows[$index][$field] = $data[$field];
+                }
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     public function build_counts_snapshot(
@@ -1914,6 +1963,7 @@ class Kiwi_Test_Premium_Sms_Fraud_Signal_Repository extends Kiwi_Premium_Sms_Fra
 class Kiwi_Test_Premium_Sms_Fraud_Monitor_Service extends Kiwi_Premium_Sms_Fraud_Monitor_Service
 {
     public $calls = [];
+    public $outcome_updates = [];
     private $result;
 
     public function __construct(array $result = [])
@@ -1935,6 +1985,16 @@ class Kiwi_Test_Premium_Sms_Fraud_Monitor_Service extends Kiwi_Premium_Sms_Fraud
         $this->calls[] = $signal_context;
 
         return $this->result;
+    }
+
+    public function update_subscriber_billing_outcome(string $source_event_key, array $outcome): bool
+    {
+        $this->outcome_updates[] = [
+            'source_event_key' => $source_event_key,
+            'outcome' => $outcome,
+        ];
+
+        return true;
     }
 }
 
@@ -1995,6 +2055,17 @@ class Kiwi_Test_Nth_Event_Repository extends Kiwi_Nth_Event_Repository
             'row' => $row,
         ];
     }
+
+    public function get_by_id(int $id): ?array
+    {
+        foreach ($this->rows as $row) {
+            if ((int) ($row['id'] ?? 0) === $id) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
 }
 
 class Kiwi_Test_Nth_Flow_Transaction_Repository extends Kiwi_Nth_Flow_Transaction_Repository
@@ -2049,6 +2120,42 @@ class Kiwi_Test_Nth_Flow_Transaction_Repository extends Kiwi_Nth_Flow_Transactio
             }
 
             if (($row['keyword'] ?? '') !== $keyword) {
+                continue;
+            }
+
+            return $row;
+        }
+
+        return null;
+    }
+
+    public function find_pending_by_subscriber_context(
+        string $service_key,
+        string $subscriber_reference,
+        string $shortcode,
+        string $keyword,
+        int $hours
+    ): ?array {
+        $rows = array_reverse($this->rows, true);
+
+        foreach ($rows as $row) {
+            if (($row['service_key'] ?? '') !== $service_key) {
+                continue;
+            }
+
+            if (($row['subscriber_reference'] ?? '') !== $subscriber_reference) {
+                continue;
+            }
+
+            if (($row['shortcode'] ?? '') !== $shortcode) {
+                continue;
+            }
+
+            if (($row['keyword'] ?? '') !== $keyword) {
+                continue;
+            }
+
+            if (!empty($row['is_terminal'])) {
                 continue;
             }
 
@@ -3730,6 +3837,62 @@ class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
         }
 
         return null;
+    }
+
+    public function find_recent_completed_one_off_sale_by_subscriber_context(
+        string $service_key,
+        string $subscriber_reference,
+        string $shortcode,
+        string $keyword,
+        int $days
+    ): ?array {
+        $days = max(0, $days);
+
+        if ($days === 0) {
+            return null;
+        }
+
+        $matches = [];
+
+        foreach ($this->rows as $row) {
+            if ((string) ($row['status'] ?? '') !== 'completed') {
+                continue;
+            }
+
+            if ((string) ($row['sale_type'] ?? '') !== 'premium_sms_one_off') {
+                continue;
+            }
+
+            if ((string) ($row['service_key'] ?? '') !== $service_key) {
+                continue;
+            }
+
+            if ((string) ($row['subscriber_reference'] ?? '') !== $subscriber_reference) {
+                continue;
+            }
+
+            if ((string) ($row['shortcode'] ?? '') !== $shortcode) {
+                continue;
+            }
+
+            if ((string) ($row['keyword'] ?? '') !== $keyword) {
+                continue;
+            }
+
+            $completed_at = strtotime((string) ($row['completed_at'] ?? ''));
+
+            if ($completed_at === false || $completed_at < strtotime('2026-04-01 12:00:00') - $days * 86400) {
+                continue;
+            }
+
+            $matches[] = $row;
+        }
+
+        usort($matches, static function (array $left, array $right): int {
+            return strcmp((string) ($right['completed_at'] ?? ''), (string) ($left['completed_at'] ?? ''));
+        });
+
+        return $matches[0] ?? null;
     }
 
     public function update_pid_by_sale_reference(string $sale_reference, string $pid): bool
@@ -7737,6 +7900,43 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository schema includes CT
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Signal_Repository schema includes billing outcome columns', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+    };
+
+    (new Kiwi_Premium_Sms_Fraud_Signal_Repository())->create_table();
+    $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+    foreach ([
+        "billing_outcome VARCHAR(50) NOT NULL DEFAULT 'mo_received'",
+        'billing_outcome_at DATETIME NULL',
+        'billing_transaction_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'sale_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0',
+        'sale_completed_at DATETIME NULL',
+        "aggregator_status_code VARCHAR(50) NOT NULL DEFAULT ''",
+        "aggregator_status_text VARCHAR(191) NOT NULL DEFAULT ''",
+        'KEY billing_outcome (billing_outcome)',
+        'KEY billing_transaction_id (billing_transaction_id)',
+        'KEY sale_id (sale_id)',
+    ] as $schema_fragment) {
+        kiwi_assert_contains($schema_fragment, $sql, 'Expected fraud signal schema to include: ' . $schema_fragment);
+    }
+
+    $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Landing_Page_Session_Repository creates canonical dimension schema', function (): void {
     global $wpdb;
 
@@ -8030,6 +8230,7 @@ kiwi_run_test('Landing funnel source schemas include daily refresh composite ind
     kiwi_assert_contains('KEY created_landing_session_event (created_at, landing_key, session_token, event_type)', $sql, 'Expected handoff events to support date-bounded session/event scans.');
     kiwi_assert_contains('KEY status_attribution_metric_date (status, attribution_metric_date)', $sql, 'Expected sales snapshots to support completed sales lookup by attribution metric date.');
     kiwi_assert_contains('KEY status_completed_at (status, completed_at)', $sql, 'Expected legacy sales fallback to support completed_at date scans.');
+    kiwi_assert_contains('KEY completed_subscriber_context (status, service_key, subscriber_reference, shortcode, keyword, completed_at)', $sql, 'Expected sales snapshots to support completed-sale cooldown lookup by subscriber context.');
 
     $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
     $wpdb = $previous_wpdb;
@@ -8228,7 +8429,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service merges engagement reasons 
     kiwi_assert_contains('mo_too_fast_after_load<1s', (string) ($first_row['soft_flag_reason'] ?? ''), 'Expected persisted soft_flag_reason to include engagement rule trigger.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities and soft-flags when either threshold is exceeded', function (): void {
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records subscriber identity and keeps session only as metadata', function (): void {
     $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
     $config = new Kiwi_Test_Config(
         100,
@@ -8249,8 +8450,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities an
         'service_key' => 'svc_a',
         'flow_key' => 'flow-a',
         'source_event_key' => 'seed-1',
-        'identity_type' => 'session',
-        'identity_value' => 'session-abc',
+        'identity_type' => 'subscriber',
+        'identity_value' => 'enc-123',
         'occurred_at' => '2026-04-01 11:00:00',
         'count_1h' => 1,
         'count_24h' => 1,
@@ -8261,8 +8462,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities an
         'service_key' => 'svc_a',
         'flow_key' => 'flow-a',
         'source_event_key' => 'seed-2',
-        'identity_type' => 'session',
-        'identity_value' => 'session-abc',
+        'identity_type' => 'subscriber',
+        'identity_value' => 'enc-123',
         'occurred_at' => '2026-04-01 11:10:00',
         'count_1h' => 2,
         'count_24h' => 2,
@@ -8284,17 +8485,18 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service records both identities an
         'session_ref' => 'session-abc',
     ]);
 
-    kiwi_assert_same(2, count($result['signals'] ?? []), 'Expected fraud monitor to persist one row per available identity type.');
-    kiwi_assert_true(!empty($result['has_soft_flag']), 'Expected either-key threshold logic to mark the capture result as soft-flagged.');
-    kiwi_assert_same(['session'], $result['soft_flagged_identity_types'] ?? [], 'Expected session identity to carry the soft flag in this scenario.');
-    kiwi_assert_same(4, count($repository->rows), 'Expected seed rows plus both new identity rows to be persisted.');
+    kiwi_assert_same(1, count($result['signals'] ?? []), 'Expected fraud monitor to persist only subscriber identity rows.');
+    kiwi_assert_true(!empty($result['has_soft_flag']), 'Expected subscriber threshold logic to mark the capture result as soft-flagged.');
+    kiwi_assert_same(['subscriber'], $result['soft_flagged_identity_types'] ?? [], 'Expected subscriber identity to carry the soft flag in this scenario.');
+    kiwi_assert_same(3, count($repository->rows), 'Expected seed rows plus the new subscriber identity row to be persisted.');
     kiwi_assert_same('pid-direct-a', (string) ($repository->rows[2]['pid'] ?? ''), 'Expected fraud signal rows to include pid from inbound signal context.');
     kiwi_assert_same('click-direct-a', (string) ($repository->rows[2]['click_id'] ?? ''), 'Expected fraud signal rows to include click_id from inbound signal context.');
     kiwi_assert_same('source-direct-a', (string) ($repository->rows[2]['tksource'] ?? ''), 'Expected fraud signal rows to include tksource from inbound signal context.');
     kiwi_assert_same('zone-direct-a', (string) ($repository->rows[2]['tkzone'] ?? ''), 'Expected fraud signal rows to include tkzone from inbound signal context.');
+    kiwi_assert_contains('session-abc', (string) ($repository->rows[2]['meta_json'] ?? ''), 'Expected session_ref to remain available as non-counting metadata.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service skips empty identities and records available identity safely', function (): void {
+kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service skips session-only identities', function (): void {
     $repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
     $service = new Kiwi_Premium_Sms_Fraud_Monitor_Service(new Kiwi_Test_Config(), $repository);
 
@@ -8309,9 +8511,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service skips empty identities and
         'session_ref' => 'session-only-1',
     ]);
 
-    kiwi_assert_same(1, count($result['signals'] ?? []), 'Expected only the non-empty identity to be recorded.');
-    kiwi_assert_same('session', $result['signals'][0]['identity_type'] ?? '', 'Expected session identity row to be stored when subscriber is empty.');
-    kiwi_assert_same(1, count($repository->rows), 'Expected repository to store exactly one signal row when one identity is available.');
+    kiwi_assert_same(0, count($result['signals'] ?? []), 'Expected no fraud identity row when subscriber is empty.');
+    kiwi_assert_same(0, count($repository->rows), 'Expected session-only MO context not to write a counting fraud signal.');
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for duplicate MO callbacks', function (): void {
@@ -8383,6 +8584,373 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for du
         'Expected FR one-off default MT content wording to match the configured compliance text.'
     );
     kiwi_assert_same('Duplicate MO callback ignored.', $second['message'], 'Expected the second identical MO callback to be treated as a duplicate event.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks parallel MT while an earlier billing attempt is pending', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+                'completed_sale_cooldown_days' => 7,
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-pending-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $fraud_monitor = new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, $fraud_repository);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        $fraud_monitor,
+        null,
+        new Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service($sales_repository)
+    );
+
+    $first = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-pending-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-pending-1',
+    ]);
+    $second = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-pending-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-pending-2',
+    ]);
+
+    kiwi_assert_true($first['success'], 'Expected first MO to submit an MT.');
+    kiwi_assert_same('duplicate_pending_ignored', $second['message'] ?? '', 'Expected second distinct MO to be ignored only because the first MT is pending.');
+    kiwi_assert_same(1, count($client->calls), 'Expected pending duplicate guard to prevent a parallel MT submit.');
+    kiwi_assert_same('mt_submitted', (string) ($transaction_repository->rows[1]['current_status'] ?? ''), 'Expected pending duplicate not to overwrite the visible transaction status.');
+    kiwi_assert_same('pending', (string) ($fraud_repository->rows[0]['billing_outcome'] ?? ''), 'Expected first MO fraud row to show pending billing outcome.');
+    kiwi_assert_same('duplicate_pending_ignored', (string) ($fraud_repository->rows[1]['billing_outcome'] ?? ''), 'Expected ignored MO fraud row to show duplicate pending outcome.');
+    kiwi_assert_same(1, (int) ($fraud_repository->rows[1]['billing_transaction_id'] ?? 0), 'Expected ignored MO fraud row to reference the pending transaction.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service allows retry after terminal failed delivery report', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20810' => '20810',
+                ],
+                'completed_sale_cooldown_days' => 7,
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-failed-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-retry-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $fraud_monitor = new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, $fraud_repository);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        $fraud_monitor,
+        null,
+        new Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service($sales_repository)
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-failed-retry-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20810',
+        'Operator' => 'SFR',
+        'session_id' => 'session-failed-1',
+    ]);
+    $notification = $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-failed-1',
+        'messageStatus' => '-9',
+        'messageStatusText' => 'Delivery failed',
+        'encrypted_msisdn' => 'enc-failed-retry-1',
+        'businessNumber' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+    $retry = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-failed-retry-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20810',
+        'Operator' => 'SFR',
+        'session_id' => 'session-failed-2',
+    ]);
+
+    kiwi_assert_true(!$notification['success'], 'Expected -9 delivery report to remain a failed terminal notification.');
+    kiwi_assert_true($retry['success'], 'Expected a new MO after terminal failed report to submit a new MT.');
+    kiwi_assert_same(2, count($client->calls), 'Expected failed terminal report not to keep the old 24h MO block active.');
+    kiwi_assert_same('failed', (string) ($fraud_repository->rows[0]['billing_outcome'] ?? ''), 'Expected first MO fraud row to be updated as failed.');
+    kiwi_assert_same('-9', (string) ($fraud_repository->rows[0]['aggregator_status_code'] ?? ''), 'Expected failed outcome to preserve the aggregator status code.');
+    kiwi_assert_same('Delivery failed', (string) ($fraud_repository->rows[0]['aggregator_status_text'] ?? ''), 'Expected failed outcome to preserve the aggregator status text.');
+    kiwi_assert_same('pending', (string) ($fraud_repository->rows[1]['billing_outcome'] ?? ''), 'Expected retry MO fraud row to show a fresh pending billing attempt.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks new billing attempt after recent completed sale', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+                'completed_sale_cooldown_days' => 7,
+            ],
+        ]
+    );
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $sale = $sales_repository->upsert([
+        'sale_reference' => 'sale-cooldown-1',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'flow_key' => 'one-off',
+        'sale_type' => 'premium_sms_one_off',
+        'status' => 'completed',
+        'subscriber_reference' => 'enc-sale-cooldown-1',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+        'completed_at' => '2026-03-31 12:00:00',
+    ]);
+    $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        new Kiwi_Nth_Premium_Sms_Normalizer($config),
+        new Kiwi_Test_Nth_Client([]),
+        new Kiwi_Test_Nth_Event_Repository(),
+        new Kiwi_Test_Nth_Flow_Transaction_Repository(),
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, $fraud_repository),
+        null,
+        new Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service($sales_repository)
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-sale-cooldown-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-sale-cooldown-1',
+    ]);
+
+    kiwi_assert_true($result['success'], 'Expected sale cooldown policy to acknowledge the MO callback.');
+    kiwi_assert_same('sale_cooldown_ignored', $result['message'] ?? '', 'Expected completed sale cooldown to be surfaced as the handling result.');
+    kiwi_assert_same((int) ($sale['id'] ?? 0), (int) ($result['sale']['id'] ?? 0), 'Expected result to expose the blocking sale.');
+    kiwi_assert_same('sale_cooldown_ignored', (string) ($fraud_repository->rows[0]['billing_outcome'] ?? ''), 'Expected fraud row to record sale cooldown outcome.');
+    kiwi_assert_same((int) ($sale['id'] ?? 0), (int) ($fraud_repository->rows[0]['sale_id'] ?? 0), 'Expected fraud row to reference the blocking sale id.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service allows completed sale retry when cooldown is disabled', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+                'completed_sale_cooldown_days' => 0,
+            ],
+        ]
+    );
+    $sales_repository = new Kiwi_Test_Sales_Repository();
+    $sales_repository->upsert([
+        'sale_reference' => 'sale-cooldown-disabled-1',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'flow_key' => 'one-off',
+        'sale_type' => 'premium_sms_one_off',
+        'status' => 'completed',
+        'subscriber_reference' => 'enc-cooldown-disabled-1',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+        'completed_at' => '2026-03-31 12:00:00',
+    ]);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<response><message_id>msg-cooldown-disabled-1</message_id><status>submitted</status></response>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        new Kiwi_Nth_Premium_Sms_Normalizer($config),
+        $client,
+        new Kiwi_Test_Nth_Event_Repository(),
+        new Kiwi_Test_Nth_Flow_Transaction_Repository(),
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository()),
+        null,
+        new Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service($sales_repository)
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-cooldown-disabled-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-cooldown-disabled-1',
+    ]);
+
+    kiwi_assert_true($result['success'], 'Expected disabled completed-sale cooldown to allow a fresh billing attempt.');
+    kiwi_assert_same(1, count($client->calls), 'Expected MT submit to run when completed_sale_cooldown_days is 0.');
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service updates fraud outcome on successful terminal delivery', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        new Kiwi_Nth_Premium_Sms_Normalizer($config),
+        new Kiwi_Test_Nth_Client([
+            [
+                'success' => true,
+                'status_code' => 200,
+                'body' => '<response><message_id>msg-delivered-outcome-1</message_id><status>submitted</status></response>',
+                'request' => [],
+                'error' => '',
+            ],
+        ]),
+        new Kiwi_Test_Nth_Event_Repository(),
+        new Kiwi_Test_Nth_Flow_Transaction_Repository(),
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        new Kiwi_Premium_Sms_Fraud_Monitor_Service($config, $fraud_repository)
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-delivered-outcome-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-delivered-outcome-1',
+    ]);
+    $service->handle_notification('nth_fr_one_off_jplay', [
+        'message_id' => 'msg-delivered-outcome-1',
+        'messageStatus' => '2',
+        'messageStatusText' => 'Delivered',
+        'encrypted_msisdn' => 'enc-delivered-outcome-1',
+        'businessNumber' => '84072',
+        'keyword' => 'JPLAY',
+    ]);
+
+    kiwi_assert_same('completed', (string) ($fraud_repository->rows[0]['billing_outcome'] ?? ''), 'Expected terminal success to mark the MO fraud row as completed.');
+    kiwi_assert_same(1, (int) ($fraud_repository->rows[0]['sale_id'] ?? 0), 'Expected completed fraud row to carry the shared sale id.');
+    kiwi_assert_same('2026-04-01 12:00:00', (string) ($fraud_repository->rows[0]['sale_completed_at'] ?? ''), 'Expected completed fraud row to carry sale completion time.');
+    kiwi_assert_same('2', (string) ($fraud_repository->rows[0]['aggregator_status_code'] ?? ''), 'Expected completed fraud row to carry aggregator status code.');
+    kiwi_assert_same('Delivered', (string) ($fraud_repository->rows[0]['aggregator_status_text'] ?? ''), 'Expected completed fraud row to carry aggregator status text.');
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service captures fraud signal once for deduped MO callbacks without changing MT behavior', function (): void {
@@ -10727,7 +11295,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary cont
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-06-02-1', $schema_version, 'Expected schema version to be bumped for persistent landing engagement soft flags and the device model brand harvester contract.');
+    kiwi_assert_same('2026-06-08-1', $schema_version, 'Expected schema version to be bumped for premium-sms fraud billing outcome columns and completed-sale cooldown indexes.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
@@ -12732,6 +13300,12 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
         'count_total' => 4,
         'is_soft_flag' => true,
         'soft_flag_reason' => 'count_1h>=3',
+        'billing_outcome' => 'failed',
+        'billing_outcome_at' => '2026-04-01 16:00:00',
+        'billing_transaction_id' => 42,
+        'sale_id' => 0,
+        'aggregator_status_code' => '-9',
+        'aggregator_status_text' => 'Delivery failed',
     ]);
     $repository->insert_if_new([
         'provider_key' => 'nth',
@@ -12814,9 +13388,15 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders filtered flagged rows fr
     kiwi_assert_contains('<th>Click ID</th>', $output, 'Expected shortcode tables to render a Click ID column.');
     kiwi_assert_contains('<th>TK Source</th>', $output, 'Expected shortcode tables to render a TK Source column.');
     kiwi_assert_contains('<th>TK Zone</th>', $output, 'Expected shortcode tables to render a TK Zone column.');
+    kiwi_assert_contains('<th>Billing Outcome</th>', $output, 'Expected fraud table to render billing outcome column.');
+    kiwi_assert_contains('<th>Aggregator Code</th>', $output, 'Expected fraud table to render aggregator status code column.');
+    kiwi_assert_contains('<th>Aggregator Text</th>', $output, 'Expected fraud table to render aggregator status text column.');
     kiwi_assert_contains('click-a', $output, 'Expected filtered fraud rows to render click_id values.');
     kiwi_assert_contains('source-a', $output, 'Expected filtered fraud rows to render tksource values.');
     kiwi_assert_contains('zone-a', $output, 'Expected filtered fraud rows to render tkzone values.');
+    kiwi_assert_contains('failed', $output, 'Expected filtered fraud rows to render billing outcome values.');
+    kiwi_assert_contains('-9', $output, 'Expected filtered fraud rows to render aggregator status codes.');
+    kiwi_assert_contains('Delivery failed', $output, 'Expected filtered fraud rows to render aggregator status text.');
     kiwi_assert_contains('session-flagged-1', $output, 'Expected filtered flagged row to be rendered.');
     kiwi_assert_true(strpos($output, 'session-not-flagged') === false, 'Expected flagged_only filter to remove non-flagged rows.');
     kiwi_assert_true(strpos($output, 'session-other-service') === false, 'Expected service_key filter to remove rows from other services.');

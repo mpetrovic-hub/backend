@@ -240,8 +240,8 @@ Notes:
   - aggregated SMS body variant metrics for SQL-based experiment analysis
 
 - `wp_kiwi_premium_sms_fraud_signals`
-  - MO fraud snapshots per identity (`subscriber`/`session`)
-  - per-service volume counts, soft-flag reasons, source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
+  - MO fraud snapshots per subscriber identity, with session refs retained as metadata
+  - per-service volume counts, billing outcome/sale/aggregator-status snapshots, soft-flag reasons, source snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
 - `wp_kiwi_v_load_to_cta_by_tksource_tkzone`
   - plugin-managed legacy/debug view for the traffic-source funnel report

@@ -28,7 +28,8 @@ For aggregator-specific details, see:
 | Shared/Core | landing funnel daily summary analytics | generic | landing / engagement / handoff / sales reporting | implemented | Slim main `wp_kiwi_landing_funnel_daily_summary` from canonical landing sessions plus separate `wp_kiwi_landing_funnel_daily_tkzone_summary`; date-range recompute, hourly rolling WP-Cron refresh, step-specific CTA metrics, handoff diagnostics, durable sales/device/coarse-IP snapshot dimensions, and `(unknown)` buckets |
 | Shared/Core | SMS body variant experiment | FR | click-to-SMS | implemented | `wp_kiwi_sms_body_variant_assignments` + summary table; stable visible tokens map back to internal `transaction_id` |
 | Shared/Core | sales persistence + enrichment | generic | confirmed sales | implemented | `wp_kiwi_sales` with transaction correlation, durable attribution/source/device snapshots, and landing-session IP prefix/hash context |
-| Shared/Core | premium-SMS inbound MO fraud monitoring (volume + engagement) | generic | premium-SMS inbound MO | implemented | `wp_kiwi_premium_sms_fraud_signals` + `wp_kiwi_premium_sms_landing_engagements`; dual identity (`subscriber`/`session`), per-service 1h/24h snapshot counts, persisted landing-engagement UI soft-flag snapshots (`missing_load`, `click_before_load`, `fast_click`), MO engagement soft-flag checks (`missing_page_loaded`, `missing_cta_click`, fast MO), unknown engagement links recorded as audit context only, source context snapshots (`pid`, `click_id`), default observe mode with optional block integration |
+| Shared/Core | premium-SMS inbound MO fraud monitoring (volume + engagement) | generic | premium-SMS inbound MO | implemented | `wp_kiwi_premium_sms_fraud_signals` + `wp_kiwi_premium_sms_landing_engagements`; subscriber identity rows with session refs retained as metadata, per-service 1h/24h snapshot counts, billing outcome/sale/aggregator-status snapshots, persisted landing-engagement UI soft-flag snapshots (`missing_load`, `click_before_load`, `fast_click`), MO engagement soft-flag checks (`missing_page_loaded`, `missing_cta_click`, fast MO), unknown engagement links recorded as audit context only, source context snapshots (`pid`, `click_id`), default observe mode with optional block integration |
+| Shared/Core | premium-SMS completed-sale cooldown | generic | premium-SMS one-off billing attempts | implemented | Shared completed-sale lookup on `wp_kiwi_sales`; adapters can block new billing attempts after a completed one-off sale for configurable `completed_sale_cooldown_days`, while terminal failed attempts remain retryable |
 | Dimoco | operator-lookup | generic / multi-country | API action | implemented | Existing backend capability routed through Dimoco where configured |
 | Dimoco | refund | generic | API action | implemented | Existing backend capability with callback persistence |
 | Dimoco | add-blacklist | generic | add-blocklist | implemented | Existing backend capability; external action name is `add-blocklist` |
@@ -61,7 +62,8 @@ Current known repository capabilities:
 - persistent landing funnel daily summary analytics, including a slim main summary, separate tkzone daily summary, and coarse IP version/prefix dimensions without raw IP or IP-hash reporting
 - SMS body variant assignments and SQL-based summary metrics for click-to-SMS experiments
 - shared sales persistence/enrichment with durable attribution snapshots for confirmed sales
-- premium-SMS inbound MO fraud monitoring with volume and landing-engagement signals, including source-context snapshots (`pid`, `click_id`)
+- premium-SMS inbound MO fraud monitoring with volume, billing-outcome, sale-correlation, aggregator-status, and landing-engagement signals, including source-context snapshots (`pid`, `click_id`)
+- premium-SMS completed-sale cooldown based on durable `wp_kiwi_sales` facts
 
 ### Dimoco
 Current known repository capabilities:

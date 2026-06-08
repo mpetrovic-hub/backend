@@ -169,6 +169,16 @@ If these constants are not defined:
 - callback logging defaults to `KIWI_DEBUG`
 - payload logging defaults to callback-logging setting
 
+NTH service arrays may also carry flow-specific runtime policy values. For the FR one-off Premium SMS flow:
+
+- `session_validity_hours`
+  - technical pending/correlation window for non-terminal MT attempts
+  - default in the adapter: `24`
+- `completed_sale_cooldown_days`
+  - completed one-off sale cooldown before another billed MT attempt for the same subscriber/service/shortcode/keyword
+  - default in the adapter: `7`
+  - `0` disables this completed-sale cooldown
+
 ## Premium SMS fraud monitoring toggles
 
 Premium-SMS fraud monitoring supports MO volume signals and landing-engagement signals.

@@ -101,7 +101,11 @@ Landing-engagement soft flags are evaluated when a landing engagement row is ins
 
 `wp_kiwi_premium_sms_fraud_signals` stores per-MO fraud snapshots, including:
 
+- subscriber identity context, with session references retained as metadata rather than separate counting identities
 - volume metrics (`count_1h`, `count_24h`, `count_total`)
+- billing outcome snapshots (`billing_outcome`, `billing_outcome_at`, `billing_transaction_id`)
+- sale correlation snapshots (`sale_id`, `sale_completed_at`)
+- aggregator status snapshots (`aggregator_status_code`, `aggregator_status_text`)
 - soft-flag outcome and reason
 - source context snapshots (`pid`, `click_id`, `tksource`, `tkzone`)
 
@@ -123,6 +127,7 @@ The shared attribution layer now feeds downstream fraud-monitoring context:
 3. SMS-body variant assignment stores the visible token shown in the user SMS app while preserving the internal `transaction_id`.
 4. Landing handoff events (`sms_handoff_*`) preserve click-to-SMS transition evidence for operations analysis without altering KPI counters; optional UA Client Hints are best-effort and controlled by `KIWI_LANDING_UA_TRACKING_MODE`.
 5. Inbound MO fraud evaluation resolves attribution + engagement linkage and snapshots `pid`/`click_id`/`tksource`/`tkzone` into `wp_kiwi_premium_sms_fraud_signals`.
+6. Billing attempts and terminal reports update the subscriber fraud snapshot with the current outcome, sale linkage, and normalized aggregator status.
 
 This keeps provider payload parsing at the boundary while giving the shared fraud capability stable traffic-source dimensions.
 

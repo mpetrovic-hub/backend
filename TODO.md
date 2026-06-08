@@ -62,6 +62,9 @@ Mögliche Config-Kandidaten aus der aktuellen Codebase:
 #### Provider / Integration Operations
 
 - `KIWI_NTH_SERVICES` (komplexes Service-Mapping, eher anzeigen/validieren als direkt editieren)
+  - darin pro Service explizit sichtbar machen:
+    - `session_validity_hours` (technisches Pending-/Korrelationsfenster fuer noch nicht terminale MT-Versuche, Default/Fallback aktuell 24h)
+    - `completed_sale_cooldown_days` (Business-Cooldown nach abgeschlossenem One-off Sale, Default/Fallback aktuell 7; `0` deaktiviert diese Sperre)
 - `KIWI_NTH_SUBMIT_TIMEOUT`
 - `KIWI_NTH_CALLBACK_LOGGING_ENABLED`
 - `KIWI_NTH_CALLBACK_PAYLOAD_LOGGING_ENABLED`
@@ -200,3 +203,20 @@ In manchen response-Fällen wird von nth keine operator-info im payload übergeb
 
 - Keine neue Tabelle
 - Keine Änderungen an der Flow-Logik, NTH-Integration oder irgendeiner anderen User-Flow/Billing Integration
+
+## 5. Premium-SMS-Fraud-Signale: `identity_type=session` entfernen
+
+### Ziel
+
+`identity_type=session` nicht mehr in `wp_kiwi_premium_sms_fraud_signals` schreiben.
+
+### Hintergrund
+
+Business-technisch und fuer die Fraud-Analyse interessieren vor allem echte Subscriber-/Sales-Signale. Bei NTH FR vergibt NTH pro `mo_callback` / `deliverMessage` eine neue `sessionId`; dadurch ist der Session-Count praktisch immer `1` und als Frequenz-/Duplicate-Fraud-Signal wenig aussagekraeftig.
+
+### Erwartetes Verhalten
+
+- Fraud-Signale werden weiterhin fuer `identity_type=subscriber` geschrieben.
+- Reine NTH-Session-Identities werden nicht mehr als eigene Fraud-Signal-Identity persistiert.
+- Falls Session-IDs fuer Audit/Debug wichtig bleiben, sollen sie nur als Kontext/Meta erhalten bleiben, nicht als zaehlende Fraud-Identity.
+- Fraud-Signale sollen den Billing-Ausgang als Snapshot enthalten (`billing_outcome`, `billing_outcome_at`, `billing_transaction_id`, `sale_id`, `sale_completed_at`, `aggregator_status_code`, `aggregator_status_text`), damit Subscriber-Cases direkt gegen Sales und terminale Aggregator-Reports geprueft werden koennen.

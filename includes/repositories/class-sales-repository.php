@@ -86,7 +86,8 @@ class Kiwi_Sales_Repository
             KEY external_sale_id (external_sale_id),
             KEY created_at (created_at),
             KEY status_attribution_metric_date (status, attribution_metric_date),
-            KEY status_completed_at (status, completed_at)
+            KEY status_completed_at (status, completed_at),
+            KEY completed_subscriber_context (status, service_key, subscriber_reference, shortcode, keyword, completed_at)
         ) {$charset_collate};";
 
         if (!function_exists('dbDelta')) {
@@ -124,6 +125,52 @@ class Kiwi_Sales_Repository
             $wpdb->prepare(
                 "SELECT * FROM {$this->get_table_name()} WHERE sale_reference = %s LIMIT 1",
                 $sale_reference
+            ),
+            ARRAY_A
+        );
+
+        return is_array($row) ? $row : null;
+    }
+
+    public function find_recent_completed_one_off_sale_by_subscriber_context(
+        string $service_key,
+        string $subscriber_reference,
+        string $shortcode,
+        string $keyword,
+        int $days
+    ): ?array {
+        global $wpdb;
+
+        $service_key = trim($service_key);
+        $subscriber_reference = trim($subscriber_reference);
+        $shortcode = trim($shortcode);
+        $keyword = trim($keyword);
+        $days = max(0, $days);
+
+        if ($service_key === '' || $subscriber_reference === '' || $shortcode === '' || $keyword === '' || $days === 0) {
+            return null;
+        }
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT *
+                 FROM {$this->get_table_name()}
+                 WHERE status = 'completed'
+                   AND sale_type = 'premium_sms_one_off'
+                   AND service_key = %s
+                   AND subscriber_reference = %s
+                   AND shortcode = %s
+                   AND keyword = %s
+                   AND completed_at IS NOT NULL
+                   AND completed_at >= DATE_SUB(%s, INTERVAL %d DAY)
+                 ORDER BY completed_at DESC, id DESC
+                 LIMIT 1",
+                $service_key,
+                $subscriber_reference,
+                $shortcode,
+                $keyword,
+                $this->current_time_mysql(),
+                $days
             ),
             ARRAY_A
         );

@@ -72,6 +72,7 @@ require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/services/class-premium-sms-mo-engagement-evaluator-service.php';
+require_once __DIR__ . '/services/class-premium-sms-completed-sale-cooldown-service.php';
 require_once __DIR__ . '/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';

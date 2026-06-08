@@ -149,6 +149,18 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'state',
             'code',
         ]);
+        $raw_status_text = $this->first_non_empty($payload, [
+            'message_status_text',
+            'messagestatustext',
+            'status_text',
+            'statustext',
+            'delivery_status_text',
+            'deliverystatustext',
+            'report_status_text',
+            'reportstatustext',
+            'message',
+            'description',
+        ]);
 
         $normalized_status = $this->normalize_status($callback_type, $raw_status);
 
@@ -185,6 +197,8 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'operator_code' => $operator_code,
             'operator_name' => $operator_name,
             'status' => $normalized_status['status'],
+            'aggregator_status_code' => $raw_status,
+            'aggregator_status_text' => $raw_status_text,
             'is_terminal' => $normalized_status['is_terminal'],
             'is_success' => $normalized_status['is_success'],
             'occurred_at' => $event_timestamp,
@@ -237,6 +251,15 @@ class Kiwi_Nth_Premium_Sms_Normalizer
                 'delivery_status',
             ])
             : '';
+        $raw_status_text = $xml_object instanceof SimpleXMLElement
+            ? $this->first_xml_value($xml_object, [
+                'status_text',
+                'statusText',
+                'message',
+                'description',
+                'error',
+            ])
+            : '';
 
         if ($raw_status === '' && $http_status >= 200 && $http_status < 300) {
             $raw_status = 'submitted';
@@ -264,6 +287,8 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'operator_code' => trim((string) ($transaction['operator_code'] ?? '')),
             'operator_name' => trim((string) ($transaction['operator_name'] ?? '')),
             'status' => $normalized_status['status'],
+            'aggregator_status_code' => $raw_status,
+            'aggregator_status_text' => $raw_status_text,
             'is_terminal' => $normalized_status['is_terminal'],
             'is_success' => $normalized_status['is_success'],
             'occurred_at' => $this->current_time_mysql(),
