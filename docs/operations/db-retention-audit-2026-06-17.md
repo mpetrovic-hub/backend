@@ -11,6 +11,12 @@ No rows were changed. The audit used the Hostinger SSH/WP-CLI backend path
 and ran only aggregate `SELECT` statements, `information_schema` reads, and a
 read-only `wp eval` to resolve the tkzone summary PID allow-list.
 
+Review follow-up: on `2026-06-17 10:02:04 UTC`, the fraud-signal dry-run was
+rerun with the latest relevant evidence timestamp:
+`GREATEST(occurred_at, billing_outcome_at, sale_completed_at)`. That avoids
+marking a fraud row eligible from the original MO timestamp when later billing
+or sale evidence was written after the MO.
+
 Audit clock:
 
 - DB `NOW()`: `2026-06-17 09:49:36`
@@ -61,7 +67,7 @@ row-count source because it is approximate for InnoDB.
 | `wp_kiwi_nth_flow_transactions` | 1,026 | 17.50 | 0.45 | 17.95 | 0.73% |
 | `wp_kiwi_landing_funnel_daily_tkzone_summary` | 12,280 | 5.02 | 11.13 | 16.14 | 0.65% |
 | `wp_kiwi_nth_events` | 4,158 | 8.52 | 1.30 | 9.81 | 0.40% |
-| `wp_kiwi_premium_sms_fraud_signals` | 1,332 | 5.52 | 1.02 | 6.53 | 0.26% |
+| `wp_kiwi_premium_sms_fraud_signals` | 1,334 | 5.52 | 1.02 | 6.53 | 0.26% |
 | `wp_kiwi_dimoco_refund_callbacks` | n/a | 0.14 | 0.09 | 0.23 | 0.01% |
 | `wp_kiwi_dimoco_blacklist_callbacks` | n/a | 0.08 | 0.14 | 0.22 | 0.01% |
 | `wp_kiwi_dimoco_operator_lookup_callbacks` | n/a | 0.09 | 0.13 | 0.22 | 0.01% |
@@ -86,7 +92,7 @@ return the same bytes to the Hostinger quota immediately after deletes.
 | `wp_kiwi_premium_sms_landing_engagements` | `created_at` | `2026-04-23 12:51:39` | `2026-06-17 11:48:35` | 8,013.91 | 10,679.67 | 8.69 |
 | `wp_kiwi_landing_handoff_events` | `created_at` | `2026-05-07 23:02:36` | `2026-06-17 11:48:32` | 3,482.60 | 4,746.23 | 6.87 |
 | `wp_kiwi_sms_body_variant_assignments` | `created_at` | `2026-05-08 08:57:57` | `2026-06-17 11:47:52` | 10,549.20 | 9,932.53 | 7.69 |
-| `wp_kiwi_premium_sms_fraud_signals` | `occurred_at` | `2026-05-06 17:11:21` | `2026-06-17 11:32:08` | 30.98 | 43.60 | 0.21 |
+| `wp_kiwi_premium_sms_fraud_signals` | latest of `occurred_at`, `billing_outcome_at`, `sale_completed_at` | `2026-05-06 17:11:21` | `2026-06-17 11:56:44` | 31.02 | 43.67 | 0.21 |
 | `wp_kiwi_nth_events` | `occurred_at` | `2026-04-09 14:33:56` | `2026-06-17 11:32:16` | 59.40 | 135.83 | 0.32 |
 | `wp_kiwi_nth_flow_transactions` | terminal `updated_at` | `2026-04-09 16:04:17` | `2026-06-17 11:32:17` | 14.61 | 33.43 | 0.58 |
 
@@ -110,7 +116,7 @@ timestamp is older than start-of-day minus the retention window. Values are
 | `wp_kiwi_premium_sms_landing_engagements` | `created_at` | 389,425 (316.80) | 360,433 (293.21) | 128,389 (104.44) | 0 (0.00) | 0 (0.00) | 0 (0.00) | 0 (0.00) |
 | `wp_kiwi_landing_handoff_events` | `created_at` | 54,983 (79.58) | 24,400 (35.32) | 3,882 (5.62) | 0 (0.00) | 0 (0.00) | 0 (0.00) | 0 (0.00) |
 | `wp_kiwi_sms_body_variant_assignments` | `created_at` | 402,434 (311.64) | 380,348 (294.54) | 134,541 (104.19) | 0 (0.00) | 0 (0.00) | 0 (0.00) | 0 (0.00) |
-| `wp_kiwi_premium_sms_fraud_signals` | `occurred_at` | 604 (2.96) | 154 (0.75) | 24 (0.12) | 0 (0.00) | 0 (0.00) | 0 (0.00) | 0 (0.00) |
+| `wp_kiwi_premium_sms_fraud_signals` | latest evidence timestamp | 601 (2.94) | 154 (0.75) | 24 (0.12) | 0 (0.00) | 0 (0.00) | 0 (0.00) | 0 (0.00) |
 | `wp_kiwi_nth_events` | `occurred_at` | 1,306 (3.08) | 328 (0.77) | 83 (0.20) | 22 (0.05) | 0 (0.00) | 0 (0.00) | 0 (0.00) |
 | `wp_kiwi_nth_flow_transactions` | terminal `updated_at` | 313 (5.48) | 80 (1.40) | 20 (0.35) | 4 (0.07) | 0 (0.00) | 0 (0.00) | 0 (0.00) |
 
@@ -184,7 +190,7 @@ Cleanup implication:
 | `wp_kiwi_premium_sms_landing_engagements` | Keep 14 complete days | storage-pressure | 14 days reclaims about `293.21 MiB`; 7 days adds only about `23.59 MiB` more. |
 | `wp_kiwi_landing_handoff_events` | Keep 14 complete days | storage-pressure | 14 days reclaims about `35.32 MiB`; 7 days adds about `44.26 MiB`, but handoff diagnostics are lower volume and still useful for recent debugging. |
 | `wp_kiwi_sms_body_variant_assignments` | Keep 90 complete days | preferred | Assignment correlation is operationally useful and the table is not old enough for 60/90-day reclaim. Revisit 60 days only if landing raw cleanup cannot land quickly. |
-| `wp_kiwi_premium_sms_fraud_signals` | Keep 120 complete days | preferred | Small table and operational fraud/billing evidence. Do not go below 90 days without business approval. |
+| `wp_kiwi_premium_sms_fraud_signals` | Keep 120 complete days after latest evidence timestamp | preferred | Small table and operational fraud/billing evidence. Eligibility must use the latest of `occurred_at`, `billing_outcome_at`, and `sale_completed_at`, not the original MO timestamp alone. Do not go below 90 days without business approval. |
 | `wp_kiwi_nth_events` | Keep 120 complete days | preferred | Small provider audit/reconciliation table. Do not go below 90 days without business approval. |
 | `wp_kiwi_nth_flow_transactions` | Keep 120 days after terminal `updated_at`; never prune non-terminal rows | preferred | Small lifecycle table; 3 non-terminal rows remain ineligible regardless of age. |
 
@@ -207,6 +213,8 @@ Issue 3, fraud/provider audit cleanup:
 - Keep separate from landing analytics cleanup.
 - Use 120 days for fraud signals and NTH audit tables unless a later audit or
   business decision approves a 90-day storage-pressure fallback.
+- For fraud signals, use the latest relevant evidence timestamp:
+  `GREATEST(occurred_at, billing_outcome_at, sale_completed_at)`.
 - For NTH flow transactions, count only `is_terminal = 1` rows as eligible.
 - Never delete non-terminal transactions.
 
@@ -252,6 +260,18 @@ FROM wp_kiwi_landing_page_sessions;
 SELECT
     SUM(created_at < DATE_SUB(CURDATE(), INTERVAL 14 DAY)) AS eligible_rows
 FROM wp_kiwi_landing_page_sessions;
+```
+
+```sql
+SELECT
+    SUM(
+        GREATEST(
+            occurred_at,
+            COALESCE(billing_outcome_at, '1000-01-01 00:00:00'),
+            COALESCE(sale_completed_at, '1000-01-01 00:00:00')
+        ) < DATE_SUB(CURDATE(), INTERVAL 120 DAY)
+    ) AS eligible_fraud_rows
+FROM wp_kiwi_premium_sms_fraud_signals;
 ```
 
 ```sql
