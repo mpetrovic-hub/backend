@@ -2,6 +2,13 @@
 
 Status: temporary planning document. Do not link this into the permanent docs yet.
 
+Issue 1 audit result: the read-only production audit is recorded in
+`docs/operations/db-retention-audit-2026-06-17.md`. The audit recommends a
+14-day storage-pressure window for raw landing analytics tables, keeps
+click-attribution TTL unchanged, and keeps fraud/provider audit tables on the
+preferred 120-day policy unless a later business decision approves a shorter
+fallback.
+
 This file is the working plan for reducing WordPress database growth after the landing analytics, daily summary, tkzone summary, device normalization, trusted-proxy IP, and premium-SMS fraud changes that landed after the original GitHub issue was written. It is intentionally separate from the existing documentation until the actual retention implementation is approved.
 
 ## Immediate problem
