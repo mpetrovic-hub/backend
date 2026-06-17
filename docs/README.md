@@ -56,6 +56,9 @@ Do **not** store real credentials or secrets in this repository.
 - `operations/landing-page-prod-behaviour.md`  
   Runtime landing-page logic and operations runbook, including a legacy migration appendix.
 
+- `operations/db-retention-audit-2026-06-17.md`
+  Read-only production DB size, growth, dry-run retention, and summary coverage audit for Issue #70.
+
 - `operations/vps-endpoint-runbook.md`
   VPS edge-endpoint operations guide for reverse-proxy domain exposure to backend landing routes.
 

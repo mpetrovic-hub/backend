@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-06-17:
+- [DB Retention Audit] Added a read-only production database size, growth, dry-run retention, and summary-coverage report for the cleanup planning sequence. The report identifies raw landing analytics as the main storage pressure, recommends a 14-day storage-pressure window for landing raw tables, confirms no click-attribution TTL backlog, and documents summary coverage gaps that must block later cleanup until resolved or accepted.
+
 2026-06-08:
 - [Premium SMS Fraud / NTH FR One-off] Replaced the old blanket MO-based 24h duplicate block with a pending-MT guard plus configurable `completed_sale_cooldown_days` after completed one-off sales. Terminal failed MT reports such as NTH `-9 Delivery failed` can now retry, while fraud snapshots are subscriber-only and include billing outcome, sale correlation, and normalized aggregator status fields.
 
