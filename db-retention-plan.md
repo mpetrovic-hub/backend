@@ -96,7 +96,9 @@ Proposed preferred rule:
 - delete only rows with `created_at < start_of_today - 30 days`;
 - never delete today's rows or yesterday's rows during the first rollout;
 - run the cleanup only after both summaries have refreshed through the cutoff date;
-- run in small batches, ordered by the primary key, with a dry-run count first.
+- export/archive the full eligible set with `created_at < new_cutoff` before deleting, not only the newly eligible daily slice;
+- make the archive import idempotent/deduplicated by original primary key or another stable unique key;
+- run deletes in small batches, ordered by the primary key, with a dry-run count first.
 
 Example with today as `2026-06-12`:
 
@@ -172,6 +174,8 @@ Required safeguards:
 - dry-run/report mode;
 - explicit enabled flag, default off;
 - configurable retention days with minimum 7 and default 30;
+- backup/export-before-delete for the full eligible cutoff set, using the relevant cutoff column with `< new_cutoff`;
+- deduplicated archive import so repeated or overlapping exports cannot create duplicate archived rows;
 - batch deletes with a small limit;
 - transient or option lock to prevent concurrent cleanup;
 - per-table counts before and after;

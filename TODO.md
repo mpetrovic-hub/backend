@@ -126,6 +126,7 @@ Für die spätere Umsetzung sollte zuerst ein kleines Config-Metadatenmodell gep
 - [ ] Geänderte editierbare Optionen wirken nach Save in `Kiwi_Config`.
 
 
+
 ## 2. Refactor Tabellenbenennung `wp_kiwi_premium_sms_landing_engagements`
 
 ### Ziel
@@ -161,6 +162,8 @@ Erst Analyse/Plan erstellen. Mögliche Strategie: neue generische View/Alias-Sch
 
 - [ ] Bestehende Fraud-/Statistics-/Landing-Reports nach Refactor prüfen
 
+
+
 ## 3. Temporaere Debug-/Logging-Experimente wieder entfernen
 
 ### Ziel
@@ -182,6 +185,8 @@ Kurzfristige Diagnose- und Logging-Experimente sammeln, damit sie nach der jewei
 
 Neue SQL-/Header-/Payload-Diagnosen nur temporaer, hinter explizitem Schalter und ohne rohe personenbezogene oder geheime Werte dauerhaft zu speichern.
 
+
+
 ## 4. 'nth_events' Tabelle - 'operator_code' und 'operator_name" Anreicherung + 'response_code' Spalte
 
 ### Ziel
@@ -198,8 +203,25 @@ In manchen response-Fällen wird von nth keine operator-info im payload übergeb
 - [ ] Möglichst alle Felder mit 'operator_code' und 'operator_name' haben die korrekte Info über den operator
 - [ ] Spalte mit dem response-code des Aggregators (z.B. "2" bei erfolgreich delivered billings oder "-9" bei "Delivery failed") und eine Spalte "response_meaning" 
 
-
 ### Nicht-Ziele
 
 - Keine neue Tabelle
 - Keine Änderungen an der Flow-Logik, NTH-Integration oder irgendeiner anderen User-Flow/Billing Integration
+
+
+
+## 5: GitHub Actions PHP-Testworkflow fuer `backend` Repo einrichten
+
+Kurz denselben CI-Ansatz wie im `receipt-generator` Repo auf das `backend` Repo uebertragen.
+
+Akzeptanzkriterien:
+- [ ] GitHub Actions Workflow laeuft bei Pull Requests gegen `main`
+- [ ] Workflow laeuft bei Pushes auf `main`
+- [ ] Relevante PHP-Dateien werden mit `php -l` syntaxgeprueft
+- [ ] Vorhandene PHP-Test-/Smoke-Test-Runner werden automatisch ausgefuehrt
+- [ ] Workflow benoetigt keine Live-Secrets, keine Hostinger-Verbindung und keine echte externe API
+- [ ] Fehlerhafte Syntax oder Tests lassen den GitHub Check rot werden
+
+Hinweise:
+- Als Vorlage kann `.github/workflows/php-tests.yml` aus `receipt-generator` dienen.
+- Vor Umsetzung im `backend` Repo zuerst pruefen, welche lokalen Test-/Lint-Befehle dort bereits existieren.
