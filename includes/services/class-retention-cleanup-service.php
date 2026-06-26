@@ -195,15 +195,11 @@ class Kiwi_Retention_Cleanup_Service
                 $this->config->get_retention_default_batch_limit()
             );
             $archived_rows = (int) ($archive_result['archived_rows'] ?? 0);
-            $archived_primary_keys = $this->normalize_primary_keys((array) ($archive_result['archived_primary_keys'] ?? []));
             $archive_inserted_rows = (int) ($archive_result['archive_inserted_rows'] ?? 0);
             $archive_duplicate_rows = (int) ($archive_result['archive_duplicate_rows'] ?? 0);
             $archive_integrity_check = (string) ($archive_result['archive_integrity_check'] ?? '');
 
-            if (empty($archive_result['success'])
-                || $archived_rows !== $eligible_rows
-                || count($archived_primary_keys) !== $archived_rows
-            ) {
+            if (empty($archive_result['success']) || $archived_rows !== $eligible_rows) {
                 $this->snapshot_repository->capture_snapshot(
                     $source,
                     'after_cleanup',
@@ -229,14 +225,15 @@ class Kiwi_Retention_Cleanup_Service
                     'archive_batch_id' => $archive_batch_id,
                     'archive_db_path' => (string) ($archive_result['archive_db_path'] ?? ''),
                     'archive_integrity_check' => $archive_integrity_check,
-                    'error_code' => $this->archive_failure_code($archive_result, $archived_primary_keys, $archived_rows),
-                    'error_message' => $this->archive_failure_message($archive_result, $archived_primary_keys, $archived_rows),
+                    'error_code' => $this->archive_failure_code($archive_result),
+                    'error_message' => $this->archive_failure_message($archive_result),
                 ]);
             }
 
             $delete_result = $this->delete_archived_rows(
                 $source,
-                $archived_primary_keys,
+                (string) ($archive_result['archive_db_path'] ?? ''),
+                $archive_batch_id,
                 $this->config->get_retention_default_batch_limit()
             );
             $deleted_rows = (int) ($delete_result['deleted_rows'] ?? 0);
@@ -323,45 +320,72 @@ class Kiwi_Retention_Cleanup_Service
         );
     }
 
-    protected function delete_archived_rows(array $source, array $primary_keys, int $batch_limit): array
+    protected function delete_archived_rows(
+        array $source,
+        string $archive_db_path,
+        string $archive_batch_id,
+        int $batch_limit
+    ): array
     {
-        global $wpdb;
-
-        $source_table = (string) ($source['source_table'] ?? '');
-        $primary_key = (string) ($source['primary_key'] ?? '');
-        $primary_keys = $this->normalize_primary_keys($primary_keys);
         $batch_limit = max(1, $batch_limit);
+        $last_primary_key = 0;
         $deleted_rows = 0;
         $delete_batches = 0;
 
-        if (!$this->is_identifier($source_table) || !$this->is_identifier($primary_key) || empty($primary_keys)) {
-            return [
-                'deleted_rows' => 0,
-                'delete_batches' => 0,
-            ];
-        }
-
-        foreach (array_chunk($primary_keys, $batch_limit) as $ids) {
-            $placeholders = implode(', ', array_fill(0, count($ids), '%d'));
-            $deleted = $wpdb->query(
-                $wpdb->prepare(
-                    "DELETE FROM {$source_table} WHERE {$primary_key} IN ({$placeholders})",
-                    ...$ids
-                )
+        while (true) {
+            $ids = $this->archive_service->fetch_archived_primary_key_batch(
+                $source,
+                $archive_db_path,
+                $archive_batch_id,
+                $last_primary_key,
+                $batch_limit
             );
+            $ids = $this->normalize_primary_keys($ids);
 
-            if ($deleted === false) {
-                throw new RuntimeException('Retention delete query failed.');
+            if (empty($ids)) {
+                break;
             }
 
-            $deleted_rows += (int) $deleted;
+            $deleted_rows += $this->delete_source_primary_keys($source, $ids);
             $delete_batches++;
+            $last_primary_key = max($ids);
+
+            if (count($ids) < $batch_limit) {
+                break;
+            }
         }
 
         return [
             'deleted_rows' => $deleted_rows,
             'delete_batches' => $delete_batches,
         ];
+    }
+
+    protected function delete_source_primary_keys(array $source, array $primary_keys): int
+    {
+        global $wpdb;
+
+        $source_table = (string) ($source['source_table'] ?? '');
+        $primary_key = (string) ($source['primary_key'] ?? '');
+        $primary_keys = $this->normalize_primary_keys($primary_keys);
+
+        if (!$this->is_identifier($source_table) || !$this->is_identifier($primary_key) || empty($primary_keys)) {
+            return 0;
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($primary_keys), '%d'));
+        $deleted = $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM {$source_table} WHERE {$primary_key} IN ({$placeholders})",
+                ...$primary_keys
+            )
+        );
+
+        if ($deleted === false) {
+            throw new RuntimeException('Retention delete query failed.');
+        }
+
+        return (int) $deleted;
     }
 
     private function normalize_primary_keys(array $primary_keys): array
@@ -375,30 +399,18 @@ class Kiwi_Retention_Cleanup_Service
         return array_values(array_unique($ids));
     }
 
-    private function archive_failure_code(array $archive_result, array $archived_primary_keys, int $archived_rows): string
+    private function archive_failure_code(array $archive_result): string
     {
         $error_code = (string) ($archive_result['error_code'] ?? '');
 
-        if ($error_code !== '') {
-            return $error_code;
-        }
-
-        return count($archived_primary_keys) !== $archived_rows
-            ? 'archive_primary_key_count_mismatch'
-            : 'archive_count_mismatch';
+        return $error_code !== '' ? $error_code : 'archive_count_mismatch';
     }
 
-    private function archive_failure_message(array $archive_result, array $archived_primary_keys, int $archived_rows): string
+    private function archive_failure_message(array $archive_result): string
     {
         $error_message = (string) ($archive_result['error_message'] ?? '');
 
-        if ($error_message !== '') {
-            return $error_message;
-        }
-
-        return count($archived_primary_keys) !== $archived_rows
-            ? 'Archived primary-key count did not match archived row count.'
-            : 'Archived row count did not match eligible row count.';
+        return $error_message !== '' ? $error_message : 'Archived row count did not match eligible row count.';
     }
 
     protected function build_cutoff_value(int $retention_days): string

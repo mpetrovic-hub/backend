@@ -45,6 +45,7 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository implements Kiwi_Statis
             tksource VARCHAR(191) NOT NULL DEFAULT '(unknown)',
             tkzone VARCHAR(191) NOT NULL DEFAULT '(unknown)',
             dimension_hash CHAR(64) NOT NULL,
+            pid_set_hash CHAR(64) NOT NULL DEFAULT '',
             sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             page_loaded_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             cta1_sessions BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
@@ -71,6 +72,8 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository implements Kiwi_Statis
             KEY landing_key (landing_key),
             KEY tksource (tksource),
             KEY tkzone (tkzone),
+            KEY pid_set_hash (pid_set_hash),
+            KEY metric_date_pid_set_hash (metric_date, pid_set_hash),
             KEY dimension_hash (dimension_hash)
         ) {$charset_collate};";
 

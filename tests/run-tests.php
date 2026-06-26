@@ -1272,11 +1272,11 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
         'success' => true,
         'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
         'archived_rows' => 0,
-        'archived_primary_keys' => [],
         'archive_inserted_rows' => 0,
         'archive_duplicate_rows' => 0,
         'archive_integrity_check' => 'ok',
     ];
+    public $archived_primary_keys = [];
 
     public function __construct()
     {
@@ -1302,6 +1302,18 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
         return array_merge($this->result, [
             'archive_batch_id' => $archive_batch_id,
         ]);
+    }
+
+    public function fetch_archived_primary_key_batch(
+        array $source,
+        string $archive_db_path,
+        string $archive_batch_id,
+        int $last_primary_key,
+        int $batch_limit
+    ): array {
+        return array_slice(array_values(array_filter($this->archived_primary_keys, static function (int $id) use ($last_primary_key): bool {
+            return $id > $last_primary_key;
+        })), 0, max(1, $batch_limit));
     }
 }
 
@@ -1331,6 +1343,7 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
     public $eligible_rows = 0;
     public $delete_result = ['deleted_rows' => 0, 'delete_batches' => 0];
     public $deleted_primary_keys = [];
+    public $deleted_primary_key_batches = [];
     public $events = [];
 
     protected function count_eligible_rows(array $source, string $cutoff_value): int
@@ -1340,12 +1353,13 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
         return $this->eligible_rows;
     }
 
-    protected function delete_archived_rows(array $source, array $primary_keys, int $batch_limit): array
+    protected function delete_source_primary_keys(array $source, array $primary_keys): int
     {
         $this->events[] = 'delete';
-        $this->deleted_primary_keys = $primary_keys;
+        $this->deleted_primary_key_batches[] = $primary_keys;
+        $this->deleted_primary_keys = array_merge($this->deleted_primary_keys, $primary_keys);
 
-        return $this->delete_result;
+        return (int) ($this->delete_result['deleted_rows'] ?? count($primary_keys));
     }
 }
 
@@ -10451,6 +10465,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository creates slim 
         "tksource VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
         "tkzone VARCHAR(191) NOT NULL DEFAULT '(unknown)'",
         'dimension_hash CHAR(64) NOT NULL',
+        "pid_set_hash CHAR(64) NOT NULL DEFAULT ''",
     ] as $column) {
         kiwi_assert_contains($column, $sql, 'Expected required tkzone summary dimension column: ' . $column);
     }
@@ -10481,6 +10496,8 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository creates slim 
         'KEY landing_key (landing_key)',
         'KEY tksource (tksource)',
         'KEY tkzone (tkzone)',
+        'KEY pid_set_hash (pid_set_hash)',
+        'KEY metric_date_pid_set_hash (metric_date, pid_set_hash)',
     ] as $index) {
         kiwi_assert_contains($index, $sql, 'Expected filterable tkzone summary dimension index: ' . $index);
     }
@@ -10548,6 +10565,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service buil
             '2026-05-22',
             '106',
             '207',
+            hash('sha256', '106|207'),
             '2026-05-22',
         ],
         $prepared[1]['args'] ?? [],
@@ -10557,6 +10575,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service buil
     $normalized_insert_sql = str_replace("\r\n", "\n", $insert_sql);
 
     kiwi_assert_contains('INSERT INTO abc_kiwi_landing_funnel_daily_tkzone_summary', $insert_sql, 'Expected refresh to populate the tkzone summary table.');
+    kiwi_assert_contains('pid_set_hash', $insert_sql, 'Expected tkzone refresh to persist the current PID-set coverage hash.');
     kiwi_assert_contains('FROM abc_kiwi_landing_page_sessions', $insert_sql, 'Expected tkzone refresh to aggregate canonical landing sessions.');
     kiwi_assert_contains('AND pid IN (%s, %s)', $insert_sql, 'Expected tkzone session facts to be limited to configured PIDs.');
     kiwi_assert_true(strpos($insert_sql, 'engagement_sessions AS') === false, 'Expected tkzone summary refresh not to materialize engagement sessions before joining.');
@@ -11352,6 +11371,7 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches TK-zone coverage to current 
     kiwi_assert_same(['2026-06-10'], $result['tkzone_summary']['blocking_missing_dates'] ?? [], 'Expected current-PID TK-zone mismatch date to block cleanup.');
     kiwi_assert_contains('pid IN', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to filter raw sessions by the current PID allow-list.');
     kiwi_assert_contains('summary.sessions = raw.sessions', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to compare current raw PID sessions against summary sessions.');
+    kiwi_assert_contains('WHERE pid_set_hash = %s', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to require current PID-set coverage metadata.');
 
     $wpdb = $previous_wpdb;
 });
@@ -11573,11 +11593,11 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service archives before deleting active la
         'success' => true,
         'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
         'archived_rows' => 3,
-        'archived_primary_keys' => [101, 102, 103],
         'archive_inserted_rows' => 2,
         'archive_duplicate_rows' => 1,
         'archive_integrity_check' => 'ok',
     ];
+    $archive->archived_primary_keys = [101, 102, 103];
     $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
     $service = new Kiwi_Test_Retention_Cleanup_Service(
         new Kiwi_Config(),
@@ -11629,11 +11649,11 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service fails when archived primary-key de
         'success' => true,
         'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
         'archived_rows' => 2,
-        'archived_primary_keys' => [201, 202],
         'archive_inserted_rows' => 2,
         'archive_duplicate_rows' => 0,
         'archive_integrity_check' => 'ok',
     ];
+    $archive->archived_primary_keys = [201, 202];
     $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
     $service = new Kiwi_Test_Retention_Cleanup_Service(
         new Kiwi_Config(),
@@ -11902,7 +11922,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary cont
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-06-26-1', $schema_version, 'Expected schema version to be bumped for retention run and growth snapshot tables.');
+    kiwi_assert_same('2026-06-26-2', $schema_version, 'Expected schema version to be bumped for retention and tkzone PID-set coverage metadata.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
@@ -14233,6 +14253,7 @@ kiwi_run_test('Kiwi_Config exposes tkzone summary PID allow-list', function (): 
     }
 
     kiwi_assert_same(['106', '207', 'badpid'], $config->get_landing_funnel_tkzone_summary_pids(), 'Expected tkzone summary PID allow-list to sanitize configured PID values.');
+    kiwi_assert_same(hash('sha256', '106|207|badpid'), $config->get_landing_funnel_tkzone_summary_pid_set_hash(), 'Expected tkzone summary PID-set hash to be stable over normalized PID values.');
 });
 
 kiwi_run_test('Kiwi_Config exposes device model brand harvest threshold', function (): void {

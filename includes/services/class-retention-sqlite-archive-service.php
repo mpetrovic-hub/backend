@@ -24,7 +24,6 @@ class Kiwi_Retention_Sqlite_Archive_Service
             'archive_batch_id' => $archive_batch_id,
             'archive_db_path' => '',
             'archived_rows' => 0,
-            'archived_primary_keys' => [],
             'archive_inserted_rows' => 0,
             'archive_duplicate_rows' => 0,
             'archive_integrity_check' => '',
@@ -80,11 +79,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
                     $source_pk = (int) ($row[$primary_key] ?? 0);
                     $last_id = max($last_id, $source_pk);
                     $inserted = $this->insert_archive_row($pdo, $source, $archive_batch_id, $row);
+                    $this->insert_archive_batch_row($pdo, $archive_batch_id, $source_pk);
                     $result['archived_rows']++;
-
-                    if ($source_pk > 0) {
-                        $result['archived_primary_keys'][] = $source_pk;
-                    }
 
                     if ($inserted) {
                         $result['archive_inserted_rows']++;
@@ -110,6 +106,49 @@ class Kiwi_Retention_Sqlite_Archive_Service
         }
 
         return $result;
+    }
+
+    public function fetch_archived_primary_key_batch(
+        array $source,
+        string $archive_db_path,
+        string $archive_batch_id,
+        int $last_primary_key,
+        int $batch_limit
+    ): array {
+        if (!class_exists('PDO') || $archive_db_path === '' || !is_file($archive_db_path)) {
+            return [];
+        }
+
+        if (!$this->is_identifier((string) ($source['source_table'] ?? ''))) {
+            return [];
+        }
+
+        $pdo = new PDO('sqlite:' . $archive_db_path);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $statement = $pdo->prepare(
+            'SELECT source_pk
+             FROM archive_batch_rows
+             WHERE archive_batch_id = :archive_batch_id
+               AND source_pk > :last_primary_key
+             ORDER BY source_pk ASC
+             LIMIT :batch_limit'
+        );
+        $statement->bindValue(':archive_batch_id', $archive_batch_id, PDO::PARAM_STR);
+        $statement->bindValue(':last_primary_key', max(0, $last_primary_key), PDO::PARAM_INT);
+        $statement->bindValue(':batch_limit', max(1, $batch_limit), PDO::PARAM_INT);
+        $statement->execute();
+
+        $ids = [];
+
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $source_pk = (int) ($row['source_pk'] ?? 0);
+
+            if ($source_pk > 0) {
+                $ids[] = $source_pk;
+            }
+        }
+
+        return $ids;
     }
 
     protected function fetch_source_rows(array $source, string $cutoff_value, int $last_id, int $batch_limit): array
@@ -188,6 +227,14 @@ class Kiwi_Retention_Sqlite_Archive_Service
             )'
         );
 
+        $pdo->exec(
+            'CREATE TABLE IF NOT EXISTS archive_batch_rows (
+                archive_batch_id TEXT NOT NULL,
+                source_pk INTEGER NOT NULL,
+                PRIMARY KEY (archive_batch_id, source_pk)
+            )'
+        );
+
         $archive_table = $this->quote_identifier((string) ($source['source_table'] ?? ''));
         $columns_sql = [
             '_archive_batch_id TEXT NOT NULL',
@@ -251,6 +298,13 @@ class Kiwi_Retention_Sqlite_Archive_Service
             ':status' => 'running',
             ':archive_db_path' => $archive_db_path,
         ]);
+
+        $delete_statement = $pdo->prepare(
+            'DELETE FROM archive_batch_rows WHERE archive_batch_id = :archive_batch_id'
+        );
+        $delete_statement->execute([
+            ':archive_batch_id' => $archive_batch_id,
+        ]);
     }
 
     private function finish_archive_batch(PDO $pdo, string $archive_batch_id, array $result): void
@@ -312,6 +366,21 @@ class Kiwi_Retention_Sqlite_Archive_Service
         $statement->execute();
 
         return $statement->rowCount() > 0;
+    }
+
+    private function insert_archive_batch_row(PDO $pdo, string $archive_batch_id, int $source_pk): void
+    {
+        if ($source_pk <= 0) {
+            return;
+        }
+
+        $statement = $pdo->prepare(
+            'INSERT OR IGNORE INTO archive_batch_rows (archive_batch_id, source_pk)
+             VALUES (:archive_batch_id, :source_pk)'
+        );
+        $statement->bindValue(':archive_batch_id', $archive_batch_id, PDO::PARAM_STR);
+        $statement->bindValue(':source_pk', $source_pk, PDO::PARAM_INT);
+        $statement->execute();
     }
 
     private function quote_identifier(string $identifier): string

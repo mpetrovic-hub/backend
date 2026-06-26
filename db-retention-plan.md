@@ -113,6 +113,8 @@ Rule:
 - keep coverage gates hard for any other new/future missing summary coverage;
 - export/archive the full eligible set with `created_at < new_cutoff` before deleting, not only the newly eligible daily slice;
 - make the archive import idempotent/deduplicated by original primary key or another stable unique key;
+- delete only primary keys proven by the archive batch membership table, streamed in batches from SQLite rather than kept in PHP memory;
+- require tkzone summary rows to carry the current configured PID-set hash before accepting them as coverage evidence;
 - run deletes in small batches, ordered by the primary key, with a dry-run count first.
 
 ## Required issues to create
@@ -198,7 +200,7 @@ Acceptance criteria:
 - Enabled cleanup deletes only rows older than the retention cutoff.
 - Cleanup records the accepted historical coverage gap instead of backfilling it.
 - Cleanup refuses to delete when non-accepted main summary coverage is missing for the cutoff period.
-- Cleanup refuses to delete for tkzone-allow-listed raw rows when non-accepted tkzone summary coverage is missing for the cutoff period.
+- Cleanup refuses to delete for tkzone-allow-listed raw rows when non-accepted tkzone summary coverage is missing for the cutoff period or was built for a different PID allow-list.
 - Tests cover cutoff boundaries, dry-run behavior, disabled behavior, summary-coverage failure, batch limiting, and idempotency.
 
 ### Issue 3: Fraud/provider audit retention policy and cleanup

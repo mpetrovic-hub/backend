@@ -111,7 +111,8 @@ class Kiwi_Retention_Coverage_Gate
         }
 
         $placeholders = implode(', ', array_fill(0, count($pids), '%s'));
-        $params = array_merge([$cutoff_value], $pids);
+        $pid_set_hash = $this->config->get_landing_funnel_tkzone_summary_pid_set_hash();
+        $params = array_merge([$cutoff_value], $pids, [$pid_set_hash]);
         $query = $wpdb->prepare(
             "SELECT raw.metric_date
              FROM (
@@ -164,6 +165,7 @@ class Kiwi_Retention_Coverage_Gate
                         tkzone,
                         SUM(sessions) AS sessions
                     FROM {$summary_table}
+                    WHERE pid_set_hash = %s
                     GROUP BY
                         metric_date,
                         provider_key,

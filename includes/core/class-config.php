@@ -321,6 +321,14 @@ class Kiwi_Config
         return array_values(array_unique($normalized));
     }
 
+    public function get_landing_funnel_tkzone_summary_pid_set_hash(): string
+    {
+        $pids = $this->get_landing_funnel_tkzone_summary_pids();
+        sort($pids, SORT_STRING);
+
+        return hash('sha256', implode('|', $pids));
+    }
+
     public function get_device_model_brand_harvest_min_daily_sessions(): int
     {
         return defined('KIWI_DEVICE_MODEL_BRAND_HARVEST_MIN_DAILY_SESSIONS')
