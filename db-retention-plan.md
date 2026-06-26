@@ -115,6 +115,7 @@ Rule:
 - make the archive import idempotent/deduplicated by original primary key or another stable unique key;
 - delete only primary keys proven by the archive batch membership table, streamed in batches from SQLite rather than kept in PHP memory;
 - require tkzone summary rows to carry the current configured PID-set hash before accepting them as coverage evidence;
+- backfill blank legacy tkzone summary PID-set hashes during schema migration without rebuilding historical summaries;
 - run deletes in small batches, ordered by the primary key, with a dry-run count first.
 
 ## Required issues to create
