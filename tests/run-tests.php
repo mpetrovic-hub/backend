@@ -1201,6 +1201,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 {
     public $rows = [];
     public $updates = [];
+    public $create_run_result = null;
     private $next_id = 1;
 
     public function create_table(): void
@@ -1209,6 +1210,10 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
     public function create_run(array $data): int
     {
+        if ($this->create_run_result !== null) {
+            return (int) $this->create_run_result;
+        }
+
         $id = $this->next_id++;
         $this->rows[$id] = array_merge(['id' => $id], $data);
 
@@ -11263,6 +11268,47 @@ kiwi_run_test('Kiwi_Plugin schedules the retention cleanup daily cron hook once'
     kiwi_assert_same('daily', $GLOBALS['kiwi_test_cron_events'][0]['recurrence'] ?? '', 'Expected retention cleanup to use a daily cron recurrence.');
 });
 
+kiwi_run_test('Kiwi_Retention_Coverage_Gate fails closed when summary coverage query errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'wp_';
+        public $last_error = 'summary table missing';
+        public $prepared_statements = [];
+
+        public function prepare($query, ...$args)
+        {
+            $statement = [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+            $this->prepared_statements[] = $statement;
+
+            return $statement;
+        }
+
+        public function get_results($statement, $output = null)
+        {
+            return false;
+        }
+    };
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-06-12 00:00:00');
+
+    kiwi_assert_same('failed', $result['status'], 'Expected coverage gate to fail closed when a coverage query errors.');
+    kiwi_assert_true(
+        in_array('main_summary_query_failed', $result['blocking_errors'] ?? [], true),
+        'Expected main summary query failures to block cleanup.'
+    );
+    kiwi_assert_same('failed', $result['main_summary']['status'] ?? '', 'Expected failed main summary query to mark that gate section failed.');
+    kiwi_assert_contains('summary table missing', $result['main_summary']['error_message'] ?? '', 'Expected coverage gate error details to retain wpdb error context.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service records disabled landing-page-session runs without archive or delete', function (): void {
     global $wpdb;
 
@@ -11301,6 +11347,54 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records disabled landing-page-sess
     kiwi_assert_same([], $archive->calls, 'Expected disabled cleanup not to archive rows.');
     kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected disabled run to still capture growth snapshots.');
     kiwi_assert_true(!array_key_exists('kiwi_retention_cleanup_last_result', $GLOBALS['kiwi_test_options']), 'Expected cleanup not to create a last-result WordPress option.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service aborts when run audit creation fails', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->create_run_result = 0;
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 3;
+    $service->delete_result = ['deleted_rows' => 3, 'delete_batches' => 1];
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same(false, $result['success'], 'Expected cleanup to fail when the audit run row cannot be created.');
+    kiwi_assert_same('failed', $result['status'], 'Expected missing audit row to produce a failed cleanup result.');
+    kiwi_assert_same('run_audit_create_failed', $result['error_code'], 'Expected missing audit row failure to be explicit.');
+    kiwi_assert_same([], $snapshots->snapshots, 'Expected cleanup not to capture snapshots without a durable run row.');
+    kiwi_assert_same([], $archive->calls, 'Expected cleanup not to archive rows without a durable run row.');
+    kiwi_assert_same([], $gate->calls, 'Expected cleanup not to run coverage gates without a durable run row.');
+    kiwi_assert_same(['count'], $service->events, 'Expected cleanup not to delete rows after audit run creation fails.');
+    kiwi_assert_same([], $GLOBALS['kiwi_test_transients'], 'Expected cleanup not to take a lock without a durable run row.');
+    kiwi_assert_same([], $GLOBALS['kiwi_test_deleted_transients'], 'Expected cleanup not to clear an uncreated lock.');
 
     $wpdb = $previous_wpdb;
 });

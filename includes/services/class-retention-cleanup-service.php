@@ -79,6 +79,17 @@ class Kiwi_Retention_Cleanup_Service
             'archive_batch_id' => $archive_batch_id,
         ]);
 
+        if ($run_db_id <= 0) {
+            return [
+                'success' => false,
+                'run_id' => $run_id,
+                'status' => 'failed',
+                'error_code' => 'run_audit_create_failed',
+                'error_message' => 'Retention cleanup aborted because the audit run row could not be created.',
+                'eligible_rows' => $eligible_rows,
+            ];
+        }
+
         if ($this->has_lock($source_key)) {
             return $this->finish_run($run_db_id, [
                 'success' => true,
