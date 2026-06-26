@@ -11372,6 +11372,9 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches TK-zone coverage to current 
     kiwi_assert_contains('pid IN', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to filter raw sessions by the current PID allow-list.');
     kiwi_assert_contains('summary.sessions = raw.sessions', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to compare current raw PID sessions against summary sessions.');
     kiwi_assert_contains('WHERE pid_set_hash = %s', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to require current PID-set coverage metadata.');
+    kiwi_assert_contains('DATE(created_at) AS metric_date', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to derive raw coverage metric dates per row date.');
+    kiwi_assert_contains('GROUP BY DATE(created_at), landing_key, session_token', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to mirror the per-day refresh grouping for reused session cookies.');
+    kiwi_assert_true(strpos((string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'DATE(MIN(created_at)) AS metric_date') === false, 'Expected TK-zone gate not to collapse reused cookies across days.');
 
     $wpdb = $previous_wpdb;
 });

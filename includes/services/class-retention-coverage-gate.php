@@ -128,7 +128,7 @@ class Kiwi_Retention_Coverage_Gate
                     COUNT(*) AS sessions
                 FROM (
                     SELECT
-                        DATE(MIN(created_at)) AS metric_date,
+                        DATE(created_at) AS metric_date,
                         COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(provider_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS provider_key,
                         COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(flow_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS flow_key,
                         COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(country, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS country,
@@ -141,7 +141,7 @@ class Kiwi_Retention_Coverage_Gate
                       AND pid IN ({$placeholders})
                       AND landing_key <> ''
                       AND session_token <> ''
-                    GROUP BY landing_key, session_token
+                    GROUP BY DATE(created_at), landing_key, session_token
                 ) landed
                 GROUP BY
                     landed.metric_date,
