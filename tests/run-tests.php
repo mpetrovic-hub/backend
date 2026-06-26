@@ -1272,6 +1272,7 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
         'success' => true,
         'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
         'archived_rows' => 0,
+        'archived_primary_keys' => [],
         'archive_inserted_rows' => 0,
         'archive_duplicate_rows' => 0,
         'archive_integrity_check' => 'ok',
@@ -1329,6 +1330,7 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
 {
     public $eligible_rows = 0;
     public $delete_result = ['deleted_rows' => 0, 'delete_batches' => 0];
+    public $deleted_primary_keys = [];
     public $events = [];
 
     protected function count_eligible_rows(array $source, string $cutoff_value): int
@@ -1338,9 +1340,10 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
         return $this->eligible_rows;
     }
 
-    protected function delete_eligible_rows(array $source, string $cutoff_value, int $batch_limit): array
+    protected function delete_archived_rows(array $source, array $primary_keys, int $batch_limit): array
     {
         $this->events[] = 'delete';
+        $this->deleted_primary_keys = $primary_keys;
 
         return $this->delete_result;
     }
@@ -11309,6 +11312,50 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate fails closed when summary coverage q
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Coverage_Gate matches TK-zone coverage to current PID set', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'wp_';
+        public $last_error = '';
+        public $prepared_statements = [];
+
+        public function prepare($query, ...$args)
+        {
+            $statement = [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+            $this->prepared_statements[] = $statement;
+
+            return $statement;
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+
+            if (strpos($query, 'summary.sessions = raw.sessions') !== false) {
+                return [['metric_date' => '2026-06-10']];
+            }
+
+            return [];
+        }
+    };
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-06-12 00:00:00');
+
+    kiwi_assert_same('failed', $result['status'], 'Expected TK-zone coverage mismatch for the current PID set to fail the gate.');
+    kiwi_assert_same(['2026-06-10'], $result['tkzone_summary']['blocking_missing_dates'] ?? [], 'Expected current-PID TK-zone mismatch date to block cleanup.');
+    kiwi_assert_contains('pid IN', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to filter raw sessions by the current PID allow-list.');
+    kiwi_assert_contains('summary.sessions = raw.sessions', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to compare current raw PID sessions against summary sessions.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service records disabled landing-page-session runs without archive or delete', function (): void {
     global $wpdb;
 
@@ -11526,6 +11573,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service archives before deleting active la
         'success' => true,
         'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
         'archived_rows' => 3,
+        'archived_primary_keys' => [101, 102, 103],
         'archive_inserted_rows' => 2,
         'archive_duplicate_rows' => 1,
         'archive_integrity_check' => 'ok',
@@ -11548,10 +11596,63 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service archives before deleting active la
 
     kiwi_assert_same('success', $result['status'], 'Expected active cleanup to succeed when archive and gates pass.');
     kiwi_assert_same(['count', 'archive', 'delete'], $events, 'Expected cleanup to archive rows before deleting them.');
+    kiwi_assert_same([101, 102, 103], $service->deleted_primary_keys, 'Expected cleanup to delete only rows proven archived by primary key.');
     kiwi_assert_same(3, $run_row['archived_rows'] ?? 0, 'Expected archived row count to be persisted.');
     kiwi_assert_same(3, $run_row['deleted_rows'] ?? 0, 'Expected deleted row count to be persisted.');
     kiwi_assert_same('ok', $run_row['archive_integrity_check'] ?? '', 'Expected archive integrity result to be persisted.');
     kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected active cleanup to capture before/after snapshots.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service fails when archived primary-key deletes do not match', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->result = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 2,
+        'archived_primary_keys' => [201, 202],
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0,
+        'archive_integrity_check' => 'ok',
+    ];
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 2;
+    $service->delete_result = ['deleted_rows' => 1, 'delete_batches' => 1];
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same(false, $result['success'], 'Expected cleanup to fail when not every archived primary key is deleted.');
+    kiwi_assert_same('failed', $result['status'], 'Expected partial archived-ID delete to mark the run failed.');
+    kiwi_assert_same('delete_count_mismatch', $result['error_code'], 'Expected partial archived-ID delete to expose a count mismatch.');
+    kiwi_assert_same([201, 202], $service->deleted_primary_keys, 'Expected cleanup to attempt deletion by archived primary keys only.');
+    kiwi_assert_same(1, $runs->rows[1]['deleted_rows'] ?? 0, 'Expected partial delete count to be audited.');
 
     $wpdb = $previous_wpdb;
 });

@@ -24,6 +24,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
             'archive_batch_id' => $archive_batch_id,
             'archive_db_path' => '',
             'archived_rows' => 0,
+            'archived_primary_keys' => [],
             'archive_inserted_rows' => 0,
             'archive_duplicate_rows' => 0,
             'archive_integrity_check' => '',
@@ -76,9 +77,14 @@ class Kiwi_Retention_Sqlite_Archive_Service
                 }
 
                 foreach ($rows as $row) {
-                    $last_id = max($last_id, (int) ($row[$primary_key] ?? 0));
+                    $source_pk = (int) ($row[$primary_key] ?? 0);
+                    $last_id = max($last_id, $source_pk);
                     $inserted = $this->insert_archive_row($pdo, $source, $archive_batch_id, $row);
                     $result['archived_rows']++;
+
+                    if ($source_pk > 0) {
+                        $result['archived_primary_keys'][] = $source_pk;
+                    }
 
                     if ($inserted) {
                         $result['archive_inserted_rows']++;

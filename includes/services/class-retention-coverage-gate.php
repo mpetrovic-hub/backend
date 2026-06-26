@@ -115,17 +115,76 @@ class Kiwi_Retention_Coverage_Gate
         $query = $wpdb->prepare(
             "SELECT raw.metric_date
              FROM (
-                SELECT DISTINCT DATE(created_at) AS metric_date
-                FROM {$source_table}
-                WHERE created_at < %s
-                  AND pid IN ({$placeholders})
-             ) raw
-             LEFT JOIN (
-                SELECT DISTINCT metric_date
-                FROM {$summary_table}
-             ) summary ON summary.metric_date = raw.metric_date
-             WHERE summary.metric_date IS NULL
-             ORDER BY raw.metric_date ASC",
+                SELECT
+                    landed.metric_date,
+                    landed.provider_key,
+                    landed.flow_key,
+                    landed.country,
+                    landed.service_key,
+                    landed.landing_key,
+                    landed.tksource,
+                    landed.tkzone,
+                    COUNT(*) AS sessions
+                FROM (
+                    SELECT
+                        DATE(MIN(created_at)) AS metric_date,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(provider_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS provider_key,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(flow_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS flow_key,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(country, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS country,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(service_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS service_key,
+                        COALESCE(NULLIF(landing_key, ''), '(unknown)') AS landing_key,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tksource, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS tksource,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tkzone, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS tkzone
+                    FROM {$source_table}
+                    WHERE created_at < %s
+                      AND pid IN ({$placeholders})
+                      AND landing_key <> ''
+                      AND session_token <> ''
+                    GROUP BY landing_key, session_token
+                ) landed
+                GROUP BY
+                    landed.metric_date,
+                    landed.provider_key,
+                    landed.flow_key,
+                    landed.country,
+                    landed.service_key,
+                    landed.landing_key,
+                    landed.tksource,
+                    landed.tkzone
+                 ) raw
+                 LEFT JOIN (
+                    SELECT
+                        metric_date,
+                        provider_key,
+                        flow_key,
+                        country,
+                        service_key,
+                        landing_key,
+                        tksource,
+                        tkzone,
+                        SUM(sessions) AS sessions
+                    FROM {$summary_table}
+                    GROUP BY
+                        metric_date,
+                        provider_key,
+                        flow_key,
+                        country,
+                        service_key,
+                        landing_key,
+                        tksource,
+                        tkzone
+                 ) summary ON summary.metric_date = raw.metric_date
+                    AND summary.provider_key = raw.provider_key
+                    AND summary.flow_key = raw.flow_key
+                    AND summary.country = raw.country
+                    AND summary.service_key = raw.service_key
+                    AND summary.landing_key = raw.landing_key
+                    AND summary.tksource = raw.tksource
+                    AND summary.tkzone = raw.tkzone
+                    AND summary.sessions = raw.sessions
+                 WHERE summary.metric_date IS NULL
+                 GROUP BY raw.metric_date
+                 ORDER BY raw.metric_date ASC",
             ...$params
         );
 
