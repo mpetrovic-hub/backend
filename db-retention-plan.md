@@ -235,6 +235,73 @@ Acceptance criteria:
 - `db-retention-plan.md` is removed or replaced with a short pointer to the permanent docs.
 - Changelog notes the implemented retention behavior and operational controls.
 
+### Issue 5: Retention settings page and growth tracking
+
+Purpose: give operators a safe UI for choosing retention windows and enough
+historical growth evidence to understand the storage impact of each setting.
+
+Scope:
+
+- add a protected retention settings/readout page;
+- expose per-table retention days, cleanup enablement, dry-run status, and last
+  cleanup status;
+- track daily table growth before cleanup so the UI can show estimated
+  MiB/day growth and retention-size projections even after tables are pruned.
+
+Growth tracking contract:
+
+- add a small durable MySQL metadata table
+  `wp_kiwi_retention_table_growth_snapshots`;
+- write a `before_cleanup` snapshot for every retention-managed table before any
+  archive/delete work starts;
+- write an `after_cleanup` snapshot after archive/delete completes or after the
+  run is skipped/fails in a state where post-run measurement is meaningful;
+- store only metadata, not raw subscriber/session payloads;
+- include table name, snapshot phase, snapshot date/time, effective retention
+  days, cutoff column/value, row count, data size bytes, index size bytes, total
+  size bytes, min/max cutoff values, eligible rows, archived rows, deleted rows,
+  cleanup run id, and archive batch id where available.
+
+Cleanup run contract:
+
+- add a separate durable MySQL table `wp_kiwi_retention_cleanup_runs`;
+- write one row for every cleanup attempt, including skipped and failed runs;
+- store run id, table, status, started/finished timestamps, retention days,
+  cutoff column/value, eligible rows, archived rows, archive duplicate rows,
+  deleted rows, delete batch count, gate statuses, archive batch id, error code,
+  and error message;
+- do not add an extra WordPress option such as
+  `kiwi_retention_cleanup_last_result`; the cleanup-runs table is the source of
+  truth for the Settings page.
+
+Growth calculation:
+
+- primary UI metric is observed net growth before cleanup;
+- per-day observed growth is calculated as
+  `today.before_cleanup.total_size_bytes - previous.after_cleanup.total_size_bytes`;
+- 7-day, 30-day, and all-time averages are calculated from those observed daily
+  growth values;
+- row-count-derived bytes/row estimates may be stored or used as diagnostics,
+  but they are not the primary UI growth metric.
+
+Acceptance criteria:
+
+- Settings page shows current retention days and cleanup enabled/dry-run state
+  per managed table.
+- Settings page shows last cleanup status per table from
+  `wp_kiwi_retention_cleanup_runs`.
+- Settings page shows 7-day, 30-day, and all-time observed average daily growth
+  where enough snapshots exist.
+- Settings page shows retention-size projections using observed average growth
+  and the selected retention window.
+- Growth snapshots are recorded before cleanup, so active pruning does not hide
+  true daily growth.
+- Failed/skipped cleanup attempts are visible with status, error code, error
+  message, and deleted rows.
+- Tests cover snapshot writing order, growth averaging, cleanup-run persistence,
+  settings readout behavior, and the explicit absence of a last-result
+  WordPress option.
+
 ## Validation gates before deleting raw analytics rows
 
 A later cleanup implementation may delete rows only after these gates are documented for the proposed date range and table set.
@@ -328,7 +395,8 @@ Create the issues in this order:
 1. DB size audit, growth analysis, and retention recommendation.
 2. Raw landing analytics retention cleanup with a 30-day preferred default, plus 14-day storage-pressure and 7-day emergency fallbacks only if Issue 1 recommends them.
 3. Fraud/provider audit retention cleanup with 120-day preferred windows and 90-day fallbacks only if Issue 1 recommends them.
-4. Permanent documentation update after the implementation is real.
+4. Retention settings page and growth tracking after the cleanup contracts are clear enough to expose safely.
+5. Permanent documentation update after the implementation is real.
 
 Until those issues are complete:
 
