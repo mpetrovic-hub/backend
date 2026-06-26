@@ -616,6 +616,106 @@ class Kiwi_Config
             : 1000;
     }
 
+    public function get_retention_settings(): array
+    {
+        $settings = function_exists('get_option')
+            ? get_option('kiwi_retention_settings', [])
+            : [];
+
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $normalized = [];
+
+        foreach ($this->get_default_retention_settings() as $source_key => $defaults) {
+            $source_settings = isset($settings[$source_key]) && is_array($settings[$source_key])
+                ? $settings[$source_key]
+                : [];
+
+            $normalized[$source_key] = [
+                'enabled' => (bool) ($source_settings['enabled'] ?? $defaults['enabled']),
+                'dry_run' => (bool) ($source_settings['dry_run'] ?? $defaults['dry_run']),
+                'retention_days' => max(1, (int) ($source_settings['retention_days'] ?? $defaults['retention_days'])),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    public function get_retention_source_settings(string $source_key): array
+    {
+        $settings = $this->get_retention_settings();
+
+        return $settings[$source_key] ?? [
+            'enabled' => false,
+            'dry_run' => true,
+            'retention_days' => 14,
+        ];
+    }
+
+    public function get_default_retention_settings(): array
+    {
+        return [
+            'landing_page_sessions' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 14,
+            ],
+            'premium_sms_landing_engagements' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 14,
+            ],
+            'landing_handoff_events' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 14,
+            ],
+            'sms_body_variant_assignments' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 90,
+            ],
+            'premium_sms_fraud_signals' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 120,
+            ],
+            'nth_events' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 120,
+            ],
+            'nth_flow_transactions' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 120,
+            ],
+        ];
+    }
+
+    public function get_retention_archive_root(): string
+    {
+        return defined('KIWI_RETENTION_ARCHIVE_ROOT')
+            ? rtrim((string) KIWI_RETENTION_ARCHIVE_ROOT, '/\\')
+            : '/home/u367252972/kiwi-backend-archives/db-retention';
+    }
+
+    public function get_retention_default_batch_limit(): int
+    {
+        return defined('KIWI_RETENTION_DEFAULT_BATCH_LIMIT')
+            ? max(1, (int) KIWI_RETENTION_DEFAULT_BATCH_LIMIT)
+            : 500;
+    }
+
+    public function get_retention_lock_ttl_seconds(): int
+    {
+        return defined('KIWI_RETENTION_LOCK_TTL_SECONDS')
+            ? max(60, (int) KIWI_RETENTION_LOCK_TTL_SECONDS)
+            : 1800;
+    }
+
     /**
      * Operator lookup routes configuration
      * Returns a mapping of MSISDN prefixes to provider and country, used for routing operator lookup requests to the correct provider based on the phone number's prefix. Configured in wp-config.php as KIWI_OPERATOR_LOOKUP_ROUTES.

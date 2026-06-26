@@ -9,6 +9,15 @@ click-attribution TTL unchanged, and keeps fraud/provider audit tables on the
 preferred 120-day policy unless a later business decision approves a shorter
 fallback.
 
+Final planning update, 2026-06-26:
+
+- Start implementation with `wp_kiwi_landing_page_sessions` only (`source_key = landing_page_sessions`).
+- Use `enabled=false`, `dry_run=true`, `retention_days=14` as the default for that source.
+- Do not solve historical summary backfill in Issue #71; known old missing coverage is accepted as gone.
+- Keep coverage gates hard for new/future missing summary coverage.
+- Run cleanup through a daily WP-Cron job plus a manually callable runner.
+- Keep the Settings page/UI in Issue #80.
+
 This file is the working plan for reducing WordPress database growth after the landing analytics, daily summary, tkzone summary, device normalization, trusted-proxy IP, and premium-SMS fraud changes that landed after the original GitHub issue was written. It is intentionally separate from the existing documentation until the actual retention implementation is approved.
 
 ## Immediate problem
@@ -59,9 +68,12 @@ Since the original issue was written, the table contracts changed materially:
 
 ## Planning assumptions agreed so far
 
-These are planning inputs, not implemented behavior:
+These were original planning inputs, not implemented behavior. The audit has
+since selected the storage-pressure window for the first raw landing cleanup:
 
-- Landing/session, CTA/engagement, and handoff raw evidence should ideally remain available for **30 days**.
+- Landing/session, CTA/engagement, and handoff raw evidence originally targeted
+  **30 days**, but the current implementation default is **14 days** for raw
+  landing sources because of storage pressure.
 - Billing and fraud evidence should remain available for **90-120 days**.
 - If the size audit proves that the preferred windows still leave the database too close to the 3 GB Hostinger limit, the implementation issue must come back with a narrower recommendation instead of silently using shorter windows.
 
@@ -78,9 +90,9 @@ The table below is a decision matrix. The preferred window is the current planni
 | `wp_kiwi_sms_body_variant_summary` | keep indefinitely | keep indefinitely | keep indefinitely | n/a | Small aggregate experiment table. | none |
 | `wp_kiwi_device_model_brand_map` | keep indefinitely | keep indefinitely | keep indefinitely | n/a | Configuration/reference table, not traffic raw data. | none |
 | `wp_kiwi_click_attributions` | existing 48h TTL | existing 48h TTL | existing 48h TTL plus cleanup-backlog fix | `expires_at` | Already short-lived and already has bounded cleanup. Audit only needs to confirm no backlog. | none unless audit finds backlog |
-| `wp_kiwi_landing_page_sessions` | **30 days** | **14 days** | **7 days** | `created_at` | Choose from table size, average daily growth, share of total DB volume, summary coverage, and required debug window. | Issue 2 |
-| `wp_kiwi_premium_sms_landing_engagements` | **30 days** | **14 days** | **7 days** | `created_at` / row timestamp used by repository | Choose from table size, average daily growth, share of total DB volume, CTA/fraud debug needs, and summary coverage. | Issue 2 |
-| `wp_kiwi_landing_handoff_events` | **30 days** | **14 days** | **7 days** | `created_at` | Choose from table size, average daily growth, share of total DB volume, handoff debug needs, and summary coverage. | Issue 2 |
+| `wp_kiwi_landing_page_sessions` | **14 days** | n/a | **7 days** only with explicit emergency approval | `created_at` | Audit selected the storage-pressure window; implement first as Issue #71 pilot. | Issue 2 / #71 |
+| `wp_kiwi_premium_sms_landing_engagements` | **14 days** | n/a | **7 days** only with explicit emergency approval | `created_at` / row timestamp used by repository | Same raw landing default, but implement later. | Issue 2 / #72 |
+| `wp_kiwi_landing_handoff_events` | **14 days** | n/a | **7 days** only with explicit emergency approval | `created_at` | Same raw landing default, but implement later. | Issue 2 / #73 |
 | `wp_kiwi_sms_body_variant_assignments` | **90 days** | **60 days** | **30 days** | `created_at` | Assignment-level token correlation may be needed longer than raw analytics. Choose from size audit and support needs. | Issue 3 |
 | `wp_kiwi_premium_sms_fraud_signals` | **120 days** | **90 days** | not below 90 days without explicit business approval | `occurred_at` or latest billing outcome timestamp | Operational fraud/billing evidence. Choose from support, payout-dispute, chargeback, and fraud-review windows. | Issue 3 |
 | `wp_kiwi_nth_events` | **120 days** | **90 days** | not below 90 days without explicit business approval | event timestamp | Provider event audit/reconciliation data. Choose from provider support and reconciliation needs. | Issue 3 |
@@ -88,31 +100,20 @@ The table below is a decision matrix. The preferred window is the current planni
 
 ### Specific answer: when should `wp_kiwi_landing_page_sessions` be cut?
 
-The current planning preference is **30 complete days** for `wp_kiwi_landing_page_sessions`, because landing/session debugging for about a month would be useful.
+The final default for `wp_kiwi_landing_page_sessions` is **14 complete days**.
 
-Proposed preferred rule:
+Rule:
 
-- keep the most recent **30 complete days**;
-- delete only rows with `created_at < start_of_today - 30 days`;
+- keep the most recent **14 complete days**;
+- delete only rows with `created_at < start_of_today - 14 days`;
 - never delete today's rows or yesterday's rows during the first rollout;
-- run the cleanup only after both summaries have refreshed through the cutoff date;
+- do not backfill historical missing summaries in Issue #71;
+- accept the known old missing summary coverage from `2026-05-15` through
+  `2026-05-27` as historical raw evidence that is no longer recoverable;
+- keep coverage gates hard for any other new/future missing summary coverage;
 - export/archive the full eligible set with `created_at < new_cutoff` before deleting, not only the newly eligible daily slice;
 - make the archive import idempotent/deduplicated by original primary key or another stable unique key;
 - run deletes in small batches, ordered by the primary key, with a dry-run count first.
-
-Example with today as `2026-06-12`:
-
-- preferred 30-day cutoff keeps rows from `2026-05-13 00:00:00` onward;
-- preferred eligible cutoff: `created_at < 2026-05-13 00:00:00`;
-- before deleting those rows, confirm main and tkzone summaries cover every `metric_date <= 2026-05-12` that has raw sessions.
-
-Fallback logic:
-
-- use **30 days** if the dry-run report shows enough headroom below the 3 GB limit;
-- consider **14 days** only if 30 days leaves the database too close to the limit or average daily growth makes the 3 GB limit likely before the next review;
-- consider **7 days** only as an explicit emergency setting when the size audit shows the site cannot stay safely below the host limit otherwise.
-
-So, `14 days` is no longer the default decision. It is a storage-pressure fallback candidate.
 
 ## Required issues to create
 
@@ -152,22 +153,25 @@ Acceptance criteria:
 
 ### Issue 2: Raw landing analytics retention cleanup
 
-Purpose: implement the first storage-saving cleanup for the largest analytics raw tables.
+Purpose: implement the first storage-saving cleanup pilot for the largest analytics raw table.
 
 Scope:
 
 - `wp_kiwi_landing_page_sessions`
+
+Out of scope for Issue #71:
+
 - `wp_kiwi_premium_sms_landing_engagements`
 - `wp_kiwi_landing_handoff_events`
+- the Settings page/UI from Issue #80
 
 Preferred target:
 
-- keep 30 complete days for landing sessions, CTA/engagement rows, and handoff rows.
+- keep 14 complete days for landing sessions.
 
 Fallbacks:
 
-- allow a configurable storage-pressure fallback to 14 complete days only when Issue 1 recommends it;
-- allow a configurable emergency fallback to 7 complete days only when Issue 1 shows the 3 GB limit cannot be protected otherwise.
+- allow a configurable emergency fallback to 7 complete days only with explicit approval.
 
 Required safeguards:
 
@@ -177,10 +181,14 @@ Required safeguards:
 - backup/export-before-delete for the full eligible cutoff set, using the relevant cutoff column with `< new_cutoff`;
 - deduplicated archive import so repeated or overlapping exports cannot create duplicate archived rows;
 - batch deletes with a small limit;
+- daily WP-Cron hook plus a manually callable runner;
 - transient or option lock to prevent concurrent cleanup;
 - per-table counts before and after;
-- do not run if summary coverage check fails;
-- log/persist last cleanup result;
+- accept the known old missing summary coverage from `2026-05-15` through
+  `2026-05-27`;
+- do not delete if any other new/future summary coverage check fails;
+- persist cleanup attempts in `wp_kiwi_retention_cleanup_runs`;
+- do not add `kiwi_retention_cleanup_last_result`;
 - never delete durable summary or sales rows.
 
 Acceptance criteria:
@@ -188,8 +196,9 @@ Acceptance criteria:
 - With cleanup disabled, nothing is deleted.
 - Dry-run mode reports eligible row counts without deleting.
 - Enabled cleanup deletes only rows older than the retention cutoff.
-- Cleanup refuses to run when main summary coverage is missing for the cutoff period.
-- Cleanup refuses to run for tkzone-allow-listed raw rows when tkzone summary coverage is missing for the cutoff period.
+- Cleanup records the accepted historical coverage gap instead of backfilling it.
+- Cleanup refuses to delete when non-accepted main summary coverage is missing for the cutoff period.
+- Cleanup refuses to delete for tkzone-allow-listed raw rows when non-accepted tkzone summary coverage is missing for the cutoff period.
 - Tests cover cutoff boundaries, dry-run behavior, disabled behavior, summary-coverage failure, batch limiting, and idempotency.
 
 ### Issue 3: Fraud/provider audit retention policy and cleanup
@@ -390,13 +399,13 @@ Confirm the operational answer to these questions:
 
 ## Current recommendation
 
-Create the issues in this order:
+Current implementation order:
 
-1. DB size audit, growth analysis, and retention recommendation.
-2. Raw landing analytics retention cleanup with a 30-day preferred default, plus 14-day storage-pressure and 7-day emergency fallbacks only if Issue 1 recommends them.
-3. Fraud/provider audit retention cleanup with 120-day preferred windows and 90-day fallbacks only if Issue 1 recommends them.
-4. Retention settings page and growth tracking after the cleanup contracts are clear enough to expose safely.
-5. Permanent documentation update after the implementation is real.
+1. Finish/formalize the audit issue if needed.
+2. Implement Issue #71 as the pilot for `wp_kiwi_landing_page_sessions` only.
+3. Reuse the infrastructure for `wp_kiwi_premium_sms_landing_engagements` and `wp_kiwi_landing_handoff_events`.
+4. Implement the Settings page/growth readout in Issue #80 after cleanup/run/snapshot contracts exist.
+5. Implement fraud/provider audit cleanup issues and then move final policy into permanent docs.
 
 Until those issues are complete:
 

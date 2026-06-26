@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-06-08-1';
+    private const DB_SCHEMA_VERSION = '2026-06-26-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -19,6 +19,7 @@ class Kiwi_Plugin
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS = 1800;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_summary_refresh_last_result';
     private const DEVICE_MODEL_BRAND_HARVEST_HOOK = 'kiwi_device_model_brand_harvest';
+    private const RETENTION_CLEANUP_DAILY_HOOK = 'kiwi_retention_cleanup_daily';
 
     private $plugin_root_path;
     private $plugin_base_url;
@@ -54,8 +55,10 @@ class Kiwi_Plugin
         add_action('init', [$this, 'cleanup_expired_click_attributions']);
         add_action('init', [$this, 'schedule_landing_funnel_daily_summary_refresh']);
         add_action('init', [$this, 'schedule_device_model_brand_harvest']);
+        add_action('init', [$this, 'schedule_retention_cleanup']);
         add_action(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_summary_refresh']);
         add_action(self::DEVICE_MODEL_BRAND_HARVEST_HOOK, [$this, 'run_device_model_brand_harvest']);
+        add_action(self::RETENTION_CLEANUP_DAILY_HOOK, [$this, 'run_retention_cleanup_daily']);
         add_action('init', [$this, 'maybe_export_statistics']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
@@ -278,6 +281,44 @@ class Kiwi_Plugin
             'daily',
             self::DEVICE_MODEL_BRAND_HARVEST_HOOK
         );
+    }
+
+    public function schedule_retention_cleanup(): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+
+        if (wp_next_scheduled(self::RETENTION_CLEANUP_DAILY_HOOK) !== false) {
+            return;
+        }
+
+        wp_schedule_event(
+            time(),
+            'daily',
+            self::RETENTION_CLEANUP_DAILY_HOOK
+        );
+    }
+
+    public function run_retention_cleanup_daily(): array
+    {
+        return $this->run_retention_cleanup('cron');
+    }
+
+    public function run_retention_cleanup(string $triggered_by = 'manual'): array
+    {
+        $result = $this->build_retention_cleanup_service()->run_source(
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
+            $triggered_by
+        );
+
+        $message = !empty($result['success'])
+            ? 'Cleanup finished for landing_page_sessions with status ' . (string) ($result['status'] ?? 'unknown') . '.'
+            : 'Cleanup failed for landing_page_sessions: ' . (string) ($result['error_message'] ?? 'failed without error detail');
+
+        $this->log_retention_cleanup($message);
+
+        return $result;
     }
 
     public function run_device_model_brand_harvest(): array
@@ -940,6 +981,8 @@ TEXT;
             new Kiwi_Sms_Body_Variant_Repository(),
             new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
             new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
+            new Kiwi_Retention_Cleanup_Run_Repository(),
+            new Kiwi_Retention_Table_Growth_Snapshot_Repository(),
             new Kiwi_Landing_Funnel_Daily_Summary_Repository(),
             new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository(),
             new Kiwi_Traffic_Source_Funnel_Statistics_Repository(),
@@ -1230,6 +1273,11 @@ TEXT;
         return new Kiwi_Device_Model_Brand_Harvest_Service();
     }
 
+    protected function build_retention_cleanup_service(): Kiwi_Retention_Cleanup_Service
+    {
+        return new Kiwi_Retention_Cleanup_Service();
+    }
+
     protected function get_current_business_date(): string
     {
         if (function_exists('current_time')) {
@@ -1272,6 +1320,11 @@ TEXT;
     protected function log_device_model_brand_harvest(string $message): void
     {
         error_log('[kiwi-device-model-brand-harvest] ' . $message);
+    }
+
+    protected function log_retention_cleanup(string $message): void
+    {
+        error_log('[kiwi-retention-cleanup] ' . $message);
     }
 
     protected function get_device_model_brand_harvest_min_daily_sessions(): int

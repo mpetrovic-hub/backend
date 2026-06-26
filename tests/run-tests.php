@@ -349,6 +349,8 @@ require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-re
 require_once __DIR__ . '/../includes/repositories/class-sms-body-variant-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-retention-cleanup-run-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-retention-table-growth-snapshot-repository.php';
 require_once __DIR__ . '/../includes/repositories/interface-statistics-read-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-tkzone-summary-repository.php';
@@ -376,6 +378,10 @@ require_once __DIR__ . '/../includes/services/class-landing-page-variant-agent.p
 require_once __DIR__ . '/../includes/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-summary-aggregation-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-tkzone-summary-aggregation-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-source-registry.php';
+require_once __DIR__ . '/../includes/services/class-retention-coverage-gate.php';
+require_once __DIR__ . '/../includes/services/class-retention-sqlite-archive-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
@@ -1186,6 +1192,172 @@ class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
     }
 
     protected function log_landing_funnel_daily_summary_refresh(string $message): void
+    {
+        $this->logs[] = $message;
+    }
+}
+
+class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_Run_Repository
+{
+    public $rows = [];
+    public $updates = [];
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function create_run(array $data): int
+    {
+        $id = $this->next_id++;
+        $this->rows[$id] = array_merge(['id' => $id], $data);
+
+        return $id;
+    }
+
+    public function update_run(int $id, array $data): bool
+    {
+        $this->updates[] = ['id' => $id, 'data' => $data];
+        $this->rows[$id] = array_merge($this->rows[$id] ?? ['id' => $id], $data);
+
+        return true;
+    }
+}
+
+class Kiwi_Test_Retention_Table_Growth_Snapshot_Repository extends Kiwi_Retention_Table_Growth_Snapshot_Repository
+{
+    public $snapshots = [];
+
+    public function create_table(): void
+    {
+    }
+
+    public function capture_snapshot(
+        array $source,
+        string $snapshot_phase,
+        int $retention_days,
+        string $cutoff_value,
+        int $eligible_rows,
+        string $cleanup_run_id,
+        string $archive_batch_id = '',
+        int $archived_rows = 0,
+        int $deleted_rows = 0
+    ): int {
+        $this->snapshots[] = [
+            'source' => $source,
+            'snapshot_phase' => $snapshot_phase,
+            'retention_days' => $retention_days,
+            'cutoff_value' => $cutoff_value,
+            'eligible_rows' => $eligible_rows,
+            'cleanup_run_id' => $cleanup_run_id,
+            'archive_batch_id' => $archive_batch_id,
+            'archived_rows' => $archived_rows,
+            'deleted_rows' => $deleted_rows,
+        ];
+
+        return count($this->snapshots);
+    }
+}
+
+class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_Archive_Service
+{
+    public $calls = [];
+    public $events = null;
+    public $result = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 0,
+        'archive_inserted_rows' => 0,
+        'archive_duplicate_rows' => 0,
+        'archive_integrity_check' => 'ok',
+    ];
+
+    public function __construct()
+    {
+    }
+
+    public function archive_eligible_rows(
+        array $source,
+        string $cutoff_value,
+        string $archive_batch_id,
+        int $batch_limit
+    ): array {
+        if (is_array($this->events)) {
+            $this->events[] = 'archive';
+        }
+
+        $this->calls[] = [
+            'source' => $source,
+            'cutoff_value' => $cutoff_value,
+            'archive_batch_id' => $archive_batch_id,
+            'batch_limit' => $batch_limit,
+        ];
+
+        return array_merge($this->result, [
+            'archive_batch_id' => $archive_batch_id,
+        ]);
+    }
+}
+
+class Kiwi_Test_Retention_Coverage_Gate extends Kiwi_Retention_Coverage_Gate
+{
+    public $calls = [];
+    public $result;
+
+    public function __construct(array $result)
+    {
+        $this->result = $result;
+    }
+
+    public function check_landing_page_sessions(array $source, string $cutoff_value): array
+    {
+        $this->calls[] = [
+            'source' => $source,
+            'cutoff_value' => $cutoff_value,
+        ];
+
+        return $this->result;
+    }
+}
+
+class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
+{
+    public $eligible_rows = 0;
+    public $delete_result = ['deleted_rows' => 0, 'delete_batches' => 0];
+    public $events = [];
+
+    protected function count_eligible_rows(array $source, string $cutoff_value): int
+    {
+        $this->events[] = 'count';
+
+        return $this->eligible_rows;
+    }
+
+    protected function delete_eligible_rows(array $source, string $cutoff_value, int $batch_limit): array
+    {
+        $this->events[] = 'delete';
+
+        return $this->delete_result;
+    }
+}
+
+class Kiwi_Test_Plugin_Retention_Cleanup extends Kiwi_Plugin
+{
+    public $logs = [];
+    private $retention_cleanup_service;
+
+    public function __construct(Kiwi_Retention_Cleanup_Service $retention_cleanup_service)
+    {
+        parent::__construct(dirname(__DIR__), 'https://example.test/plugin/');
+        $this->retention_cleanup_service = $retention_cleanup_service;
+    }
+
+    protected function build_retention_cleanup_service(): Kiwi_Retention_Cleanup_Service
+    {
+        return $this->retention_cleanup_service;
+    }
+
+    protected function log_retention_cleanup(string $message): void
     {
         $this->logs[] = $message;
     }
@@ -10944,6 +11116,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'cleanup_expired_click_attributions',
             'schedule_landing_funnel_daily_summary_refresh',
             'schedule_device_model_brand_harvest',
+            'schedule_retention_cleanup',
             'maybe_export_statistics',
             'maybe_export_hlr_results',
             'maybe_run_dimoco_test',
@@ -11048,6 +11221,245 @@ kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema rep
         in_array(Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository::class, $classes, true),
         'Expected schema migrations to include the landing funnel daily tkzone summary repository.'
     );
+    kiwi_assert_true(
+        in_array(Kiwi_Retention_Cleanup_Run_Repository::class, $classes, true),
+        'Expected schema migrations to include the retention cleanup run repository.'
+    );
+    kiwi_assert_true(
+        in_array(Kiwi_Retention_Table_Growth_Snapshot_Repository::class, $classes, true),
+        'Expected schema migrations to include the retention growth snapshot repository.'
+    );
+});
+
+kiwi_run_test('Kiwi_Config exposes final retention defaults for landing page sessions', function (): void {
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $config = new Kiwi_Config();
+    $settings = $config->get_retention_source_settings('landing_page_sessions');
+
+    kiwi_assert_same(false, $settings['enabled'], 'Expected landing-page-session retention to be disabled by default.');
+    kiwi_assert_same(true, $settings['dry_run'], 'Expected landing-page-session retention to default to dry-run.');
+    kiwi_assert_same(14, $settings['retention_days'], 'Expected landing-page-session retention to default to fourteen days.');
+    kiwi_assert_same('/home/u367252972/kiwi-backend-archives/db-retention', $config->get_retention_archive_root(), 'Expected Hostinger archive root to be the default.');
+});
+
+kiwi_run_test('Kiwi_Plugin schedules the retention cleanup daily cron hook once', function (): void {
+    $GLOBALS['kiwi_test_hooks'] = [];
+    $GLOBALS['kiwi_test_cron_events'] = [];
+    $GLOBALS['kiwi_test_next_scheduled'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $hook = (string) $reflection->getConstant('RETENTION_CLEANUP_DAILY_HOOK');
+
+    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
+    $plugin->register();
+    $plugin->schedule_retention_cleanup();
+    $plugin->schedule_retention_cleanup();
+
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks'][$hook]), 'Expected the retention cleanup cron hook to be registered.');
+    kiwi_assert_same(1, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event) use ($hook): bool {
+        return ($event['hook'] ?? '') === $hook;
+    })), 'Expected retention cleanup to be scheduled only once.');
+    kiwi_assert_same('daily', $GLOBALS['kiwi_test_cron_events'][0]['recurrence'] ?? '', 'Expected retention cleanup to use a daily cron recurrence.');
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service records disabled landing-page-session runs without archive or delete', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 42;
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same('skipped', $result['status'], 'Expected disabled retention cleanup to be skipped.');
+    kiwi_assert_same('cleanup_disabled', $result['error_code'], 'Expected disabled skip to be explicit in the run result.');
+    kiwi_assert_same([], $archive->calls, 'Expected disabled cleanup not to archive rows.');
+    kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected disabled run to still capture growth snapshots.');
+    kiwi_assert_true(!array_key_exists('kiwi_retention_cleanup_last_result', $GLOBALS['kiwi_test_options']), 'Expected cleanup not to create a last-result WordPress option.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service dry-run records accepted historical coverage gaps without deleting', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => true,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $gate_result = [
+        'status' => 'passed',
+        'main_summary' => [
+            'accepted_missing_dates' => ['2026-05-15', '2026-05-16'],
+            'blocking_missing_dates' => [],
+        ],
+    ];
+    $gate = new Kiwi_Test_Retention_Coverage_Gate($gate_result);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 9;
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+    $run_row = $runs->rows[1] ?? [];
+
+    kiwi_assert_same('success', $result['status'], 'Expected dry-run to finish successfully when the only gaps are accepted historical dates.');
+    kiwi_assert_same('passed', $result['gate_status'], 'Expected accepted historical gaps to pass the gate.');
+    kiwi_assert_same([], $archive->calls, 'Expected dry-run not to archive rows.');
+    kiwi_assert_same('2026-03-18 00:00:00', $run_row['cutoff_value'] ?? '', 'Expected cutoff to use start of today minus fourteen complete days.');
+    $gate_results_json = $runs->rows[1]['gate_results_json'] ?? $runs->updates[0]['data']['gate_results_json'] ?? '';
+    if (is_array($gate_results_json)) {
+        $gate_results_json = wp_json_encode($gate_results_json);
+    }
+    kiwi_assert_contains('2026-05-15', (string) $gate_results_json, 'Expected accepted historical dates to be persisted in gate results.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks active deletes for non-accepted coverage gaps', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $gate = new Kiwi_Test_Retention_Coverage_Gate([
+        'status' => 'failed',
+        'main_summary' => [
+            'accepted_missing_dates' => [],
+            'blocking_missing_dates' => ['2026-06-18'],
+        ],
+    ]);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 5;
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same('skipped', $result['status'], 'Expected active cleanup to skip deletion when future coverage is missing.');
+    kiwi_assert_same('coverage_gate_failed', $result['error_code'], 'Expected coverage gate skip to be explicit.');
+    kiwi_assert_same([], $archive->calls, 'Expected failed coverage gate not to archive rows.');
+    kiwi_assert_same(['count'], $service->events, 'Expected failed coverage gate not to delete rows.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service archives before deleting active landing-page-session rows', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $events = [];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->events =& $events;
+    $archive->result = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 3,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 1,
+        'archive_integrity_check' => 'ok',
+    ];
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->events =& $events;
+    $service->eligible_rows = 3;
+    $service->delete_result = ['deleted_rows' => 3, 'delete_batches' => 1];
+
+    $result = $service->run_source('landing_page_sessions', 'wp_cli');
+    $run_row = $runs->rows[1] ?? [];
+
+    kiwi_assert_same('success', $result['status'], 'Expected active cleanup to succeed when archive and gates pass.');
+    kiwi_assert_same(['count', 'archive', 'delete'], $events, 'Expected cleanup to archive rows before deleting them.');
+    kiwi_assert_same(3, $run_row['archived_rows'] ?? 0, 'Expected archived row count to be persisted.');
+    kiwi_assert_same(3, $run_row['deleted_rows'] ?? 0, 'Expected deleted row count to be persisted.');
+    kiwi_assert_same('ok', $run_row['archive_integrity_check'] ?? '', 'Expected archive integrity result to be persisted.');
+    kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected active cleanup to capture before/after snapshots.');
+
+    $wpdb = $previous_wpdb;
 });
 
 kiwi_run_test('Kiwi_Plugin backfills legacy Android version before dropping old columns', function (): void {
@@ -11295,7 +11707,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary cont
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-06-08-1', $schema_version, 'Expected schema version to be bumped for premium-sms fraud billing outcome columns and completed-sale cooldown indexes.');
+    kiwi_assert_same('2026-06-26-1', $schema_version, 'Expected schema version to be bumped for retention run and growth snapshot tables.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
