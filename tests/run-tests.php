@@ -11374,6 +11374,72 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate fails closed when summary coverage q
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dimensions and sessions', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'wp_';
+        public $last_error = '';
+        public $prepared_statements = [];
+
+        public function prepare($query, ...$args)
+        {
+            $statement = [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+            $this->prepared_statements[] = $statement;
+
+            return $statement;
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+
+            if (strpos($query, 'kiwi_landing_funnel_daily_summary') !== false
+                && strpos($query, 'summary.sessions = raw.sessions') !== false
+            ) {
+                return [['metric_date' => '2026-06-11']];
+            }
+
+            return [];
+        }
+    };
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-06-12 00:00:00');
+    $main_query = (string) ($wpdb->prepared_statements[0]['query'] ?? '');
+
+    kiwi_assert_same('failed', $result['status'], 'Expected main summary dimension/session mismatch to fail the gate.');
+    kiwi_assert_same(['2026-06-11'], $result['main_summary']['blocking_missing_dates'] ?? [], 'Expected main summary mismatch date to block cleanup.');
+    kiwi_assert_contains('COUNT(*) AS sessions', $main_query, 'Expected main coverage gate to count canonical raw sessions.');
+    kiwi_assert_contains('GROUP BY DATE(created_at), landing_key, session_token', $main_query, 'Expected main coverage gate to mirror the per-day landing/session refresh grain.');
+    kiwi_assert_contains('summary.sessions = raw.sessions', $main_query, 'Expected main coverage gate to compare raw and summary session counts.');
+    foreach ([
+        'landing_key',
+        'service_key',
+        'provider_key',
+        'flow_key',
+        'country',
+        'pid',
+        'tksource',
+        'device_brand',
+        'os',
+        'os_version',
+        'browser',
+        'client_ip_version',
+        'client_ip_prefix',
+    ] as $dimension) {
+        kiwi_assert_contains('summary.' . $dimension . ' = raw.' . $dimension, $main_query, 'Expected main coverage gate to match dimension: ' . $dimension);
+    }
+    kiwi_assert_true(strpos($main_query, 'SELECT DISTINCT metric_date') === false, 'Expected main coverage gate not to accept any summary row for a date as full coverage.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Coverage_Gate matches TK-zone coverage to current PID set', function (): void {
     global $wpdb;
 
@@ -11398,7 +11464,9 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches TK-zone coverage to current 
         {
             $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
 
-            if (strpos($query, 'summary.sessions = raw.sessions') !== false) {
+            if (strpos($query, 'kiwi_landing_funnel_daily_tkzone_summary') !== false
+                && strpos($query, 'summary.sessions = raw.sessions') !== false
+            ) {
                 return [['metric_date' => '2026-06-10']];
             }
 

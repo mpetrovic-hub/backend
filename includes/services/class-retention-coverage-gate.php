@@ -61,15 +61,110 @@ class Kiwi_Retention_Coverage_Gate
         $query = $wpdb->prepare(
             "SELECT raw.metric_date
              FROM (
-                SELECT DISTINCT DATE(created_at) AS metric_date
-                FROM {$source_table}
-                WHERE created_at < %s
+                SELECT
+                    landed.metric_date,
+                    landed.landing_key,
+                    landed.service_key,
+                    landed.provider_key,
+                    landed.flow_key,
+                    landed.country,
+                    landed.pid,
+                    landed.tksource,
+                    landed.device_brand,
+                    landed.os,
+                    landed.os_version,
+                    landed.browser,
+                    landed.client_ip_version,
+                    landed.client_ip_prefix,
+                    COUNT(*) AS sessions
+                FROM (
+                    SELECT
+                        DATE(created_at) AS metric_date,
+                        COALESCE(NULLIF(landing_key, ''), '(unknown)') AS landing_key,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(service_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS service_key,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(provider_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS provider_key,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(flow_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS flow_key,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(country, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS country,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(pid, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS pid,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tksource, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS tksource,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(device_brand, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS device_brand,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(os, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS os,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(os_version, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS os_version,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(browser, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS browser,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(client_ip_version, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS client_ip_version,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(client_ip_prefix, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS client_ip_prefix
+                    FROM {$source_table}
+                    WHERE created_at < %s
+                      AND landing_key <> ''
+                      AND session_token <> ''
+                    GROUP BY DATE(created_at), landing_key, session_token
+                ) landed
+                GROUP BY
+                    landed.metric_date,
+                    landed.landing_key,
+                    landed.service_key,
+                    landed.provider_key,
+                    landed.flow_key,
+                    landed.country,
+                    landed.pid,
+                    landed.tksource,
+                    landed.device_brand,
+                    landed.os,
+                    landed.os_version,
+                    landed.browser,
+                    landed.client_ip_version,
+                    landed.client_ip_prefix
              ) raw
              LEFT JOIN (
-                SELECT DISTINCT metric_date
+                SELECT
+                    metric_date,
+                    landing_key,
+                    service_key,
+                    provider_key,
+                    flow_key,
+                    country,
+                    pid,
+                    tksource,
+                    device_brand,
+                    os,
+                    os_version,
+                    browser,
+                    client_ip_version,
+                    client_ip_prefix,
+                    SUM(sessions) AS sessions
                 FROM {$summary_table}
+                GROUP BY
+                    metric_date,
+                    landing_key,
+                    service_key,
+                    provider_key,
+                    flow_key,
+                    country,
+                    pid,
+                    tksource,
+                    device_brand,
+                    os,
+                    os_version,
+                    browser,
+                    client_ip_version,
+                    client_ip_prefix
              ) summary ON summary.metric_date = raw.metric_date
+                AND summary.landing_key = raw.landing_key
+                AND summary.service_key = raw.service_key
+                AND summary.provider_key = raw.provider_key
+                AND summary.flow_key = raw.flow_key
+                AND summary.country = raw.country
+                AND summary.pid = raw.pid
+                AND summary.tksource = raw.tksource
+                AND summary.device_brand = raw.device_brand
+                AND summary.os = raw.os
+                AND summary.os_version = raw.os_version
+                AND summary.browser = raw.browser
+                AND summary.client_ip_version = raw.client_ip_version
+                AND summary.client_ip_prefix = raw.client_ip_prefix
+                AND summary.sessions = raw.sessions
              WHERE summary.metric_date IS NULL
+             GROUP BY raw.metric_date
              ORDER BY raw.metric_date ASC",
             $cutoff_value
         );

@@ -117,6 +117,7 @@ Rule:
 - report cleanup as failed if final retention run audit persistence fails after archive/delete work;
 - require tkzone summary rows to carry the current configured PID-set hash before accepting them as coverage evidence;
 - backfill blank legacy tkzone summary PID-set hashes during schema migration without rebuilding historical summaries;
+- require main summary rows to match raw landing-session dimensions and session counts before accepting coverage;
 - run deletes in small batches, ordered by the primary key, with a dry-run count first.
 
 ## Required issues to create
@@ -141,7 +142,7 @@ Tasks:
   - 120 days;
   - 180 days.
 - Verify `wp_kiwi_click_attributions` cleanup is keeping up with its existing TTL.
-- Verify main summary coverage by `metric_date` for raw session dates.
+- Verify main summary coverage by `metric_date`, canonical dimensions, and session counts for raw session dates.
 - Verify tkzone summary coverage by `metric_date` for raw `pid` values included in the configured tkzone allow-list.
 - Recommend a retention window for each table, using the preferred planning windows above unless the size/growth report proves they are unsafe for the Hostinger limit.
 - Output a report only. No deletes.
@@ -201,7 +202,7 @@ Acceptance criteria:
 - Dry-run mode reports eligible row counts without deleting.
 - Enabled cleanup deletes only rows older than the retention cutoff.
 - Cleanup records the accepted historical coverage gap instead of backfilling it.
-- Cleanup refuses to delete when non-accepted main summary coverage is missing for the cutoff period.
+- Cleanup refuses to delete when non-accepted main summary coverage is missing or stale for the cutoff period.
 - Cleanup refuses to delete for tkzone-allow-listed raw rows when non-accepted tkzone summary coverage is missing for the cutoff period or was built for a different PID allow-list.
 - Tests cover cutoff boundaries, dry-run behavior, disabled behavior, summary-coverage failure, batch limiting, and idempotency.
 
