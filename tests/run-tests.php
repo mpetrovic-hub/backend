@@ -1088,11 +1088,6 @@ class Kiwi_Test_Plugin_Device_Dimension_Migration extends Kiwi_Plugin
     {
         $this->migrate_slim_landing_funnel_daily_summary_columns();
     }
-
-    public function run_tkzone_pid_hash_migration_for_test(): void
-    {
-        $this->backfill_landing_funnel_tkzone_summary_pid_set_hash();
-    }
 }
 
 class Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service extends Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
@@ -11435,6 +11430,13 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dim
     ] as $dimension) {
         kiwi_assert_contains('summary.' . $dimension . ' = raw.' . $dimension, $main_query, 'Expected main coverage gate to match dimension: ' . $dimension);
     }
+    foreach (['device_brand', 'os', 'os_version', 'browser', 'client_ip_version', 'client_ip_prefix'] as $dimension) {
+        kiwi_assert_contains(
+            "GROUP_CONCAT(NULLIF(NULLIF({$dimension}, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|')",
+            $main_query,
+            'Expected main coverage gate to mirror summary unknown-bucket normalization for dimension: ' . $dimension
+        );
+    }
     kiwi_assert_true(strpos($main_query, 'SELECT DISTINCT metric_date') === false, 'Expected main coverage gate not to accept any summary row for a date as full coverage.');
 
     $wpdb = $previous_wpdb;
@@ -12087,70 +12089,6 @@ kiwi_run_test('Kiwi_Plugin keeps retired main daily summary columns when slim ro
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Plugin backfills legacy TK-zone summary PID-set hashes during schema migration', function (): void {
-    global $wpdb;
-
-    $previous_wpdb = $wpdb ?? null;
-    $wpdb = new class {
-        public $prefix = 'abc_';
-        public $queries = [];
-        public $columns = [
-            'abc_kiwi_landing_funnel_daily_tkzone_summary' => [
-                'pid_set_hash' => true,
-            ],
-        ];
-
-        public function prepare($query, ...$args)
-        {
-            if (count($args) === 1 && is_array($args[0])) {
-                $args = $args[0];
-            }
-
-            return [
-                'query' => (string) $query,
-                'args' => $args,
-            ];
-        }
-
-        public function get_var($statement)
-        {
-            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
-            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
-
-            if (preg_match('/SHOW COLUMNS FROM ([A-Za-z0-9_]+) LIKE %s/', $query, $matches) !== 1) {
-                return null;
-            }
-
-            $table_name = (string) ($matches[1] ?? '');
-            $column_name = (string) ($args[0] ?? '');
-
-            return !empty($this->columns[$table_name][$column_name]) ? $column_name : null;
-        }
-
-        public function query($statement)
-        {
-            $this->queries[] = is_array($statement)
-                ? $statement
-                : [
-                    'query' => (string) $statement,
-                    'args' => [],
-                ];
-
-            return 1;
-        }
-    };
-
-    $plugin = new Kiwi_Test_Plugin_Device_Dimension_Migration(dirname(__DIR__), 'https://example.test/plugin/');
-    $plugin->run_tkzone_pid_hash_migration_for_test();
-    $last_query = $wpdb->queries[count($wpdb->queries) - 1] ?? [];
-
-    kiwi_assert_contains('UPDATE abc_kiwi_landing_funnel_daily_tkzone_summary', (string) ($last_query['query'] ?? ''), 'Expected migration to backfill legacy TK-zone summary hash metadata.');
-    kiwi_assert_contains("WHERE pid_set_hash = ''", (string) ($last_query['query'] ?? ''), 'Expected migration to only update legacy rows without PID-set metadata.');
-    kiwi_assert_same([hash('sha256', '106')], $last_query['args'] ?? [], 'Expected migration to stamp existing rows with the current normalized PID-set hash.');
-
-    $wpdb = $previous_wpdb;
-});
-
 kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary contract', function (): void {
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
@@ -12163,7 +12101,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for slim main daily summary cont
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-06-27-1', $schema_version, 'Expected schema version to be bumped for TK-zone PID-set hash backfill.');
+    kiwi_assert_same('2026-06-27-1', $schema_version, 'Expected schema version to be bumped for the TK-zone PID-set hash schema.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,

@@ -961,7 +961,6 @@ TEXT;
 
         $this->migrate_legacy_android_version_columns();
         $this->migrate_slim_landing_funnel_daily_summary_columns();
-        $this->backfill_landing_funnel_tkzone_summary_pid_set_hash();
         $this->seed_device_model_brand_map();
     }
 
@@ -1017,28 +1016,6 @@ TEXT;
         foreach (['tkzone', 'median_hidden_seconds'] as $column_name) {
             $this->drop_column_if_exists($table_name, $column_name);
         }
-    }
-
-    protected function backfill_landing_funnel_tkzone_summary_pid_set_hash(): void
-    {
-        global $wpdb;
-
-        $table_name = (new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository())->get_table_name();
-
-        if (!$this->column_exists($table_name, 'pid_set_hash')) {
-            return;
-        }
-
-        $pid_set_hash = (new Kiwi_Config())->get_landing_funnel_tkzone_summary_pid_set_hash();
-
-        $wpdb->query(
-            $wpdb->prepare(
-                "UPDATE {$table_name}
-                 SET pid_set_hash = %s
-                 WHERE pid_set_hash = ''",
-                $pid_set_hash
-            )
-        );
     }
 
     private function consolidate_slim_landing_funnel_daily_summary_rows(string $table_name): bool

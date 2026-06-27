@@ -87,12 +87,12 @@ class Kiwi_Retention_Coverage_Gate
                         COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(country, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS country,
                         COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(pid, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS pid,
                         COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(tksource, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS tksource,
-                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(device_brand, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS device_brand,
-                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(os, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS os,
-                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(os_version, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS os_version,
-                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(browser, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS browser,
-                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(client_ip_version, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS client_ip_version,
-                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(client_ip_prefix, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS client_ip_prefix
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(device_brand, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS device_brand,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS os,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(os_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS os_version,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(browser, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS browser,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(client_ip_version, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS client_ip_version,
+                        COALESCE(NULLIF(SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(NULLIF(client_ip_prefix, ''), '(unknown)') ORDER BY created_at ASC SEPARATOR '|'), '|', 1), ''), '(unknown)') AS client_ip_prefix
                     FROM {$source_table}
                     WHERE created_at < %s
                       AND landing_key <> ''
