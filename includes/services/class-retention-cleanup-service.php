@@ -429,7 +429,25 @@ class Kiwi_Retention_Cleanup_Service
         unset($update['success'], $update['run_id']);
 
         if ($run_db_id > 0) {
-            $this->run_repository->update_run($run_db_id, $update);
+            try {
+                $updated = $this->run_repository->update_run($run_db_id, $update);
+            } catch (Throwable $error) {
+                $updated = false;
+            }
+
+            if (!$updated) {
+                $audit_failure = $result;
+                $audit_failure['success'] = false;
+                $audit_failure['status'] = 'failed';
+                $audit_failure['audit_persisted'] = false;
+                $audit_failure['cleanup_status_before_audit_failure'] = (string) ($result['status'] ?? '');
+                $audit_failure['cleanup_error_code'] = (string) ($result['error_code'] ?? '');
+                $audit_failure['cleanup_error_message'] = (string) ($result['error_message'] ?? '');
+                $audit_failure['error_code'] = 'run_audit_update_failed';
+                $audit_failure['error_message'] = 'Retention cleanup finished but the audit run update could not be persisted.';
+
+                return $audit_failure;
+            }
         }
 
         return $result;

@@ -1207,6 +1207,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public $rows = [];
     public $updates = [];
     public $create_run_result = null;
+    public $update_run_result = true;
     private $next_id = 1;
 
     public function create_table(): void
@@ -1228,6 +1229,11 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public function update_run(int $id, array $data): bool
     {
         $this->updates[] = ['id' => $id, 'data' => $data];
+
+        if (!$this->update_run_result) {
+            return false;
+        }
+
         $this->rows[$id] = array_merge($this->rows[$id] ?? ['id' => $id], $data);
 
         return true;
@@ -11661,6 +11667,69 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service archives before deleting active la
     kiwi_assert_same(3, $run_row['deleted_rows'] ?? 0, 'Expected deleted row count to be persisted.');
     kiwi_assert_same('ok', $run_row['archive_integrity_check'] ?? '', 'Expected archive integrity result to be persisted.');
     kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected active cleanup to capture before/after snapshots.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service reports final audit update failures after active deletes', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $events = [];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->update_run_result = false;
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->events =& $events;
+    $archive->result = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 3,
+        'archive_inserted_rows' => 3,
+        'archive_duplicate_rows' => 0,
+        'archive_integrity_check' => 'ok',
+    ];
+    $archive->archived_primary_keys = [301, 302, 303];
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->events =& $events;
+    $service->eligible_rows = 3;
+    $service->delete_result = ['deleted_rows' => 3, 'delete_batches' => 1];
+
+    $result = $service->run_source('landing_page_sessions', 'wp_cli');
+    $run_row = $runs->rows[1] ?? [];
+
+    kiwi_assert_same(false, $result['success'], 'Expected cleanup result to fail when final audit update is not persisted.');
+    kiwi_assert_same('failed', $result['status'], 'Expected audit update failure to mark the returned cleanup result failed.');
+    kiwi_assert_same('run_audit_update_failed', $result['error_code'], 'Expected audit update persistence failures to be explicit.');
+    kiwi_assert_same(false, $result['audit_persisted'] ?? true, 'Expected returned result to expose the missing audit persistence.');
+    kiwi_assert_same('success', $result['cleanup_status_before_audit_failure'] ?? '', 'Expected returned result to retain the cleanup outcome before the audit failure.');
+    kiwi_assert_same(3, $result['archived_rows'] ?? 0, 'Expected archive count to remain visible when the audit update fails.');
+    kiwi_assert_same(3, $result['deleted_rows'] ?? 0, 'Expected delete count to remain visible when the audit update fails.');
+    kiwi_assert_same(['count', 'archive', 'delete'], $events, 'Expected audit update failure to happen only after archive and delete work completed.');
+    kiwi_assert_same([301, 302, 303], $service->deleted_primary_keys, 'Expected cleanup to still delete only archived primary keys before reporting audit failure.');
+    kiwi_assert_same('skipped', $run_row['status'] ?? '', 'Expected failed audit update not to mutate the stored initial audit row in the test double.');
+    kiwi_assert_same(1, count($runs->updates), 'Expected cleanup to attempt the final audit update exactly once.');
 
     $wpdb = $previous_wpdb;
 });
