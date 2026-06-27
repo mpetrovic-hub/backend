@@ -10691,16 +10691,17 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository reads rows wi
     kiwi_assert_true(!array_key_exists('device_brand', $normalized), 'Expected tkzone filters not to normalize unsupported device dimensions.');
     kiwi_assert_true(!array_key_exists('client_ip_prefix', $normalized), 'Expected tkzone filters not to normalize unsupported IP dimensions.');
     kiwi_assert_contains('FROM abc_kiwi_landing_funnel_daily_tkzone_summary', $query, 'Expected tkzone query to read from the tkzone summary table.');
-    kiwi_assert_contains('WHERE metric_date >= %s AND metric_date <= %s AND provider_key = %s AND flow_key = %s AND country = %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s', $query, 'Expected all supported tkzone filters to be applied.');
+    kiwi_assert_contains('WHERE metric_date >= %s AND pid_set_hash = %s AND metric_date <= %s AND provider_key = %s AND flow_key = %s AND country = %s AND service_key = %s AND landing_key = %s AND tksource = %s AND tkzone = %s', $query, 'Expected current PID-set hash and all supported tkzone filters to be applied.');
     kiwi_assert_contains('handoff_rate_pct', $query, 'Expected tkzone query to expose handoff rate.');
     kiwi_assert_contains('sales_amount_minor', $query, 'Expected tkzone query to expose sales amount metrics.');
-    foreach (['pid', 'device_brand', 'os_version', 'browser', 'client_ip_prefix', 'median_hidden_seconds'] as $excluded) {
+    kiwi_assert_true(strpos($query, 'pid = %s') === false, 'Expected tkzone query not to expose unsupported PID filters.');
+    foreach (['device_brand', 'os_version', 'browser', 'client_ip_prefix', 'median_hidden_seconds'] as $excluded) {
         kiwi_assert_true(strpos($query, $excluded) === false, 'Expected tkzone query not to expose unsupported field: ' . $excluded);
     }
     kiwi_assert_same(
-        ['2026-05-24', '2026-05-25', 'nth', 'one-off', 'FR', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 500],
+        ['2026-05-24', hash('sha256', '106'), '2026-05-25', 'nth', 'one-off', 'FR', 'svc_a', 'lp2-fr', 'src_a', 'zone_a', 500],
         $statement['args'] ?? [],
-        'Expected tkzone query args to normalize date filters and cap the limit to 500.'
+        'Expected tkzone query args to include the current PID-set hash, normalize date filters, and cap the limit to 500.'
     );
 
     $wpdb = $previous_wpdb;
@@ -10740,10 +10741,11 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository exposes zone 
     }
     kiwi_assert_contains('SELECT DISTINCT provider_key', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected provider options to query distinct provider keys from the tkzone summary table.');
     kiwi_assert_contains('SELECT DISTINCT tkzone', (string) ($wpdb->prepared_statements[12]['query'] ?? ''), 'Expected tkzone options to query distinct zones from the tkzone summary table.');
+    kiwi_assert_contains('pid_set_hash = %s', (string) ($wpdb->prepared_statements[0]['query'] ?? ''), 'Expected tkzone option queries to stay scoped to the current PID-set hash.');
     kiwi_assert_same(
-        ['2026-05-24', '2026-05-25'],
+        ['2026-05-24', hash('sha256', '106'), '2026-05-25'],
         $wpdb->prepared_statements[0]['args'] ?? [],
-        'Expected tkzone options query to reuse normalized date filters.'
+        'Expected tkzone options query to include the current PID-set hash and reuse normalized date filters.'
     );
 
     $wpdb = $previous_wpdb;
@@ -11410,9 +11412,31 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dim
 
     kiwi_assert_same('failed', $result['status'], 'Expected main summary dimension/session mismatch to fail the gate.');
     kiwi_assert_same(['2026-06-11'], $result['main_summary']['blocking_missing_dates'] ?? [], 'Expected main summary mismatch date to block cleanup.');
-    kiwi_assert_contains('COUNT(*) AS sessions', $main_query, 'Expected main coverage gate to count canonical raw sessions.');
+    kiwi_assert_contains('1 AS sessions', $main_query, 'Expected main coverage gate to derive one raw session fact per canonical landing session.');
     kiwi_assert_contains('GROUP BY DATE(created_at), landing_key, session_token', $main_query, 'Expected main coverage gate to mirror the per-day landing/session refresh grain.');
     kiwi_assert_contains('summary.sessions = raw.sessions', $main_query, 'Expected main coverage gate to compare raw and summary session counts.');
+    foreach ([
+        'page_loaded_sessions',
+        'cta1_sessions',
+        'cta1_click_events',
+        'cta2_sessions',
+        'cta2_click_events',
+        'cta3_sessions',
+        'cta3_click_events',
+        'handoff_attempts',
+        'handoff_successes',
+        'handoff_fails',
+        'handoff_rate_pct',
+        'sales',
+        'sales_amount_minor',
+    ] as $metric) {
+        kiwi_assert_contains('summary.' . $metric . ' = raw.' . $metric, $main_query, 'Expected main coverage gate to compare summary metric: ' . $metric);
+    }
+    kiwi_assert_contains('summary.min_hidden_seconds <=> raw.min_hidden_seconds', $main_query, 'Expected main coverage gate to compare nullable min hidden seconds.');
+    kiwi_assert_contains('summary.max_hidden_seconds <=> raw.max_hidden_seconds', $main_query, 'Expected main coverage gate to compare nullable max hidden seconds.');
+    kiwi_assert_contains('LEFT JOIN wp_kiwi_premium_sms_landing_engagements', $main_query, 'Expected main coverage gate to recompute engagement metrics from persisted engagement rows.');
+    kiwi_assert_contains('INNER JOIN wp_kiwi_landing_handoff_events', $main_query, 'Expected main coverage gate to recompute handoff metrics from persisted handoff rows.');
+    kiwi_assert_contains('FROM wp_kiwi_sales s', $main_query, 'Expected main coverage gate to recompute sale metrics from durable sales rows.');
     foreach ([
         'landing_key',
         'service_key',
@@ -11438,6 +11462,11 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dim
         );
     }
     kiwi_assert_true(strpos($main_query, 'SELECT DISTINCT metric_date') === false, 'Expected main coverage gate not to accept any summary row for a date as full coverage.');
+    kiwi_assert_same(
+        ['2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00'],
+        $wpdb->prepared_statements[0]['args'] ?? [],
+        'Expected main coverage gate to bind cutoff for landing, sales, and summary coverage windows.'
+    );
 
     $wpdb = $previous_wpdb;
 });
@@ -11484,10 +11513,35 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches TK-zone coverage to current 
     kiwi_assert_same(['2026-06-10'], $result['tkzone_summary']['blocking_missing_dates'] ?? [], 'Expected current-PID TK-zone mismatch date to block cleanup.');
     kiwi_assert_contains('pid IN', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to filter raw sessions by the current PID allow-list.');
     kiwi_assert_contains('summary.sessions = raw.sessions', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to compare current raw PID sessions against summary sessions.');
+    foreach ([
+        'page_loaded_sessions',
+        'cta1_sessions',
+        'cta1_click_events',
+        'cta2_sessions',
+        'cta2_click_events',
+        'cta3_sessions',
+        'cta3_click_events',
+        'handoff_attempts',
+        'handoff_successes',
+        'handoff_fails',
+        'handoff_rate_pct',
+        'sales',
+        'sales_amount_minor',
+    ] as $metric) {
+        kiwi_assert_contains('summary.' . $metric . ' = raw.' . $metric, (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to compare summary metric: ' . $metric);
+    }
     kiwi_assert_contains('WHERE pid_set_hash = %s', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to require current PID-set coverage metadata.');
     kiwi_assert_contains('DATE(created_at) AS metric_date', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to derive raw coverage metric dates per row date.');
     kiwi_assert_contains('GROUP BY DATE(created_at), landing_key, session_token', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone gate to mirror the per-day refresh grouping for reused session cookies.');
     kiwi_assert_true(strpos((string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'DATE(MIN(created_at)) AS metric_date') === false, 'Expected TK-zone gate not to collapse reused cookies across days.');
+    kiwi_assert_contains('LEFT JOIN wp_kiwi_premium_sms_landing_engagements', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to recompute engagement metrics from persisted engagement rows.');
+    kiwi_assert_contains('INNER JOIN wp_kiwi_landing_handoff_events', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to recompute handoff metrics from persisted handoff rows.');
+    kiwi_assert_contains('FROM wp_kiwi_sales s', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to recompute sale metrics from durable sales rows.');
+    kiwi_assert_same(
+        ['2026-06-12 00:00:00', '106', '2026-06-12 00:00:00', '106', hash('sha256', '106'), '2026-06-12 00:00:00'],
+        $wpdb->prepared_statements[1]['args'] ?? [],
+        'Expected TK-zone coverage gate to bind cutoff and current PID set for landing, sales, and summary coverage windows.'
+    );
 
     $wpdb = $previous_wpdb;
 });

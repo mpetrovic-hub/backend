@@ -117,7 +117,7 @@ Rule:
 - report cleanup as failed if final retention run audit persistence fails after archive/delete work;
 - require tkzone summary rows to carry the current configured PID-set hash before accepting them as coverage evidence;
 - leave blank legacy tkzone summary PID-set hashes untrusted/fail-closed unless those dates are refreshed with the current PID set;
-- require main summary rows to match raw landing-session dimensions and session counts before accepting coverage;
+- require main and tkzone summary rows to match raw landing-session dimensions and all rebuilt summary metrics before accepting coverage;
 - run deletes in small batches, ordered by the primary key, with a dry-run count first.
 
 ## Required issues to create

@@ -18,7 +18,13 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository implements Kiwi_Statis
         'tkzone' => 'tkzones',
     ];
 
+    private $config;
     private $last_error = '';
+
+    public function __construct(?Kiwi_Config $config = null)
+    {
+        $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
+    }
 
     public function get_table_name(): string
     {
@@ -107,8 +113,11 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository implements Kiwi_Statis
         $this->last_error = '';
         $limit = max(1, min(500, $limit));
         $normalized_filters = $this->normalize_filters($filters);
-        $where_sql = ['metric_date >= %s'];
-        $params = [(string) $normalized_filters['from']];
+        $where_sql = ['metric_date >= %s', 'pid_set_hash = %s'];
+        $params = [
+            (string) $normalized_filters['from'],
+            $this->config->get_landing_funnel_tkzone_summary_pid_set_hash(),
+        ];
 
         if ((string) ($normalized_filters['to'] ?? '') !== '') {
             $where_sql[] = 'metric_date <= %s';
@@ -268,8 +277,11 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository implements Kiwi_Statis
 
         $this->last_error = '';
         $normalized_filters = $this->normalize_filters($filters);
-        $where_sql = ['metric_date >= %s'];
-        $params = [(string) $normalized_filters['from']];
+        $where_sql = ['metric_date >= %s', 'pid_set_hash = %s'];
+        $params = [
+            (string) $normalized_filters['from'],
+            $this->config->get_landing_funnel_tkzone_summary_pid_set_hash(),
+        ];
 
         if ((string) ($normalized_filters['to'] ?? '') !== '') {
             $where_sql[] = 'metric_date <= %s';
