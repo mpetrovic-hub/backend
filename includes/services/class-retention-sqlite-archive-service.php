@@ -101,8 +101,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
 
             $this->finish_archive_batch($pdo, $archive_batch_id, $result);
         } catch (Throwable $error) {
-            $result['error_code'] = 'archive_failed';
-            $result['error_message'] = $error->getMessage();
+            $result = $this->apply_archive_failure($result, $error);
         }
 
         return $result;
@@ -328,6 +327,15 @@ class Kiwi_Retention_Sqlite_Archive_Service
             ':error_message' => (string) ($result['error_message'] ?? ''),
             ':archive_batch_id' => $archive_batch_id,
         ]);
+    }
+
+    protected function apply_archive_failure(array $result, Throwable $error): array
+    {
+        $result['success'] = false;
+        $result['error_code'] = 'archive_failed';
+        $result['error_message'] = $error->getMessage();
+
+        return $result;
     }
 
     private function insert_archive_row(PDO $pdo, array $source, string $archive_batch_id, array $row): bool

@@ -1322,6 +1322,18 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
     }
 }
 
+class Kiwi_Test_Retention_Sqlite_Archive_Failure_Service extends Kiwi_Retention_Sqlite_Archive_Service
+{
+    public function __construct()
+    {
+    }
+
+    public function apply_archive_failure_for_test(array $result, Throwable $error): array
+    {
+        return $this->apply_archive_failure($result, $error);
+    }
+}
+
 class Kiwi_Test_Retention_Coverage_Gate extends Kiwi_Retention_Coverage_Gate
 {
     public $calls = [];
@@ -11293,6 +11305,26 @@ kiwi_run_test('Kiwi_Plugin schedules the retention cleanup daily cron hook once'
         return ($event['hook'] ?? '') === $hook;
     })), 'Expected retention cleanup to be scheduled only once.');
     kiwi_assert_same('daily', $GLOBALS['kiwi_test_cron_events'][0]['recurrence'] ?? '', 'Expected retention cleanup to use a daily cron recurrence.');
+});
+
+kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service fails closed after archive finalization errors', function (): void {
+    $service = new Kiwi_Test_Retention_Sqlite_Archive_Failure_Service();
+    $result = $service->apply_archive_failure_for_test(
+        [
+            'success' => true,
+            'archive_integrity_check' => 'ok',
+            'archived_rows' => 12,
+            'error_code' => '',
+            'error_message' => '',
+        ],
+        new RuntimeException('finalization failed')
+    );
+
+    kiwi_assert_same(false, $result['success'] ?? null, 'Expected archive finalization errors to fail closed even after an ok integrity check.');
+    kiwi_assert_same('archive_failed', $result['error_code'] ?? '', 'Expected archive finalization errors to use the generic archive failure code.');
+    kiwi_assert_same('finalization failed', $result['error_message'] ?? '', 'Expected archive finalization error detail to be retained.');
+    kiwi_assert_same('ok', $result['archive_integrity_check'] ?? '', 'Expected failure handling not to erase the recorded integrity check result.');
+    kiwi_assert_same(12, $result['archived_rows'] ?? 0, 'Expected failure handling not to erase archived row counts.');
 });
 
 kiwi_run_test('Kiwi_Retention_Coverage_Gate fails closed when summary coverage query errors', function (): void {
