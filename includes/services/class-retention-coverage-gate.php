@@ -91,26 +91,40 @@ class Kiwi_Retention_Coverage_Gate
                   AND session_token <> ''
                 GROUP BY DATE(created_at), landing_key, session_token
              ),
-             handoff_by_session AS (
+             handoff_origin_events AS (
                 SELECT
-                    l.metric_date,
-                    l.landing_key,
-                    l.session_token,
-                    SUM(CASE WHEN h.event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
-                    SUM(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
-                    SUM(CASE WHEN h.event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails,
-                    MIN(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN ROUND(h.elapsed_ms / 1000, 2) ELSE NULL END) AS min_hidden_seconds,
-                    MAX(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN ROUND(h.elapsed_ms / 1000, 2) ELSE NULL END) AS max_hidden_seconds
-                FROM landing_loads l
-                INNER JOIN {$handoff_table} h
-                  ON h.landing_key = l.landing_key
-                 AND h.session_token = l.session_token
-                 AND h.created_at >= l.first_landing_at
-                 AND h.created_at >= l.metric_date
-                 AND h.created_at < DATE_ADD(l.metric_date, INTERVAL 2 DAY)
+                    h.landing_key,
+                    h.session_token,
+                    DATE(MAX(ls.created_at)) AS metric_date,
+                    h.event_type,
+                    h.elapsed_ms,
+                    MAX(h.created_at) AS handoff_created_at
+                FROM {$handoff_table} h
+                INNER JOIN {$source_table} ls
+                  ON ls.landing_key = h.landing_key
+                 AND ls.session_token = h.session_token
+                 AND ls.created_at < DATE_ADD(DATE(%s), INTERVAL 1 DAY)
+                 AND ls.created_at <= h.created_at
+                 AND ls.landing_key <> ''
+                 AND ls.session_token <> ''
+                WHERE h.created_at < DATE_ADD(DATE(%s), INTERVAL 1 DAY)
                  AND h.landing_key <> ''
                  AND h.session_token <> ''
-                GROUP BY l.metric_date, l.landing_key, l.session_token
+                GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms
+                HAVING handoff_created_at < DATE_ADD(metric_date, INTERVAL 2 DAY)
+             ),
+             handoff_by_session AS (
+                SELECT
+                    metric_date,
+                    landing_key,
+                    session_token,
+                    SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
+                    SUM(CASE WHEN event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
+                    SUM(CASE WHEN event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails,
+                    MIN(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS min_hidden_seconds,
+                    MAX(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS max_hidden_seconds
+                FROM handoff_origin_events
+                GROUP BY metric_date, landing_key, session_token
              ),
              session_facts AS (
                 SELECT
@@ -347,6 +361,8 @@ class Kiwi_Retention_Coverage_Gate
              WHERE summary.metric_date IS NULL
              GROUP BY raw.metric_date
              ORDER BY raw.metric_date ASC",
+            $cutoff_value,
+            $cutoff_value,
             $cutoff_value,
             $cutoff_value,
             $cutoff_value

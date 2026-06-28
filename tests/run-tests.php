@@ -11435,7 +11435,13 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dim
     kiwi_assert_contains('summary.min_hidden_seconds <=> raw.min_hidden_seconds', $main_query, 'Expected main coverage gate to compare nullable min hidden seconds.');
     kiwi_assert_contains('summary.max_hidden_seconds <=> raw.max_hidden_seconds', $main_query, 'Expected main coverage gate to compare nullable max hidden seconds.');
     kiwi_assert_contains('LEFT JOIN wp_kiwi_premium_sms_landing_engagements', $main_query, 'Expected main coverage gate to recompute engagement metrics from persisted engagement rows.');
-    kiwi_assert_contains('INNER JOIN wp_kiwi_landing_handoff_events', $main_query, 'Expected main coverage gate to recompute handoff metrics from persisted handoff rows.');
+    kiwi_assert_contains('FROM wp_kiwi_landing_handoff_events h', $main_query, 'Expected main coverage gate to recompute handoff metrics from persisted handoff rows.');
+    kiwi_assert_contains('handoff_origin_events AS', $main_query, 'Expected main coverage gate to mirror summary handoff attribution through origin events.');
+    kiwi_assert_contains('DATE(MAX(ls.created_at)) AS metric_date', $main_query, 'Expected main coverage gate to attribute handoffs to the latest landing row before the event.');
+    kiwi_assert_contains('ls.created_at <= h.created_at', $main_query, 'Expected main coverage gate not to attribute handoffs to future landing rows.');
+    kiwi_assert_contains('GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms', $main_query, 'Expected main coverage gate to attribute each handoff event once before aggregating by session.');
+    kiwi_assert_contains('HAVING handoff_created_at < DATE_ADD(metric_date, INTERVAL 2 DAY)', $main_query, 'Expected main coverage gate to preserve the daily summary carryover window.');
+    kiwi_assert_true(strpos($main_query, 'h.created_at >= l.first_landing_at') === false, 'Expected main coverage gate not to broadly join handoffs back to earlier reused-session landing days.');
     kiwi_assert_contains('FROM wp_kiwi_sales s', $main_query, 'Expected main coverage gate to recompute sale metrics from durable sales rows.');
     foreach ([
         'landing_key',
@@ -11463,9 +11469,9 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dim
     }
     kiwi_assert_true(strpos($main_query, 'SELECT DISTINCT metric_date') === false, 'Expected main coverage gate not to accept any summary row for a date as full coverage.');
     kiwi_assert_same(
-        ['2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00'],
+        ['2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00'],
         $wpdb->prepared_statements[0]['args'] ?? [],
-        'Expected main coverage gate to bind cutoff for landing, sales, and summary coverage windows.'
+        'Expected main coverage gate to bind cutoff for landing, handoff origin, sales, and summary coverage windows.'
     );
 
     $wpdb = $previous_wpdb;
