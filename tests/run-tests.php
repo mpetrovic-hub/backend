@@ -11542,6 +11542,8 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches TK-zone coverage to current 
     kiwi_assert_true(strpos((string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'DATE(MIN(created_at)) AS metric_date') === false, 'Expected TK-zone gate not to collapse reused cookies across days.');
     kiwi_assert_contains('LEFT JOIN wp_kiwi_premium_sms_landing_engagements', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to recompute engagement metrics from persisted engagement rows.');
     kiwi_assert_contains('INNER JOIN wp_kiwi_landing_handoff_events', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to recompute handoff metrics from persisted handoff rows.');
+    kiwi_assert_contains('h.created_at < DATE_ADD(l.metric_date, INTERVAL 2 DAY)', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to mirror the refresh handoff carryover window.');
+    kiwi_assert_true(strpos((string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'h.created_at < DATE_ADD(l.metric_date, INTERVAL 1 DAY)') === false, 'Expected TK-zone coverage gate not to stop handoff coverage at midnight.');
     kiwi_assert_contains('FROM wp_kiwi_sales s', (string) ($wpdb->prepared_statements[1]['query'] ?? ''), 'Expected TK-zone coverage gate to recompute sale metrics from durable sales rows.');
     kiwi_assert_same(
         ['2026-06-12 00:00:00', '106', '2026-06-12 00:00:00', '106', hash('sha256', '106'), '2026-06-12 00:00:00'],

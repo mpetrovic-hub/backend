@@ -449,7 +449,7 @@ class Kiwi_Retention_Coverage_Gate
                   ON h.landing_key = l.landing_key
                  AND h.session_token = l.session_token
                  AND h.created_at >= l.metric_date
-                 AND h.created_at < DATE_ADD(l.metric_date, INTERVAL 1 DAY)
+                 AND h.created_at < DATE_ADD(l.metric_date, INTERVAL 2 DAY)
                  AND h.landing_key <> ''
                  AND h.session_token <> ''
                 GROUP BY l.metric_date, l.landing_key, l.session_token
