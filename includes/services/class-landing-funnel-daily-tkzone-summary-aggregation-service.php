@@ -158,6 +158,7 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
                 tksource,
                 tkzone,
                 dimension_hash,
+                pid_set_hash,
                 sessions,
                 page_loaded_sessions,
                 cta1_sessions,
@@ -321,6 +322,7 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
                 a.tksource,
                 a.tkzone,
                 {$dimension_hash_expression} AS dimension_hash,
+                %s AS pid_set_hash,
                 a.sessions,
                 a.page_loaded_sessions,
                 a.cta1_sessions,
@@ -378,9 +380,20 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
             ],
             $tkzone_summary_pids,
             [
+                $this->build_pid_set_hash($tkzone_summary_pids),
                 $metric_date,
             ]
         );
+    }
+
+    private function build_pid_set_hash(array $pids): string
+    {
+        $pids = array_values(array_unique(array_map(static function ($pid): string {
+            return (string) $pid;
+        }, $pids)));
+        sort($pids, SORT_STRING);
+
+        return hash('sha256', implode('|', $pids));
     }
 
     private function build_placeholder_list(int $count): string

@@ -281,6 +281,7 @@ Notes:
 - `wp_kiwi_landing_funnel_daily_tkzone_summary`
   - plugin-managed companion table for daily zone analysis
   - keeps `tkzone` out of the broad main summary while preserving zone-level sessions, CTA, handoff, and sales metrics for diagnostics and optimization work
+  - stores a hash of the configured TK-zone PID allow-list on refreshed rows; normal reads and filter options only use rows whose hash matches the current configuration, so rows built for older allow-lists are not mixed into current TK-zone reporting
 
 ## Configuration switches
 
