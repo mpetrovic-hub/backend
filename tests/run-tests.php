@@ -12341,6 +12341,36 @@ kiwi_run_test('Kiwi_Plugin advances split summary refreshes through the rolling 
     kiwi_assert_same('2026-05-20', $result['metric_date'], 'Expected persisted result to identify the advanced metric date.');
 });
 
+kiwi_run_test('Kiwi_Plugin retries failed split summary refresh work units before advancing', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $GLOBALS['kiwi_test_options'][$last_result_option] = [
+        'success' => false,
+        'metric_date' => '2026-05-19',
+        'skipped_due_to_lock' => false,
+        'error' => 'insert aggregate rows failed',
+    ];
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-19',
+        'to_date' => '2026-05-19',
+        'deleted' => 1,
+        'inserted' => 2,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
+
+    kiwi_assert_true($result['success'], 'Expected retried split refresh work unit to succeed.');
+    kiwi_assert_same([['2026-05-19', '2026-05-19']], $service->calls, 'Expected failed metric date to be retried before advancing the cursor.');
+    kiwi_assert_same('2026-05-19', $result['metric_date'], 'Expected persisted result to identify the retried metric date.');
+});
+
 kiwi_run_test('Kiwi_Plugin runs one TK-zone summary refresh work unit with its own result option', function (): void {
     $GLOBALS['kiwi_test_transients'] = [];
     $GLOBALS['kiwi_test_deleted_transients'] = [];

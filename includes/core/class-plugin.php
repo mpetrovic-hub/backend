@@ -1479,7 +1479,10 @@ TEXT;
         if (function_exists('get_option')) {
             $last_result = get_option($last_result_option, []);
 
-            if (is_array($last_result) && empty($last_result['skipped_due_to_lock'])) {
+            if (is_array($last_result)
+                && !empty($last_result['success'])
+                && empty($last_result['skipped_due_to_lock'])
+            ) {
                 $candidate = $this->normalize_landing_funnel_daily_summary_refresh_date(
                     (string) ($last_result['metric_date'] ?? $last_result['to_date'] ?? '')
                 );
