@@ -2,6 +2,10 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-06-29:
+- [Landing Funnel Daily Summary Refresh] Split the combined landing-funnel daily summary cron into independent Main and TK-zone refresh jobs with separate hooks, locks, last-result options, and log prefixes. The legacy combined hook is unscheduled during normal bootstrap.
+- [Landing Funnel Daily Summary Refresh] Optimized the Main summary handoff aggregation by joining handoff events directly to canonical landing sessions with cross-midnight latest-landing anti-join protection, while keeping sales facts on durable `attribution_metric_date` snapshots and preserving the retention coverage gate's fail-closed comparison contract.
+
 2026-06-17:
 - [DB Retention Audit] Added a read-only production database size, growth, dry-run retention, and summary-coverage report for the cleanup planning sequence. The report identifies raw landing analytics as the main storage pressure, recommends a 14-day storage-pressure window for landing raw tables, confirms no click-attribution TTL backlog, and documents summary coverage gaps that must block later cleanup until resolved or accepted.
 

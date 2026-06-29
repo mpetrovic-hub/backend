@@ -96,12 +96,13 @@ Runtime enrichment note:
 The daily landing-funnel summary refresh is operational configuration, not an aggregator credential. It is read from `wp-config.php` through `Kiwi_Config`.
 
 - `KIWI_LANDING_FUNNEL_SUMMARY_REFRESH_DAYS`
-  - number of lookback days recalculated by the WP-Cron rolling refresh in addition to today
+  - number of lookback days included in the split Main and TK-zone WP-Cron rolling refresh windows in addition to today
   - default: `7`, which refreshes `today - 7 days` through today
   - minimum configured value: `0`
   - negative values are clamped to `0`
-  - the selected window is processed internally as per-day chunks, so the default value remains usable on production data without one multi-day aggregate statement
+  - each split cron invocation processes one due metric date from the selected window, so the default remains usable on production data without one multi-day request
   - hourly WP-Cron refreshes apply an effective one-day minimum, so `0` refreshes yesterday through today to preserve cross-midnight handoff completions
+  - the Main job uses hook `kiwi_landing_funnel_daily_main_summary_refresh`; the TK-zone job uses hook `kiwi_landing_funnel_daily_tkzone_summary_refresh`; the legacy combined hook is cleared during bootstrap
 
 ## Trusted proxy client-IP resolution
 

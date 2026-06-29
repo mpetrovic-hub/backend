@@ -14,10 +14,14 @@ class Kiwi_Plugin
     private const DB_SCHEMA_VERSION = '2026-06-27-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
-    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
-    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY = 'kiwi_landing_funnel_daily_summary_refresh_lock';
+    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
+    private const LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_main_summary_refresh';
+    private const LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY = 'kiwi_landing_funnel_daily_main_summary_refresh_lock';
+    private const LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_main_summary_refresh_last_result';
+    private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_tkzone_summary_refresh';
+    private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_KEY = 'kiwi_landing_funnel_daily_tkzone_summary_refresh_lock';
+    private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_tkzone_summary_refresh_last_result';
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS = 1800;
-    private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_summary_refresh_last_result';
     private const DEVICE_MODEL_BRAND_HARVEST_HOOK = 'kiwi_device_model_brand_harvest';
     private const RETENTION_CLEANUP_DAILY_HOOK = 'kiwi_retention_cleanup_daily';
 
@@ -53,10 +57,12 @@ class Kiwi_Plugin
         add_action('init', [$this, 'ensure_click_attribution_table']);
         add_action('init', [$this, 'ensure_sales_table']);
         add_action('init', [$this, 'cleanup_expired_click_attributions']);
-        add_action('init', [$this, 'schedule_landing_funnel_daily_summary_refresh']);
+        add_action('init', [$this, 'schedule_landing_funnel_daily_main_summary_refresh']);
+        add_action('init', [$this, 'schedule_landing_funnel_daily_tkzone_summary_refresh']);
         add_action('init', [$this, 'schedule_device_model_brand_harvest']);
         add_action('init', [$this, 'schedule_retention_cleanup']);
-        add_action(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_summary_refresh']);
+        add_action(self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_main_summary_refresh']);
+        add_action(self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_tkzone_summary_refresh']);
         add_action(self::DEVICE_MODEL_BRAND_HARVEST_HOOK, [$this, 'run_device_model_brand_harvest']);
         add_action(self::RETENTION_CLEANUP_DAILY_HOOK, [$this, 'run_retention_cleanup_daily']);
         add_action('init', [$this, 'maybe_export_statistics']);
@@ -251,18 +257,45 @@ class Kiwi_Plugin
 
     public function schedule_landing_funnel_daily_summary_refresh(): void
     {
+        $this->schedule_landing_funnel_daily_main_summary_refresh();
+        $this->schedule_landing_funnel_daily_tkzone_summary_refresh();
+    }
+
+    public function schedule_landing_funnel_daily_main_summary_refresh(): void
+    {
         if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
             return;
         }
 
-        if (wp_next_scheduled(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK) !== false) {
+        $this->unschedule_legacy_landing_funnel_daily_summary_refresh();
+
+        if (wp_next_scheduled(self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK) !== false) {
             return;
         }
 
         wp_schedule_event(
             time(),
             'hourly',
-            self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK
+            self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK
+        );
+    }
+
+    public function schedule_landing_funnel_daily_tkzone_summary_refresh(): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+
+        $this->unschedule_legacy_landing_funnel_daily_summary_refresh();
+
+        if (wp_next_scheduled(self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK) !== false) {
+            return;
+        }
+
+        wp_schedule_event(
+            time() + (5 * 60),
+            'hourly',
+            self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK
         );
     }
 
@@ -294,7 +327,7 @@ class Kiwi_Plugin
         }
 
         wp_schedule_event(
-            time(),
+            time() + (15 * 60),
             'daily',
             self::RETENTION_CLEANUP_DAILY_HOOK
         );
@@ -355,52 +388,109 @@ class Kiwi_Plugin
     public function run_landing_funnel_daily_summary_refresh(): array
     {
         $started_at = $this->get_current_time_mysql();
+        $result = [
+            'success' => true,
+            'status' => 'legacy_unscheduled',
+            'summary' => 'legacy',
+            'from_date' => '',
+            'to_date' => '',
+            'metric_date' => '',
+            'deleted' => 0,
+            'inserted' => 0,
+            'error' => 'Legacy combined landing funnel daily summary refresh hook is disabled; split main and TK-zone hooks own refresh execution.',
+            'started_at' => $started_at,
+            'finished_at' => $this->get_current_time_mysql(),
+            'skipped_due_to_lock' => false,
+        ];
 
-        if ($this->has_landing_funnel_daily_summary_refresh_lock()) {
+        $this->log_landing_funnel_daily_summary_refresh($result['error']);
+
+        return $result;
+    }
+
+    public function run_landing_funnel_daily_main_summary_refresh(): array
+    {
+        return $this->run_landing_funnel_daily_summary_refresh_job(
+            'main',
+            self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY,
+            self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION,
+            function () {
+                return $this->build_landing_funnel_daily_summary_refresh_service();
+            },
+            function (string $message): void {
+                $this->log_landing_funnel_daily_main_summary_refresh($message);
+            }
+        );
+    }
+
+    public function run_landing_funnel_daily_tkzone_summary_refresh(): array
+    {
+        return $this->run_landing_funnel_daily_summary_refresh_job(
+            'tkzone',
+            self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_KEY,
+            self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LAST_RESULT_OPTION,
+            function () {
+                return $this->build_landing_funnel_daily_tkzone_summary_refresh_service();
+            },
+            function (string $message): void {
+                $this->log_landing_funnel_daily_tkzone_summary_refresh($message);
+            }
+        );
+    }
+
+    private function run_landing_funnel_daily_summary_refresh_job(
+        string $summary_key,
+        string $lock_key,
+        string $last_result_option,
+        callable $service_factory,
+        callable $logger
+    ): array {
+        $started_at = $this->get_current_time_mysql();
+
+        if ($this->has_landing_funnel_daily_summary_refresh_lock($lock_key)) {
             $result = [
                 'success' => false,
+                'summary' => $summary_key,
                 'from_date' => '',
                 'to_date' => '',
+                'metric_date' => '',
                 'deleted' => 0,
                 'inserted' => 0,
-                'error' => 'Landing funnel daily summary refresh skipped because lock is active.',
+                'error' => 'Landing funnel daily ' . $summary_key . ' summary refresh skipped because lock is active.',
                 'started_at' => $started_at,
                 'finished_at' => $this->get_current_time_mysql(),
                 'skipped_due_to_lock' => true,
             ];
-            $this->persist_landing_funnel_daily_summary_refresh_result($result);
-            $this->log_landing_funnel_daily_summary_refresh($result['error']);
+            $this->persist_landing_funnel_daily_summary_refresh_result($last_result_option, $result);
+            $logger($result['error']);
 
             return $result;
         }
 
-        $this->set_landing_funnel_daily_summary_refresh_lock();
+        $this->set_landing_funnel_daily_summary_refresh_lock($lock_key);
 
         try {
             $range = $this->build_landing_funnel_daily_summary_refresh_range();
-            $main_result = $this->run_landing_funnel_daily_refresh_service(
-                $this->build_landing_funnel_daily_summary_refresh_service(),
+            $metric_date = $this->select_landing_funnel_daily_summary_refresh_metric_date($range, $last_result_option);
+            $service = $service_factory();
+            $result = $this->run_landing_funnel_daily_refresh_service_for_metric_date(
+                $service,
+                $summary_key,
+                $metric_date,
                 $range,
-                $started_at
-            );
-            $tkzone_result = $this->run_landing_funnel_daily_refresh_service(
-                $this->build_landing_funnel_daily_tkzone_summary_refresh_service(),
-                $range,
-                $started_at
-            );
-            $result = $this->combine_landing_funnel_daily_refresh_results(
-                $main_result,
-                $tkzone_result,
-                $range['from_date'],
-                $range['to_date'],
                 $started_at
             );
         } catch (Throwable $error) {
             $range = isset($range) && is_array($range) ? $range : ['from_date' => '', 'to_date' => ''];
+            $metric_date = isset($metric_date) ? (string) $metric_date : '';
             $result = [
                 'success' => false,
-                'from_date' => (string) ($range['from_date'] ?? ''),
-                'to_date' => (string) ($range['to_date'] ?? ''),
+                'summary' => $summary_key,
+                'from_date' => $metric_date,
+                'to_date' => $metric_date,
+                'metric_date' => $metric_date,
+                'range_from_date' => (string) ($range['from_date'] ?? ''),
+                'range_to_date' => (string) ($range['to_date'] ?? ''),
                 'deleted' => 0,
                 'inserted' => 0,
                 'error' => $error->getMessage(),
@@ -409,14 +499,14 @@ class Kiwi_Plugin
                 'skipped_due_to_lock' => false,
             ];
         } finally {
-            $this->clear_landing_funnel_daily_summary_refresh_lock();
+            $this->clear_landing_funnel_daily_summary_refresh_lock($lock_key);
         }
 
-        $this->persist_landing_funnel_daily_summary_refresh_result($result);
-        $this->log_landing_funnel_daily_summary_refresh(
+        $this->persist_landing_funnel_daily_summary_refresh_result($last_result_option, $result);
+        $logger(
             $result['success']
-                ? 'Refresh succeeded for ' . $result['from_date'] . ' to ' . $result['to_date'] . '; deleted=' . $result['deleted'] . '; inserted=' . $result['inserted'] . '.'
-                : 'Refresh failed for ' . $result['from_date'] . ' to ' . $result['to_date'] . ': ' . $result['error']
+                ? ucfirst($summary_key) . ' refresh succeeded for ' . $result['metric_date'] . '; deleted=' . $result['deleted'] . '; inserted=' . $result['inserted'] . '.'
+                : ucfirst($summary_key) . ' refresh failed for ' . $result['metric_date'] . ': ' . $result['error']
         );
 
         return $result;
@@ -1317,6 +1407,16 @@ TEXT;
         error_log('[kiwi-landing-funnel-daily-summary-refresh] ' . $message);
     }
 
+    protected function log_landing_funnel_daily_main_summary_refresh(string $message): void
+    {
+        error_log('[kiwi-landing-main-summary-refresh] ' . $message);
+    }
+
+    protected function log_landing_funnel_daily_tkzone_summary_refresh(string $message): void
+    {
+        error_log('[kiwi-landing-tkzone-summary-refresh] ' . $message);
+    }
+
     protected function log_device_model_brand_harvest(string $message): void
     {
         error_log('[kiwi-device-model-brand-harvest] ' . $message);
@@ -1370,16 +1470,58 @@ TEXT;
         return $config->get_landing_funnel_summary_refresh_days();
     }
 
+    private function select_landing_funnel_daily_summary_refresh_metric_date(array $range, string $last_result_option): string
+    {
+        $from_date = (string) ($range['from_date'] ?? '');
+        $to_date = (string) ($range['to_date'] ?? '');
+        $last_metric_date = '';
+
+        if (function_exists('get_option')) {
+            $last_result = get_option($last_result_option, []);
+
+            if (is_array($last_result) && empty($last_result['skipped_due_to_lock'])) {
+                $candidate = $this->normalize_landing_funnel_daily_summary_refresh_date(
+                    (string) ($last_result['metric_date'] ?? $last_result['to_date'] ?? '')
+                );
+
+                if ($candidate !== '') {
+                    $last_metric_date = $candidate;
+                }
+            }
+        }
+
+        if ($last_metric_date !== '') {
+            if ($from_date !== '' && strcmp($last_metric_date, $from_date) < 0) {
+                return $from_date;
+            }
+
+            $next_date = $this->next_landing_funnel_daily_summary_refresh_date($last_metric_date);
+
+            if ($next_date !== ''
+                && ($from_date === '' || strcmp($next_date, $from_date) >= 0)
+                && ($to_date === '' || strcmp($next_date, $to_date) <= 0)
+            ) {
+                return $next_date;
+            }
+        }
+
+        return $from_date !== '' ? $from_date : $to_date;
+    }
+
     private function normalize_landing_funnel_daily_summary_refresh_result(
         array $result,
         string $from_date,
         string $to_date,
-        string $started_at
+        string $started_at,
+        string $summary_key = '',
+        string $metric_date = '',
+        ?array $rolling_range = null
     ): array {
         $normalized = [
             'success' => (bool) ($result['success'] ?? false),
             'from_date' => (string) ($result['from_date'] ?? $from_date),
             'to_date' => (string) ($result['to_date'] ?? $to_date),
+            'metric_date' => (string) ($result['metric_date'] ?? ($metric_date !== '' ? $metric_date : $from_date)),
             'deleted' => (int) ($result['deleted'] ?? 0),
             'inserted' => (int) ($result['inserted'] ?? 0),
             'error' => (string) ($result['error'] ?? ''),
@@ -1388,6 +1530,15 @@ TEXT;
             'skipped_due_to_lock' => false,
         ];
 
+        if ($summary_key !== '') {
+            $normalized['summary'] = $summary_key;
+        }
+
+        if (is_array($rolling_range)) {
+            $normalized['range_from_date'] = (string) ($rolling_range['from_date'] ?? '');
+            $normalized['range_to_date'] = (string) ($rolling_range['to_date'] ?? '');
+        }
+
         if (isset($result['daily_results']) && is_array($result['daily_results'])) {
             $normalized['daily_results'] = array_values($result['daily_results']);
         }
@@ -1395,22 +1546,27 @@ TEXT;
         return $normalized;
     }
 
-    private function run_landing_funnel_daily_refresh_service($service, array $range, string $started_at): array
-    {
+    private function run_landing_funnel_daily_refresh_service_for_metric_date(
+        $service,
+        string $summary_key,
+        string $metric_date,
+        array $rolling_range,
+        string $started_at
+    ): array {
         try {
             if (!is_object($service) || !method_exists($service, 'refresh_range')) {
-                throw new RuntimeException('Landing funnel daily refresh service is not callable.');
+                throw new RuntimeException('Landing funnel daily ' . $summary_key . ' refresh service is not callable.');
             }
 
-            $service_result = $service->refresh_range(
-                (string) ($range['from_date'] ?? ''),
-                (string) ($range['to_date'] ?? '')
-            );
+            $service_result = $service->refresh_range($metric_date, $metric_date);
             $result = $this->normalize_landing_funnel_daily_summary_refresh_result(
                 is_array($service_result) ? $service_result : [],
-                (string) ($range['from_date'] ?? ''),
-                (string) ($range['to_date'] ?? ''),
-                $started_at
+                $metric_date,
+                $metric_date,
+                $started_at,
+                $summary_key,
+                $metric_date,
+                $rolling_range
             );
 
             if (!$result['success'] && $result['error'] === '' && method_exists($service, 'get_last_error')) {
@@ -1421,8 +1577,12 @@ TEXT;
         } catch (Throwable $error) {
             return [
                 'success' => false,
-                'from_date' => (string) ($range['from_date'] ?? ''),
-                'to_date' => (string) ($range['to_date'] ?? ''),
+                'summary' => $summary_key,
+                'from_date' => $metric_date,
+                'to_date' => $metric_date,
+                'metric_date' => $metric_date,
+                'range_from_date' => (string) ($rolling_range['from_date'] ?? ''),
+                'range_to_date' => (string) ($rolling_range['to_date'] ?? ''),
                 'deleted' => 0,
                 'inserted' => 0,
                 'error' => $error->getMessage(),
@@ -1433,92 +1593,91 @@ TEXT;
         }
     }
 
-    private function combine_landing_funnel_daily_refresh_results(
-        array $main_result,
-        array $tkzone_result,
-        string $from_date,
-        string $to_date,
-        string $started_at
-    ): array {
-        $errors = [];
-
-        if (!($main_result['success'] ?? false)) {
-            $errors[] = 'main: ' . $this->format_landing_funnel_daily_refresh_error($main_result);
-        }
-
-        if (!($tkzone_result['success'] ?? false)) {
-            $errors[] = 'tkzone: ' . $this->format_landing_funnel_daily_refresh_error($tkzone_result);
-        }
-
-        return [
-            'success' => empty($errors),
-            'from_date' => $from_date,
-            'to_date' => $to_date,
-            'deleted' => (int) ($main_result['deleted'] ?? 0) + (int) ($tkzone_result['deleted'] ?? 0),
-            'inserted' => (int) ($main_result['inserted'] ?? 0) + (int) ($tkzone_result['inserted'] ?? 0),
-            'error' => implode('; ', $errors),
-            'started_at' => $started_at,
-            'finished_at' => $this->get_current_time_mysql(),
-            'skipped_due_to_lock' => false,
-            'summaries' => [
-                'main' => $this->compact_landing_funnel_daily_refresh_result($main_result),
-                'tkzone' => $this->compact_landing_funnel_daily_refresh_result($tkzone_result),
-            ],
-        ];
-    }
-
-    private function compact_landing_funnel_daily_refresh_result(array $result): array
-    {
-        return [
-            'success' => (bool) ($result['success'] ?? false),
-            'from_date' => (string) ($result['from_date'] ?? ''),
-            'to_date' => (string) ($result['to_date'] ?? ''),
-            'deleted' => (int) ($result['deleted'] ?? 0),
-            'inserted' => (int) ($result['inserted'] ?? 0),
-            'error' => (string) ($result['error'] ?? ''),
-        ];
-    }
-
-    private function format_landing_funnel_daily_refresh_error(array $result): string
-    {
-        $error = trim((string) ($result['error'] ?? ''));
-
-        return $error !== '' ? $error : 'failed without error detail';
-    }
-
-    private function has_landing_funnel_daily_summary_refresh_lock(): bool
+    private function has_landing_funnel_daily_summary_refresh_lock(string $lock_key): bool
     {
         return function_exists('get_transient')
-            && get_transient(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY) !== false;
+            && get_transient($lock_key) !== false;
     }
 
-    private function set_landing_funnel_daily_summary_refresh_lock(): void
+    private function set_landing_funnel_daily_summary_refresh_lock(string $lock_key): void
     {
         if (!function_exists('set_transient')) {
             return;
         }
 
         set_transient(
-            self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY,
+            $lock_key,
             '1',
             self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS
         );
     }
 
-    private function clear_landing_funnel_daily_summary_refresh_lock(): void
+    private function clear_landing_funnel_daily_summary_refresh_lock(string $lock_key): void
     {
         if (function_exists('delete_transient')) {
-            delete_transient(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY);
+            delete_transient($lock_key);
         }
     }
 
-    private function persist_landing_funnel_daily_summary_refresh_result(array $result): void
+    private function persist_landing_funnel_daily_summary_refresh_result(string $option_name, array $result): void
     {
         if (!function_exists('update_option')) {
             return;
         }
 
-        update_option(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION, $result, false);
+        update_option($option_name, $result, false);
+    }
+
+    private function unschedule_legacy_landing_funnel_daily_summary_refresh(): void
+    {
+        if (function_exists('wp_clear_scheduled_hook')) {
+            wp_clear_scheduled_hook(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK);
+
+            return;
+        }
+
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_unschedule_event')) {
+            return;
+        }
+
+        $guard = 0;
+
+        while ($guard < 10) {
+            $timestamp = wp_next_scheduled(self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK);
+
+            if ($timestamp === false) {
+                return;
+            }
+
+            wp_unschedule_event((int) $timestamp, self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK);
+            $guard++;
+        }
+    }
+
+    private function normalize_landing_funnel_daily_summary_refresh_date(string $date): string
+    {
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $matches) !== 1) {
+            return '';
+        }
+
+        $year = (int) $matches[1];
+        $month = (int) $matches[2];
+        $day = (int) $matches[3];
+
+        return checkdate($month, $day, $year) ? sprintf('%04d-%02d-%02d', $year, $month, $day) : '';
+    }
+
+    private function next_landing_funnel_daily_summary_refresh_date(string $date): string
+    {
+        $date = $this->normalize_landing_funnel_daily_summary_refresh_date($date);
+
+        if ($date === '') {
+            return '';
+        }
+
+        $timestamp = strtotime($date . ' +1 day');
+
+        return $timestamp === false ? '' : date('Y-m-d', $timestamp);
     }
 
     private function get_current_timestamp(): int
