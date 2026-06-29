@@ -225,3 +225,10 @@ Akzeptanzkriterien:
 Hinweise:
 - Als Vorlage kann `.github/workflows/php-tests.yml` aus `receipt-generator` dienen.
 - Vor Umsetzung im `backend` Repo zuerst pruefen, welche lokalen Test-/Lint-Befehle dort bereits existieren.
+
+## 6: "Ordentliches" Menü
+
+Ein linksseitiges Menü-Bar erstellen mit Submenüs
+
+- Workflow: Codex mit /product-design(?)
+- Design.md's benutzen (welche?)
