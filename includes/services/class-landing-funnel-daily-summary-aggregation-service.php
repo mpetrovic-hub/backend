@@ -84,11 +84,9 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                 $from_datetime,
                 $to_exclusive_datetime,
                 $from_datetime,
-                $handoff_to_exclusive_datetime,
-                $from_datetime,
-                $handoff_to_exclusive_datetime,
-                $from_datetime,
                 $to_exclusive_datetime,
+                $from_datetime,
+                $handoff_to_exclusive_datetime,
                 $metric_date,
                 $metric_date,
                 $metric_date,
@@ -197,41 +195,6 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                   AND session_token <> ''
                 GROUP BY landing_key, session_token
             ),
-            handoff_origin_events AS (
-                SELECT
-                    h.landing_key,
-                    h.session_token,
-                    DATE(MAX(ls.created_at)) AS metric_date,
-                    h.event_type,
-                    h.elapsed_ms
-                FROM {$handoff_table} h
-                INNER JOIN {$landing_session_table} ls
-                  ON ls.landing_key = h.landing_key
-                 AND ls.session_token = h.session_token
-                 AND ls.created_at >= %s
-                 AND ls.created_at < %s
-                 AND ls.created_at <= h.created_at
-                 AND ls.landing_key <> ''
-                 AND ls.session_token <> ''
-                WHERE h.created_at >= %s
-                  AND h.created_at < %s
-                  AND h.landing_key <> ''
-                  AND h.session_token <> ''
-                GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms
-            ),
-            handoff_by_session AS (
-                SELECT
-                    metric_date,
-                    landing_key,
-                    session_token,
-                    SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
-                    SUM(CASE WHEN event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
-                    SUM(CASE WHEN event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails,
-                    MIN(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS min_hidden_seconds,
-                    MAX(CASE WHEN event_type = 'sms_handoff_hidden' THEN ROUND(elapsed_ms / 1000, 2) ELSE NULL END) AS max_hidden_seconds
-                FROM handoff_origin_events
-                GROUP BY metric_date, landing_key, session_token
-            ),
             session_facts AS (
                 SELECT
                     DATE(l.first_landing_at) AS metric_date,
@@ -256,11 +219,11 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                     COALESCE(e.cta2_click_count, 0) AS cta2_click_events,
                     CASE WHEN e.first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta3_sessions,
                     COALESCE(e.cta3_click_count, 0) AS cta3_click_events,
-                    COALESCE(h.handoff_attempts, 0) AS handoff_attempts,
-                    COALESCE(h.handoff_successes, 0) AS handoff_successes,
-                    COALESCE(h.handoff_fails, 0) AS handoff_fails,
-                    h.min_hidden_seconds,
-                    h.max_hidden_seconds,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails,
+                    MIN(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN ROUND(h.elapsed_ms / 1000, 2) ELSE NULL END) AS min_hidden_seconds,
+                    MAX(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN ROUND(h.elapsed_ms / 1000, 2) ELSE NULL END) AS max_hidden_seconds,
                     0 AS sales,
                     0 AS sales_amount_minor
                 FROM landing_loads l
@@ -271,10 +234,49 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
                  AND e.created_at < %s
                  AND e.landing_key <> ''
                  AND e.session_token <> ''
-                LEFT JOIN handoff_by_session h
+                LEFT JOIN {$handoff_table} h
                   ON h.landing_key = l.landing_key
                  AND h.session_token = l.session_token
-                 AND h.metric_date = DATE(l.first_landing_at)
+                 AND h.created_at >= %s
+                 AND h.created_at >= l.first_landing_at
+                 AND h.created_at < %s
+                 AND h.landing_key <> ''
+                 AND h.session_token <> ''
+                 AND NOT EXISTS (
+                    SELECT 1
+                    FROM {$landing_session_table} later_ls
+                    WHERE later_ls.landing_key = l.landing_key
+                      AND later_ls.session_token = l.session_token
+                      AND later_ls.created_at > l.first_landing_at
+                      AND later_ls.created_at <= h.created_at
+                      AND DATE(later_ls.created_at) > DATE(l.first_landing_at)
+                      AND later_ls.landing_key <> ''
+                      AND later_ls.session_token <> ''
+                    LIMIT 1
+                 )
+                GROUP BY
+                    DATE(l.first_landing_at),
+                    l.landing_key,
+                    l.session_token,
+                    l.service_key,
+                    l.provider_key,
+                    l.flow_key,
+                    l.country,
+                    l.pid,
+                    l.tksource,
+                    l.device_brand,
+                    l.os,
+                    l.os_version,
+                    l.browser,
+                    l.client_ip_version,
+                    l.client_ip_prefix,
+                    e.page_loaded_at,
+                    e.first_cta1_click_at,
+                    e.cta1_click_count,
+                    e.first_cta2_click_at,
+                    e.cta2_click_count,
+                    e.first_cta3_click_at,
+                    e.cta3_click_count
             ),
             sales_facts AS (
                 SELECT

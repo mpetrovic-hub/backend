@@ -27,6 +27,7 @@ $GLOBALS['kiwi_test_dbdelta_queries'] = [];
 $GLOBALS['kiwi_test_cron_events'] = [];
 $GLOBALS['kiwi_test_next_scheduled'] = [];
 $GLOBALS['kiwi_test_deleted_transients'] = [];
+$GLOBALS['kiwi_test_cleared_hooks'] = [];
 
 function add_action($hook, $callback): void
 {
@@ -104,6 +105,20 @@ function wp_schedule_event($timestamp, $recurrence, $hook): bool
     $GLOBALS['kiwi_test_next_scheduled'][(string) $hook] = (int) $timestamp;
 
     return true;
+}
+
+function wp_clear_scheduled_hook($hook): int
+{
+    $hook = (string) $hook;
+    $GLOBALS['kiwi_test_cleared_hooks'][] = $hook;
+
+    if (!array_key_exists($hook, $GLOBALS['kiwi_test_next_scheduled'])) {
+        return 0;
+    }
+
+    unset($GLOBALS['kiwi_test_next_scheduled'][$hook]);
+
+    return 1;
 }
 
 function get_option($option, $default = false)
@@ -1192,6 +1207,16 @@ class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
     }
 
     protected function log_landing_funnel_daily_summary_refresh(string $message): void
+    {
+        $this->logs[] = $message;
+    }
+
+    protected function log_landing_funnel_daily_main_summary_refresh(string $message): void
+    {
+        $this->logs[] = $message;
+    }
+
+    protected function log_landing_funnel_daily_tkzone_summary_refresh(string $message): void
     {
         $this->logs[] = $message;
     }
@@ -10117,17 +10142,15 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
             '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
             '2026-05-22 00:00:00',
-            '2026-05-24 00:00:00',
-            '2026-05-22 00:00:00',
-            '2026-05-24 00:00:00',
-            '2026-05-22 00:00:00',
             '2026-05-23 00:00:00',
+            '2026-05-22 00:00:00',
+            '2026-05-24 00:00:00',
             '2026-05-22',
             '2026-05-22',
             '2026-05-22',
         ],
         $prepared[1]['args'] ?? [],
-        'Expected refresh insert to bind day-bounded sessions/sales plus next-day handoff origin carryover.'
+        'Expected refresh insert to bind day-bounded sessions/engagement/sales plus next-day handoff carryover.'
     );
     $insert_sql = (string) ($prepared[1]['query'] ?? '');
     $normalized_insert_sql = str_replace("\r\n", "\n", $insert_sql);
@@ -10138,7 +10161,9 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('LEFT JOIN abc_kiwi_premium_sms_landing_engagements e', $insert_sql, 'Expected engagement metrics to join directly to landing sessions.');
     kiwi_assert_contains('AND e.created_at >= %s', $insert_sql, 'Expected direct engagement joins to keep the refresh day lower bound.');
     kiwi_assert_contains('AND e.created_at < %s', $insert_sql, 'Expected direct engagement joins to keep the refresh day upper bound.');
-    kiwi_assert_contains('LEFT JOIN handoff_by_session h', $insert_sql, 'Expected handoff metrics to join to landing sessions.');
+    kiwi_assert_true(strpos($insert_sql, 'handoff_by_session AS') === false, 'Expected main summary refresh not to materialize handoff sessions before joining.');
+    kiwi_assert_true(strpos($insert_sql, 'handoff_origin_events AS') === false, 'Expected main summary refresh not to materialize handoff origin events before joining.');
+    kiwi_assert_contains('LEFT JOIN abc_kiwi_landing_handoff_events h', $insert_sql, 'Expected handoff metrics to join directly to landing sessions.');
     kiwi_assert_contains('FROM abc_kiwi_sales s', $insert_sql, 'Expected refresh to aggregate completed sales from durable sales snapshots.');
     kiwi_assert_true(strpos($insert_sql, 'abc_kiwi_click_attributions') === false, 'Expected daily summary sales aggregation not to depend on temporary click attribution rows.');
     kiwi_assert_contains("SUBSTRING_INDEX(GROUP_CONCAT(NULLIF(service_key, '') ORDER BY created_at ASC SEPARATOR '|'), '|', 1) AS service_key", $insert_sql, 'Expected landing loads to read canonical service_key from landing sessions.');
@@ -10190,14 +10215,16 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('COALESCE(e.cta1_click_count, 0) AS cta1_click_events', $insert_sql, 'Expected CTA1 events to use step-specific engagement counts from the direct session lookup.');
     kiwi_assert_contains('COALESCE(e.cta2_click_count, 0) AS cta2_click_events', $insert_sql, 'Expected CTA2 events to use step-specific engagement counts from the direct session lookup.');
     kiwi_assert_contains('COALESCE(e.cta3_click_count, 0) AS cta3_click_events', $insert_sql, 'Expected CTA3 events to use step-specific engagement counts from the direct session lookup.');
-    kiwi_assert_contains("SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to use event counts under the handoff uniqueness contract.');
-    kiwi_assert_contains('MIN(CASE WHEN event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected min hidden seconds to remain as a light aggregate.');
-    kiwi_assert_contains('MAX(CASE WHEN event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected max hidden seconds to remain as a light aggregate.');
-    kiwi_assert_contains('handoff_origin_events AS', $insert_sql, 'Expected handoffs to resolve an origin landing-session day before aggregation.');
-    kiwi_assert_contains('DATE(MAX(ls.created_at)) AS metric_date', $insert_sql, 'Expected handoff carryover to use the latest matching landing row before the event as the origin metric date.');
-    kiwi_assert_contains('AND ls.created_at <= h.created_at', $insert_sql, 'Expected handoffs not to attach to landing rows that happened after the handoff event.');
-    kiwi_assert_contains('GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms', $insert_sql, 'Expected each handoff event to be assigned to one origin day before session aggregation.');
-    kiwi_assert_contains('AND h.metric_date = DATE(l.first_landing_at)', $insert_sql, 'Expected handoff metrics to join only to the landing-session day they originated from.');
+    kiwi_assert_contains("SUM(CASE WHEN h.event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts", $insert_sql, 'Expected handoff attempts to use event counts under the handoff uniqueness contract.');
+    kiwi_assert_contains('MIN(CASE WHEN h.event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected min hidden seconds to remain as a light aggregate.');
+    kiwi_assert_contains('MAX(CASE WHEN h.event_type = \'sms_handoff_hidden\'', $insert_sql, 'Expected max hidden seconds to remain as a light aggregate.');
+    kiwi_assert_contains('AND h.created_at >= l.first_landing_at', $insert_sql, 'Expected handoff events to attach only after the canonical landing session begins.');
+    kiwi_assert_contains('AND h.created_at < %s', $insert_sql, 'Expected handoff join to keep the target-day plus next-day carryover upper bound.');
+    kiwi_assert_contains('AND NOT EXISTS (', $insert_sql, 'Expected direct handoff attribution to reject later cross-midnight landing rows.');
+    kiwi_assert_contains('later_ls.created_at > l.first_landing_at', $insert_sql, 'Expected anti-join to find later landing rows for the same session token.');
+    kiwi_assert_contains('later_ls.created_at <= h.created_at', $insert_sql, 'Expected anti-join to preserve latest-landing-before-event attribution.');
+    kiwi_assert_contains('DATE(later_ls.created_at) > DATE(l.first_landing_at)', $insert_sql, 'Expected anti-join to focus rejection on cross-midnight session-token reuse.');
+    kiwi_assert_contains('GROUP BY' . "\n" . '                    DATE(l.first_landing_at),', $normalized_insert_sql, 'Expected direct handoff metrics to aggregate at one row per canonical landing session.');
     kiwi_assert_contains('s.attribution_metric_date AS metric_date', $insert_sql, 'Expected sales metric date to use durable attribution metric date only.');
     kiwi_assert_contains('s.attribution_metric_date BETWEEN %s AND %s', $insert_sql, 'Expected sales refresh to use attribution metric date bounds.');
     kiwi_assert_contains('COUNT(*) AS sales', $insert_sql, 'Expected completed sales to use COUNT(*) without join multiplication.');
@@ -10272,17 +10299,15 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service chunks mult
             '2026-05-21 00:00:00',
             '2026-05-22 00:00:00',
             '2026-05-21 00:00:00',
-            '2026-05-23 00:00:00',
-            '2026-05-21 00:00:00',
-            '2026-05-23 00:00:00',
-            '2026-05-21 00:00:00',
             '2026-05-22 00:00:00',
+            '2026-05-21 00:00:00',
+            '2026-05-23 00:00:00',
             '2026-05-21',
             '2026-05-21',
             '2026-05-21',
         ],
         $prepared[3]['args'] ?? [],
-        'Expected each chunk insert to bind only its own metric day while keeping next-day handoff origin carryover.'
+        'Expected each chunk insert to bind only its own metric day while keeping next-day handoff carryover.'
     );
 
     $wpdb = $previous_wpdb;
@@ -11161,7 +11186,8 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'ensure_click_attribution_table',
             'ensure_sales_table',
             'cleanup_expired_click_attributions',
-            'schedule_landing_funnel_daily_summary_refresh',
+            'schedule_landing_funnel_daily_main_summary_refresh',
+            'schedule_landing_funnel_daily_tkzone_summary_refresh',
             'schedule_device_model_brand_harvest',
             'schedule_retention_cleanup',
             'maybe_export_statistics',
@@ -11177,6 +11203,8 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
 
     kiwi_assert_same(1, count($GLOBALS['kiwi_test_hooks']['template_redirect'] ?? []), 'Expected one landing-page routing hook.');
     kiwi_assert_same('maybe_render_landing_page', $GLOBALS['kiwi_test_hooks']['template_redirect'][0][1] ?? null, 'Expected the landing-page router hook to remain explicit.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_landing_funnel_daily_main_summary_refresh']), 'Expected main summary refresh cron hook to be registered.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_landing_funnel_daily_tkzone_summary_refresh']), 'Expected TK-zone summary refresh cron hook to be registered.');
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_device_model_brand_harvest']), 'Expected device model brand harvest cron hook to be registered.');
 
     $enqueue_callback = $GLOBALS['kiwi_test_hooks']['wp_enqueue_scripts'][0];
@@ -11435,13 +11463,15 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dim
     kiwi_assert_contains('summary.min_hidden_seconds <=> raw.min_hidden_seconds', $main_query, 'Expected main coverage gate to compare nullable min hidden seconds.');
     kiwi_assert_contains('summary.max_hidden_seconds <=> raw.max_hidden_seconds', $main_query, 'Expected main coverage gate to compare nullable max hidden seconds.');
     kiwi_assert_contains('LEFT JOIN wp_kiwi_premium_sms_landing_engagements', $main_query, 'Expected main coverage gate to recompute engagement metrics from persisted engagement rows.');
-    kiwi_assert_contains('FROM wp_kiwi_landing_handoff_events h', $main_query, 'Expected main coverage gate to recompute handoff metrics from persisted handoff rows.');
-    kiwi_assert_contains('handoff_origin_events AS', $main_query, 'Expected main coverage gate to mirror summary handoff attribution through origin events.');
-    kiwi_assert_contains('DATE(MAX(ls.created_at)) AS metric_date', $main_query, 'Expected main coverage gate to attribute handoffs to the latest landing row before the event.');
-    kiwi_assert_contains('ls.created_at <= h.created_at', $main_query, 'Expected main coverage gate not to attribute handoffs to future landing rows.');
-    kiwi_assert_contains('GROUP BY h.id, h.landing_key, h.session_token, h.event_type, h.elapsed_ms', $main_query, 'Expected main coverage gate to attribute each handoff event once before aggregating by session.');
-    kiwi_assert_contains('HAVING handoff_created_at < DATE_ADD(metric_date, INTERVAL 2 DAY)', $main_query, 'Expected main coverage gate to preserve the daily summary carryover window.');
-    kiwi_assert_true(strpos($main_query, 'h.created_at >= l.first_landing_at') === false, 'Expected main coverage gate not to broadly join handoffs back to earlier reused-session landing days.');
+    kiwi_assert_contains('LEFT JOIN wp_kiwi_landing_handoff_events h', $main_query, 'Expected main coverage gate to recompute handoff metrics from persisted handoff rows.');
+    kiwi_assert_true(strpos($main_query, 'handoff_origin_events AS') === false, 'Expected main coverage gate not to materialize handoff origin events before joining.');
+    kiwi_assert_true(strpos($main_query, 'handoff_by_session AS') === false, 'Expected main coverage gate not to materialize handoff sessions before joining.');
+    kiwi_assert_contains('h.created_at >= l.first_landing_at', $main_query, 'Expected main coverage gate to mirror direct handoff joins after the canonical landing starts.');
+    kiwi_assert_contains('h.created_at < DATE_ADD(l.metric_date, INTERVAL 2 DAY)', $main_query, 'Expected main coverage gate to preserve the daily summary carryover window.');
+    kiwi_assert_contains('NOT EXISTS (', $main_query, 'Expected main coverage gate to mirror latest-landing-before-event anti-join semantics.');
+    kiwi_assert_contains('later_ls.created_at > l.first_landing_at', $main_query, 'Expected main coverage gate anti-join to inspect later landing rows for reused sessions.');
+    kiwi_assert_contains('later_ls.created_at <= h.created_at', $main_query, 'Expected main coverage gate not to attribute handoffs to a prior landing day when a later landing owns the event.');
+    kiwi_assert_contains('DATE(later_ls.created_at) > l.metric_date', $main_query, 'Expected main coverage gate anti-join to focus rejection on cross-midnight session-token reuse.');
     kiwi_assert_contains('FROM wp_kiwi_sales s', $main_query, 'Expected main coverage gate to recompute sale metrics from durable sales rows.');
     foreach ([
         'landing_key',
@@ -11469,9 +11499,9 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate matches main summary coverage by dim
     }
     kiwi_assert_true(strpos($main_query, 'SELECT DISTINCT metric_date') === false, 'Expected main coverage gate not to accept any summary row for a date as full coverage.');
     kiwi_assert_same(
-        ['2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00'],
+        ['2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00', '2026-06-12 00:00:00'],
         $wpdb->prepared_statements[0]['args'] ?? [],
-        'Expected main coverage gate to bind cutoff for landing, handoff origin, sales, and summary coverage windows.'
+        'Expected main coverage gate to bind cutoff for landing, handoff carryover, sales, and summary coverage windows.'
     );
 
     $wpdb = $previous_wpdb;
@@ -12205,37 +12235,52 @@ kiwi_run_test('Kiwi_Plugin throttles click attribution cleanup with transient lo
     kiwi_assert_same('1', $GLOBALS['kiwi_test_transients'][$cleanup_lock_key] ?? '', 'Expected cleanup throttle lock to be stored after first cleanup run.');
 });
 
-kiwi_run_test('Kiwi_Plugin schedules the landing funnel daily summary cron hook once', function (): void {
+kiwi_run_test('Kiwi_Plugin schedules split landing funnel summary cron hooks once and clears the legacy hook', function (): void {
     $GLOBALS['kiwi_test_hooks'] = [];
     $GLOBALS['kiwi_test_cron_events'] = [];
     $GLOBALS['kiwi_test_next_scheduled'] = [];
+    $GLOBALS['kiwi_test_cleared_hooks'] = [];
 
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
-    $hook = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_HOOK');
+    $legacy_hook = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK');
+    $main_hook = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK');
+    $tkzone_hook = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK');
+    $GLOBALS['kiwi_test_next_scheduled'][$legacy_hook] = 123456;
 
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->register();
-    $plugin->schedule_landing_funnel_daily_summary_refresh();
-    $plugin->schedule_landing_funnel_daily_summary_refresh();
+    $plugin->schedule_landing_funnel_daily_main_summary_refresh();
+    $plugin->schedule_landing_funnel_daily_main_summary_refresh();
+    $plugin->schedule_landing_funnel_daily_tkzone_summary_refresh();
+    $plugin->schedule_landing_funnel_daily_tkzone_summary_refresh();
 
-    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks'][$hook]), 'Expected the daily summary cron hook to be registered.');
-    kiwi_assert_same(1, count($GLOBALS['kiwi_test_cron_events']), 'Expected daily summary refresh to be scheduled only when no event exists.');
-    kiwi_assert_same('hourly', $GLOBALS['kiwi_test_cron_events'][0]['recurrence'] ?? '', 'Expected daily summary refresh to use the documented hourly interval.');
-    kiwi_assert_same($hook, $GLOBALS['kiwi_test_cron_events'][0]['hook'] ?? '', 'Expected scheduled event to use the daily summary refresh hook.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks'][$main_hook]), 'Expected the main summary cron hook to be registered.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks'][$tkzone_hook]), 'Expected the TK-zone summary cron hook to be registered.');
+    kiwi_assert_true(in_array($legacy_hook, $GLOBALS['kiwi_test_cleared_hooks'], true), 'Expected scheduling to clear the legacy combined hook.');
+    kiwi_assert_true(!isset($GLOBALS['kiwi_test_next_scheduled'][$legacy_hook]), 'Expected the legacy combined hook not to remain scheduled.');
+    kiwi_assert_same(2, count($GLOBALS['kiwi_test_cron_events']), 'Expected split summary refreshes to be scheduled only when no event exists.');
+    kiwi_assert_same('hourly', $GLOBALS['kiwi_test_cron_events'][0]['recurrence'] ?? '', 'Expected main summary refresh to use the documented hourly interval.');
+    kiwi_assert_same('hourly', $GLOBALS['kiwi_test_cron_events'][1]['recurrence'] ?? '', 'Expected TK-zone summary refresh to use the documented hourly interval.');
+    kiwi_assert_same($main_hook, $GLOBALS['kiwi_test_cron_events'][0]['hook'] ?? '', 'Expected first scheduled event to use the main summary refresh hook.');
+    kiwi_assert_same($tkzone_hook, $GLOBALS['kiwi_test_cron_events'][1]['hook'] ?? '', 'Expected second scheduled event to use the TK-zone summary refresh hook.');
+    kiwi_assert_true(
+        (($GLOBALS['kiwi_test_cron_events'][1]['timestamp'] ?? 0) - ($GLOBALS['kiwi_test_cron_events'][0]['timestamp'] ?? 0)) >= 300,
+        'Expected TK-zone refresh scheduling to be offset after the main summary refresh.'
+    );
 });
 
-kiwi_run_test('Kiwi_Plugin runs landing funnel daily summary refresh for the default rolling window', function (): void {
+kiwi_run_test('Kiwi_Plugin runs one main summary refresh work unit for the default rolling window', function (): void {
     $GLOBALS['kiwi_test_transients'] = [];
     $GLOBALS['kiwi_test_deleted_transients'] = [];
     $GLOBALS['kiwi_test_options'] = [];
 
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
-    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY');
-    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY');
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
     $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
         'success' => true,
         'from_date' => '2026-05-19',
-        'to_date' => '2026-05-26',
+        'to_date' => '2026-05-19',
         'deleted' => 4,
         'inserted' => 6,
         'error' => '',
@@ -12250,19 +12295,148 @@ kiwi_run_test('Kiwi_Plugin runs landing funnel daily summary refresh for the def
     ]);
     $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service, $tkzone_service);
 
-    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
 
-    kiwi_assert_true($result['success'], 'Expected the daily summary refresh wrapper to return the service success.');
-    kiwi_assert_same([['2026-05-19', '2026-05-26']], $service->calls, 'Expected default refresh window to cover today minus seven lookback days through today.');
-    kiwi_assert_same([['2026-05-19', '2026-05-26']], $tkzone_service->calls, 'Expected tkzone summary refresh to use the same rolling window.');
-    kiwi_assert_same(5, $result['deleted'], 'Expected combined refresh result to expose deleted rows across both summaries.');
-    kiwi_assert_same(8, $result['inserted'], 'Expected combined refresh result to expose inserted rows across both summaries.');
-    kiwi_assert_same(4, $result['summaries']['main']['deleted'] ?? null, 'Expected persisted result to keep main summary refresh counters.');
-    kiwi_assert_same(2, $result['summaries']['tkzone']['inserted'] ?? null, 'Expected persisted result to keep tkzone summary refresh counters.');
+    kiwi_assert_true($result['success'], 'Expected the main summary refresh wrapper to return the service success.');
+    kiwi_assert_same([['2026-05-19', '2026-05-19']], $service->calls, 'Expected default refresh to process only the oldest due metric date in the rolling window.');
+    kiwi_assert_same([], $tkzone_service->calls, 'Expected the main summary runner not to invoke the TK-zone service.');
+    kiwi_assert_same('main', $result['summary'], 'Expected persisted result to identify the split summary job.');
+    kiwi_assert_same('2026-05-19', $result['metric_date'], 'Expected persisted result to expose the processed metric date.');
+    kiwi_assert_same('2026-05-19', $result['range_from_date'], 'Expected persisted result to retain the rolling-window lower bound.');
+    kiwi_assert_same('2026-05-26', $result['range_to_date'], 'Expected persisted result to retain the rolling-window upper bound.');
+    kiwi_assert_same(4, $result['deleted'], 'Expected main refresh result to expose deleted rows.');
+    kiwi_assert_same(6, $result['inserted'], 'Expected main refresh result to expose inserted rows.');
     kiwi_assert_true(!isset($GLOBALS['kiwi_test_transients'][$lock_key]), 'Expected daily summary refresh lock to be cleared after normal completion.');
     kiwi_assert_same([$lock_key], $GLOBALS['kiwi_test_deleted_transients'], 'Expected normal completion to explicitly delete the refresh lock.');
     kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected last refresh result to be persisted as an option.');
-    kiwi_assert_contains('Refresh succeeded for 2026-05-19 to 2026-05-26', implode("\n", $plugin->logs), 'Expected successful refresh to be visibly logged.');
+    kiwi_assert_contains('Main refresh succeeded for 2026-05-19', implode("\n", $plugin->logs), 'Expected successful main refresh to be visibly logged.');
+});
+
+kiwi_run_test('Kiwi_Plugin advances split summary refreshes through the rolling window', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $GLOBALS['kiwi_test_options'][$last_result_option] = [
+        'success' => true,
+        'metric_date' => '2026-05-19',
+        'skipped_due_to_lock' => false,
+    ];
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-20',
+        'to_date' => '2026-05-20',
+        'deleted' => 1,
+        'inserted' => 2,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
+
+    kiwi_assert_true($result['success'], 'Expected next split refresh work unit to succeed.');
+    kiwi_assert_same([['2026-05-20', '2026-05-20']], $service->calls, 'Expected next run to advance to the next due metric date instead of repeating the prior success.');
+    kiwi_assert_same('2026-05-20', $result['metric_date'], 'Expected persisted result to identify the advanced metric date.');
+});
+
+kiwi_run_test('Kiwi_Plugin retries failed split summary refresh work units before advancing', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $GLOBALS['kiwi_test_options'][$last_result_option] = [
+        'success' => false,
+        'metric_date' => '2026-05-19',
+        'skipped_due_to_lock' => false,
+        'error' => 'insert aggregate rows failed',
+    ];
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-19',
+        'to_date' => '2026-05-19',
+        'deleted' => 1,
+        'inserted' => 2,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
+
+    kiwi_assert_true($result['success'], 'Expected retried split refresh work unit to succeed.');
+    kiwi_assert_same([['2026-05-19', '2026-05-19']], $service->calls, 'Expected failed metric date to be retried before advancing the cursor.');
+    kiwi_assert_same('2026-05-19', $result['metric_date'], 'Expected persisted result to identify the retried metric date.');
+});
+
+kiwi_run_test('Kiwi_Plugin retries later failed split summary work units before wrapping', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $GLOBALS['kiwi_test_options'][$last_result_option] = [
+        'success' => false,
+        'metric_date' => '2026-05-23',
+        'range_from_date' => '2026-05-19',
+        'range_to_date' => '2026-05-26',
+        'skipped_due_to_lock' => false,
+        'error' => 'insert aggregate rows failed',
+    ];
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-23',
+        'to_date' => '2026-05-23',
+        'deleted' => 1,
+        'inserted' => 2,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
+
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
+
+    kiwi_assert_true($result['success'], 'Expected later failed split refresh work unit to be retried.');
+    kiwi_assert_same([['2026-05-23', '2026-05-23']], $service->calls, 'Expected later failed metric date to retry before wrapping to the rolling-window start.');
+    kiwi_assert_same('2026-05-23', $result['metric_date'], 'Expected persisted result to identify the retried later metric date.');
+});
+
+kiwi_run_test('Kiwi_Plugin runs one TK-zone summary refresh work unit with its own result option', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_KEY');
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
+        'success' => true,
+        'deleted' => 0,
+        'inserted' => 0,
+        'error' => '',
+    ]);
+    $tkzone_service = new Kiwi_Test_Landing_Funnel_Daily_Tkzone_Summary_Refresh_Service([
+        'success' => true,
+        'from_date' => '2026-05-19',
+        'to_date' => '2026-05-19',
+        'deleted' => 1,
+        'inserted' => 2,
+        'error' => '',
+    ]);
+    $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service, $tkzone_service);
+
+    $result = $plugin->run_landing_funnel_daily_tkzone_summary_refresh();
+
+    kiwi_assert_true($result['success'], 'Expected the TK-zone summary refresh wrapper to return the service success.');
+    kiwi_assert_same([], $service->calls, 'Expected the TK-zone runner not to invoke the main summary service.');
+    kiwi_assert_same([['2026-05-19', '2026-05-19']], $tkzone_service->calls, 'Expected TK-zone refresh to process only the oldest due metric date.');
+    kiwi_assert_same('tkzone', $result['summary'], 'Expected persisted result to identify the TK-zone summary job.');
+    kiwi_assert_true(!isset($GLOBALS['kiwi_test_transients'][$lock_key]), 'Expected TK-zone refresh lock to be cleared after normal completion.');
+    kiwi_assert_same([$lock_key], $GLOBALS['kiwi_test_deleted_transients'], 'Expected TK-zone normal completion to explicitly delete the refresh lock.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected TK-zone last refresh result to be persisted separately.');
+    kiwi_assert_contains('Tkzone refresh succeeded for 2026-05-19', implode("\n", $plugin->logs), 'Expected successful TK-zone refresh to be visibly logged.');
 });
 
 kiwi_run_test('Kiwi_Plugin keeps a prior-day carryover when daily summary refresh days is zero', function (): void {
@@ -12273,7 +12447,7 @@ kiwi_run_test('Kiwi_Plugin keeps a prior-day carryover when daily summary refres
     $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
         'success' => true,
         'from_date' => '2026-05-25',
-        'to_date' => '2026-05-26',
+        'to_date' => '2026-05-25',
         'deleted' => 2,
         'inserted' => 3,
         'error' => '',
@@ -12281,12 +12455,13 @@ kiwi_run_test('Kiwi_Plugin keeps a prior-day carryover when daily summary refres
     $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
     $plugin->refresh_days = 0;
 
-    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
 
     kiwi_assert_true($result['success'], 'Expected zero-lookback refresh with handoff carryover to succeed.');
-    kiwi_assert_same([['2026-05-25', '2026-05-26']], $service->calls, 'Expected hourly zero-lookback refresh to include yesterday so cross-midnight handoff completions update the first-handoff day.');
+    kiwi_assert_same([['2026-05-25', '2026-05-25']], $service->calls, 'Expected hourly zero-lookback refresh to process yesterday first so cross-midnight handoff completions update the first-handoff day.');
     kiwi_assert_same('2026-05-25', $result['from_date'], 'Expected persisted result to expose the effective carryover start date.');
-    kiwi_assert_contains('Refresh succeeded for 2026-05-25 to 2026-05-26', implode("\n", $plugin->logs), 'Expected carryover refresh range to be visible in logs.');
+    kiwi_assert_same('2026-05-26', $result['range_to_date'], 'Expected persisted result to retain today as the upper rolling-window date.');
+    kiwi_assert_contains('Main refresh succeeded for 2026-05-25', implode("\n", $plugin->logs), 'Expected carryover refresh date to be visible in logs.');
 });
 
 kiwi_run_test('Kiwi_Plugin skips landing funnel daily summary refresh while lock is active', function (): void {
@@ -12295,9 +12470,19 @@ kiwi_run_test('Kiwi_Plugin skips landing funnel daily summary refresh while lock
     $GLOBALS['kiwi_test_options'] = [];
 
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
-    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY');
-    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY');
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $lock_skip_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_SKIP_OPTION');
+    $previous_result = [
+        'success' => true,
+        'summary' => 'main',
+        'metric_date' => '2026-05-22',
+        'range_from_date' => '2026-05-19',
+        'range_to_date' => '2026-05-26',
+        'skipped_due_to_lock' => false,
+    ];
     $GLOBALS['kiwi_test_transients'][$lock_key] = '1';
+    $GLOBALS['kiwi_test_options'][$last_result_option] = $previous_result;
     $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
         'success' => true,
         'from_date' => '2026-05-19',
@@ -12308,12 +12493,14 @@ kiwi_run_test('Kiwi_Plugin skips landing funnel daily summary refresh while lock
     ]);
     $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
 
-    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
 
     kiwi_assert_true($result['skipped_due_to_lock'], 'Expected active lock to produce an explicit skip result.');
+    kiwi_assert_same('main', $result['summary'], 'Expected lock skip result to identify the split summary job.');
     kiwi_assert_same([], $service->calls, 'Expected locked refresh not to call the aggregation service.');
     kiwi_assert_same('1', $GLOBALS['kiwi_test_transients'][$lock_key] ?? '', 'Expected existing lock to remain untouched on skip.');
-    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected lock skip result to be persisted as the latest operational state.');
+    kiwi_assert_same($previous_result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected lock skip not to overwrite the previous non-lock refresh cursor.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$lock_skip_result_option] ?? null, 'Expected lock skip result to be persisted separately for operational diagnostics.');
     kiwi_assert_contains('lock is active', implode("\n", $plugin->logs), 'Expected lock skip to be visibly logged.');
 });
 
@@ -12323,25 +12510,26 @@ kiwi_run_test('Kiwi_Plugin persists landing funnel daily summary refresh failure
     $GLOBALS['kiwi_test_options'] = [];
 
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
-    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_KEY');
-    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY');
+    $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
     $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
         'success' => false,
         'from_date' => '2026-05-19',
-        'to_date' => '2026-05-26',
+        'to_date' => '2026-05-19',
         'deleted' => 0,
         'inserted' => 0,
         'error' => 'summary insert failed',
     ], 'summary insert failed');
     $plugin = new Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh($service);
 
-    $result = $plugin->run_landing_funnel_daily_summary_refresh();
+    $result = $plugin->run_landing_funnel_daily_main_summary_refresh();
 
     kiwi_assert_true(!$result['success'], 'Expected failed aggregation service result to remain failed.');
-    kiwi_assert_same('main: summary insert failed', $result['error'], 'Expected failed refresh error to name the failed summary.');
+    kiwi_assert_same('summary insert failed', $result['error'], 'Expected failed refresh error to preserve the service error.');
+    kiwi_assert_same('main', $result['summary'], 'Expected failed refresh result to identify the split summary job.');
     kiwi_assert_true(!isset($GLOBALS['kiwi_test_transients'][$lock_key]), 'Expected refresh lock to be cleared after failed service completion.');
     kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected failed refresh result to be persisted for operations.');
-    kiwi_assert_contains('Refresh failed for 2026-05-19 to 2026-05-26: main: summary insert failed', implode("\n", $plugin->logs), 'Expected failed refresh to be visibly logged.');
+    kiwi_assert_contains('Main refresh failed for 2026-05-19: summary insert failed', implode("\n", $plugin->logs), 'Expected failed refresh to be visibly logged.');
 });
 
 kiwi_run_test('Kiwi_Plugin exports HLR rows from the transient identified by batch_id', function (): void {
