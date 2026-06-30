@@ -927,7 +927,25 @@ class Kiwi_Retention_Coverage_Gate
                     client_ip_version,
                     client_ip_prefix
              )
-             SELECT raw.metric_date
+             SELECT raw.metric_date,
+                CASE
+                    WHEN summary.metric_date IS NULL
+                      OR summary.sessions <> raw.sessions
+                      OR summary.page_loaded_sessions <> raw.page_loaded_sessions
+                      OR summary.handoff_attempts <> raw.handoff_attempts
+                      OR summary.handoff_successes <> raw.handoff_successes
+                      OR summary.handoff_fails <> raw.handoff_fails
+                      OR NOT (summary.min_hidden_seconds <=> raw.min_hidden_seconds)
+                      OR NOT (summary.max_hidden_seconds <=> raw.max_hidden_seconds)
+                      OR ABS(summary.cta1_sessions - raw.cta1_sessions) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_sessions), ABS(summary.cta1_sessions)) * 0.001))
+                      OR ABS(summary.cta1_click_events - raw.cta1_click_events) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_click_events), ABS(summary.cta1_click_events)) * 0.001))
+                      OR ABS(summary.cta2_sessions - raw.cta2_sessions) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_sessions), ABS(summary.cta2_sessions)) * 0.001))
+                      OR ABS(summary.cta2_click_events - raw.cta2_click_events) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_click_events), ABS(summary.cta2_click_events)) * 0.001))
+                      OR ABS(summary.cta3_sessions - raw.cta3_sessions) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_sessions), ABS(summary.cta3_sessions)) * 0.001))
+                      OR ABS(summary.cta3_click_events - raw.cta3_click_events) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_click_events), ABS(summary.cta3_click_events)) * 0.001))
+                    THEN 'blocked'
+                    ELSE 'warning'
+                END AS severity
              FROM raw
              LEFT JOIN summary ON summary.metric_date = raw.metric_date
                 AND summary.landing_key = raw.landing_key
@@ -943,20 +961,21 @@ class Kiwi_Retention_Coverage_Gate
                 AND summary.browser = raw.browser
                 AND summary.client_ip_version = raw.client_ip_version
                 AND summary.client_ip_prefix = raw.client_ip_prefix
-                AND summary.sessions = raw.sessions
-                AND summary.page_loaded_sessions = raw.page_loaded_sessions
-                AND ABS(summary.cta1_sessions - raw.cta1_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_sessions), ABS(summary.cta1_sessions)) * 0.001))
-                AND ABS(summary.cta1_click_events - raw.cta1_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_click_events), ABS(summary.cta1_click_events)) * 0.001))
-                AND ABS(summary.cta2_sessions - raw.cta2_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_sessions), ABS(summary.cta2_sessions)) * 0.001))
-                AND ABS(summary.cta2_click_events - raw.cta2_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_click_events), ABS(summary.cta2_click_events)) * 0.001))
-                AND ABS(summary.cta3_sessions - raw.cta3_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_sessions), ABS(summary.cta3_sessions)) * 0.001))
-                AND ABS(summary.cta3_click_events - raw.cta3_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_click_events), ABS(summary.cta3_click_events)) * 0.001))
-                AND summary.handoff_attempts = raw.handoff_attempts
-                AND summary.handoff_successes = raw.handoff_successes
-                AND summary.handoff_fails = raw.handoff_fails
-                AND summary.min_hidden_seconds <=> raw.min_hidden_seconds
-                AND summary.max_hidden_seconds <=> raw.max_hidden_seconds
              WHERE summary.metric_date IS NULL
+                OR summary.sessions <> raw.sessions
+                OR summary.page_loaded_sessions <> raw.page_loaded_sessions
+                OR summary.handoff_attempts <> raw.handoff_attempts
+                OR summary.handoff_successes <> raw.handoff_successes
+                OR summary.handoff_fails <> raw.handoff_fails
+                OR NOT (summary.min_hidden_seconds <=> raw.min_hidden_seconds)
+                OR NOT (summary.max_hidden_seconds <=> raw.max_hidden_seconds)
+                OR summary.cta1_sessions <> raw.cta1_sessions
+                OR summary.cta1_click_events <> raw.cta1_click_events
+                OR summary.cta2_sessions <> raw.cta2_sessions
+                OR summary.cta2_click_events <> raw.cta2_click_events
+                OR summary.cta3_sessions <> raw.cta3_sessions
+                OR summary.cta3_click_events <> raw.cta3_click_events
+             ORDER BY CASE severity WHEN 'blocked' THEN 0 ELSE 1 END ASC
              LIMIT 1",
             $window['from'],
             $window['to'],
@@ -1101,7 +1120,23 @@ class Kiwi_Retention_Coverage_Gate
                     tksource,
                     tkzone
              )
-             SELECT raw.metric_date
+             SELECT raw.metric_date,
+                CASE
+                    WHEN summary.metric_date IS NULL
+                      OR summary.sessions <> raw.sessions
+                      OR summary.page_loaded_sessions <> raw.page_loaded_sessions
+                      OR summary.handoff_attempts <> raw.handoff_attempts
+                      OR summary.handoff_successes <> raw.handoff_successes
+                      OR summary.handoff_fails <> raw.handoff_fails
+                      OR ABS(summary.cta1_sessions - raw.cta1_sessions) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_sessions), ABS(summary.cta1_sessions)) * 0.001))
+                      OR ABS(summary.cta1_click_events - raw.cta1_click_events) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_click_events), ABS(summary.cta1_click_events)) * 0.001))
+                      OR ABS(summary.cta2_sessions - raw.cta2_sessions) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_sessions), ABS(summary.cta2_sessions)) * 0.001))
+                      OR ABS(summary.cta2_click_events - raw.cta2_click_events) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_click_events), ABS(summary.cta2_click_events)) * 0.001))
+                      OR ABS(summary.cta3_sessions - raw.cta3_sessions) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_sessions), ABS(summary.cta3_sessions)) * 0.001))
+                      OR ABS(summary.cta3_click_events - raw.cta3_click_events) > GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_click_events), ABS(summary.cta3_click_events)) * 0.001))
+                    THEN 'blocked'
+                    ELSE 'warning'
+                END AS severity
              FROM raw
              LEFT JOIN summary ON summary.metric_date = raw.metric_date
                 AND summary.provider_key = raw.provider_key
@@ -1111,18 +1146,19 @@ class Kiwi_Retention_Coverage_Gate
                 AND summary.landing_key = raw.landing_key
                 AND summary.tksource = raw.tksource
                 AND summary.tkzone = raw.tkzone
-                AND summary.sessions = raw.sessions
-                AND summary.page_loaded_sessions = raw.page_loaded_sessions
-                AND ABS(summary.cta1_sessions - raw.cta1_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_sessions), ABS(summary.cta1_sessions)) * 0.001))
-                AND ABS(summary.cta1_click_events - raw.cta1_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_click_events), ABS(summary.cta1_click_events)) * 0.001))
-                AND ABS(summary.cta2_sessions - raw.cta2_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_sessions), ABS(summary.cta2_sessions)) * 0.001))
-                AND ABS(summary.cta2_click_events - raw.cta2_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_click_events), ABS(summary.cta2_click_events)) * 0.001))
-                AND ABS(summary.cta3_sessions - raw.cta3_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_sessions), ABS(summary.cta3_sessions)) * 0.001))
-                AND ABS(summary.cta3_click_events - raw.cta3_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_click_events), ABS(summary.cta3_click_events)) * 0.001))
-                AND summary.handoff_attempts = raw.handoff_attempts
-                AND summary.handoff_successes = raw.handoff_successes
-                AND summary.handoff_fails = raw.handoff_fails
              WHERE summary.metric_date IS NULL
+                OR summary.sessions <> raw.sessions
+                OR summary.page_loaded_sessions <> raw.page_loaded_sessions
+                OR summary.handoff_attempts <> raw.handoff_attempts
+                OR summary.handoff_successes <> raw.handoff_successes
+                OR summary.handoff_fails <> raw.handoff_fails
+                OR summary.cta1_sessions <> raw.cta1_sessions
+                OR summary.cta1_click_events <> raw.cta1_click_events
+                OR summary.cta2_sessions <> raw.cta2_sessions
+                OR summary.cta2_click_events <> raw.cta2_click_events
+                OR summary.cta3_sessions <> raw.cta3_sessions
+                OR summary.cta3_click_events <> raw.cta3_click_events
+             ORDER BY CASE severity WHEN 'blocked' THEN 0 ELSE 1 END ASC
              LIMIT 1",
             ...$params
         );
@@ -1152,9 +1188,17 @@ class Kiwi_Retention_Coverage_Gate
             ];
         }
 
+        $first_row = $rows[0] ?? [];
+        $severity = (string) ($first_row['severity'] ?? 'blocked');
+
+        if ($severity !== 'warning') {
+            $severity = 'blocked';
+        }
+
         return [
             'ok' => true,
             'matched' => empty($rows),
+            'severity' => $severity,
         ];
     }
 
@@ -1171,6 +1215,18 @@ class Kiwi_Retention_Coverage_Gate
                 'metric' => 'deep_compare',
                 'type' => 'query_error',
                 'error_code' => $result['error_code'],
+            ];
+
+            return $result;
+        }
+
+        if (empty($deep_result['matched']) && ($deep_result['severity'] ?? 'blocked') === 'warning') {
+            if ($result['status'] === 'passed') {
+                $result['status'] = 'warning';
+            }
+            $result['warnings'][] = [
+                'metric' => 'deep_compare',
+                'type' => 'dimension_cta_diff_within_tolerance',
             ];
 
             return $result;

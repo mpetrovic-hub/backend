@@ -1423,6 +1423,8 @@ class Kiwi_Test_Wpdb_Retention_Coverage_Gate
     public $tkzone_rows_by_date = [];
     public $main_deep_mismatch_dates = [];
     public $tkzone_deep_mismatch_dates = [];
+    public $main_deep_warning_dates = [];
+    public $tkzone_deep_warning_dates = [];
     public $fail_query_markers = [];
 
     public function prepare($query, ...$args)
@@ -1468,16 +1470,24 @@ class Kiwi_Test_Wpdb_Retention_Coverage_Gate
         if (strpos($query, 'kiwi_retention_main_deep_compare') !== false) {
             $date = $this->extract_metric_date($args);
 
+            if (in_array($date, $this->main_deep_warning_dates, true)) {
+                return [['metric_date' => $date, 'severity' => 'warning']];
+            }
+
             return in_array($date, $this->main_deep_mismatch_dates, true)
-                ? [['metric_date' => $date]]
+                ? [['metric_date' => $date, 'severity' => 'blocked']]
                 : [];
         }
 
         if (strpos($query, 'kiwi_retention_tkzone_deep_compare') !== false) {
             $date = $this->extract_metric_date($args);
 
+            if (in_array($date, $this->tkzone_deep_warning_dates, true)) {
+                return [['metric_date' => $date, 'severity' => 'warning']];
+            }
+
             return in_array($date, $this->tkzone_deep_mismatch_dates, true)
-                ? [['metric_date' => $date]]
+                ? [['metric_date' => $date, 'severity' => 'blocked']]
                 : [];
         }
 
@@ -11574,15 +11584,45 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate compares CTA metrics in dimension de
             'cta3_click_events',
         ] as $metric) {
             kiwi_assert_contains(
-                'ABS(summary.' . $metric . ' - raw.' . $metric . ') <= GREATEST',
+                'OR summary.' . $metric . ' <> raw.' . $metric,
                 $deep_queries[$summary],
-                'Expected ' . $summary . ' deep compare to apply CTA tolerance for ' . $metric . '.'
+                'Expected ' . $summary . ' deep compare to surface any CTA dimension mismatch for ' . $metric . '.'
+            );
+            kiwi_assert_contains(
+                'ABS(summary.' . $metric . ' - raw.' . $metric . ') > GREATEST',
+                $deep_queries[$summary],
+                'Expected ' . $summary . ' deep compare to block CTA dimension mismatch above tolerance for ' . $metric . '.'
             );
         }
     }
 
+    kiwi_assert_contains('END AS severity', $deep_queries['main'], 'Expected main deep compare to classify CTA dimension mismatches.');
+    kiwi_assert_contains('END AS severity', $deep_queries['tkzone'], 'Expected TK-zone deep compare to classify CTA dimension mismatches.');
     kiwi_assert_contains('CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta1_sessions', $deep_queries['main'], 'Expected main deep compare to derive CTA session facts from engagement rows.');
     kiwi_assert_contains('SUM(CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta1_sessions', $deep_queries['tkzone'], 'Expected TK-zone deep compare to aggregate CTA session facts from engagement rows.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Coverage_Gate warns on tolerated CTA dimension mismatches', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Retention_Coverage_Gate();
+    $wpdb->candidate_dates = ['2026-06-11'];
+    $wpdb->main_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row(['raw_sessions' => 10, 'summary_sessions' => 10]);
+    $wpdb->tkzone_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row(['raw_sessions' => 10, 'summary_sessions' => 10]);
+    $wpdb->main_deep_warning_dates = ['2026-06-11'];
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-06-12 00:00:00');
+
+    kiwi_assert_same('passed', $result['status'], 'Expected tolerated CTA dimension mismatches to warn without blocking cleanup.');
+    kiwi_assert_same(['2026-06-11'], $result['warning_dates'] ?? [], 'Expected tolerated CTA dimension mismatch date to be visible in compact gate output.');
+    kiwi_assert_same([], $result['blocked_dates'] ?? [], 'Expected tolerated CTA dimension mismatches not to create blocked dates.');
+    kiwi_assert_same(['2026-06-11'], $result['main_summary']['warning_dates'] ?? [], 'Expected main summary warning date to retain tolerated CTA dimension mismatch.');
+    kiwi_assert_same('dimension_cta_diff_within_tolerance', $result['main_summary']['details'][0]['warnings'][0]['type'] ?? '', 'Expected warning type to document tolerated CTA dimension mismatch.');
 
     $wpdb = $previous_wpdb;
 });
