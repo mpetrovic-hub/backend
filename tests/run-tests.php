@@ -11561,6 +11561,29 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate returns partial cutoff at first hard
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Coverage_Gate blocks non-edge dimension mismatches before verification', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Retention_Coverage_Gate();
+    $wpdb->candidate_dates = ['2026-06-10', '2026-06-11'];
+    $wpdb->main_rows_by_date['2026-06-10'] = kiwi_test_retention_totals_row(['raw_sessions' => 4, 'summary_sessions' => 4]);
+    $wpdb->main_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row(['raw_sessions' => 5, 'summary_sessions' => 5]);
+    $wpdb->tkzone_rows_by_date['2026-06-10'] = kiwi_test_retention_totals_row();
+    $wpdb->tkzone_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row();
+    $wpdb->main_deep_mismatch_dates = ['2026-06-10'];
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-06-12 00:00:00');
+
+    kiwi_assert_same('failed', $result['status'], 'Expected a non-edge dimension mismatch to fail before any date is verified.');
+    kiwi_assert_same(['2026-06-10'], $result['blocked_dates'] ?? [], 'Expected the non-edge mismatch date to be blocked.');
+    kiwi_assert_same('hard_dimension_mismatch', $result['main_summary']['details'][0]['blockers'][0]['type'] ?? '', 'Expected deep compare dimension mismatch to be explicit.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Coverage_Gate warns but does not block small CTA and sales diffs', function (): void {
     global $wpdb;
 

@@ -55,7 +55,7 @@ class Kiwi_Retention_Coverage_Gate
         }
 
         $candidate_dates = (array) ($candidate_result['metric_dates'] ?? []);
-        $edge_date = empty($candidate_dates) ? '' : (string) end($candidate_dates);
+        $last_candidate_date = empty($candidate_dates) ? '' : (string) end($candidate_dates);
         $main_details = [];
         $tkzone_details = [];
         $blocking_errors = [];
@@ -80,8 +80,8 @@ class Kiwi_Retention_Coverage_Gate
                 continue;
             }
 
-            $main_result = $this->check_main_summary_date($source, $metric_date, $requested_cutoff_value, $metric_date === $edge_date);
-            $tkzone_result = $this->check_tkzone_summary_date($source, $metric_date, $requested_cutoff_value, $metric_date === $edge_date);
+            $main_result = $this->check_main_summary_date($source, $metric_date, $requested_cutoff_value);
+            $tkzone_result = $this->check_tkzone_summary_date($source, $metric_date, $requested_cutoff_value);
 
             if (empty($main_result['ok'])) {
                 $blocking_errors[] = (string) ($main_result['error_code'] ?? 'main_summary_coverage_failed');
@@ -139,7 +139,7 @@ class Kiwi_Retention_Coverage_Gate
             'status' => $status,
             'requested_cutoff_value' => $requested_cutoff_value,
             'effective_cutoff_value' => $effective_cutoff_value,
-            'verified_until_date' => $status === 'passed' ? $edge_date : $last_verified_before_blocker,
+            'verified_until_date' => $status === 'passed' ? $last_candidate_date : $last_verified_before_blocker,
             'candidate_dates' => $candidate_dates,
             'blocked_dates' => $blocked_dates,
             'warning_dates' => $warning_dates,
@@ -200,8 +200,7 @@ class Kiwi_Retention_Coverage_Gate
     protected function check_main_summary_date(
         array $source,
         string $metric_date,
-        string $requested_cutoff_value,
-        bool $is_edge_date
+        string $requested_cutoff_value
     ): array {
         global $wpdb;
 
@@ -257,17 +256,15 @@ class Kiwi_Retention_Coverage_Gate
             return $result;
         }
 
-        if ($is_edge_date || !empty($result['warnings'])) {
-            $deep_result = $this->check_main_summary_deep_compare(
-                $source_table,
-                $summary_table,
-                $engagement_table,
-                $handoff_table,
-                $metric_date,
-                $window
-            );
-            $result = $this->merge_deep_compare_result($result, $deep_result);
-        }
+        $deep_result = $this->check_main_summary_deep_compare(
+            $source_table,
+            $summary_table,
+            $engagement_table,
+            $handoff_table,
+            $metric_date,
+            $window
+        );
+        $result = $this->merge_deep_compare_result($result, $deep_result);
 
         return $result;
     }
@@ -275,8 +272,7 @@ class Kiwi_Retention_Coverage_Gate
     protected function check_tkzone_summary_date(
         array $source,
         string $metric_date,
-        string $requested_cutoff_value,
-        bool $is_edge_date
+        string $requested_cutoff_value
     ): array {
         global $wpdb;
 
@@ -347,18 +343,16 @@ class Kiwi_Retention_Coverage_Gate
             return $result;
         }
 
-        if ($is_edge_date || !empty($result['warnings'])) {
-            $deep_result = $this->check_tkzone_summary_deep_compare(
-                $source_table,
-                $summary_table,
-                $engagement_table,
-                $handoff_table,
-                $metric_date,
-                $window,
-                $pids
-            );
-            $result = $this->merge_deep_compare_result($result, $deep_result);
-        }
+        $deep_result = $this->check_tkzone_summary_deep_compare(
+            $source_table,
+            $summary_table,
+            $engagement_table,
+            $handoff_table,
+            $metric_date,
+            $window,
+            $pids
+        );
+        $result = $this->merge_deep_compare_result($result, $deep_result);
 
         return $result;
     }

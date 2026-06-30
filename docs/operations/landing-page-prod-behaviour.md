@@ -297,7 +297,7 @@ Gate statuses:
 
 Hard blockers are exact mismatches for canonical sessions, page-loaded sessions, handoff attempts/successes/fails, and hidden-time min/max where applicable. CTA session/click mismatches are tolerated only up to `max(5 events, 0.1%)`; larger CTA diffs block the affected date. Sales and sales amount diffs are warning-only for this source because confirmed sales live in `wp_kiwi_sales` and are not deleted by landing-session raw cleanup.
 
-For edge dates and warning dates, the gate also runs a date-bounded dimension-level deep compare of the hard metrics. This keeps the historical backlog path lightweight while still checking newly entering retention dates more strictly.
+For every non-accepted candidate date, the gate also runs a date-bounded dimension-level deep compare of the hard metrics. This prevents a date from being marked safe when light totals match but rows are assigned to the wrong landing/service/source dimensions.
 
 Audit details are stored on `wp_kiwi_retention_cleanup_runs.gate_results_json`, including requested/effective cutoffs, verified date, blocked dates, warning dates, and compact per-summary details. Final cleanup run rows and growth snapshots use the effective cleanup cutoff actually used for archive/delete.
 
