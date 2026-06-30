@@ -11538,6 +11538,29 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate uses per-date light totals and passe
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Coverage_Gate keeps accepted historical gaps out of blocking audit details', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Retention_Coverage_Gate();
+    $wpdb->candidate_dates = ['2026-05-15'];
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-05-16 00:00:00');
+
+    kiwi_assert_same('passed', $result['status'], 'Expected accepted historical coverage gaps to pass the top-level gate.');
+    kiwi_assert_same('passed', $result['main_summary']['status'] ?? '', 'Expected accepted main summary gap to keep the summary audit passed.');
+    kiwi_assert_same('passed', $result['tkzone_summary']['status'] ?? '', 'Expected accepted TK-zone summary gap to keep the summary audit passed.');
+    kiwi_assert_same(['2026-05-15'], $result['main_summary']['accepted_missing_dates'] ?? [], 'Expected accepted main summary date to be recorded separately.');
+    kiwi_assert_same(['2026-05-15'], $result['tkzone_summary']['accepted_missing_dates'] ?? [], 'Expected accepted TK-zone summary date to be recorded separately.');
+    kiwi_assert_same([], $result['main_summary']['blocking_missing_dates'] ?? [], 'Expected accepted main summary date not to be listed as blocking.');
+    kiwi_assert_same([], $result['tkzone_summary']['blocking_missing_dates'] ?? [], 'Expected accepted TK-zone summary date not to be listed as blocking.');
+    kiwi_assert_same(true, $result['main_summary']['details'][0]['ok'] ?? false, 'Expected accepted details to be marked ok for audit summarization.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Coverage_Gate returns partial cutoff at first hard main mismatch', function (): void {
     global $wpdb;
 

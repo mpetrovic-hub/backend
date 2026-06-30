@@ -70,6 +70,7 @@ class Kiwi_Retention_Coverage_Gate
                 $accepted_detail = [
                     'metric_date' => $metric_date,
                     'status' => 'accepted',
+                    'ok' => true,
                     'blockers' => [],
                     'warnings' => [],
                     'accepted_missing_date' => true,
