@@ -18,9 +18,11 @@ class Kiwi_Plugin
     private const LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_main_summary_refresh';
     private const LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY = 'kiwi_landing_funnel_daily_main_summary_refresh_lock';
     private const LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_main_summary_refresh_last_result';
+    private const LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_SKIP_OPTION = 'kiwi_landing_funnel_daily_main_summary_refresh_lock_skip_last_result';
     private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK = 'kiwi_landing_funnel_daily_tkzone_summary_refresh';
     private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_KEY = 'kiwi_landing_funnel_daily_tkzone_summary_refresh_lock';
     private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LAST_RESULT_OPTION = 'kiwi_landing_funnel_daily_tkzone_summary_refresh_last_result';
+    private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_SKIP_OPTION = 'kiwi_landing_funnel_daily_tkzone_summary_refresh_lock_skip_last_result';
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS = 1800;
     private const DEVICE_MODEL_BRAND_HARVEST_HOOK = 'kiwi_device_model_brand_harvest';
     private const RETENTION_CLEANUP_DAILY_HOOK = 'kiwi_retention_cleanup_daily';
@@ -414,6 +416,7 @@ class Kiwi_Plugin
             'main',
             self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY,
             self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION,
+            self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_SKIP_OPTION,
             function () {
                 return $this->build_landing_funnel_daily_summary_refresh_service();
             },
@@ -429,6 +432,7 @@ class Kiwi_Plugin
             'tkzone',
             self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_KEY,
             self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LAST_RESULT_OPTION,
+            self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_SKIP_OPTION,
             function () {
                 return $this->build_landing_funnel_daily_tkzone_summary_refresh_service();
             },
@@ -442,6 +446,7 @@ class Kiwi_Plugin
         string $summary_key,
         string $lock_key,
         string $last_result_option,
+        string $lock_skip_result_option,
         callable $service_factory,
         callable $logger
     ): array {
@@ -461,7 +466,7 @@ class Kiwi_Plugin
                 'finished_at' => $this->get_current_time_mysql(),
                 'skipped_due_to_lock' => true,
             ];
-            $this->persist_landing_funnel_daily_summary_refresh_result($last_result_option, $result);
+            $this->persist_landing_funnel_daily_summary_refresh_result($lock_skip_result_option, $result);
             $logger($result['error']);
 
             return $result;

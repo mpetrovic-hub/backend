@@ -12472,7 +12472,17 @@ kiwi_run_test('Kiwi_Plugin skips landing funnel daily summary refresh while lock
     $reflection = new ReflectionClass(Kiwi_Plugin::class);
     $lock_key = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_KEY');
     $last_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LAST_RESULT_OPTION');
+    $lock_skip_result_option = (string) $reflection->getConstant('LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_LOCK_SKIP_OPTION');
+    $previous_result = [
+        'success' => true,
+        'summary' => 'main',
+        'metric_date' => '2026-05-22',
+        'range_from_date' => '2026-05-19',
+        'range_to_date' => '2026-05-26',
+        'skipped_due_to_lock' => false,
+    ];
     $GLOBALS['kiwi_test_transients'][$lock_key] = '1';
+    $GLOBALS['kiwi_test_options'][$last_result_option] = $previous_result;
     $service = new Kiwi_Test_Landing_Funnel_Daily_Summary_Refresh_Service([
         'success' => true,
         'from_date' => '2026-05-19',
@@ -12489,7 +12499,8 @@ kiwi_run_test('Kiwi_Plugin skips landing funnel daily summary refresh while lock
     kiwi_assert_same('main', $result['summary'], 'Expected lock skip result to identify the split summary job.');
     kiwi_assert_same([], $service->calls, 'Expected locked refresh not to call the aggregation service.');
     kiwi_assert_same('1', $GLOBALS['kiwi_test_transients'][$lock_key] ?? '', 'Expected existing lock to remain untouched on skip.');
-    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected lock skip result to be persisted as the latest operational state.');
+    kiwi_assert_same($previous_result, $GLOBALS['kiwi_test_options'][$last_result_option] ?? null, 'Expected lock skip not to overwrite the previous non-lock refresh cursor.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options'][$lock_skip_result_option] ?? null, 'Expected lock skip result to be persisted separately for operational diagnostics.');
     kiwi_assert_contains('lock is active', implode("\n", $plugin->logs), 'Expected lock skip to be visibly logged.');
 });
 
