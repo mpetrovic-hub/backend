@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-06-30:
+- [DB Retention Coverage Gate] Reworked the landing-page-session retention coverage gate to use date-bounded Main/TK-zone checks with `passed`, `partial`, and `failed` outcomes. Partial coverage now archives/deletes only up to the effective verified cutoff, persists requested/effective diagnostics in `gate_results_json`, and treats small CTA diffs plus sales diffs according to the documented warning policy.
+
 2026-06-29:
 - [Landing Funnel Daily Summary Refresh] Split the combined landing-funnel daily summary cron into independent Main and TK-zone refresh jobs with separate hooks, locks, last-result options, and log prefixes. The legacy combined hook is unscheduled during normal bootstrap.
 - [Landing Funnel Daily Summary Refresh] Optimized the Main summary handoff aggregation by joining handoff events directly to canonical landing sessions with cross-midnight latest-landing anti-join protection, while keeping sales facts on durable `attribution_metric_date` snapshots and preserving the retention coverage gate's fail-closed comparison contract.

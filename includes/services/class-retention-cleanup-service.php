@@ -103,19 +103,18 @@ class Kiwi_Retention_Cleanup_Service
         $this->set_lock($source_key);
 
         try {
-            $this->snapshot_repository->capture_snapshot(
-                $source,
-                'before_cleanup',
-                $retention_days,
-                $cutoff_value,
-                $eligible_rows,
-                $run_id,
-                '',
-                0,
-                0
-            );
-
             if (!$enabled) {
+                $this->snapshot_repository->capture_snapshot(
+                    $source,
+                    'before_cleanup',
+                    $retention_days,
+                    $cutoff_value,
+                    $eligible_rows,
+                    $run_id,
+                    '',
+                    0,
+                    0
+                );
                 $this->snapshot_repository->capture_snapshot(
                     $source,
                     'after_cleanup',
@@ -140,14 +139,30 @@ class Kiwi_Retention_Cleanup_Service
 
             $gate_results = $this->coverage_gate->check_landing_page_sessions($source, $cutoff_value);
             $gate_status = (string) ($gate_results['status'] ?? 'failed');
+            $effective_cutoff_value = $this->resolve_effective_cutoff_value($gate_results, $cutoff_value);
+            $effective_cutoff_for_readout = $effective_cutoff_value !== '' ? $effective_cutoff_value : $cutoff_value;
+            $effective_eligible_rows = $effective_cutoff_for_readout === $cutoff_value
+                ? $eligible_rows
+                : $this->count_eligible_rows($source, $effective_cutoff_for_readout);
 
             if ($dry_run) {
                 $this->snapshot_repository->capture_snapshot(
                     $source,
+                    'before_cleanup',
+                    $retention_days,
+                    $effective_cutoff_for_readout,
+                    $effective_eligible_rows,
+                    $run_id,
+                    '',
+                    0,
+                    0
+                );
+                $this->snapshot_repository->capture_snapshot(
+                    $source,
                     'after_cleanup',
                     $retention_days,
-                    $cutoff_value,
-                    $eligible_rows,
+                    $effective_cutoff_for_readout,
+                    $effective_eligible_rows,
                     $run_id,
                     '',
                     0,
@@ -160,17 +175,31 @@ class Kiwi_Retention_Cleanup_Service
                     'status' => 'success',
                     'gate_status' => $gate_status,
                     'gate_results_json' => $gate_results,
-                    'eligible_rows' => $eligible_rows,
+                    'cutoff_value' => $effective_cutoff_for_readout,
+                    'eligible_rows' => $effective_eligible_rows,
                 ]);
             }
 
-            if ($gate_status !== 'passed') {
+            if (!$this->gate_status_allows_cleanup($gate_status) || $effective_cutoff_value === '') {
+                $effective_cutoff_value = $cutoff_value;
+                $effective_eligible_rows = $eligible_rows;
+                $this->snapshot_repository->capture_snapshot(
+                    $source,
+                    'before_cleanup',
+                    $retention_days,
+                    $effective_cutoff_value,
+                    $effective_eligible_rows,
+                    $run_id,
+                    '',
+                    0,
+                    0
+                );
                 $this->snapshot_repository->capture_snapshot(
                     $source,
                     'after_cleanup',
                     $retention_days,
-                    $cutoff_value,
-                    $eligible_rows,
+                    $effective_cutoff_value,
+                    $effective_eligible_rows,
                     $run_id,
                     '',
                     0,
@@ -183,14 +212,28 @@ class Kiwi_Retention_Cleanup_Service
                     'status' => 'skipped',
                     'gate_status' => $gate_status,
                     'gate_results_json' => $gate_results,
+                    'cutoff_value' => $effective_cutoff_value,
+                    'eligible_rows' => $effective_eligible_rows,
                     'error_code' => 'coverage_gate_failed',
                     'error_message' => 'Retention cleanup skipped because summary coverage gate failed.',
                 ]);
             }
 
+            $this->snapshot_repository->capture_snapshot(
+                $source,
+                'before_cleanup',
+                $retention_days,
+                $effective_cutoff_value,
+                $effective_eligible_rows,
+                $run_id,
+                '',
+                0,
+                0
+            );
+
             $archive_result = $this->archive_service->archive_eligible_rows(
                 $source,
-                $cutoff_value,
+                $effective_cutoff_value,
                 $archive_batch_id,
                 $this->config->get_retention_default_batch_limit()
             );
@@ -199,13 +242,13 @@ class Kiwi_Retention_Cleanup_Service
             $archive_duplicate_rows = (int) ($archive_result['archive_duplicate_rows'] ?? 0);
             $archive_integrity_check = (string) ($archive_result['archive_integrity_check'] ?? '');
 
-            if (empty($archive_result['success']) || $archived_rows !== $eligible_rows) {
+            if (empty($archive_result['success']) || $archived_rows !== $effective_eligible_rows) {
                 $this->snapshot_repository->capture_snapshot(
                     $source,
                     'after_cleanup',
                     $retention_days,
-                    $cutoff_value,
-                    $eligible_rows,
+                    $effective_cutoff_value,
+                    $effective_eligible_rows,
                     $run_id,
                     $archive_batch_id,
                     $archived_rows,
@@ -218,7 +261,8 @@ class Kiwi_Retention_Cleanup_Service
                     'status' => 'failed',
                     'gate_status' => $gate_status,
                     'gate_results_json' => $gate_results,
-                    'eligible_rows' => $eligible_rows,
+                    'cutoff_value' => $effective_cutoff_value,
+                    'eligible_rows' => $effective_eligible_rows,
                     'archived_rows' => $archived_rows,
                     'archive_inserted_rows' => $archive_inserted_rows,
                     'archive_duplicate_rows' => $archive_duplicate_rows,
@@ -243,8 +287,8 @@ class Kiwi_Retention_Cleanup_Service
                 $source,
                 'after_cleanup',
                 $retention_days,
-                $cutoff_value,
-                $eligible_rows,
+                $effective_cutoff_value,
+                $effective_eligible_rows,
                 $run_id,
                 $archive_batch_id,
                 $archived_rows,
@@ -258,7 +302,8 @@ class Kiwi_Retention_Cleanup_Service
                     'status' => 'failed',
                     'gate_status' => $gate_status,
                     'gate_results_json' => $gate_results,
-                    'eligible_rows' => $eligible_rows,
+                    'cutoff_value' => $effective_cutoff_value,
+                    'eligible_rows' => $effective_eligible_rows,
                     'archived_rows' => $archived_rows,
                     'archive_inserted_rows' => $archive_inserted_rows,
                     'archive_duplicate_rows' => $archive_duplicate_rows,
@@ -278,7 +323,8 @@ class Kiwi_Retention_Cleanup_Service
                 'status' => 'success',
                 'gate_status' => $gate_status,
                 'gate_results_json' => $gate_results,
-                'eligible_rows' => $eligible_rows,
+                'cutoff_value' => $effective_cutoff_value,
+                'eligible_rows' => $effective_eligible_rows,
                 'archived_rows' => $archived_rows,
                 'archive_inserted_rows' => $archive_inserted_rows,
                 'archive_duplicate_rows' => $archive_duplicate_rows,
@@ -299,6 +345,44 @@ class Kiwi_Retention_Cleanup_Service
         } finally {
             $this->clear_lock($source_key);
         }
+    }
+
+    private function gate_status_allows_cleanup(string $gate_status): bool
+    {
+        return in_array($gate_status, ['passed', 'partial'], true);
+    }
+
+    private function resolve_effective_cutoff_value(array $gate_results, string $requested_cutoff_value): string
+    {
+        $gate_status = (string) ($gate_results['status'] ?? 'failed');
+        $effective_cutoff_value = (string) ($gate_results['effective_cutoff_value'] ?? '');
+
+        if ($gate_status === 'passed' && $effective_cutoff_value === '') {
+            return $requested_cutoff_value;
+        }
+
+        if (!$this->gate_status_allows_cleanup($gate_status)) {
+            return '';
+        }
+
+        if (!$this->is_valid_cutoff_value($effective_cutoff_value)) {
+            return '';
+        }
+
+        if (strcmp($effective_cutoff_value, $requested_cutoff_value) > 0) {
+            return '';
+        }
+
+        if ($gate_status === 'partial' && strcmp($effective_cutoff_value, $requested_cutoff_value) >= 0) {
+            return '';
+        }
+
+        return $effective_cutoff_value;
+    }
+
+    private function is_valid_cutoff_value(string $cutoff_value): bool
+    {
+        return preg_match('/^\d{4}-\d{2}-\d{2} 00:00:00$/', $cutoff_value) === 1;
     }
 
     protected function count_eligible_rows(array $source, string $cutoff_value): int
