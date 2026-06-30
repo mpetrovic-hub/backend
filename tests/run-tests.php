@@ -11538,6 +11538,55 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate uses per-date light totals and passe
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Coverage_Gate compares CTA metrics in dimension deep compares', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Retention_Coverage_Gate();
+    $wpdb->candidate_dates = ['2026-06-11'];
+    $wpdb->main_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row(['raw_sessions' => 10, 'summary_sessions' => 10]);
+    $wpdb->tkzone_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row(['raw_sessions' => 10, 'summary_sessions' => 10]);
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-06-12 00:00:00');
+
+    $deep_queries = [];
+    foreach ($wpdb->prepared_statements as $statement) {
+        $query = (string) ($statement['query'] ?? '');
+        if (strpos($query, 'kiwi_retention_main_deep_compare') !== false) {
+            $deep_queries['main'] = $query;
+        }
+        if (strpos($query, 'kiwi_retention_tkzone_deep_compare') !== false) {
+            $deep_queries['tkzone'] = $query;
+        }
+    }
+
+    foreach (['main', 'tkzone'] as $summary) {
+        kiwi_assert_true(isset($deep_queries[$summary]), 'Expected ' . $summary . ' deep compare query to run.');
+
+        foreach ([
+            'cta1_sessions',
+            'cta1_click_events',
+            'cta2_sessions',
+            'cta2_click_events',
+            'cta3_sessions',
+            'cta3_click_events',
+        ] as $metric) {
+            kiwi_assert_contains(
+                'ABS(summary.' . $metric . ' - raw.' . $metric . ') <= GREATEST',
+                $deep_queries[$summary],
+                'Expected ' . $summary . ' deep compare to apply CTA tolerance for ' . $metric . '.'
+            );
+        }
+    }
+
+    kiwi_assert_contains('CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta1_sessions', $deep_queries['main'], 'Expected main deep compare to derive CTA session facts from engagement rows.');
+    kiwi_assert_contains('SUM(CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta1_sessions', $deep_queries['tkzone'], 'Expected TK-zone deep compare to aggregate CTA session facts from engagement rows.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Coverage_Gate keeps accepted historical gaps out of blocking audit details', function (): void {
     global $wpdb;
 

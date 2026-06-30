@@ -772,6 +772,12 @@ class Kiwi_Retention_Coverage_Gate
                     l.client_ip_prefix,
                     1 AS sessions,
                     CASE WHEN e.page_loaded_at IS NOT NULL THEN 1 ELSE 0 END AS page_loaded_sessions,
+                    CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta1_sessions,
+                    COALESCE(e.cta1_click_count, 0) AS cta1_click_events,
+                    CASE WHEN e.first_cta2_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta2_sessions,
+                    COALESCE(e.cta2_click_count, 0) AS cta2_click_events,
+                    CASE WHEN e.first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END AS cta3_sessions,
+                    COALESCE(e.cta3_click_count, 0) AS cta3_click_events,
                     SUM(CASE WHEN h.event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
                     SUM(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
                     SUM(CASE WHEN h.event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails,
@@ -820,7 +826,13 @@ class Kiwi_Retention_Coverage_Gate
                     l.client_ip_version,
                     l.client_ip_prefix,
                     l.session_token,
-                    e.page_loaded_at
+                    e.page_loaded_at,
+                    e.first_cta1_click_at,
+                    e.cta1_click_count,
+                    e.first_cta2_click_at,
+                    e.cta2_click_count,
+                    e.first_cta3_click_at,
+                    e.cta3_click_count
              ),
              raw AS (
                 SELECT
@@ -840,6 +852,12 @@ class Kiwi_Retention_Coverage_Gate
                     client_ip_prefix,
                     SUM(sessions) AS sessions,
                     SUM(page_loaded_sessions) AS page_loaded_sessions,
+                    SUM(cta1_sessions) AS cta1_sessions,
+                    SUM(cta1_click_events) AS cta1_click_events,
+                    SUM(cta2_sessions) AS cta2_sessions,
+                    SUM(cta2_click_events) AS cta2_click_events,
+                    SUM(cta3_sessions) AS cta3_sessions,
+                    SUM(cta3_click_events) AS cta3_click_events,
                     SUM(handoff_attempts) AS handoff_attempts,
                     SUM(handoff_successes) AS handoff_successes,
                     SUM(handoff_fails) AS handoff_fails,
@@ -880,6 +898,12 @@ class Kiwi_Retention_Coverage_Gate
                     client_ip_prefix,
                     SUM(sessions) AS sessions,
                     SUM(page_loaded_sessions) AS page_loaded_sessions,
+                    SUM(cta1_sessions) AS cta1_sessions,
+                    SUM(cta1_click_events) AS cta1_click_events,
+                    SUM(cta2_sessions) AS cta2_sessions,
+                    SUM(cta2_click_events) AS cta2_click_events,
+                    SUM(cta3_sessions) AS cta3_sessions,
+                    SUM(cta3_click_events) AS cta3_click_events,
                     SUM(handoff_attempts) AS handoff_attempts,
                     SUM(handoff_successes) AS handoff_successes,
                     SUM(handoff_fails) AS handoff_fails,
@@ -921,6 +945,12 @@ class Kiwi_Retention_Coverage_Gate
                 AND summary.client_ip_prefix = raw.client_ip_prefix
                 AND summary.sessions = raw.sessions
                 AND summary.page_loaded_sessions = raw.page_loaded_sessions
+                AND ABS(summary.cta1_sessions - raw.cta1_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_sessions), ABS(summary.cta1_sessions)) * 0.001))
+                AND ABS(summary.cta1_click_events - raw.cta1_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_click_events), ABS(summary.cta1_click_events)) * 0.001))
+                AND ABS(summary.cta2_sessions - raw.cta2_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_sessions), ABS(summary.cta2_sessions)) * 0.001))
+                AND ABS(summary.cta2_click_events - raw.cta2_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_click_events), ABS(summary.cta2_click_events)) * 0.001))
+                AND ABS(summary.cta3_sessions - raw.cta3_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_sessions), ABS(summary.cta3_sessions)) * 0.001))
+                AND ABS(summary.cta3_click_events - raw.cta3_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_click_events), ABS(summary.cta3_click_events)) * 0.001))
                 AND summary.handoff_attempts = raw.handoff_attempts
                 AND summary.handoff_successes = raw.handoff_successes
                 AND summary.handoff_fails = raw.handoff_fails
@@ -1008,6 +1038,12 @@ class Kiwi_Retention_Coverage_Gate
                     l.tkzone,
                     COUNT(*) AS sessions,
                     SUM(CASE WHEN e.page_loaded_at IS NOT NULL THEN 1 ELSE 0 END) AS page_loaded_sessions,
+                    SUM(CASE WHEN e.first_cta1_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta1_sessions,
+                    COALESCE(SUM(e.cta1_click_count), 0) AS cta1_click_events,
+                    SUM(CASE WHEN e.first_cta2_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta2_sessions,
+                    COALESCE(SUM(e.cta2_click_count), 0) AS cta2_click_events,
+                    SUM(CASE WHEN e.first_cta3_click_at IS NOT NULL THEN 1 ELSE 0 END) AS cta3_sessions,
+                    COALESCE(SUM(e.cta3_click_count), 0) AS cta3_click_events,
                     SUM(COALESCE(h.handoff_attempts, 0)) AS handoff_attempts,
                     SUM(COALESCE(h.handoff_successes, 0)) AS handoff_successes,
                     SUM(COALESCE(h.handoff_fails, 0)) AS handoff_fails
@@ -1043,6 +1079,12 @@ class Kiwi_Retention_Coverage_Gate
                     tkzone,
                     SUM(sessions) AS sessions,
                     SUM(page_loaded_sessions) AS page_loaded_sessions,
+                    SUM(cta1_sessions) AS cta1_sessions,
+                    SUM(cta1_click_events) AS cta1_click_events,
+                    SUM(cta2_sessions) AS cta2_sessions,
+                    SUM(cta2_click_events) AS cta2_click_events,
+                    SUM(cta3_sessions) AS cta3_sessions,
+                    SUM(cta3_click_events) AS cta3_click_events,
                     SUM(handoff_attempts) AS handoff_attempts,
                     SUM(handoff_successes) AS handoff_successes,
                     SUM(handoff_fails) AS handoff_fails
@@ -1071,6 +1113,12 @@ class Kiwi_Retention_Coverage_Gate
                 AND summary.tkzone = raw.tkzone
                 AND summary.sessions = raw.sessions
                 AND summary.page_loaded_sessions = raw.page_loaded_sessions
+                AND ABS(summary.cta1_sessions - raw.cta1_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_sessions), ABS(summary.cta1_sessions)) * 0.001))
+                AND ABS(summary.cta1_click_events - raw.cta1_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta1_click_events), ABS(summary.cta1_click_events)) * 0.001))
+                AND ABS(summary.cta2_sessions - raw.cta2_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_sessions), ABS(summary.cta2_sessions)) * 0.001))
+                AND ABS(summary.cta2_click_events - raw.cta2_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta2_click_events), ABS(summary.cta2_click_events)) * 0.001))
+                AND ABS(summary.cta3_sessions - raw.cta3_sessions) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_sessions), ABS(summary.cta3_sessions)) * 0.001))
+                AND ABS(summary.cta3_click_events - raw.cta3_click_events) <= GREATEST(5, CEIL(GREATEST(ABS(raw.cta3_click_events), ABS(summary.cta3_click_events)) * 0.001))
                 AND summary.handoff_attempts = raw.handoff_attempts
                 AND summary.handoff_successes = raw.handoff_successes
                 AND summary.handoff_fails = raw.handoff_fails
