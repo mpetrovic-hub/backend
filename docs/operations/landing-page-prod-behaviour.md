@@ -285,6 +285,22 @@ Notes:
   - is refreshed hourly by separate WP-Cron hook `kiwi_landing_funnel_daily_tkzone_summary_refresh`, using transient lock `kiwi_landing_funnel_daily_tkzone_summary_refresh_lock`, non-lock result option `kiwi_landing_funnel_daily_tkzone_summary_refresh_last_result`, and lock-skip option `kiwi_landing_funnel_daily_tkzone_summary_refresh_lock_skip_last_result`
   - the legacy combined hook `kiwi_landing_funnel_daily_summary_refresh` is cleared during bootstrap; do not re-enable it for normal production refreshes
 
+## Landing raw retention coverage gate
+
+The `landing_page_sessions` retention cleanup uses a fail-closed coverage gate before archive/delete work starts. The gate checks raw candidate days chronologically and compares date-bounded light totals against the durable Main and TK-zone daily summaries instead of rebuilding the full historical summary contract in one query.
+
+Gate statuses:
+
+- `passed`: every raw candidate day before the requested cutoff is covered; cleanup may use the requested cutoff.
+- `partial`: at least one contiguous early date range is covered or explicitly accepted, but a later date has a hard blocker; cleanup may only use `effective_cutoff_value`, the start of the day after the last verified date.
+- `failed`: no safe cleanup range exists or a query/schema/summary read failed; cleanup must not archive or delete rows.
+
+Hard blockers are exact mismatches for canonical sessions, page-loaded sessions, handoff attempts/successes/fails, and hidden-time min/max where applicable. CTA session/click mismatches are tolerated only up to `max(5 events, 0.1%)`; larger CTA diffs block the affected date. Sales and sales amount diffs are warning-only for this source because confirmed sales live in `wp_kiwi_sales` and are not deleted by landing-session raw cleanup.
+
+For every non-accepted candidate date, the gate also runs a date-bounded dimension-level deep compare of the hard metrics. This prevents a date from being marked safe when light totals match but rows are assigned to the wrong landing/service/source dimensions.
+
+Audit details are stored on `wp_kiwi_retention_cleanup_runs.gate_results_json`, including requested/effective cutoffs, verified date, blocked dates, warning dates, and compact per-summary details. Final cleanup run rows and growth snapshots use the effective cleanup cutoff actually used for archive/delete.
+
 ## Configuration switches
 
 ### Landing-page loading
