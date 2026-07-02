@@ -297,9 +297,9 @@ Gate statuses:
 
 Hard blockers are exact mismatches for canonical sessions, page-loaded sessions, handoff attempts/successes/fails, and hidden-time min/max where applicable. CTA session/click mismatches are tolerated only up to `max(5 events, 0.1%)`; larger CTA diffs block the affected date. Sales and sales amount diffs are warning-only for this source because confirmed sales live in `wp_kiwi_sales` and are not deleted by landing-session raw cleanup.
 
-For every non-accepted candidate date, the gate also runs a date-bounded dimension-level deep compare of the hard metrics. This prevents a date from being marked safe when light totals match but rows are assigned to the wrong landing/service/source dimensions.
+The gate intentionally does not run the expensive dimension-level deep compare for every non-accepted candidate date. That is the production safety/performance contract for raw-session retention: hard light totals run for every candidate date, while deep compare runs only for the current retention edge date, the first hard-blocked date for diagnosis, and at most two CTA-warning dates. Sales-only warning dates are not deep-checked because `wp_kiwi_sales` is not deleted by this cleanup. Older dates with exact hard totals can therefore be listed as totals-only by design.
 
-Audit details are stored on `wp_kiwi_retention_cleanup_runs.gate_results_json`, including requested/effective cutoffs, verified date, blocked dates, warning dates, and compact per-summary details. Final cleanup run rows and growth snapshots use the effective cleanup cutoff actually used for archive/delete.
+Audit details are stored on `wp_kiwi_retention_cleanup_runs.gate_results_json`, including `coverage_mode`, requested/effective cutoffs, verified date, candidate dates, deep-checked dates, totals-only dates, skipped deep dates, deep-compare reasons, blocked dates, warning dates, and compact per-summary details. Final cleanup run rows and growth snapshots use the effective cleanup cutoff actually used for archive/delete. TK-zone light totals restrict handoff aggregation to the candidate PID-allow-listed landing sessions before joining handoff events, avoiding broad two-day handoff materialization for unrelated traffic.
 
 ## Configuration switches
 

@@ -11538,7 +11538,11 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate uses per-date light totals and passe
     $queries = implode("\n", array_column($wpdb->prepared_statements, 'query'));
 
     kiwi_assert_same('passed', $result['status'], 'Expected exact per-date light totals to pass the gate.');
+    kiwi_assert_same('selective_deep_compare_v1', $result['coverage_mode'] ?? '', 'Expected gate to publish the selective deep-compare coverage mode.');
     kiwi_assert_same('2026-06-12 00:00:00', $result['effective_cutoff_value'] ?? '', 'Expected passed coverage to keep the requested cutoff.');
+    kiwi_assert_same(['2026-06-11'], $result['deep_checked_dates'] ?? [], 'Expected the current retention edge date to be deep checked.');
+    kiwi_assert_same([], $result['totals_only_dates'] ?? [], 'Expected no totals-only dates when the single candidate is the edge date.');
+    kiwi_assert_same(['edge_date'], $result['deep_compare_reasons']['2026-06-11'] ?? [], 'Expected edge-date reason to be audited.');
     kiwi_assert_contains('kiwi_retention_candidate_dates', $queries, 'Expected gate to enumerate raw candidate dates first.');
     kiwi_assert_contains('kiwi_retention_main_light_totals', $queries, 'Expected gate to use date-bounded main light totals.');
     kiwi_assert_contains('kiwi_retention_tkzone_light_totals', $queries, 'Expected gate to use date-bounded TK-zone light totals.');
@@ -11673,14 +11677,16 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate returns partial cutoff at first hard
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Retention_Coverage_Gate blocks non-edge dimension mismatches before verification', function (): void {
+kiwi_run_test('Kiwi_Retention_Coverage_Gate intentionally skips non-edge deep compares when light totals pass', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
     $wpdb = new Kiwi_Test_Wpdb_Retention_Coverage_Gate();
-    $wpdb->candidate_dates = ['2026-06-10', '2026-06-11'];
+    $wpdb->candidate_dates = ['2026-06-09', '2026-06-10', '2026-06-11'];
+    $wpdb->main_rows_by_date['2026-06-09'] = kiwi_test_retention_totals_row(['raw_sessions' => 3, 'summary_sessions' => 3]);
     $wpdb->main_rows_by_date['2026-06-10'] = kiwi_test_retention_totals_row(['raw_sessions' => 4, 'summary_sessions' => 4]);
     $wpdb->main_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row(['raw_sessions' => 5, 'summary_sessions' => 5]);
+    $wpdb->tkzone_rows_by_date['2026-06-09'] = kiwi_test_retention_totals_row();
     $wpdb->tkzone_rows_by_date['2026-06-10'] = kiwi_test_retention_totals_row();
     $wpdb->tkzone_rows_by_date['2026-06-11'] = kiwi_test_retention_totals_row();
     $wpdb->main_deep_mismatch_dates = ['2026-06-10'];
@@ -11689,9 +11695,47 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate blocks non-edge dimension mismatches
     $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
         ->check_landing_page_sessions($source, '2026-06-12 00:00:00');
 
-    kiwi_assert_same('failed', $result['status'], 'Expected a non-edge dimension mismatch to fail before any date is verified.');
-    kiwi_assert_same(['2026-06-10'], $result['blocked_dates'] ?? [], 'Expected the non-edge mismatch date to be blocked.');
-    kiwi_assert_same('hard_dimension_mismatch', $result['main_summary']['details'][0]['blockers'][0]['type'] ?? '', 'Expected deep compare dimension mismatch to be explicit.');
+    kiwi_assert_same('passed', $result['status'], 'Expected non-edge deep mismatches not to be queried when light totals pass.');
+    kiwi_assert_same(['2026-06-11'], $result['deep_checked_dates'] ?? [], 'Expected only the current retention edge date to be deep checked.');
+    kiwi_assert_same(['2026-06-09', '2026-06-10'], $result['totals_only_dates'] ?? [], 'Expected older exact-total dates to remain totals-only by design.');
+    kiwi_assert_same(['2026-06-09', '2026-06-10'], $result['deep_skipped_dates'] ?? [], 'Expected skipped deep dates to be auditable.');
+    kiwi_assert_same(['edge_date'], $result['deep_compare_reasons']['2026-06-11'] ?? [], 'Expected edge deep-check reason to be auditable.');
+    kiwi_assert_same([], $result['blocked_dates'] ?? [], 'Expected non-edge unqueried dimension mismatches not to block cleanup.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Coverage_Gate limits CTA warning deep compares to two dates plus edge', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Retention_Coverage_Gate();
+    $wpdb->candidate_dates = ['2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12'];
+
+    foreach ($wpdb->candidate_dates as $date) {
+        $wpdb->main_rows_by_date[$date] = kiwi_test_retention_totals_row([
+            'raw_cta1_click_events' => 1000,
+            'summary_cta1_click_events' => 996,
+        ]);
+        $wpdb->tkzone_rows_by_date[$date] = kiwi_test_retention_totals_row();
+        $wpdb->main_deep_warning_dates[] = $date;
+    }
+
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    $result = (new Kiwi_Retention_Coverage_Gate(new Kiwi_Config()))
+        ->check_landing_page_sessions($source, '2026-06-13 00:00:00');
+
+    kiwi_assert_same('passed', $result['status'], 'Expected tolerated CTA warning dates to pass retention coverage.');
+    kiwi_assert_same(
+        ['2026-06-12', '2026-06-09', '2026-06-10'],
+        $result['deep_checked_dates'] ?? [],
+        'Expected the edge date plus the first two CTA warning dates to be deep checked.'
+    );
+    kiwi_assert_same(['2026-06-11'], $result['totals_only_dates'] ?? [], 'Expected later CTA warnings beyond the budget to be totals-only.');
+    kiwi_assert_same(['edge_date'], $result['deep_compare_reasons']['2026-06-12'] ?? [], 'Expected edge reason for the newest date.');
+    kiwi_assert_same(['cta_warning'], $result['deep_compare_reasons']['2026-06-09'] ?? [], 'Expected first CTA warning reason.');
+    kiwi_assert_same(['cta_warning'], $result['deep_compare_reasons']['2026-06-10'] ?? [], 'Expected second CTA warning reason.');
 
     $wpdb = $previous_wpdb;
 });
@@ -11772,6 +11816,8 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate requires current TK-zone PID-set cov
     kiwi_assert_same(['2026-06-11'], $result['tkzone_summary']['blocking_missing_dates'] ?? [], 'Expected TK-zone blocking date to be reported.');
     kiwi_assert_contains('pid IN', $queries, 'Expected TK-zone gate to filter raw sessions by the current PID allow-list.');
     kiwi_assert_contains('pid_set_hash = %s', $queries, 'Expected TK-zone gate to require current PID-set summary rows.');
+    kiwi_assert_contains('FROM landing_loads l', $queries, 'Expected TK-zone handoff coverage to restrict handoff aggregation to candidate landing sessions.');
+    kiwi_assert_contains('INNER JOIN wp_kiwi_landing_handoff_events h', $queries, 'Expected TK-zone handoff coverage not to materialize unrelated handoff sessions.');
     kiwi_assert_true(in_array('106', $args, true), 'Expected TK-zone gate to bind default PID 106.');
     kiwi_assert_true(in_array(hash('sha256', '106'), $args, true), 'Expected TK-zone gate to bind current PID-set hash.');
 
