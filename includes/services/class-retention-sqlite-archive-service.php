@@ -52,6 +52,9 @@ class Kiwi_Retention_Sqlite_Archive_Service
             return $result;
         }
 
+        $pdo = null;
+        $transaction_started = false;
+
         try {
             $archive_db_path = $this->build_archive_db_path();
             $result['archive_db_path'] = $archive_db_path;
@@ -64,9 +67,14 @@ class Kiwi_Retention_Sqlite_Archive_Service
 
             $this->ensure_archive_schema($pdo, $source);
             $this->start_archive_batch($pdo, $source, $archive_batch_id, $cutoff_value, $archive_db_path);
+            $archive_row_statement = $this->prepare_archive_row_statement($pdo, $source);
+            $archive_batch_row_statement = $this->prepare_archive_batch_row_statement($pdo);
+            $archived_at = $this->current_time_mysql();
 
             $last_id = 0;
             $batch_limit = max(1, $batch_limit);
+            $pdo->beginTransaction();
+            $transaction_started = true;
 
             while (true) {
                 $rows = $this->fetch_source_rows($source, $cutoff_value, $last_id, $batch_limit);
@@ -78,8 +86,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
                 foreach ($rows as $row) {
                     $source_pk = (int) ($row[$primary_key] ?? 0);
                     $last_id = max($last_id, $source_pk);
-                    $inserted = $this->insert_archive_row($pdo, $source, $archive_batch_id, $row);
-                    $this->insert_archive_batch_row($pdo, $archive_batch_id, $source_pk);
+                    $inserted = $this->insert_archive_row($archive_row_statement, $source, $archive_batch_id, $archived_at, $row);
+                    $this->insert_archive_batch_row($archive_batch_row_statement, $archive_batch_id, $source_pk);
                     $result['archived_rows']++;
 
                     if ($inserted) {
@@ -89,6 +97,9 @@ class Kiwi_Retention_Sqlite_Archive_Service
                     }
                 }
             }
+
+            $pdo->commit();
+            $transaction_started = false;
 
             $integrity_check = (string) $pdo->query('PRAGMA integrity_check')->fetchColumn();
             $result['archive_integrity_check'] = $integrity_check;
@@ -101,6 +112,10 @@ class Kiwi_Retention_Sqlite_Archive_Service
 
             $this->finish_archive_batch($pdo, $archive_batch_id, $result);
         } catch (Throwable $error) {
+            if ($transaction_started && $pdo instanceof PDO && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
             $result = $this->apply_archive_failure($result, $error);
         }
 
@@ -338,13 +353,42 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return $result;
     }
 
-    private function insert_archive_row(PDO $pdo, array $source, string $archive_batch_id, array $row): bool
+    private function prepare_archive_row_statement(PDO $pdo, array $source): PDOStatement
     {
         $archive_table = $this->quote_identifier((string) ($source['source_table'] ?? ''));
         $columns = ['_archive_batch_id', '_archived_at', '_source_pk'];
+
+        foreach ((array) ($source['archive_columns'] ?? []) as $column => $type) {
+            if (!$this->is_identifier((string) $column)) {
+                continue;
+            }
+
+            $columns[] = (string) $column;
+        }
+
+        $quoted_columns = array_map([$this, 'quote_identifier'], $columns);
+        $placeholders = array_map(static function (string $column): string {
+            return ':' . $column;
+        }, $columns);
+
+        return $pdo->prepare(
+            'INSERT OR IGNORE INTO ' . $archive_table
+            . ' (' . implode(', ', $quoted_columns) . ')'
+            . ' VALUES (' . implode(', ', $placeholders) . ')'
+        );
+    }
+
+    private function insert_archive_row(
+        PDOStatement $statement,
+        array $source,
+        string $archive_batch_id,
+        string $archived_at,
+        array $row
+    ): bool
+    {
         $values = [
             '_archive_batch_id' => $archive_batch_id,
-            '_archived_at' => $this->current_time_mysql(),
+            '_archived_at' => $archived_at,
             '_source_pk' => (int) ($row[(string) ($source['primary_key'] ?? 'id')] ?? 0),
         ];
 
@@ -353,19 +397,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
                 continue;
             }
 
-            $columns[] = (string) $column;
             $values[(string) $column] = $row[(string) $column] ?? null;
         }
-
-        $quoted_columns = array_map([$this, 'quote_identifier'], $columns);
-        $placeholders = array_map(static function (string $column): string {
-            return ':' . $column;
-        }, $columns);
-        $statement = $pdo->prepare(
-            'INSERT OR IGNORE INTO ' . $archive_table
-            . ' (' . implode(', ', $quoted_columns) . ')'
-            . ' VALUES (' . implode(', ', $placeholders) . ')'
-        );
 
         foreach ($values as $column => $value) {
             $statement->bindValue(':' . $column, $value);
@@ -376,16 +409,20 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return $statement->rowCount() > 0;
     }
 
-    private function insert_archive_batch_row(PDO $pdo, string $archive_batch_id, int $source_pk): void
+    private function prepare_archive_batch_row_statement(PDO $pdo): PDOStatement
+    {
+        return $pdo->prepare(
+            'INSERT OR IGNORE INTO archive_batch_rows (archive_batch_id, source_pk)
+             VALUES (:archive_batch_id, :source_pk)'
+        );
+    }
+
+    private function insert_archive_batch_row(PDOStatement $statement, string $archive_batch_id, int $source_pk): void
     {
         if ($source_pk <= 0) {
             return;
         }
 
-        $statement = $pdo->prepare(
-            'INSERT OR IGNORE INTO archive_batch_rows (archive_batch_id, source_pk)
-             VALUES (:archive_batch_id, :source_pk)'
-        );
         $statement->bindValue(':archive_batch_id', $archive_batch_id, PDO::PARAM_STR);
         $statement->bindValue(':source_pk', $source_pk, PDO::PARAM_INT);
         $statement->execute();

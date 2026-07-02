@@ -4,6 +4,7 @@ Changes are listed by date (newest first). Only medium-impact or higher updates 
 
 2026-07-02:
 - [DB Retention Coverage Gate] Made the landing-page-session coverage gate use the intended selective deep-compare policy: hard light totals still run for every candidate date, while dimension deep compares are limited to the retention edge, the first hard blocker, and up to two CTA-warning dates. TK-zone light totals now restrict handoff aggregation to the current PID allow-list's landing sessions before joining handoff events, keeping the read-only production gate path well below cron timeout limits.
+- [DB Retention Archive] Optimized SQLite archiving for landing-page-session retention by wrapping archive-row and archive-batch-row inserts in one transaction, reusing prepared statements, and using a single batch archive timestamp. Production-like measurement against the 135,322-row backlog cut the archive step from roughly 112.6 seconds to roughly 24.1 seconds without weakening archive-before-delete.
 
 2026-06-30:
 - [DB Retention Coverage Gate] Reworked the landing-page-session retention coverage gate to use date-bounded Main/TK-zone checks with `passed`, `partial`, and `failed` outcomes. Partial coverage now archives/deletes only up to the effective verified cutoff, persists requested/effective diagnostics in `gate_results_json`, and treats small CTA diffs plus sales diffs according to the documented warning policy.

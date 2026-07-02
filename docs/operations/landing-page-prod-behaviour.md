@@ -301,6 +301,8 @@ The gate intentionally does not run the expensive dimension-level deep compare f
 
 Audit details are stored on `wp_kiwi_retention_cleanup_runs.gate_results_json`, including `coverage_mode`, requested/effective cutoffs, verified date, candidate dates, deep-checked dates, totals-only dates, skipped deep dates, deep-compare reasons, blocked dates, warning dates, and compact per-summary details. Final cleanup run rows and growth snapshots use the effective cleanup cutoff actually used for archive/delete. TK-zone light totals restrict handoff aggregation to the candidate PID-allow-listed landing sessions before joining handoff events, avoiding broad two-day handoff materialization for unrelated traffic.
 
+When cleanup proceeds, eligible raw rows are archived to the configured SQLite archive before any MySQL delete. The SQLite writer keeps archive rows and `archive_batch_rows` in one transaction and reuses prepared insert statements across the batch, so the archive remains idempotent by source primary key without paying per-row autocommit overhead.
+
 ## Configuration switches
 
 ### Landing-page loading
