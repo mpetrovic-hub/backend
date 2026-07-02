@@ -724,6 +724,34 @@ class Kiwi_Config
             : 1800;
     }
 
+    public function get_retention_worker_row_limit(): int
+    {
+        return defined('KIWI_RETENTION_WORKER_ROW_LIMIT')
+            ? max(1, (int) KIWI_RETENTION_WORKER_ROW_LIMIT)
+            : 50000;
+    }
+
+    public function get_retention_worker_time_limit_seconds(): int
+    {
+        return defined('KIWI_RETENTION_WORKER_TIME_LIMIT_SECONDS')
+            ? max(1, (int) KIWI_RETENTION_WORKER_TIME_LIMIT_SECONDS)
+            : 60;
+    }
+
+    public function get_retention_worker_reschedule_delay_seconds(): int
+    {
+        return defined('KIWI_RETENTION_WORKER_RESCHEDULE_DELAY_SECONDS')
+            ? max(1, (int) KIWI_RETENTION_WORKER_RESCHEDULE_DELAY_SECONDS)
+            : 60;
+    }
+
+    public function get_retention_worker_lock_ttl_seconds(): int
+    {
+        return defined('KIWI_RETENTION_WORKER_LOCK_TTL_SECONDS')
+            ? max(60, (int) KIWI_RETENTION_WORKER_LOCK_TTL_SECONDS)
+            : 300;
+    }
+
     /**
      * Operator lookup routes configuration
      * Returns a mapping of MSISDN prefixes to provider and country, used for routing operator lookup requests to the correct provider based on the phone number's prefix. Configured in wp-config.php as KIWI_OPERATOR_LOOKUP_ROUTES.

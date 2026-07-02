@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-06-27-1';
+    private const DB_SCHEMA_VERSION = '2026-07-02-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -25,7 +25,9 @@ class Kiwi_Plugin
     private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_SKIP_OPTION = 'kiwi_landing_funnel_daily_tkzone_summary_refresh_lock_skip_last_result';
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS = 1800;
     private const DEVICE_MODEL_BRAND_HARVEST_HOOK = 'kiwi_device_model_brand_harvest';
-    private const RETENTION_CLEANUP_DAILY_HOOK = 'kiwi_retention_cleanup_daily';
+    private const RETENTION_CLEANUP_LEGACY_DAILY_HOOK = 'kiwi_retention_cleanup_daily';
+    private const RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK = 'kiwi_retention_cleanup_scheduler_daily';
+    private const RETENTION_CLEANUP_WORKER_HOOK = 'kiwi_retention_cleanup_worker';
 
     private $plugin_root_path;
     private $plugin_base_url;
@@ -66,7 +68,8 @@ class Kiwi_Plugin
         add_action(self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_main_summary_refresh']);
         add_action(self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_tkzone_summary_refresh']);
         add_action(self::DEVICE_MODEL_BRAND_HARVEST_HOOK, [$this, 'run_device_model_brand_harvest']);
-        add_action(self::RETENTION_CLEANUP_DAILY_HOOK, [$this, 'run_retention_cleanup_daily']);
+        add_action(self::RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK, [$this, 'run_retention_cleanup_scheduler_daily']);
+        add_action(self::RETENTION_CLEANUP_WORKER_HOOK, [$this, 'run_retention_cleanup_worker']);
         add_action('init', [$this, 'maybe_export_statistics']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
@@ -324,20 +327,46 @@ class Kiwi_Plugin
             return;
         }
 
-        if (wp_next_scheduled(self::RETENTION_CLEANUP_DAILY_HOOK) !== false) {
+        $this->unschedule_legacy_retention_cleanup();
+
+        if (wp_next_scheduled(self::RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK) !== false) {
             return;
         }
 
         wp_schedule_event(
             time() + (15 * 60),
             'daily',
-            self::RETENTION_CLEANUP_DAILY_HOOK
+            self::RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK
         );
     }
 
     public function run_retention_cleanup_daily(): array
     {
+        return $this->run_retention_cleanup_scheduler_daily();
+    }
+
+    public function run_retention_cleanup_scheduler_daily(): array
+    {
         return $this->run_retention_cleanup('cron');
+    }
+
+    public function run_retention_cleanup_worker(): array
+    {
+        $result = $this->build_retention_cleanup_service()->run_worker(
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS
+        );
+
+        if (!empty($result['schedule_worker']) || !empty($result['reschedule_worker'])) {
+            $this->schedule_retention_cleanup_worker((int) ($result['reschedule_delay_seconds'] ?? 0));
+        }
+
+        $message = !empty($result['success'])
+            ? 'Worker finished for landing_page_sessions with status ' . (string) ($result['status'] ?? 'unknown') . ' and phase ' . (string) ($result['worker_phase'] ?? 'unknown') . '.'
+            : 'Worker failed for landing_page_sessions: ' . (string) ($result['error_message'] ?? 'failed without error detail');
+
+        $this->log_retention_cleanup($message);
+
+        return $result;
     }
 
     public function run_retention_cleanup(string $triggered_by = 'manual'): array
@@ -347,9 +376,13 @@ class Kiwi_Plugin
             $triggered_by
         );
 
+        if (!empty($result['schedule_worker']) || !empty($result['reschedule_worker'])) {
+            $this->schedule_retention_cleanup_worker((int) ($result['reschedule_delay_seconds'] ?? 0));
+        }
+
         $message = !empty($result['success'])
-            ? 'Cleanup finished for landing_page_sessions with status ' . (string) ($result['status'] ?? 'unknown') . '.'
-            : 'Cleanup failed for landing_page_sessions: ' . (string) ($result['error_message'] ?? 'failed without error detail');
+            ? 'Cleanup scheduler finished for landing_page_sessions with status ' . (string) ($result['status'] ?? 'unknown') . '.'
+            : 'Cleanup scheduler failed for landing_page_sessions: ' . (string) ($result['error_message'] ?? 'failed without error detail');
 
         $this->log_retention_cleanup($message);
 
@@ -1373,6 +1406,24 @@ TEXT;
         return new Kiwi_Retention_Cleanup_Service();
     }
 
+    protected function schedule_retention_cleanup_worker(int $delay_seconds = 0): bool
+    {
+        if (!function_exists('wp_schedule_single_event')) {
+            return false;
+        }
+
+        if (function_exists('wp_next_scheduled')
+            && wp_next_scheduled(self::RETENTION_CLEANUP_WORKER_HOOK) !== false
+        ) {
+            return false;
+        }
+
+        return (bool) wp_schedule_single_event(
+            time() + max(0, $delay_seconds),
+            self::RETENTION_CLEANUP_WORKER_HOOK
+        );
+    }
+
     protected function get_current_business_date(): string
     {
         if (function_exists('current_time')) {
@@ -1663,6 +1714,32 @@ TEXT;
             }
 
             wp_unschedule_event((int) $timestamp, self::LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK);
+            $guard++;
+        }
+    }
+
+    private function unschedule_legacy_retention_cleanup(): void
+    {
+        if (function_exists('wp_clear_scheduled_hook')) {
+            wp_clear_scheduled_hook(self::RETENTION_CLEANUP_LEGACY_DAILY_HOOK);
+
+            return;
+        }
+
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_unschedule_event')) {
+            return;
+        }
+
+        $guard = 0;
+
+        while ($guard < 10) {
+            $timestamp = wp_next_scheduled(self::RETENTION_CLEANUP_LEGACY_DAILY_HOOK);
+
+            if ($timestamp === false) {
+                return;
+            }
+
+            wp_unschedule_event((int) $timestamp, self::RETENTION_CLEANUP_LEGACY_DAILY_HOOK);
             $guard++;
         }
     }
