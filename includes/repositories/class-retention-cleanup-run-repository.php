@@ -42,6 +42,13 @@ class Kiwi_Retention_Cleanup_Run_Repository
             delete_batches INT UNSIGNED NOT NULL DEFAULT 0,
             gate_status VARCHAR(20) NOT NULL DEFAULT 'skipped',
             gate_results_json LONGTEXT NULL,
+            worker_phase VARCHAR(30) NOT NULL DEFAULT '',
+            target_max_primary_key BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+            archive_last_primary_key BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+            delete_last_primary_key BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+            worker_runs INT UNSIGNED NOT NULL DEFAULT 0,
+            worker_last_started_at DATETIME NULL,
+            worker_last_finished_at DATETIME NULL,
             archive_batch_id VARCHAR(100) NOT NULL DEFAULT '',
             archive_db_path TEXT NULL,
             archive_integrity_check VARCHAR(100) NOT NULL DEFAULT '',
@@ -53,6 +60,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
             UNIQUE KEY run_id (run_id),
             KEY source_key_started (source_key, started_at),
             KEY status_started (status, started_at),
+            KEY source_status_started (source_key, status, started_at),
             KEY archive_batch_id (archive_batch_id)
         ) {$charset_collate};";
 
@@ -125,6 +133,26 @@ class Kiwi_Retention_Cleanup_Run_Repository
         return $result !== false;
     }
 
+    public function find_open_run_for_source(string $source_key): ?array
+    {
+        global $wpdb;
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT *
+                 FROM {$this->get_table_name()}
+                 WHERE source_key = %s
+                   AND status IN ('pending', 'running', 'partial')
+                 ORDER BY started_at ASC, id ASC
+                 LIMIT 1",
+                $source_key
+            ),
+            ARRAY_A
+        );
+
+        return is_array($row) ? $row : null;
+    }
+
     private function normalize_row(array $data): array
     {
         $allowed = [
@@ -148,6 +176,13 @@ class Kiwi_Retention_Cleanup_Run_Repository
             'delete_batches' => 'int',
             'gate_status' => 'string',
             'gate_results_json' => 'json_text',
+            'worker_phase' => 'string',
+            'target_max_primary_key' => 'int',
+            'archive_last_primary_key' => 'int',
+            'delete_last_primary_key' => 'int',
+            'worker_runs' => 'int',
+            'worker_last_started_at' => 'datetime_nullable',
+            'worker_last_finished_at' => 'datetime_nullable',
             'archive_batch_id' => 'string',
             'archive_db_path' => 'text',
             'archive_integrity_check' => 'string',
@@ -203,6 +238,10 @@ class Kiwi_Retention_Cleanup_Run_Repository
             'archive_duplicate_rows',
             'deleted_rows',
             'delete_batches',
+            'target_max_primary_key',
+            'archive_last_primary_key',
+            'delete_last_primary_key',
+            'worker_runs',
         ];
 
         return array_map(static function (string $key) use ($int_fields): string {

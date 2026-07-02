@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Retention_Cleanup_Service
 {
     private const LOCK_PREFIX = 'kiwi_retention_cleanup_lock_';
+    private const WORKER_LOCK_PREFIX = 'kiwi_retention_cleanup_worker_lock_';
 
     private $config;
     private $source_registry;
@@ -51,6 +52,27 @@ class Kiwi_Retention_Cleanup_Service
                 'status' => 'failed',
                 'error_code' => 'unknown_source',
                 'error_message' => 'Unknown retention source: ' . $source_key,
+            ];
+        }
+
+        $existing_run = $this->run_repository->find_open_run_for_source($source_key);
+
+        if (is_array($existing_run)) {
+            $this->update_run_progress((int) ($existing_run['id'] ?? 0), [
+                'worker_phase' => 'active_run_rescheduled',
+                'worker_last_finished_at' => $this->current_time_mysql(),
+            ]);
+
+            return [
+                'success' => true,
+                'run_id' => (string) ($existing_run['run_id'] ?? ''),
+                'status' => (string) ($existing_run['status'] ?? 'partial'),
+                'worker_phase' => 'active_run_rescheduled',
+                'schedule_worker' => true,
+                'reschedule_worker' => true,
+                'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
+                'error_code' => 'cleanup_run_already_open',
+                'error_message' => 'Retention cleanup has an open worker run; scheduler rescheduled the worker instead of creating a second run.',
             ];
         }
 
@@ -231,18 +253,9 @@ class Kiwi_Retention_Cleanup_Service
                 0
             );
 
-            $archive_result = $this->archive_service->archive_eligible_rows(
-                $source,
-                $effective_cutoff_value,
-                $archive_batch_id,
-                $this->config->get_retention_default_batch_limit()
-            );
-            $archived_rows = (int) ($archive_result['archived_rows'] ?? 0);
-            $archive_inserted_rows = (int) ($archive_result['archive_inserted_rows'] ?? 0);
-            $archive_duplicate_rows = (int) ($archive_result['archive_duplicate_rows'] ?? 0);
-            $archive_integrity_check = (string) ($archive_result['archive_integrity_check'] ?? '');
+            $target_max_primary_key = $this->determine_target_max_primary_key($source, $effective_cutoff_value);
 
-            if (empty($archive_result['success']) || $archived_rows !== $effective_eligible_rows) {
+            if ($effective_eligible_rows <= 0) {
                 $this->snapshot_repository->capture_snapshot(
                     $source,
                     'after_cleanup',
@@ -250,8 +263,34 @@ class Kiwi_Retention_Cleanup_Service
                     $effective_cutoff_value,
                     $effective_eligible_rows,
                     $run_id,
-                    $archive_batch_id,
-                    $archived_rows,
+                    '',
+                    0
+                );
+
+                return $this->finish_run($run_db_id, [
+                    'success' => true,
+                    'run_id' => $run_id,
+                    'status' => 'completed',
+                    'gate_status' => $gate_status,
+                    'gate_results_json' => $gate_results,
+                    'cutoff_value' => $effective_cutoff_value,
+                    'eligible_rows' => $effective_eligible_rows,
+                    'worker_phase' => 'completed_noop',
+                    'target_max_primary_key' => $target_max_primary_key,
+                    'archive_batch_id' => $archive_batch_id,
+                ]);
+            }
+
+            if ($target_max_primary_key <= 0) {
+                $this->snapshot_repository->capture_snapshot(
+                    $source,
+                    'after_cleanup',
+                    $retention_days,
+                    $effective_cutoff_value,
+                    $effective_eligible_rows,
+                    $run_id,
+                    '',
+                    0,
                     0
                 );
 
@@ -263,77 +302,43 @@ class Kiwi_Retention_Cleanup_Service
                     'gate_results_json' => $gate_results,
                     'cutoff_value' => $effective_cutoff_value,
                     'eligible_rows' => $effective_eligible_rows,
-                    'archived_rows' => $archived_rows,
-                    'archive_inserted_rows' => $archive_inserted_rows,
-                    'archive_duplicate_rows' => $archive_duplicate_rows,
+                    'worker_phase' => 'target_key_unavailable',
+                    'target_max_primary_key' => 0,
                     'archive_batch_id' => $archive_batch_id,
-                    'archive_db_path' => (string) ($archive_result['archive_db_path'] ?? ''),
-                    'archive_integrity_check' => $archive_integrity_check,
-                    'error_code' => $this->archive_failure_code($archive_result),
-                    'error_message' => $this->archive_failure_message($archive_result),
+                    'error_code' => 'target_primary_key_unavailable',
+                    'error_message' => 'Retention cleanup could not freeze a target primary key for eligible rows.',
                 ]);
             }
 
-            $delete_result = $this->delete_archived_rows(
-                $source,
-                (string) ($archive_result['archive_db_path'] ?? ''),
-                $archive_batch_id,
-                $this->config->get_retention_default_batch_limit()
-            );
-            $deleted_rows = (int) ($delete_result['deleted_rows'] ?? 0);
-            $delete_batches = (int) ($delete_result['delete_batches'] ?? 0);
-
-            $this->snapshot_repository->capture_snapshot(
-                $source,
-                'after_cleanup',
-                $retention_days,
-                $effective_cutoff_value,
-                $effective_eligible_rows,
-                $run_id,
-                $archive_batch_id,
-                $archived_rows,
-                $deleted_rows
-            );
-
-            if ($deleted_rows !== $archived_rows) {
-                return $this->finish_run($run_db_id, [
-                    'success' => false,
-                    'run_id' => $run_id,
-                    'status' => 'failed',
-                    'gate_status' => $gate_status,
-                    'gate_results_json' => $gate_results,
-                    'cutoff_value' => $effective_cutoff_value,
-                    'eligible_rows' => $effective_eligible_rows,
-                    'archived_rows' => $archived_rows,
-                    'archive_inserted_rows' => $archive_inserted_rows,
-                    'archive_duplicate_rows' => $archive_duplicate_rows,
-                    'deleted_rows' => $deleted_rows,
-                    'delete_batches' => $delete_batches,
-                    'archive_batch_id' => $archive_batch_id,
-                    'archive_db_path' => (string) ($archive_result['archive_db_path'] ?? ''),
-                    'archive_integrity_check' => $archive_integrity_check,
-                    'error_code' => 'delete_count_mismatch',
-                    'error_message' => 'Deleted row count did not match archived row count.',
-                ]);
-            }
-
-            return $this->finish_run($run_db_id, [
+            $pending_result = [
                 'success' => true,
                 'run_id' => $run_id,
-                'status' => 'success',
+                'status' => 'pending',
                 'gate_status' => $gate_status,
                 'gate_results_json' => $gate_results,
                 'cutoff_value' => $effective_cutoff_value,
                 'eligible_rows' => $effective_eligible_rows,
-                'archived_rows' => $archived_rows,
-                'archive_inserted_rows' => $archive_inserted_rows,
-                'archive_duplicate_rows' => $archive_duplicate_rows,
-                'deleted_rows' => $deleted_rows,
-                'delete_batches' => $delete_batches,
+                'worker_phase' => 'archive_pending',
+                'target_max_primary_key' => $target_max_primary_key,
+                'archive_last_primary_key' => 0,
+                'delete_last_primary_key' => 0,
                 'archive_batch_id' => $archive_batch_id,
-                'archive_db_path' => (string) ($archive_result['archive_db_path'] ?? ''),
-                'archive_integrity_check' => $archive_integrity_check,
-            ]);
+                'schedule_worker' => true,
+                'reschedule_worker' => true,
+                'reschedule_delay_seconds' => 0,
+            ];
+
+            if (!$this->update_run_progress($run_db_id, $pending_result)) {
+                return [
+                    'success' => false,
+                    'run_id' => $run_id,
+                    'status' => 'failed',
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention cleanup planned a worker run but the audit row could not be updated.',
+                ];
+            }
+
+            return $pending_result;
         } catch (Throwable $error) {
             return $this->finish_run($run_db_id, [
                 'success' => false,
@@ -344,6 +349,275 @@ class Kiwi_Retention_Cleanup_Service
             ]);
         } finally {
             $this->clear_lock($source_key);
+        }
+    }
+
+    public function run_worker(string $source_key): array
+    {
+        $source = $this->source_registry->get($source_key);
+
+        if (!is_array($source)) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'unknown_source',
+                'error_message' => 'Unknown retention source: ' . $source_key,
+            ];
+        }
+
+        $run = $this->run_repository->find_open_run_for_source($source_key);
+
+        if (!is_array($run)) {
+            return [
+                'success' => true,
+                'status' => 'skipped',
+                'worker_phase' => 'no_open_run',
+                'error_code' => 'no_open_cleanup_run',
+                'error_message' => 'Retention worker skipped because no open cleanup run exists.',
+            ];
+        }
+
+        $run_db_id = (int) ($run['id'] ?? 0);
+        $run_id = (string) ($run['run_id'] ?? '');
+
+        if ($this->has_worker_lock($source_key)) {
+            $this->update_run_progress($run_db_id, [
+                'worker_phase' => 'lock_skipped',
+                'worker_last_finished_at' => $this->current_time_mysql(),
+            ]);
+
+            return [
+                'success' => true,
+                'run_id' => $run_id,
+                'status' => (string) ($run['status'] ?? 'partial'),
+                'worker_phase' => 'lock_skipped',
+                'schedule_worker' => true,
+                'reschedule_worker' => true,
+                'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
+                'error_code' => 'worker_lock_active',
+                'error_message' => 'Retention worker skipped because lock is active.',
+            ];
+        }
+
+        $this->set_worker_lock($source_key);
+
+        try {
+            $worker_runs = (int) ($run['worker_runs'] ?? 0) + 1;
+            if (!$this->update_run_progress($run_db_id, [
+                'status' => 'running',
+                'worker_phase' => 'archive_running',
+                'worker_runs' => $worker_runs,
+                'worker_last_started_at' => $this->current_time_mysql(),
+            ])) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention worker could not persist running state before archive/delete work.',
+                ]);
+            }
+
+            $cutoff_value = (string) ($run['cutoff_value'] ?? '');
+            $archive_batch_id = (string) ($run['archive_batch_id'] ?? '');
+            $target_max_primary_key = (int) ($run['target_max_primary_key'] ?? 0);
+            $existing_archive_db_path = (string) ($run['archive_db_path'] ?? '');
+
+            if (!$this->is_valid_cutoff_value($cutoff_value)
+                || $archive_batch_id === ''
+                || $target_max_primary_key <= 0
+            ) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'error_code' => 'invalid_worker_run_state',
+                    'error_message' => 'Retention worker run state is missing cutoff, archive batch, or target primary key.',
+                ]);
+            }
+
+            $chunk = $this->archive_service->archive_primary_key_chunk(
+                $source,
+                $cutoff_value,
+                $archive_batch_id,
+                (int) ($run['archive_last_primary_key'] ?? 0),
+                $target_max_primary_key,
+                $this->config->get_retention_worker_row_limit(),
+                $this->config->get_retention_worker_time_limit_seconds(),
+                $existing_archive_db_path
+            );
+
+            if (empty($chunk['success'])) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
+                    'archive_integrity_check' => (string) ($chunk['quick_check'] ?? ''),
+                    'error_code' => $this->archive_failure_code($chunk),
+                    'error_message' => $this->archive_failure_message($chunk),
+                ]);
+            }
+
+            $quick_check = (string) ($chunk['quick_check'] ?? '');
+
+            if (strtolower($quick_check) !== 'ok') {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
+                    'archive_integrity_check' => $quick_check,
+                    'error_code' => 'sqlite_quick_check_failed',
+                    'error_message' => 'SQLite archive quick_check returned: ' . $quick_check,
+                ]);
+            }
+
+            $archived_primary_keys = $this->normalize_primary_keys((array) ($chunk['archived_primary_keys'] ?? []));
+            $archived_rows = (int) ($chunk['archived_rows'] ?? count($archived_primary_keys));
+
+            if ($archived_rows !== count($archived_primary_keys)) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
+                    'archive_integrity_check' => $quick_check,
+                    'error_code' => 'archive_primary_key_count_mismatch',
+                    'error_message' => 'Archived row count did not match archived primary-key evidence count.',
+                ]);
+            }
+
+            $deleted_rows = 0;
+            $delete_batches = 0;
+
+            if (!empty($archived_primary_keys)) {
+                $deleted_rows = $this->delete_source_primary_keys($source, $archived_primary_keys);
+                $delete_batches = 1;
+
+                if ($deleted_rows !== count($archived_primary_keys)) {
+                    return $this->fail_worker_run($run_db_id, $run, [
+                        'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
+                        'archive_integrity_check' => $quick_check,
+                        'archived_rows' => (int) ($run['archived_rows'] ?? 0) + $archived_rows,
+                        'archive_inserted_rows' => (int) ($run['archive_inserted_rows'] ?? 0) + (int) ($chunk['archive_inserted_rows'] ?? 0),
+                        'archive_duplicate_rows' => (int) ($run['archive_duplicate_rows'] ?? 0) + (int) ($chunk['archive_duplicate_rows'] ?? 0),
+                        'deleted_rows' => (int) ($run['deleted_rows'] ?? 0) + $deleted_rows,
+                        'delete_batches' => (int) ($run['delete_batches'] ?? 0) + $delete_batches,
+                        'archive_last_primary_key' => max((int) ($run['archive_last_primary_key'] ?? 0), (int) ($chunk['last_primary_key'] ?? 0)),
+                        'delete_last_primary_key' => max((int) ($run['delete_last_primary_key'] ?? 0), max($archived_primary_keys)),
+                        'error_code' => 'delete_count_mismatch',
+                        'error_message' => 'Deleted row count did not match archived primary-key evidence count.',
+                    ]);
+                }
+            }
+
+            $new_archived_rows = (int) ($run['archived_rows'] ?? 0) + $archived_rows;
+            $new_archive_inserted_rows = (int) ($run['archive_inserted_rows'] ?? 0) + (int) ($chunk['archive_inserted_rows'] ?? 0);
+            $new_archive_duplicate_rows = (int) ($run['archive_duplicate_rows'] ?? 0) + (int) ($chunk['archive_duplicate_rows'] ?? 0);
+            $new_deleted_rows = (int) ($run['deleted_rows'] ?? 0) + $deleted_rows;
+            $new_delete_batches = (int) ($run['delete_batches'] ?? 0) + $delete_batches;
+            $last_primary_key = max((int) ($run['archive_last_primary_key'] ?? 0), (int) ($chunk['last_primary_key'] ?? 0));
+            $delete_last_primary_key = empty($archived_primary_keys)
+                ? (int) ($run['delete_last_primary_key'] ?? 0)
+                : max((int) ($run['delete_last_primary_key'] ?? 0), max($archived_primary_keys));
+            $archive_db_path = $existing_archive_db_path !== ''
+                ? $existing_archive_db_path
+                : (string) ($chunk['archive_db_path'] ?? '');
+            $has_more = !empty($chunk['has_more']);
+
+            if ($has_more && empty($archived_primary_keys)) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => $quick_check,
+                    'error_code' => 'worker_no_progress',
+                    'error_message' => 'Retention worker detected remaining rows but archived no primary-key evidence.',
+                ]);
+            }
+
+            if ($has_more) {
+                $progress = [
+                    'status' => 'partial',
+                    'worker_phase' => 'archive_partial',
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => $quick_check,
+                    'archived_rows' => $new_archived_rows,
+                    'archive_inserted_rows' => $new_archive_inserted_rows,
+                    'archive_duplicate_rows' => $new_archive_duplicate_rows,
+                    'deleted_rows' => $new_deleted_rows,
+                    'delete_batches' => $new_delete_batches,
+                    'archive_last_primary_key' => $last_primary_key,
+                    'delete_last_primary_key' => $delete_last_primary_key,
+                    'worker_last_finished_at' => $this->current_time_mysql(),
+                ];
+
+                if (!$this->update_run_progress($run_db_id, $progress)) {
+                    return $this->fail_worker_run($run_db_id, $run, [
+                        'error_code' => 'run_audit_update_failed',
+                        'error_message' => 'Retention worker chunk finished but progress could not be persisted.',
+                    ]);
+                }
+
+                return array_merge($progress, [
+                    'success' => true,
+                    'run_id' => $run_id,
+                    'schedule_worker' => true,
+                    'reschedule_worker' => true,
+                    'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
+                ]);
+            }
+
+            $expected_rows = (int) ($run['eligible_rows'] ?? 0);
+
+            if ($expected_rows > 0
+                && ($new_archived_rows !== $expected_rows || $new_deleted_rows !== $expected_rows)
+            ) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => $quick_check,
+                    'archived_rows' => $new_archived_rows,
+                    'archive_inserted_rows' => $new_archive_inserted_rows,
+                    'archive_duplicate_rows' => $new_archive_duplicate_rows,
+                    'deleted_rows' => $new_deleted_rows,
+                    'delete_batches' => $new_delete_batches,
+                    'archive_last_primary_key' => $last_primary_key,
+                    'delete_last_primary_key' => $delete_last_primary_key,
+                    'error_code' => 'worker_incomplete_counts',
+                    'error_message' => 'Retention worker finished before archived/deleted counts matched the frozen eligible row count.',
+                ]);
+            }
+
+            $integrity_check = $this->archive_service->run_integrity_check($archive_db_path);
+
+            if (strtolower($integrity_check) !== 'ok') {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => $integrity_check,
+                    'error_code' => 'sqlite_integrity_check_failed',
+                    'error_message' => 'SQLite archive integrity_check returned: ' . $integrity_check,
+                ]);
+            }
+
+            $this->snapshot_repository->capture_snapshot(
+                $source,
+                'after_cleanup',
+                (int) ($run['retention_days_effective'] ?? 0),
+                $cutoff_value,
+                (int) ($run['eligible_rows'] ?? 0),
+                $run_id,
+                $archive_batch_id,
+                $new_archived_rows,
+                $new_deleted_rows
+            );
+
+            return $this->finish_run($run_db_id, [
+                'success' => true,
+                'run_id' => $run_id,
+                'status' => 'completed',
+                'worker_phase' => 'completed',
+                'archive_db_path' => $archive_db_path,
+                'archive_integrity_check' => $integrity_check,
+                'archived_rows' => $new_archived_rows,
+                'archive_inserted_rows' => $new_archive_inserted_rows,
+                'archive_duplicate_rows' => $new_archive_duplicate_rows,
+                'deleted_rows' => $new_deleted_rows,
+                'delete_batches' => $new_delete_batches,
+                'archive_last_primary_key' => $last_primary_key,
+                'delete_last_primary_key' => $delete_last_primary_key,
+                'worker_last_finished_at' => $this->current_time_mysql(),
+            ]);
+        } catch (Throwable $error) {
+            return $this->fail_worker_run($run_db_id, $run, [
+                'error_code' => 'worker_exception',
+                'error_message' => $error->getMessage(),
+            ]);
+        } finally {
+            $this->clear_worker_lock($source_key);
         }
     }
 
@@ -399,6 +673,29 @@ class Kiwi_Retention_Cleanup_Service
         return (int) $wpdb->get_var(
             $wpdb->prepare(
                 "SELECT COUNT(*) FROM {$source_table} WHERE {$cutoff_column} < %s",
+                $cutoff_value
+            )
+        );
+    }
+
+    protected function determine_target_max_primary_key(array $source, string $cutoff_value): int
+    {
+        global $wpdb;
+
+        $source_table = (string) ($source['source_table'] ?? '');
+        $primary_key = (string) ($source['primary_key'] ?? '');
+        $cutoff_column = (string) ($source['cutoff_column'] ?? '');
+
+        if (!$this->is_identifier($source_table)
+            || !$this->is_identifier($primary_key)
+            || !$this->is_identifier($cutoff_column)
+        ) {
+            return 0;
+        }
+
+        return (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT MAX({$primary_key}) FROM {$source_table} WHERE {$cutoff_column} < %s",
                 $cutoff_value
             )
         );
@@ -510,7 +807,7 @@ class Kiwi_Retention_Cleanup_Service
         $update = array_merge($result, [
             'finished_at' => $this->current_time_mysql(),
         ]);
-        unset($update['success'], $update['run_id']);
+        unset($update['success'], $update['run_id'], $update['schedule_worker'], $update['reschedule_worker'], $update['reschedule_delay_seconds']);
 
         if ($run_db_id > 0) {
             try {
@@ -535,6 +832,34 @@ class Kiwi_Retention_Cleanup_Service
         }
 
         return $result;
+    }
+
+    private function update_run_progress(int $run_db_id, array $data): bool
+    {
+        if ($run_db_id <= 0) {
+            return false;
+        }
+
+        unset($data['success'], $data['run_id'], $data['schedule_worker'], $data['reschedule_worker'], $data['reschedule_delay_seconds']);
+
+        try {
+            return $this->run_repository->update_run($run_db_id, $data);
+        } catch (Throwable $error) {
+            return false;
+        }
+    }
+
+    private function fail_worker_run(int $run_db_id, array $run, array $result): array
+    {
+        $failure = array_merge([
+            'success' => false,
+            'run_id' => (string) ($run['run_id'] ?? ''),
+            'status' => 'failed',
+            'worker_phase' => 'failed',
+            'worker_last_finished_at' => $this->current_time_mysql(),
+        ], $result);
+
+        return $this->finish_run($run_db_id, $failure);
     }
 
     private function resolve_retention_days(array $settings, array $source): int
@@ -589,6 +914,32 @@ class Kiwi_Retention_Cleanup_Service
     {
         if (function_exists('delete_transient')) {
             delete_transient(self::LOCK_PREFIX . $source_key);
+        }
+    }
+
+    private function has_worker_lock(string $source_key): bool
+    {
+        return function_exists('get_transient')
+            && get_transient(self::WORKER_LOCK_PREFIX . $source_key) !== false;
+    }
+
+    private function set_worker_lock(string $source_key): void
+    {
+        if (!function_exists('set_transient')) {
+            return;
+        }
+
+        set_transient(
+            self::WORKER_LOCK_PREFIX . $source_key,
+            '1',
+            $this->config->get_retention_worker_lock_ttl_seconds()
+        );
+    }
+
+    private function clear_worker_lock(string $source_key): void
+    {
+        if (function_exists('delete_transient')) {
+            delete_transient(self::WORKER_LOCK_PREFIX . $source_key);
         }
     }
 

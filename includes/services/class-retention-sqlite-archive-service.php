@@ -66,7 +66,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $pdo->exec('PRAGMA foreign_keys = ON');
 
             $this->ensure_archive_schema($pdo, $source);
-            $this->start_archive_batch($pdo, $source, $archive_batch_id, $cutoff_value, $archive_db_path);
+            $this->start_archive_batch($pdo, $source, $archive_batch_id, $cutoff_value, $archive_db_path, true);
             $archive_row_statement = $this->prepare_archive_row_statement($pdo, $source);
             $archive_batch_row_statement = $this->prepare_archive_batch_row_statement($pdo);
             $archived_at = $this->current_time_mysql();
@@ -165,7 +165,160 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return $ids;
     }
 
-    protected function fetch_source_rows(array $source, string $cutoff_value, int $last_id, int $batch_limit): array
+    public function archive_primary_key_chunk(
+        array $source,
+        string $cutoff_value,
+        string $archive_batch_id,
+        int $last_primary_key,
+        int $target_max_primary_key,
+        int $batch_limit,
+        int $time_limit_seconds,
+        string $archive_db_path = ''
+    ): array {
+        $result = [
+            'success' => false,
+            'archive_batch_id' => $archive_batch_id,
+            'archive_db_path' => '',
+            'archived_rows' => 0,
+            'archive_inserted_rows' => 0,
+            'archive_duplicate_rows' => 0,
+            'archived_primary_keys' => [],
+            'last_primary_key' => max(0, $last_primary_key),
+            'has_more' => false,
+            'quick_check' => '',
+            'error_code' => '',
+            'error_message' => '',
+        ];
+
+        if (!class_exists('PDO')) {
+            $result['error_code'] = 'sqlite_pdo_unavailable';
+            $result['error_message'] = 'PDO is not available for SQLite retention archive.';
+
+            return $result;
+        }
+
+        $source_table = (string) ($source['source_table'] ?? '');
+        $primary_key = (string) ($source['primary_key'] ?? '');
+        $cutoff_column = (string) ($source['cutoff_column'] ?? '');
+
+        if (!$this->is_identifier($source_table)
+            || !$this->is_identifier($primary_key)
+            || !$this->is_identifier($cutoff_column)
+            || $target_max_primary_key <= 0
+        ) {
+            $result['error_code'] = 'invalid_source_definition';
+            $result['error_message'] = 'Retention source definition contains an invalid SQL identifier or target primary key.';
+
+            return $result;
+        }
+
+        $pdo = null;
+        $transaction_started = false;
+
+        try {
+            $archive_db_path = $archive_db_path !== '' ? $archive_db_path : $this->build_archive_db_path();
+            $result['archive_db_path'] = $archive_db_path;
+            $this->ensure_archive_directory(dirname($archive_db_path));
+
+            $pdo = new PDO('sqlite:' . $archive_db_path);
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $pdo->exec('PRAGMA journal_mode = WAL');
+            $pdo->exec('PRAGMA foreign_keys = ON');
+
+            $this->ensure_archive_schema($pdo, $source);
+            $this->start_archive_batch($pdo, $source, $archive_batch_id, $cutoff_value, $archive_db_path, false);
+            $archive_row_statement = $this->prepare_archive_row_statement($pdo, $source);
+            $archive_batch_row_statement = $this->prepare_archive_batch_row_statement($pdo);
+            $archived_at = $this->current_time_mysql();
+            $batch_limit = max(1, $batch_limit);
+            $time_limit_seconds = max(1, $time_limit_seconds);
+            $started_at = microtime(true);
+
+            $rows = $this->fetch_source_rows(
+                $source,
+                $cutoff_value,
+                max(0, $last_primary_key),
+                $batch_limit,
+                $target_max_primary_key
+            );
+
+            $pdo->beginTransaction();
+            $transaction_started = true;
+
+            foreach ($rows as $row) {
+                if ($result['archived_rows'] > 0 && (microtime(true) - $started_at) >= $time_limit_seconds) {
+                    break;
+                }
+
+                $source_pk = (int) ($row[$primary_key] ?? 0);
+
+                if ($source_pk <= 0 || $source_pk > $target_max_primary_key) {
+                    continue;
+                }
+
+                $inserted = $this->insert_archive_row($archive_row_statement, $source, $archive_batch_id, $archived_at, $row);
+                $this->insert_archive_batch_row($archive_batch_row_statement, $archive_batch_id, $source_pk);
+                $result['archived_rows']++;
+                $result['archived_primary_keys'][] = $source_pk;
+                $result['last_primary_key'] = max((int) $result['last_primary_key'], $source_pk);
+
+                if ($inserted) {
+                    $result['archive_inserted_rows']++;
+                } else {
+                    $result['archive_duplicate_rows']++;
+                }
+            }
+
+            $pdo->commit();
+            $transaction_started = false;
+
+            $quick_check = (string) $pdo->query('PRAGMA quick_check')->fetchColumn();
+            $result['quick_check'] = $quick_check;
+            $result['success'] = strtolower($quick_check) === 'ok';
+
+            if (!$result['success']) {
+                $result['error_code'] = 'sqlite_quick_check_failed';
+                $result['error_message'] = 'SQLite archive quick_check returned: ' . $quick_check;
+            }
+
+            $result['has_more'] = $this->has_more_source_rows(
+                $source,
+                $cutoff_value,
+                (int) $result['last_primary_key'],
+                $target_max_primary_key
+            );
+
+            $this->finish_archive_batch($pdo, $archive_batch_id, $result);
+        } catch (Throwable $error) {
+            if ($transaction_started && $pdo instanceof PDO && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            $result = $this->apply_archive_failure($result, $error);
+        }
+
+        return $result;
+    }
+
+    public function run_integrity_check(string $archive_db_path): string
+    {
+        if (!class_exists('PDO') || $archive_db_path === '' || !is_file($archive_db_path)) {
+            return '';
+        }
+
+        $pdo = new PDO('sqlite:' . $archive_db_path);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+        return (string) $pdo->query('PRAGMA integrity_check')->fetchColumn();
+    }
+
+    protected function fetch_source_rows(
+        array $source,
+        string $cutoff_value,
+        int $last_id,
+        int $batch_limit,
+        int $target_max_primary_key = 0
+    ): array
     {
         global $wpdb;
 
@@ -180,22 +333,79 @@ class Kiwi_Retention_Sqlite_Archive_Service
             return [];
         }
 
-        $rows = $wpdb->get_results(
+        if ($target_max_primary_key > 0) {
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT {$select_columns}
+                     FROM {$source_table}
+                     WHERE {$cutoff_column} < %s
+                       AND {$primary_key} > %d
+                       AND {$primary_key} <= %d
+                     ORDER BY {$primary_key} ASC
+                     LIMIT %d",
+                    $cutoff_value,
+                    $last_id,
+                    $target_max_primary_key,
+                    $batch_limit
+                ),
+                ARRAY_A
+            );
+        } else {
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT {$select_columns}
+                     FROM {$source_table}
+                     WHERE {$cutoff_column} < %s
+                       AND {$primary_key} > %d
+                     ORDER BY {$primary_key} ASC
+                     LIMIT %d",
+                    $cutoff_value,
+                    $last_id,
+                    $batch_limit
+                ),
+                ARRAY_A
+            );
+        }
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    private function has_more_source_rows(
+        array $source,
+        string $cutoff_value,
+        int $last_id,
+        int $target_max_primary_key
+    ): bool {
+        global $wpdb;
+
+        $source_table = (string) ($source['source_table'] ?? '');
+        $primary_key = (string) ($source['primary_key'] ?? '');
+        $cutoff_column = (string) ($source['cutoff_column'] ?? '');
+
+        if (!$this->is_identifier($source_table)
+            || !$this->is_identifier($primary_key)
+            || !$this->is_identifier($cutoff_column)
+            || $target_max_primary_key <= 0
+        ) {
+            return false;
+        }
+
+        $next_id = $wpdb->get_var(
             $wpdb->prepare(
-                "SELECT {$select_columns}
+                "SELECT {$primary_key}
                  FROM {$source_table}
                  WHERE {$cutoff_column} < %s
                    AND {$primary_key} > %d
+                   AND {$primary_key} <= %d
                  ORDER BY {$primary_key} ASC
-                 LIMIT %d",
+                 LIMIT 1",
                 $cutoff_value,
-                $last_id,
-                $batch_limit
-            ),
-            ARRAY_A
+                max(0, $last_id),
+                $target_max_primary_key
+            )
         );
 
-        return is_array($rows) ? $rows : [];
+        return (int) $next_id > 0;
     }
 
     protected function build_archive_db_path(): string
@@ -279,10 +489,11 @@ class Kiwi_Retention_Sqlite_Archive_Service
         array $source,
         string $archive_batch_id,
         string $cutoff_value,
-        string $archive_db_path
+        string $archive_db_path,
+        bool $reset_batch_rows = true
     ): void {
         $statement = $pdo->prepare(
-            'INSERT OR REPLACE INTO archive_batches (
+            'INSERT OR IGNORE INTO archive_batches (
                 archive_batch_id,
                 source_key,
                 source_table,
@@ -313,6 +524,46 @@ class Kiwi_Retention_Sqlite_Archive_Service
             ':archive_db_path' => $archive_db_path,
         ]);
 
+        $update_statement = $pdo->prepare(
+            'UPDATE archive_batches
+             SET source_key = :source_key,
+                 source_table = :source_table,
+                 cutoff_column = :cutoff_column,
+                 cutoff_value = :cutoff_value,
+                 started_at = :started_at,
+                 finished_at = NULL,
+                 status = :status,
+                 archive_db_path = :archive_db_path,
+                 error_message = :error_message
+             WHERE archive_batch_id = :archive_batch_id'
+        );
+        $update_statement->execute([
+            ':source_key' => (string) ($source['source_key'] ?? ''),
+            ':source_table' => (string) ($source['source_table'] ?? ''),
+            ':cutoff_column' => (string) ($source['cutoff_column'] ?? ''),
+            ':cutoff_value' => $cutoff_value,
+            ':started_at' => $this->current_time_mysql(),
+            ':status' => 'running',
+            ':archive_db_path' => $archive_db_path,
+            ':error_message' => '',
+            ':archive_batch_id' => $archive_batch_id,
+        ]);
+
+        if (!$reset_batch_rows) {
+            return;
+        }
+
+        $reset_statement = $pdo->prepare(
+            'UPDATE archive_batches
+             SET archived_rows = 0,
+                 archive_inserted_rows = 0,
+                 archive_duplicate_rows = 0
+             WHERE archive_batch_id = :archive_batch_id'
+        );
+        $reset_statement->execute([
+            ':archive_batch_id' => $archive_batch_id,
+        ]);
+
         $delete_statement = $pdo->prepare(
             'DELETE FROM archive_batch_rows WHERE archive_batch_id = :archive_batch_id'
         );
@@ -326,9 +577,9 @@ class Kiwi_Retention_Sqlite_Archive_Service
         $statement = $pdo->prepare(
             'UPDATE archive_batches
              SET finished_at = :finished_at,
-                 archived_rows = :archived_rows,
-                 archive_inserted_rows = :archive_inserted_rows,
-                 archive_duplicate_rows = :archive_duplicate_rows,
+                 archived_rows = archived_rows + :archived_rows,
+                 archive_inserted_rows = archive_inserted_rows + :archive_inserted_rows,
+                 archive_duplicate_rows = archive_duplicate_rows + :archive_duplicate_rows,
                  status = :status,
                  error_message = :error_message
              WHERE archive_batch_id = :archive_batch_id'
