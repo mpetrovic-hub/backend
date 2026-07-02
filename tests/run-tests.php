@@ -1360,6 +1360,57 @@ class Kiwi_Test_Retention_Sqlite_Archive_Failure_Service extends Kiwi_Retention_
     }
 }
 
+class Kiwi_Test_Retention_Sqlite_Archive_Config extends Kiwi_Config
+{
+    private $archive_root;
+
+    public function __construct(string $archive_root)
+    {
+        $this->archive_root = $archive_root;
+    }
+
+    public function get_retention_archive_root(): string
+    {
+        return $this->archive_root;
+    }
+}
+
+class Kiwi_Test_Wpdb_Retention_Sqlite_Archive
+{
+    public $prefix = 'wp_';
+    public $last_error = '';
+    public $rows = [];
+    public $prepared_statements = [];
+
+    public function prepare($query, ...$args)
+    {
+        $statement = [
+            'query' => (string) $query,
+            'args' => $args,
+        ];
+        $this->prepared_statements[] = $statement;
+
+        return $statement;
+    }
+
+    public function get_results($statement, $output = null): array
+    {
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $cutoff = (string) ($args[0] ?? '');
+        $last_id = (int) ($args[1] ?? 0);
+        $limit = max(1, (int) ($args[2] ?? 1));
+        $rows = array_values(array_filter($this->rows, static function (array $row) use ($cutoff, $last_id): bool {
+            return strcmp((string) ($row['created_at'] ?? ''), $cutoff) < 0
+                && (int) ($row['id'] ?? 0) > $last_id;
+        }));
+        usort($rows, static function (array $a, array $b): int {
+            return (int) ($a['id'] ?? 0) <=> (int) ($b['id'] ?? 0);
+        });
+
+        return array_slice($rows, 0, $limit);
+    }
+}
+
 class Kiwi_Test_Retention_Coverage_Gate extends Kiwi_Retention_Coverage_Gate
 {
     public $calls = [];
@@ -11487,6 +11538,77 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service fails closed after archive 
     kiwi_assert_same('finalization failed', $result['error_message'] ?? '', 'Expected archive finalization error detail to be retained.');
     kiwi_assert_same('ok', $result['archive_integrity_check'] ?? '', 'Expected failure handling not to erase the recorded integrity check result.');
     kiwi_assert_same(12, $result['archived_rows'] ?? 0, 'Expected failure handling not to erase archived row counts.');
+});
+
+kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service writes archived rows and batch keys', function (): void {
+    if (!class_exists('PDO') || !in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        return;
+    }
+
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Retention_Sqlite_Archive();
+    $wpdb->rows = [
+        [
+            'id' => 101,
+            'created_at' => '2026-05-31 08:00:00',
+            'landing_key' => 'lp-one',
+            'service_key' => 'nth',
+            'session_token' => 'session-a',
+        ],
+        [
+            'id' => 102,
+            'created_at' => '2026-06-17 08:00:00',
+            'landing_key' => 'lp-new',
+            'service_key' => 'nth',
+            'session_token' => 'session-new',
+        ],
+        [
+            'id' => 103,
+            'created_at' => '2026-06-01 08:00:00',
+            'landing_key' => 'lp-two',
+            'service_key' => 'nth',
+            'session_token' => 'session-b',
+        ],
+    ];
+
+    $archive_root = kiwi_create_temp_directory('kiwi_retention_archive_test');
+    $service = new Kiwi_Retention_Sqlite_Archive_Service(new Kiwi_Test_Retention_Sqlite_Archive_Config($archive_root));
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_page_sessions');
+
+    try {
+        $result = $service->archive_eligible_rows($source, '2026-06-17 00:00:00', 'archive-test-batch', 1);
+        $archive_db_path = (string) ($result['archive_db_path'] ?? '');
+
+        kiwi_assert_same(true, $result['success'] ?? false, 'Expected SQLite archive to succeed.');
+        kiwi_assert_same(2, $result['archived_rows'] ?? 0, 'Expected only rows older than the cutoff to be archived.');
+        kiwi_assert_same(2, $result['archive_inserted_rows'] ?? 0, 'Expected both eligible rows to be inserted into the archive.');
+        kiwi_assert_same(0, $result['archive_duplicate_rows'] ?? -1, 'Expected no duplicates in a fresh archive.');
+        kiwi_assert_same('ok', $result['archive_integrity_check'] ?? '', 'Expected SQLite integrity check to pass.');
+        kiwi_assert_true(is_file($archive_db_path), 'Expected archive database file to be created.');
+
+        $pdo = new PDO('sqlite:' . $archive_db_path);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $archive_table = '"' . str_replace('"', '""', (string) ($source['source_table'] ?? '')) . '"';
+
+        kiwi_assert_same(
+            2,
+            (int) $pdo->query('SELECT COUNT(*) FROM ' . $archive_table)->fetchColumn(),
+            'Expected two rows in the source archive table.'
+        );
+        kiwi_assert_same(
+            2,
+            (int) $pdo->query("SELECT COUNT(*) FROM archive_batch_rows WHERE archive_batch_id = 'archive-test-batch'")->fetchColumn(),
+            'Expected archived primary keys to be persisted for delete.'
+        );
+
+        $ids = $service->fetch_archived_primary_key_batch($source, $archive_db_path, 'archive-test-batch', 0, 10);
+        kiwi_assert_same([101, 103], $ids, 'Expected archived primary keys to be readable in source order.');
+    } finally {
+        $wpdb = $previous_wpdb;
+        kiwi_remove_directory($archive_root);
+    }
 });
 
 kiwi_run_test('Kiwi_Retention_Coverage_Gate fails closed when daily coverage query errors', function (): void {
