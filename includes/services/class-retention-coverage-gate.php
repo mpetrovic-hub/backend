@@ -33,6 +33,9 @@ class Kiwi_Retention_Coverage_Gate
         'sales_amount_minor',
     ];
 
+    private const COVERAGE_MODE = 'selective_deep_compare_v1';
+    private const MAX_CTA_WARNING_DEEP_DATES = 2;
+
     private $config;
 
     public function __construct(?Kiwi_Config $config = null)
@@ -55,13 +58,8 @@ class Kiwi_Retention_Coverage_Gate
         }
 
         $candidate_dates = (array) ($candidate_result['metric_dates'] ?? []);
-        $last_candidate_date = empty($candidate_dates) ? '' : (string) end($candidate_dates);
         $main_details = [];
         $tkzone_details = [];
-        $blocking_errors = [];
-        $verified_dates = [];
-        $blocked_dates = [];
-        $warning_dates = [];
 
         foreach ($candidate_dates as $metric_date) {
             $metric_date = (string) $metric_date;
@@ -77,74 +75,70 @@ class Kiwi_Retention_Coverage_Gate
                 ];
                 $main_details[] = array_merge($accepted_detail, ['summary' => 'main']);
                 $tkzone_details[] = array_merge($accepted_detail, ['summary' => 'tkzone']);
-                $verified_dates[] = $metric_date;
                 continue;
             }
 
             $main_result = $this->check_main_summary_date($source, $metric_date, $requested_cutoff_value);
             $tkzone_result = $this->check_tkzone_summary_date($source, $metric_date, $requested_cutoff_value);
 
-            if (empty($main_result['ok'])) {
-                $blocking_errors[] = (string) ($main_result['error_code'] ?? 'main_summary_coverage_failed');
-            }
-
-            if (empty($tkzone_result['ok'])) {
-                $blocking_errors[] = (string) ($tkzone_result['error_code'] ?? 'tkzone_summary_coverage_failed');
-            }
-
             $main_details[] = $main_result;
             $tkzone_details[] = $tkzone_result;
+        }
 
-            $date_blockers = array_merge(
-                (array) ($main_result['blockers'] ?? []),
-                (array) ($tkzone_result['blockers'] ?? [])
-            );
-            $date_warnings = array_merge(
-                (array) ($main_result['warnings'] ?? []),
-                (array) ($tkzone_result['warnings'] ?? [])
-            );
+        $deep_plan = $this->select_deep_compare_dates($candidate_dates, $main_details, $tkzone_details, $accepted_dates);
+        $deep_checked_dates = [];
 
-            if (!empty($date_blockers) || empty($main_result['ok']) || empty($tkzone_result['ok'])) {
-                $blocked_dates[] = $metric_date;
-                continue;
+        foreach ((array) ($deep_plan['dates'] ?? []) as $metric_date) {
+            $metric_date = (string) $metric_date;
+            $executed = false;
+            $main_index = $this->find_detail_index($main_details, $metric_date);
+            $tkzone_index = $this->find_detail_index($tkzone_details, $metric_date);
+
+            if ($main_index !== null && empty($main_details[$main_index]['accepted_missing_date'])) {
+                $main_details[$main_index] = $this->apply_main_summary_deep_compare(
+                    $source,
+                    $main_details[$main_index],
+                    $requested_cutoff_value
+                );
+                $executed = !empty($main_details[$main_index]['deep_compare'])
+                    && empty($main_details[$main_index]['deep_compare']['skipped']);
             }
 
-            if (!empty($date_warnings)) {
-                $warning_dates[] = $metric_date;
+            if ($tkzone_index !== null && empty($tkzone_details[$tkzone_index]['accepted_missing_date'])) {
+                $tkzone_details[$tkzone_index] = $this->apply_tkzone_summary_deep_compare(
+                    $source,
+                    $tkzone_details[$tkzone_index],
+                    $requested_cutoff_value
+                );
+                $executed = $executed
+                    || (!empty($tkzone_details[$tkzone_index]['deep_compare'])
+                        && empty($tkzone_details[$tkzone_index]['deep_compare']['skipped']));
             }
 
-            $verified_dates[] = $metric_date;
+            if ($executed) {
+                $deep_checked_dates[] = $metric_date;
+            }
         }
 
-        $blocked_dates = array_values(array_unique($blocked_dates));
-        $warning_dates = array_values(array_unique($warning_dates));
-        $blocking_errors = array_values(array_unique($blocking_errors));
-        $last_verified_before_blocker = $this->last_verified_date_before_first_blocker($candidate_dates, $verified_dates, $blocked_dates);
-        $has_errors = !empty($blocking_errors);
-
-        if ($has_errors || empty($blocked_dates)) {
-            $status = $has_errors ? 'failed' : 'passed';
-        } else {
-            $status = $last_verified_before_blocker !== '' ? 'partial' : 'failed';
-        }
-
-        $effective_cutoff_value = '';
-
-        if ($status === 'passed') {
-            $effective_cutoff_value = $requested_cutoff_value;
-        } elseif ($status === 'partial') {
-            $effective_cutoff_value = $this->start_of_next_day($last_verified_before_blocker);
-        }
+        $outcome = $this->build_gate_outcome($candidate_dates, $main_details, $tkzone_details, $requested_cutoff_value);
+        $deep_checked_dates = array_values(array_unique($deep_checked_dates));
+        $deep_checkable_dates = $this->filter_deep_checkable_dates($candidate_dates, $accepted_dates);
+        $totals_only_dates = array_values(array_diff($deep_checkable_dates, $deep_checked_dates));
 
         return [
-            'status' => $status,
+            'status' => $outcome['status'],
+            'coverage_mode' => self::COVERAGE_MODE,
             'requested_cutoff_value' => $requested_cutoff_value,
-            'effective_cutoff_value' => $effective_cutoff_value,
-            'verified_until_date' => $status === 'passed' ? $last_candidate_date : $last_verified_before_blocker,
+            'effective_cutoff_value' => $outcome['effective_cutoff_value'],
+            'verified_until_date' => $outcome['verified_until_date'],
             'candidate_dates' => $candidate_dates,
-            'blocked_dates' => $blocked_dates,
-            'warning_dates' => $warning_dates,
-            'blocking_errors' => $blocking_errors,
+            'deep_checked_dates' => $deep_checked_dates,
+            'totals_only_dates' => $totals_only_dates,
+            'deep_skipped_dates' => $totals_only_dates,
+            'deep_compare_reasons' => (array) ($deep_plan['reasons'] ?? []),
+            'blocked_dates' => $outcome['blocked_dates'],
+            'warning_dates' => $outcome['warning_dates'],
+            'blocking_errors' => $outcome['blocking_errors'],
             'main_summary' => $this->build_summary_result('main', $main_details),
             'tkzone_summary' => $this->build_summary_result('tkzone', $tkzone_details),
         ];
@@ -253,20 +247,6 @@ class Kiwi_Retention_Coverage_Gate
 
         $result = $this->classify_totals_row('main', $metric_date, $rows[0] ?? [], true);
 
-        if (!empty($result['blockers'])) {
-            return $result;
-        }
-
-        $deep_result = $this->check_main_summary_deep_compare(
-            $source_table,
-            $summary_table,
-            $engagement_table,
-            $handoff_table,
-            $metric_date,
-            $window
-        );
-        $result = $this->merge_deep_compare_result($result, $deep_result);
-
         return $result;
     }
 
@@ -340,8 +320,90 @@ class Kiwi_Retention_Coverage_Gate
 
         $result = $this->classify_totals_row('tkzone', $metric_date, $rows[0] ?? [], false);
 
-        if (!empty($result['blockers'])) {
+        return $result;
+    }
+
+    private function apply_main_summary_deep_compare(array $source, array $result, string $requested_cutoff_value): array
+    {
+        global $wpdb;
+
+        if (empty($result['ok'])) {
+            $result['deep_compare'] = [
+                'ok' => true,
+                'matched' => true,
+                'skipped' => true,
+                'reason' => 'light_result_not_ok',
+            ];
+
             return $result;
+        }
+
+        $metric_date = (string) ($result['metric_date'] ?? '');
+        $source_table = (string) ($source['source_table'] ?? '');
+        $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_summary';
+        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+
+        if ($metric_date === '' || !$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table])) {
+            return $this->merge_deep_compare_result($result, [
+                'ok' => false,
+                'error_code' => 'main_summary_deep_compare_identifier_invalid',
+                'error_message' => 'Retention coverage gate could not run the main deep compare because an identifier was invalid.',
+            ]);
+        }
+
+        $deep_result = $this->check_main_summary_deep_compare(
+            $source_table,
+            $summary_table,
+            $engagement_table,
+            $handoff_table,
+            $metric_date,
+            $this->build_metric_window($metric_date, $requested_cutoff_value)
+        );
+
+        return $this->merge_deep_compare_result($result, $deep_result);
+    }
+
+    private function apply_tkzone_summary_deep_compare(array $source, array $result, string $requested_cutoff_value): array
+    {
+        global $wpdb;
+
+        if (empty($result['ok'])) {
+            $result['deep_compare'] = [
+                'ok' => true,
+                'matched' => true,
+                'skipped' => true,
+                'reason' => 'light_result_not_ok',
+            ];
+
+            return $result;
+        }
+
+        $pids = $this->config->get_landing_funnel_tkzone_summary_pids();
+
+        if (empty($pids)) {
+            $result['deep_compare'] = [
+                'ok' => true,
+                'matched' => true,
+                'skipped' => true,
+                'reason' => 'tkzone_summary_pid_allowlist_empty',
+            ];
+
+            return $result;
+        }
+
+        $metric_date = (string) ($result['metric_date'] ?? '');
+        $source_table = (string) ($source['source_table'] ?? '');
+        $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary';
+        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+
+        if ($metric_date === '' || !$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table])) {
+            return $this->merge_deep_compare_result($result, [
+                'ok' => false,
+                'error_code' => 'tkzone_summary_deep_compare_identifier_invalid',
+                'error_message' => 'Retention coverage gate could not run the TK zone deep compare because an identifier was invalid.',
+            ]);
         }
 
         $deep_result = $this->check_tkzone_summary_deep_compare(
@@ -350,12 +412,11 @@ class Kiwi_Retention_Coverage_Gate
             $engagement_table,
             $handoff_table,
             $metric_date,
-            $window,
+            $this->build_metric_window($metric_date, $requested_cutoff_value),
             $pids
         );
-        $result = $this->merge_deep_compare_result($result, $deep_result);
 
-        return $result;
+        return $this->merge_deep_compare_result($result, $deep_result);
     }
 
     private function prepare_main_light_totals_query(
@@ -586,17 +647,20 @@ class Kiwi_Retention_Coverage_Gate
              ),
              handoff_by_session AS (
                 SELECT
-                    landing_key,
-                    session_token,
-                    SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
-                    SUM(CASE WHEN event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
-                    SUM(CASE WHEN event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails
-                FROM {$handoff_table}
-                WHERE created_at >= %s
-                  AND created_at < %s
-                  AND landing_key <> ''
-                  AND session_token <> ''
-                GROUP BY landing_key, session_token
+                    h.landing_key,
+                    h.session_token,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails
+                FROM landing_loads l
+                INNER JOIN {$handoff_table} h
+                  ON h.landing_key = l.landing_key
+                 AND h.session_token = l.session_token
+                WHERE h.created_at >= %s
+                  AND h.created_at < %s
+                  AND h.landing_key <> ''
+                  AND h.session_token <> ''
+                GROUP BY h.landing_key, h.session_token
              ),
              session_facts AS (
                 SELECT
@@ -1033,17 +1097,20 @@ class Kiwi_Retention_Coverage_Gate
              ),
              handoff_by_session AS (
                 SELECT
-                    landing_key,
-                    session_token,
-                    SUM(CASE WHEN event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
-                    SUM(CASE WHEN event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
-                    SUM(CASE WHEN event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails
-                FROM {$handoff_table}
-                WHERE created_at >= %s
-                  AND created_at < %s
-                  AND landing_key <> ''
-                  AND session_token <> ''
-                GROUP BY landing_key, session_token
+                    h.landing_key,
+                    h.session_token,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_attempted' THEN 1 ELSE 0 END) AS handoff_attempts,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_hidden' THEN 1 ELSE 0 END) AS handoff_successes,
+                    SUM(CASE WHEN h.event_type = 'sms_handoff_no_hide' THEN 1 ELSE 0 END) AS handoff_fails
+                FROM landing_loads l
+                INNER JOIN {$handoff_table} h
+                  ON h.landing_key = l.landing_key
+                 AND h.session_token = l.session_token
+                WHERE h.created_at >= %s
+                  AND h.created_at < %s
+                  AND h.landing_key <> ''
+                  AND h.session_token <> ''
+                GROUP BY h.landing_key, h.session_token
              ),
              raw AS (
                 SELECT
@@ -1317,6 +1384,193 @@ class Kiwi_Retention_Coverage_Gate
         return $result;
     }
 
+    private function select_deep_compare_dates(array $candidate_dates, array $main_details, array $tkzone_details, array $accepted_dates): array
+    {
+        $main_by_date = $this->details_by_date($main_details);
+        $tkzone_by_date = $this->details_by_date($tkzone_details);
+        $reasons = [];
+        $checkable_dates = $this->filter_deep_checkable_dates($candidate_dates, $accepted_dates);
+
+        if (!empty($checkable_dates)) {
+            $edge_date = (string) end($checkable_dates);
+            $reasons[$edge_date][] = 'edge_date';
+        }
+
+        foreach ($checkable_dates as $metric_date) {
+            $main_detail = $main_by_date[$metric_date] ?? [];
+            $tkzone_detail = $tkzone_by_date[$metric_date] ?? [];
+
+            if ($this->detail_has_non_query_blocker($main_detail) || $this->detail_has_non_query_blocker($tkzone_detail)) {
+                $reasons[$metric_date][] = 'first_hard_blocker';
+                break;
+            }
+        }
+
+        $cta_warning_count = 0;
+
+        foreach ($checkable_dates as $metric_date) {
+            $main_detail = $main_by_date[$metric_date] ?? [];
+            $tkzone_detail = $tkzone_by_date[$metric_date] ?? [];
+
+            if (!$this->detail_has_cta_warning($main_detail) && !$this->detail_has_cta_warning($tkzone_detail)) {
+                continue;
+            }
+
+            $reasons[$metric_date][] = 'cta_warning';
+            $cta_warning_count++;
+
+            if ($cta_warning_count >= self::MAX_CTA_WARNING_DEEP_DATES) {
+                break;
+            }
+        }
+
+        foreach ($reasons as $metric_date => $date_reasons) {
+            $reasons[$metric_date] = array_values(array_unique($date_reasons));
+        }
+
+        return [
+            'dates' => array_values(array_keys($reasons)),
+            'reasons' => $reasons,
+        ];
+    }
+
+    private function build_gate_outcome(
+        array $candidate_dates,
+        array $main_details,
+        array $tkzone_details,
+        string $requested_cutoff_value
+    ): array {
+        $main_by_date = $this->details_by_date($main_details);
+        $tkzone_by_date = $this->details_by_date($tkzone_details);
+        $verified_dates = [];
+        $blocked_dates = [];
+        $warning_dates = [];
+        $blocking_errors = [];
+        $last_candidate_date = empty($candidate_dates) ? '' : (string) end($candidate_dates);
+
+        foreach ($candidate_dates as $metric_date) {
+            $metric_date = (string) $metric_date;
+            $main_detail = $main_by_date[$metric_date] ?? [];
+            $tkzone_detail = $tkzone_by_date[$metric_date] ?? [];
+
+            if (empty($main_detail['ok']) && !empty($main_detail['error_code'])) {
+                $blocking_errors[] = (string) $main_detail['error_code'];
+            }
+
+            if (empty($tkzone_detail['ok']) && !empty($tkzone_detail['error_code'])) {
+                $blocking_errors[] = (string) $tkzone_detail['error_code'];
+            }
+
+            if ($this->detail_blocks_date($main_detail) || $this->detail_blocks_date($tkzone_detail)) {
+                $blocked_dates[] = $metric_date;
+                continue;
+            }
+
+            if (!empty($main_detail['warnings']) || !empty($tkzone_detail['warnings'])) {
+                $warning_dates[] = $metric_date;
+            }
+
+            $verified_dates[] = $metric_date;
+        }
+
+        $blocked_dates = array_values(array_unique($blocked_dates));
+        $warning_dates = array_values(array_unique($warning_dates));
+        $blocking_errors = array_values(array_unique($blocking_errors));
+        $last_verified_before_blocker = $this->last_verified_date_before_first_blocker($candidate_dates, $verified_dates, $blocked_dates);
+        $has_errors = !empty($blocking_errors);
+
+        if ($has_errors || empty($blocked_dates)) {
+            $status = $has_errors ? 'failed' : 'passed';
+        } else {
+            $status = $last_verified_before_blocker !== '' ? 'partial' : 'failed';
+        }
+
+        $effective_cutoff_value = '';
+
+        if ($status === 'passed') {
+            $effective_cutoff_value = $requested_cutoff_value;
+        } elseif ($status === 'partial') {
+            $effective_cutoff_value = $this->start_of_next_day($last_verified_before_blocker);
+        }
+
+        return [
+            'status' => $status,
+            'effective_cutoff_value' => $effective_cutoff_value,
+            'verified_until_date' => $status === 'passed' ? $last_candidate_date : $last_verified_before_blocker,
+            'blocked_dates' => $blocked_dates,
+            'warning_dates' => $warning_dates,
+            'blocking_errors' => $blocking_errors,
+        ];
+    }
+
+    private function filter_deep_checkable_dates(array $candidate_dates, array $accepted_dates): array
+    {
+        $dates = [];
+
+        foreach ($candidate_dates as $metric_date) {
+            $metric_date = (string) $metric_date;
+
+            if ($metric_date !== '' && !isset($accepted_dates[$metric_date])) {
+                $dates[] = $metric_date;
+            }
+        }
+
+        return array_values(array_unique($dates));
+    }
+
+    private function details_by_date(array $details): array
+    {
+        $by_date = [];
+
+        foreach ($details as $detail) {
+            $metric_date = (string) ($detail['metric_date'] ?? '');
+
+            if ($metric_date !== '') {
+                $by_date[$metric_date] = $detail;
+            }
+        }
+
+        return $by_date;
+    }
+
+    private function find_detail_index(array $details, string $metric_date): ?int
+    {
+        foreach ($details as $index => $detail) {
+            if ((string) ($detail['metric_date'] ?? '') === $metric_date) {
+                return (int) $index;
+            }
+        }
+
+        return null;
+    }
+
+    private function detail_blocks_date(array $detail): bool
+    {
+        return empty($detail['ok']) || !empty($detail['blockers']);
+    }
+
+    private function detail_has_non_query_blocker(array $detail): bool
+    {
+        foreach ((array) ($detail['blockers'] ?? []) as $blocker) {
+            if ((string) ($blocker['type'] ?? '') !== 'query_error') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function detail_has_cta_warning(array $detail): bool
+    {
+        foreach ((array) ($detail['warnings'] ?? []) as $warning) {
+            if (strpos((string) ($warning['metric'] ?? ''), 'cta') === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function build_summary_result(string $summary, array $details): array
     {
         $blocked_dates = [];
@@ -1380,10 +1634,15 @@ class Kiwi_Retention_Coverage_Gate
 
         return [
             'status' => 'failed',
+            'coverage_mode' => self::COVERAGE_MODE,
             'requested_cutoff_value' => $requested_cutoff_value,
             'effective_cutoff_value' => '',
             'verified_until_date' => '',
             'candidate_dates' => [],
+            'deep_checked_dates' => [],
+            'totals_only_dates' => [],
+            'deep_skipped_dates' => [],
+            'deep_compare_reasons' => [],
             'blocked_dates' => [],
             'warning_dates' => [],
             'blocking_errors' => [$error_code],
