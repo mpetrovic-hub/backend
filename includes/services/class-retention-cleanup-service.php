@@ -418,6 +418,7 @@ class Kiwi_Retention_Cleanup_Service
             $cutoff_value = (string) ($run['cutoff_value'] ?? '');
             $archive_batch_id = (string) ($run['archive_batch_id'] ?? '');
             $target_max_primary_key = (int) ($run['target_max_primary_key'] ?? 0);
+            $existing_archive_db_path = (string) ($run['archive_db_path'] ?? '');
 
             if (!$this->is_valid_cutoff_value($cutoff_value)
                 || $archive_batch_id === ''
@@ -436,7 +437,8 @@ class Kiwi_Retention_Cleanup_Service
                 (int) ($run['archive_last_primary_key'] ?? 0),
                 $target_max_primary_key,
                 $this->config->get_retention_worker_row_limit(),
-                $this->config->get_retention_worker_time_limit_seconds()
+                $this->config->get_retention_worker_time_limit_seconds(),
+                $existing_archive_db_path
             );
 
             if (empty($chunk['success'])) {
@@ -504,7 +506,9 @@ class Kiwi_Retention_Cleanup_Service
             $delete_last_primary_key = empty($archived_primary_keys)
                 ? (int) ($run['delete_last_primary_key'] ?? 0)
                 : max((int) ($run['delete_last_primary_key'] ?? 0), max($archived_primary_keys));
-            $archive_db_path = (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? ''));
+            $archive_db_path = $existing_archive_db_path !== ''
+                ? $existing_archive_db_path
+                : (string) ($chunk['archive_db_path'] ?? '');
             $has_more = !empty($chunk['has_more']);
 
             if ($has_more && empty($archived_primary_keys)) {
@@ -545,6 +549,26 @@ class Kiwi_Retention_Cleanup_Service
                     'schedule_worker' => true,
                     'reschedule_worker' => true,
                     'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
+                ]);
+            }
+
+            $expected_rows = (int) ($run['eligible_rows'] ?? 0);
+
+            if ($expected_rows > 0
+                && ($new_archived_rows !== $expected_rows || $new_deleted_rows !== $expected_rows)
+            ) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => $quick_check,
+                    'archived_rows' => $new_archived_rows,
+                    'archive_inserted_rows' => $new_archive_inserted_rows,
+                    'archive_duplicate_rows' => $new_archive_duplicate_rows,
+                    'deleted_rows' => $new_deleted_rows,
+                    'delete_batches' => $new_delete_batches,
+                    'archive_last_primary_key' => $last_primary_key,
+                    'delete_last_primary_key' => $delete_last_primary_key,
+                    'error_code' => 'worker_incomplete_counts',
+                    'error_message' => 'Retention worker finished before archived/deleted counts matched the frozen eligible row count.',
                 ]);
             }
 

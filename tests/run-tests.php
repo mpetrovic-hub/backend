@@ -1373,7 +1373,8 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
         int $last_primary_key,
         int $target_max_primary_key,
         int $batch_limit,
-        int $time_limit_seconds
+        int $time_limit_seconds,
+        string $archive_db_path = ''
     ): array {
         if (is_array($this->events)) {
             $this->events[] = 'archive_chunk';
@@ -1387,6 +1388,7 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
             'target_max_primary_key' => $target_max_primary_key,
             'batch_limit' => $batch_limit,
             'time_limit_seconds' => $time_limit_seconds,
+            'archive_db_path' => $archive_db_path,
         ];
 
         if (!empty($this->chunks)) {
@@ -1473,12 +1475,18 @@ class Kiwi_Test_Wpdb_Retention_Sqlite_Archive
     public function get_results($statement, $output = null): array
     {
         $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $has_target_bound = strpos($query, '<= %d') !== false;
         $cutoff = (string) ($args[0] ?? '');
         $last_id = (int) ($args[1] ?? 0);
-        $limit = max(1, (int) ($args[2] ?? 1));
-        $rows = array_values(array_filter($this->rows, static function (array $row) use ($cutoff, $last_id): bool {
+        $target_max_primary_key = $has_target_bound ? (int) ($args[2] ?? PHP_INT_MAX) : PHP_INT_MAX;
+        $limit = max(1, (int) ($has_target_bound ? ($args[3] ?? 1) : ($args[2] ?? 1)));
+        $rows = array_values(array_filter($this->rows, static function (array $row) use ($cutoff, $last_id, $target_max_primary_key): bool {
+            $id = (int) ($row['id'] ?? 0);
+
             return strcmp((string) ($row['created_at'] ?? ''), $cutoff) < 0
-                && (int) ($row['id'] ?? 0) > $last_id;
+                && $id > $last_id
+                && $id <= $target_max_primary_key;
         }));
         usort($rows, static function (array $a, array $b): int {
             return (int) ($a['id'] ?? 0) <=> (int) ($b['id'] ?? 0);
@@ -12538,7 +12546,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker resumes after partial archi
     ];
     $archive->chunks[] = [
         'success' => true,
-        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2027.sqlite',
         'archived_rows' => 2,
         'archive_inserted_rows' => 2,
         'archive_duplicate_rows' => 0,
@@ -12570,11 +12578,71 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker resumes after partial archi
     kiwi_assert_true(!empty($first_worker['schedule_worker']), 'Expected partial worker progress to request rescheduling.');
     kiwi_assert_same('completed', $second_worker['status'], 'Expected second worker chunk to complete the run.');
     kiwi_assert_same(2, $archive->chunk_calls[1]['last_primary_key'] ?? 0, 'Expected second worker chunk to resume after the first archive cursor.');
+    kiwi_assert_same('/tmp/kiwi_retention_archive_2026.sqlite', $archive->chunk_calls[1]['archive_db_path'] ?? '', 'Expected resumed chunks to reuse the first archive database path.');
     kiwi_assert_same([1, 2, 3, 4], $service->deleted_primary_keys, 'Expected worker to delete only archived chunk primary keys across resumes.');
+    kiwi_assert_same('/tmp/kiwi_retention_archive_2026.sqlite', $runs->rows[1]['archive_db_path'] ?? '', 'Expected audit state to keep the first archive database path.');
     kiwi_assert_same(4, $runs->rows[1]['archive_last_primary_key'] ?? 0, 'Expected completed run to persist the final archive cursor.');
     kiwi_assert_same(4, $runs->rows[1]['delete_last_primary_key'] ?? 0, 'Expected completed run to persist the final delete cursor.');
     kiwi_assert_same(2, $runs->rows[1]['worker_runs'] ?? 0, 'Expected both worker invocations to be counted.');
     kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected after snapshot only once the worker finishes.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service worker fails closed when final counts are incomplete', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [1, 2],
+        'last_primary_key' => 2,
+        'has_more' => false,
+        'quick_check' => 'ok',
+    ];
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 4;
+    $service->target_max_primary_key = 4;
+    $service->delete_result = ['deleted_rows' => 2, 'delete_batches' => 1];
+
+    $service->run_source('landing_page_sessions', 'cron');
+    $result = $service->run_worker('landing_page_sessions');
+    $run_row = $runs->rows[1] ?? [];
+
+    kiwi_assert_same(false, $result['success'], 'Expected incomplete final worker counts to fail closed.');
+    kiwi_assert_same('failed', $result['status'], 'Expected incomplete final worker counts to persist a failed run.');
+    kiwi_assert_same('worker_incomplete_counts', $result['error_code'], 'Expected incomplete final counts to have an explicit failure code.');
+    kiwi_assert_same(2, $run_row['archived_rows'] ?? 0, 'Expected partial archive count to remain audited on failure.');
+    kiwi_assert_same(2, $run_row['deleted_rows'] ?? 0, 'Expected partial delete count to remain audited on failure.');
+    kiwi_assert_same(['before_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected incomplete completion not to capture the final after snapshot.');
 
     $wpdb = $previous_wpdb;
 });

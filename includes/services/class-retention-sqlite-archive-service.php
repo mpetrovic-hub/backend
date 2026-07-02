@@ -172,7 +172,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
         int $last_primary_key,
         int $target_max_primary_key,
         int $batch_limit,
-        int $time_limit_seconds
+        int $time_limit_seconds,
+        string $archive_db_path = ''
     ): array {
         $result = [
             'success' => false,
@@ -215,7 +216,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
         $transaction_started = false;
 
         try {
-            $archive_db_path = $this->build_archive_db_path();
+            $archive_db_path = $archive_db_path !== '' ? $archive_db_path : $this->build_archive_db_path();
             $result['archive_db_path'] = $archive_db_path;
             $this->ensure_archive_directory(dirname($archive_db_path));
 
