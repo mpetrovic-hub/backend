@@ -1275,6 +1275,7 @@ class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service extends Kiwi_Land
     public $updated = false;
     public $eligible_rows = 0;
     public $eligible_rows_after_update = null;
+    public $active_compacted_rows = null;
     public $empty_rows = 0;
     public $invalid_rows = 0;
     public $already_compact_rows = 0;
@@ -1309,6 +1310,10 @@ class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service extends Kiwi_Land
     protected function update_candidates(string $cutoff_value): int
     {
         $this->updated = true;
+
+        if ($this->active_compacted_rows !== null) {
+            return (int) $this->active_compacted_rows;
+        }
 
         return min($this->processed_rows, $this->eligible_rows);
     }
@@ -11963,6 +11968,36 @@ kiwi_run_test('Kiwi_Plugin does not reschedule dry-run raw-context compaction wi
     kiwi_assert_same(0, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event) use ($worker_hook): bool {
         return ($event['hook'] ?? '') === $worker_hook;
     })), 'Expected dry-run worker not to reschedule itself without a cursor.');
+});
+
+kiwi_run_test('Kiwi_Plugin does not reschedule active raw-context compaction without progress', function (): void {
+    $GLOBALS['kiwi_test_cron_events'] = [];
+    $GLOBALS['kiwi_test_next_scheduled'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+
+    $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
+        new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
+            'enabled' => true,
+            'dry_run' => false,
+            'row_limit' => 2,
+        ])
+    );
+    $service->eligible_rows = 2;
+    $service->eligible_rows_after_update = 2;
+    $service->processed_rows = 2;
+    $service->active_compacted_rows = 0;
+    $plugin = new Kiwi_Test_Plugin_Landing_Session_Raw_Context_Compaction($service);
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $worker_hook = (string) $reflection->getConstant('LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK');
+
+    $result = $plugin->run_landing_session_raw_context_compaction_worker();
+
+    kiwi_assert_same(true, $result['has_more'], 'Expected active no-progress result to retain remaining-work diagnostics.');
+    kiwi_assert_same(0, $result['compacted_rows'], 'Expected active no-progress result to report zero compacted rows.');
+    kiwi_assert_same(0, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event) use ($worker_hook): bool {
+        return ($event['hook'] ?? '') === $worker_hook;
+    })), 'Expected active worker not to reschedule itself when no rows were compacted.');
 });
 
 kiwi_run_test('Kiwi_Plugin schedules the retention cleanup scheduler daily cron hook once', function (): void {
