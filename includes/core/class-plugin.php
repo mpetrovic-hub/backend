@@ -25,6 +25,8 @@ class Kiwi_Plugin
     private const LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_LOCK_SKIP_OPTION = 'kiwi_landing_funnel_daily_tkzone_summary_refresh_lock_skip_last_result';
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LOCK_TTL_SECONDS = 1800;
     private const DEVICE_MODEL_BRAND_HARVEST_HOOK = 'kiwi_device_model_brand_harvest';
+    private const LANDING_SESSION_RAW_CONTEXT_COMPACTION_DAILY_HOOK = 'kiwi_landing_session_raw_context_compaction_daily';
+    private const LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK = 'kiwi_landing_session_raw_context_compaction_worker';
     private const RETENTION_CLEANUP_LEGACY_DAILY_HOOK = 'kiwi_retention_cleanup_daily';
     private const RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK = 'kiwi_retention_cleanup_scheduler_daily';
     private const RETENTION_CLEANUP_WORKER_HOOK = 'kiwi_retention_cleanup_worker';
@@ -64,10 +66,13 @@ class Kiwi_Plugin
         add_action('init', [$this, 'schedule_landing_funnel_daily_main_summary_refresh']);
         add_action('init', [$this, 'schedule_landing_funnel_daily_tkzone_summary_refresh']);
         add_action('init', [$this, 'schedule_device_model_brand_harvest']);
+        add_action('init', [$this, 'schedule_landing_session_raw_context_compaction']);
         add_action('init', [$this, 'schedule_retention_cleanup']);
         add_action(self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_main_summary_refresh']);
         add_action(self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_tkzone_summary_refresh']);
         add_action(self::DEVICE_MODEL_BRAND_HARVEST_HOOK, [$this, 'run_device_model_brand_harvest']);
+        add_action(self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_DAILY_HOOK, [$this, 'run_landing_session_raw_context_compaction_daily']);
+        add_action(self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK, [$this, 'run_landing_session_raw_context_compaction_worker']);
         add_action(self::RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK, [$this, 'run_retention_cleanup_scheduler_daily']);
         add_action(self::RETENTION_CLEANUP_WORKER_HOOK, [$this, 'run_retention_cleanup_worker']);
         add_action('init', [$this, 'maybe_export_statistics']);
@@ -319,6 +324,55 @@ class Kiwi_Plugin
             'daily',
             self::DEVICE_MODEL_BRAND_HARVEST_HOOK
         );
+    }
+
+    public function schedule_landing_session_raw_context_compaction(): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+
+        if (wp_next_scheduled(self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_DAILY_HOOK) !== false) {
+            return;
+        }
+
+        wp_schedule_event(
+            time() + (20 * 60),
+            'daily',
+            self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_DAILY_HOOK
+        );
+    }
+
+    public function run_landing_session_raw_context_compaction_daily(): array
+    {
+        $scheduled = $this->schedule_landing_session_raw_context_compaction_worker(0);
+
+        return [
+            'success' => $scheduled,
+            'status' => $scheduled ? 'worker_scheduled' : 'worker_already_scheduled',
+            'schedule_worker' => $scheduled,
+        ];
+    }
+
+    public function run_landing_session_raw_context_compaction_worker(): array
+    {
+        $service = $this->build_landing_session_raw_context_compaction_service();
+        $result = $service->run('cron');
+
+        if (!empty($result['has_more'])) {
+            $settings = (new Kiwi_Config())->get_landing_session_raw_context_compaction_settings();
+            $this->schedule_landing_session_raw_context_compaction_worker(
+                (int) ($settings['reschedule_delay_seconds'] ?? 60)
+            );
+        }
+
+        $message = !empty($result['success'])
+            ? 'Raw-context compaction finished; processed=' . (int) ($result['processed_rows'] ?? 0) . '; compacted=' . (int) ($result['compacted_rows'] ?? 0) . '; dry_run=' . (!empty($result['dry_run']) ? '1' : '0') . '.'
+            : 'Raw-context compaction failed: ' . (string) ($result['error_message'] ?? 'failed without error detail');
+
+        $this->log_landing_session_raw_context_compaction($message);
+
+        return $result;
     }
 
     public function schedule_retention_cleanup(): void
@@ -1401,9 +1455,32 @@ TEXT;
         return new Kiwi_Device_Model_Brand_Harvest_Service();
     }
 
+    protected function build_landing_session_raw_context_compaction_service(): Kiwi_Landing_Session_Raw_Context_Compaction_Service
+    {
+        return new Kiwi_Landing_Session_Raw_Context_Compaction_Service();
+    }
+
     protected function build_retention_cleanup_service(): Kiwi_Retention_Cleanup_Service
     {
         return new Kiwi_Retention_Cleanup_Service();
+    }
+
+    protected function schedule_landing_session_raw_context_compaction_worker(int $delay_seconds = 0): bool
+    {
+        if (!function_exists('wp_schedule_single_event')) {
+            return false;
+        }
+
+        if (function_exists('wp_next_scheduled')
+            && wp_next_scheduled(self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK) !== false
+        ) {
+            return false;
+        }
+
+        return (bool) wp_schedule_single_event(
+            time() + max(0, $delay_seconds),
+            self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK
+        );
     }
 
     protected function schedule_retention_cleanup_worker(int $delay_seconds = 0): bool
@@ -1476,6 +1553,11 @@ TEXT;
     protected function log_device_model_brand_harvest(string $message): void
     {
         error_log('[kiwi-device-model-brand-harvest] ' . $message);
+    }
+
+    protected function log_landing_session_raw_context_compaction(string $message): void
+    {
+        error_log('[kiwi-landing-session-raw-context-compaction] ' . $message);
     }
 
     protected function log_retention_cleanup(string $message): void

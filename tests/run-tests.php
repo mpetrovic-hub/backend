@@ -406,6 +406,7 @@ require_once __DIR__ . '/../includes/services/class-landing-page-variant-agent.p
 require_once __DIR__ . '/../includes/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-summary-aggregation-service.php';
 require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-tkzone-summary-aggregation-service.php';
+require_once __DIR__ . '/../includes/services/class-landing-session-raw-context-compaction-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-source-registry.php';
 require_once __DIR__ . '/../includes/services/class-retention-coverage-gate.php';
 require_once __DIR__ . '/../includes/services/class-retention-sqlite-archive-service.php';
@@ -1230,6 +1231,135 @@ class Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh extends Kiwi_Plugin
     }
 
     protected function log_landing_funnel_daily_tkzone_summary_refresh(string $message): void
+    {
+        $this->logs[] = $message;
+    }
+}
+
+class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config extends Kiwi_Config
+{
+    private $settings;
+    private $retention_days;
+
+    public function __construct(array $settings, int $retention_days = 14)
+    {
+        $this->settings = $settings;
+        $this->retention_days = $retention_days;
+    }
+
+    public function get_landing_session_raw_context_compaction_settings(): array
+    {
+        $settings = $this->settings;
+        $retention_days = max(3, $this->retention_days);
+        $min_age_days = max(3, (int) ($settings['min_age_days'] ?? 3));
+        $min_age_days = min($min_age_days, $retention_days);
+        $age_days = max($min_age_days, min($retention_days, (int) ($settings['age_days'] ?? 7)));
+
+        return [
+            'enabled' => (bool) ($settings['enabled'] ?? false),
+            'dry_run' => (bool) ($settings['dry_run'] ?? true),
+            'age_days' => $age_days,
+            'min_age_days' => $min_age_days,
+            'row_limit' => max(1, (int) ($settings['row_limit'] ?? 20000)),
+            'time_limit_seconds' => max(1, (int) ($settings['time_limit_seconds'] ?? 60)),
+            'reschedule_delay_seconds' => max(1, (int) ($settings['reschedule_delay_seconds'] ?? 60)),
+            'lock_ttl_seconds' => max(60, (int) ($settings['lock_ttl_seconds'] ?? 300)),
+        ];
+    }
+}
+
+class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service extends Kiwi_Landing_Session_Raw_Context_Compaction_Service
+{
+    public $created_temp_table = false;
+    public $dropped_temp_table = false;
+    public $updated = false;
+    public $eligible_rows = 0;
+    public $empty_rows = 0;
+    public $invalid_rows = 0;
+    public $already_compact_rows = 0;
+    public $processed_rows = 0;
+    public $bytes_before = 0;
+    public $bytes_after = 0;
+    public $current_time = '2026-07-06 12:00:00';
+
+    protected function has_table_access(): bool
+    {
+        return true;
+    }
+
+    protected function create_temp_table(): void
+    {
+        $this->created_temp_table = true;
+    }
+
+    protected function populate_candidates(string $cutoff_value, int $row_limit): int
+    {
+        return min($this->processed_rows, $row_limit);
+    }
+
+    protected function read_candidate_totals(): array
+    {
+        return [
+            'bytes_before' => $this->bytes_before,
+            'bytes_after' => $this->bytes_after,
+        ];
+    }
+
+    protected function update_candidates(string $cutoff_value): int
+    {
+        $this->updated = true;
+
+        return min($this->processed_rows, $this->eligible_rows);
+    }
+
+    protected function count_eligible_rows(string $cutoff_value): int
+    {
+        return $this->eligible_rows;
+    }
+
+    protected function count_empty_raw_context_rows(string $cutoff_value): int
+    {
+        return $this->empty_rows;
+    }
+
+    protected function count_invalid_json_rows(string $cutoff_value): int
+    {
+        return $this->invalid_rows;
+    }
+
+    protected function count_already_compact_rows(string $cutoff_value): int
+    {
+        return $this->already_compact_rows;
+    }
+
+    protected function drop_temp_table(): void
+    {
+        $this->dropped_temp_table = true;
+    }
+
+    protected function current_time_mysql(): string
+    {
+        return $this->current_time;
+    }
+}
+
+class Kiwi_Test_Plugin_Landing_Session_Raw_Context_Compaction extends Kiwi_Plugin
+{
+    public $logs = [];
+    private $compaction_service;
+
+    public function __construct(Kiwi_Landing_Session_Raw_Context_Compaction_Service $compaction_service)
+    {
+        parent::__construct(dirname(__DIR__), 'https://example.test/plugin/');
+        $this->compaction_service = $compaction_service;
+    }
+
+    protected function build_landing_session_raw_context_compaction_service(): Kiwi_Landing_Session_Raw_Context_Compaction_Service
+    {
+        return $this->compaction_service;
+    }
+
+    protected function log_landing_session_raw_context_compaction(string $message): void
     {
         $this->logs[] = $message;
     }
@@ -11490,6 +11620,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'schedule_landing_funnel_daily_main_summary_refresh',
             'schedule_landing_funnel_daily_tkzone_summary_refresh',
             'schedule_device_model_brand_harvest',
+            'schedule_landing_session_raw_context_compaction',
             'schedule_retention_cleanup',
             'maybe_export_statistics',
             'maybe_export_hlr_results',
@@ -11507,6 +11638,8 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_landing_funnel_daily_main_summary_refresh']), 'Expected main summary refresh cron hook to be registered.');
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_landing_funnel_daily_tkzone_summary_refresh']), 'Expected TK-zone summary refresh cron hook to be registered.');
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_device_model_brand_harvest']), 'Expected device model brand harvest cron hook to be registered.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_landing_session_raw_context_compaction_daily']), 'Expected landing-session raw-context compaction daily cron hook to be registered.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_landing_session_raw_context_compaction_worker']), 'Expected landing-session raw-context compaction worker hook to be registered.');
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_retention_cleanup_scheduler_daily']), 'Expected retention scheduler cron hook to be registered.');
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_retention_cleanup_worker']), 'Expected retention worker cron hook to be registered.');
 
@@ -11623,6 +11756,159 @@ kiwi_run_test('Kiwi_Config exposes final retention defaults for landing page ses
     kiwi_assert_same(60, $config->get_retention_worker_time_limit_seconds(), 'Expected bounded worker time limit to default to 60 seconds.');
     kiwi_assert_same(60, $config->get_retention_worker_reschedule_delay_seconds(), 'Expected worker reschedule delay to default to 60 seconds.');
     kiwi_assert_same(300, $config->get_retention_worker_lock_ttl_seconds(), 'Expected worker lock TTL to default to 300 seconds.');
+});
+
+kiwi_run_test('Kiwi_Config exposes safe landing-session raw-context compaction defaults and clamps age', function (): void {
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 5,
+            ],
+        ],
+        'kiwi_landing_session_raw_context_compaction_settings' => [
+            'enabled' => true,
+            'dry_run' => false,
+            'age_days' => 1,
+            'row_limit' => 0,
+            'time_limit_seconds' => 0,
+        ],
+    ];
+
+    $config = new Kiwi_Config();
+    $settings = $config->get_landing_session_raw_context_compaction_settings();
+
+    kiwi_assert_same(true, $settings['enabled'], 'Expected runtime option to enable raw-context compaction.');
+    kiwi_assert_same(false, $settings['dry_run'], 'Expected runtime option to allow active raw-context compaction.');
+    kiwi_assert_same(3, $settings['age_days'], 'Expected compaction age to clamp to the minimum three complete days.');
+    kiwi_assert_same(1, $settings['row_limit'], 'Expected row limit to clamp to at least one.');
+    kiwi_assert_same(1, $settings['time_limit_seconds'], 'Expected time limit to clamp to at least one second.');
+
+    $GLOBALS['kiwi_test_options']['kiwi_landing_session_raw_context_compaction_settings']['age_days'] = 99;
+    $settings = $config->get_landing_session_raw_context_compaction_settings();
+
+    kiwi_assert_same(5, $settings['age_days'], 'Expected compaction age to clamp to the landing-page-session retention age.');
+});
+
+kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service dry-run measures without updating rows', function (): void {
+    $GLOBALS['kiwi_test_options'] = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+
+    $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
+        new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
+            'enabled' => true,
+            'dry_run' => true,
+            'age_days' => 7,
+            'row_limit' => 2,
+        ])
+    );
+    $service->eligible_rows = 3;
+    $service->processed_rows = 2;
+    $service->bytes_before = 4000;
+    $service->bytes_after = 1400;
+    $service->empty_rows = 1;
+    $service->invalid_rows = 2;
+    $service->already_compact_rows = 4;
+
+    $result = $service->run('wp_cli');
+
+    kiwi_assert_same(true, $result['success'], 'Expected dry-run compaction to succeed.');
+    kiwi_assert_same(true, $result['dry_run'], 'Expected dry-run flag to be retained in the result.');
+    kiwi_assert_same(false, $service->updated, 'Expected dry-run not to update source rows.');
+    kiwi_assert_same(2, $result['processed_rows'], 'Expected dry-run to report bounded candidate rows.');
+    kiwi_assert_same(0, $result['compacted_rows'], 'Expected dry-run to compact zero rows.');
+    kiwi_assert_same(2600, $result['saving_bytes'], 'Expected dry-run to report estimated byte savings.');
+    kiwi_assert_same(true, $result['has_more'], 'Expected dry-run to request another worker when eligible rows exceed the limit.');
+    kiwi_assert_same(1, $result['empty_raw_context_rows'], 'Expected empty raw_context rows to be counted separately.');
+    kiwi_assert_same(2, $result['invalid_json_rows'], 'Expected invalid JSON rows to be counted separately.');
+    kiwi_assert_same(4, $result['already_compact_rows'], 'Expected already compact rows to be counted separately.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options']['kiwi_landing_session_raw_context_compaction_last_result'] ?? [], 'Expected dry-run result to be persisted.');
+});
+
+kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service active run updates compact candidates', function (): void {
+    $GLOBALS['kiwi_test_options'] = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+
+    $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
+        new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
+            'enabled' => true,
+            'dry_run' => false,
+            'age_days' => 7,
+            'row_limit' => 20000,
+        ])
+    );
+    $service->eligible_rows = 2;
+    $service->processed_rows = 2;
+    $service->bytes_before = 2000;
+    $service->bytes_after = 800;
+
+    $result = $service->run('cron');
+
+    kiwi_assert_same(true, $result['success'], 'Expected active compaction to succeed.');
+    kiwi_assert_same(false, $result['dry_run'], 'Expected active run to retain dry_run=false.');
+    kiwi_assert_same(true, $service->updated, 'Expected active run to update source rows.');
+    kiwi_assert_same(2, $result['compacted_rows'], 'Expected active run to report updated rows.');
+    kiwi_assert_same(false, $result['has_more'], 'Expected active run without remaining rows not to reschedule.');
+});
+
+kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service lock skip persists last result', function (): void {
+    $GLOBALS['kiwi_test_options'] = [];
+    $GLOBALS['kiwi_test_transients'] = [
+        'kiwi_landing_session_raw_context_compaction_lock' => '1',
+    ];
+
+    $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
+        new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
+            'enabled' => true,
+            'dry_run' => false,
+        ])
+    );
+
+    $result = $service->run('cron');
+
+    kiwi_assert_same(true, $result['success'], 'Expected lock skip to be a safe successful no-op.');
+    kiwi_assert_same(true, $result['skipped_due_to_lock'], 'Expected lock skip to be explicit in result.');
+    kiwi_assert_same(false, $service->created_temp_table, 'Expected lock skip not to create temp tables.');
+    kiwi_assert_same('lock_active', $result['error_code'], 'Expected lock skip to use a clear code.');
+    kiwi_assert_same($result, $GLOBALS['kiwi_test_options']['kiwi_landing_session_raw_context_compaction_last_result'] ?? [], 'Expected lock-skip result to be persisted.');
+});
+
+kiwi_run_test('Kiwi_Plugin schedules landing-session raw-context compaction hooks and reschedules worker', function (): void {
+    $GLOBALS['kiwi_test_hooks'] = [];
+    $GLOBALS['kiwi_test_cron_events'] = [];
+    $GLOBALS['kiwi_test_next_scheduled'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+
+    $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
+        new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
+            'enabled' => true,
+            'dry_run' => true,
+            'row_limit' => 1,
+        ])
+    );
+    $service->eligible_rows = 2;
+    $service->processed_rows = 1;
+    $plugin = new Kiwi_Test_Plugin_Landing_Session_Raw_Context_Compaction($service);
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $daily_hook = (string) $reflection->getConstant('LANDING_SESSION_RAW_CONTEXT_COMPACTION_DAILY_HOOK');
+    $worker_hook = (string) $reflection->getConstant('LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK');
+
+    $plugin->register();
+    $plugin->schedule_landing_session_raw_context_compaction();
+    $daily_result = $plugin->run_landing_session_raw_context_compaction_daily();
+    unset($GLOBALS['kiwi_test_next_scheduled'][$worker_hook]);
+    $worker_result = $plugin->run_landing_session_raw_context_compaction_worker();
+
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks'][$daily_hook]), 'Expected daily raw-context compaction hook to be registered.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks'][$worker_hook]), 'Expected worker raw-context compaction hook to be registered.');
+    kiwi_assert_same('worker_scheduled', $daily_result['status'], 'Expected daily hook to schedule the worker.');
+    kiwi_assert_same(true, $worker_result['has_more'], 'Expected worker result to retain has_more for rescheduling.');
+    kiwi_assert_same(2, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event) use ($worker_hook): bool {
+        return ($event['hook'] ?? '') === $worker_hook;
+    })), 'Expected daily hook and has_more worker result to schedule worker events.');
+    kiwi_assert_true(!empty($plugin->logs), 'Expected worker run to log a compact operational summary.');
 });
 
 kiwi_run_test('Kiwi_Plugin schedules the retention cleanup scheduler daily cron hook once', function (): void {

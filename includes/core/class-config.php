@@ -662,6 +662,36 @@ class Kiwi_Config
         ];
     }
 
+    public function get_landing_session_raw_context_compaction_settings(): array
+    {
+        $settings = function_exists('get_option')
+            ? get_option('kiwi_landing_session_raw_context_compaction_settings', [])
+            : [];
+
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $retention_settings = $this->get_retention_source_settings('landing_page_sessions');
+        $retention_days = max(3, (int) ($retention_settings['retention_days'] ?? 14));
+        $min_age_days = max(3, (int) ($settings['min_age_days'] ?? 3));
+        $age_days = (int) ($settings['age_days'] ?? 7);
+
+        $min_age_days = min($min_age_days, $retention_days);
+        $age_days = max($min_age_days, min($retention_days, $age_days));
+
+        return [
+            'enabled' => (bool) ($settings['enabled'] ?? false),
+            'dry_run' => (bool) ($settings['dry_run'] ?? true),
+            'age_days' => $age_days,
+            'min_age_days' => $min_age_days,
+            'row_limit' => max(1, (int) ($settings['row_limit'] ?? 20000)),
+            'time_limit_seconds' => max(1, (int) ($settings['time_limit_seconds'] ?? 60)),
+            'reschedule_delay_seconds' => max(1, (int) ($settings['reschedule_delay_seconds'] ?? 60)),
+            'lock_ttl_seconds' => max(60, (int) ($settings['lock_ttl_seconds'] ?? 300)),
+        ];
+    }
+
     public function get_default_retention_settings(): array
     {
         return [

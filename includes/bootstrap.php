@@ -68,6 +68,7 @@ require_once __DIR__ . '/services/class-landing-primary-cta-resolver.php';
 require_once __DIR__ . '/services/class-landing-kpi-service.php';
 require_once __DIR__ . '/services/class-landing-funnel-daily-summary-aggregation-service.php';
 require_once __DIR__ . '/services/class-landing-funnel-daily-tkzone-summary-aggregation-service.php';
+require_once __DIR__ . '/services/class-landing-session-raw-context-compaction-service.php';
 require_once __DIR__ . '/services/class-retention-source-registry.php';
 require_once __DIR__ . '/services/class-retention-coverage-gate.php';
 require_once __DIR__ . '/services/class-retention-sqlite-archive-service.php';
