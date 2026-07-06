@@ -49,7 +49,6 @@ class Kiwi_Landing_Session_Raw_Context_Compaction_Service
                 $result['success'] = true;
                 $result['error_code'] = 'compaction_disabled';
                 $result['error_message'] = 'Landing-session raw-context compaction is disabled.';
-                $this->add_diagnostics($result);
 
                 return $this->persist_result($this->finish_result($result));
             }
@@ -75,8 +74,11 @@ class Kiwi_Landing_Session_Raw_Context_Compaction_Service
                 }
             }
 
-            $result['has_more'] = $result['has_more']
-                || $this->count_eligible_rows($result['cutoff_value']) > $processed_rows;
+            if (!empty($settings['dry_run'])) {
+                $result['has_more'] = $result['eligible_rows'] > $processed_rows;
+            } elseif (!$result['has_more']) {
+                $result['has_more'] = $this->count_eligible_rows($result['cutoff_value']) > 0;
+            }
             $result['success'] = true;
 
             return $this->persist_result($this->finish_result($result));

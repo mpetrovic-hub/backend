@@ -1274,6 +1274,7 @@ class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service extends Kiwi_Land
     public $dropped_temp_table = false;
     public $updated = false;
     public $eligible_rows = 0;
+    public $eligible_rows_after_update = null;
     public $empty_rows = 0;
     public $invalid_rows = 0;
     public $already_compact_rows = 0;
@@ -1314,6 +1315,10 @@ class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service extends Kiwi_Land
 
     protected function count_eligible_rows(string $cutoff_value): int
     {
+        if ($this->updated && $this->eligible_rows_after_update !== null) {
+            return (int) $this->eligible_rows_after_update;
+        }
+
         return $this->eligible_rows;
     }
 
@@ -11839,6 +11844,7 @@ kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service active run up
         ])
     );
     $service->eligible_rows = 2;
+    $service->eligible_rows_after_update = 0;
     $service->processed_rows = 2;
     $service->bytes_before = 2000;
     $service->bytes_after = 800;
@@ -11850,6 +11856,27 @@ kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service active run up
     kiwi_assert_same(true, $service->updated, 'Expected active run to update source rows.');
     kiwi_assert_same(2, $result['compacted_rows'], 'Expected active run to report updated rows.');
     kiwi_assert_same(false, $result['has_more'], 'Expected active run without remaining rows not to reschedule.');
+});
+
+kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service disabled mode avoids diagnostics scans', function (): void {
+    $GLOBALS['kiwi_test_options'] = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+
+    $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
+        new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
+            'enabled' => false,
+            'dry_run' => true,
+        ])
+    );
+    $service->eligible_rows = 20;
+    $service->processed_rows = 20;
+
+    $result = $service->run('cron');
+
+    kiwi_assert_same(true, $result['success'], 'Expected disabled compaction to be a safe no-op.');
+    kiwi_assert_same('compaction_disabled', $result['error_code'], 'Expected disabled mode to expose a clear code.');
+    kiwi_assert_same(0, $result['eligible_rows'], 'Expected disabled mode not to run eligible-row diagnostics.');
+    kiwi_assert_same(false, $service->created_temp_table, 'Expected disabled mode not to create temp tables.');
 });
 
 kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service lock skip persists last result', function (): void {
@@ -11874,7 +11901,7 @@ kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service lock skip per
     kiwi_assert_same($result, $GLOBALS['kiwi_test_options']['kiwi_landing_session_raw_context_compaction_last_result'] ?? [], 'Expected lock-skip result to be persisted.');
 });
 
-kiwi_run_test('Kiwi_Plugin schedules landing-session raw-context compaction hooks and reschedules worker', function (): void {
+kiwi_run_test('Kiwi_Plugin schedules landing-session raw-context compaction hooks and reschedules active worker', function (): void {
     $GLOBALS['kiwi_test_hooks'] = [];
     $GLOBALS['kiwi_test_cron_events'] = [];
     $GLOBALS['kiwi_test_next_scheduled'] = [];
@@ -11884,7 +11911,7 @@ kiwi_run_test('Kiwi_Plugin schedules landing-session raw-context compaction hook
     $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
         new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
             'enabled' => true,
-            'dry_run' => true,
+            'dry_run' => false,
             'row_limit' => 1,
         ])
     );
@@ -11909,6 +11936,33 @@ kiwi_run_test('Kiwi_Plugin schedules landing-session raw-context compaction hook
         return ($event['hook'] ?? '') === $worker_hook;
     })), 'Expected daily hook and has_more worker result to schedule worker events.');
     kiwi_assert_true(!empty($plugin->logs), 'Expected worker run to log a compact operational summary.');
+});
+
+kiwi_run_test('Kiwi_Plugin does not reschedule dry-run raw-context compaction without a cursor', function (): void {
+    $GLOBALS['kiwi_test_cron_events'] = [];
+    $GLOBALS['kiwi_test_next_scheduled'] = [];
+    $GLOBALS['kiwi_test_options'] = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+
+    $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service(
+        new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config([
+            'enabled' => true,
+            'dry_run' => true,
+            'row_limit' => 1,
+        ])
+    );
+    $service->eligible_rows = 2;
+    $service->processed_rows = 1;
+    $plugin = new Kiwi_Test_Plugin_Landing_Session_Raw_Context_Compaction($service);
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $worker_hook = (string) $reflection->getConstant('LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK');
+
+    $result = $plugin->run_landing_session_raw_context_compaction_worker();
+
+    kiwi_assert_same(true, $result['has_more'], 'Expected dry-run last result to show that more rows exist.');
+    kiwi_assert_same(0, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event) use ($worker_hook): bool {
+        return ($event['hook'] ?? '') === $worker_hook;
+    })), 'Expected dry-run worker not to reschedule itself without a cursor.');
 });
 
 kiwi_run_test('Kiwi_Plugin schedules the retention cleanup scheduler daily cron hook once', function (): void {

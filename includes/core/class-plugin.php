@@ -359,7 +359,7 @@ class Kiwi_Plugin
         $service = $this->build_landing_session_raw_context_compaction_service();
         $result = $service->run('cron');
 
-        if (!empty($result['has_more'])) {
+        if (!empty($result['has_more']) && empty($result['dry_run'])) {
             $settings = (new Kiwi_Config())->get_landing_session_raw_context_compaction_settings();
             $this->schedule_landing_session_raw_context_compaction_worker(
                 (int) ($settings['reschedule_delay_seconds'] ?? 60)
