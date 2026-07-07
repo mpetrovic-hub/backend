@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-07-06:
+- [Landing Analytics] Added a safe default-off/dry-run worker for compacting old `wp_kiwi_landing_page_sessions.raw_context` rows into `landing_session_raw_context_compact_v1`. The worker uses bounded set-based SQL, persists its last result in `wp_options`, and leaves existing SQLite retention archives untouched.
+
 2026-07-02:
 - [DB Retention Cleanup] Split landing-page-session retention cleanup into a bounded scheduler/worker flow. The daily scheduler now freezes a gated `target_max_primary_key`, writes pending worker state to `wp_kiwi_retention_cleanup_runs`, and schedules `kiwi_retention_cleanup_worker`; the worker archives/deletes chunks by archived primary-key evidence, resumes by persisted cursors, and records partial/completed/failed worker phases.
 - [DB Retention Coverage Gate] Made the landing-page-session coverage gate use the intended selective deep-compare policy: hard light totals still run for every candidate date, while dimension deep compares are limited to the retention edge, the first hard blocker, and up to two CTA-warning dates. TK-zone light totals now restrict handoff aggregation to the current PID allow-list's landing sessions before joining handoff events, keeping the read-only production gate path well below cron timeout limits.

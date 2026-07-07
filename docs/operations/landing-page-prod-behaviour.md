@@ -311,6 +311,45 @@ Delete remains bound to archive evidence. Each chunk writes archive rows and `ar
 
 After the final chunk, the worker runs SQLite `integrity_check`, captures the `after_cleanup` snapshot, and marks the run `completed`. The SQLite writer keeps archive rows and `archive_batch_rows` in one transaction and reuses prepared insert statements across the batch, so the archive remains idempotent by source primary key without paying per-row autocommit overhead.
 
+## Landing-session raw-context compaction
+
+Old `wp_kiwi_landing_page_sessions.raw_context` rows can be compacted before they reach retention archive/delete age. This reduces future SQLite archive size because the retention archive keeps copying the existing source `raw_context` column; existing archive files are not rewritten.
+
+Runtime state:
+
+- settings option: `kiwi_landing_session_raw_context_compaction_settings`
+- last-result option: `kiwi_landing_session_raw_context_compaction_last_result`
+- daily scheduler hook: `kiwi_landing_session_raw_context_compaction_daily`
+- worker hook: `kiwi_landing_session_raw_context_compaction_worker`
+- transient lock: `kiwi_landing_session_raw_context_compaction_lock`
+
+Default settings are safe for deployment: `enabled=false`, `dry_run=true`, `age_days=7`, `row_limit=20000`, `time_limit_seconds=60`, `reschedule_delay_seconds=60`, and `lock_ttl_seconds=300`. `age_days` is clamped to at least `3` complete days and at most the configured `landing_page_sessions` retention age, so compaction remains older than fresh operational evidence and still happens before normal retention eligibility.
+
+The compact JSON schema is versioned with:
+
+```json
+{
+  "schema": "landing_session_raw_context_compact_v1",
+  "landing_page": {},
+  "client_ip_resolution": {}
+}
+```
+
+Only these `landing_page` fields are retained: `key`, `country`, `flow`, `provider`, `locale`, `service_type`, `business_number`, `keyword`, `service_key`, `shortcode`, `price_label`, `kpi_cta_steps`, `render_mode`, `folder_name`, and `cta_href`.
+
+Only these `client_ip_resolution` fields are retained: `source`, `peer_trusted`, `trusted_proxy_configured`, `forwarded_headers_present`, `other_client_ip_headers_present`, `forwarded_candidate_count`, and `resolution_reason`.
+
+The worker uses a temporary table and set-based `INSERT ... SELECT` plus `UPDATE ... JOIN` instead of PHP row-by-row JSON rewriting. It skips and counts empty `raw_context`, invalid JSON, and rows already carrying `schema=landing_session_raw_context_compact_v1`. The last result records success, dry-run state, cutoff, age, row/time limits, eligible and processed counts, skip counts, before/after byte estimates, saved bytes, lock skips, remaining-work flag, and error details.
+
+Activation procedure:
+
+1. Keep `enabled=false` until the dry-run result is reviewed.
+2. Set `enabled=true` while leaving `dry_run=true`; trigger `kiwi_landing_session_raw_context_compaction_worker` and review `eligible_rows`, `bytes_before`, `bytes_after`, and `saving_bytes`.
+3. For a controlled active run, set `dry_run=false`, use the default `row_limit=20000`, and validate a sample of older rows plus newer rows that must remain unchanged.
+4. Return to dry-run or disabled if the compact evidence is not acceptable.
+
+Production sandbox measurements from planning showed about `59.8%` logical `raw_context` byte savings on the `2026-07-02` sample and about `59.7%` on the then-current eligible backlog. This does not promise immediate physical MySQL file shrink: InnoDB may only reuse freed space internally unless a separate maintenance plan such as `OPTIMIZE TABLE` is explicitly approved.
+
 ## Configuration switches
 
 ### Landing-page loading
