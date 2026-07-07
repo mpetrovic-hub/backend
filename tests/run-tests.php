@@ -1353,6 +1353,14 @@ class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service extends Kiwi_Land
     }
 }
 
+class Kiwi_Test_Landing_Session_Raw_Context_Compaction_Query_Service extends Kiwi_Landing_Session_Raw_Context_Compaction_Service
+{
+    public function populate_candidates_for_test(string $cutoff_value, int $row_limit): int
+    {
+        return $this->populate_candidates($cutoff_value, $row_limit);
+    }
+}
+
 class Kiwi_Test_Plugin_Landing_Session_Raw_Context_Compaction extends Kiwi_Plugin
 {
     public $logs = [];
@@ -11861,6 +11869,53 @@ kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service active run up
     kiwi_assert_same(true, $service->updated, 'Expected active run to update source rows.');
     kiwi_assert_same(2, $result['compacted_rows'], 'Expected active run to report updated rows.');
     kiwi_assert_same(false, $result['has_more'], 'Expected active run without remaining rows not to reschedule.');
+});
+
+kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service preserves legacy landing-page dimensions when columns are empty', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $prepared_statements = [];
+        public $queries = [];
+
+        public function prepare($query, ...$args)
+        {
+            $statement = [
+                'query' => (string) $query,
+                'args' => $args,
+            ];
+            $this->prepared_statements[] = $statement;
+
+            return $statement;
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $this->queries[] = $query;
+
+            return 1;
+        }
+    };
+
+    try {
+        $service = new Kiwi_Test_Landing_Session_Raw_Context_Compaction_Query_Service();
+
+        $processed_rows = $service->populate_candidates_for_test('2026-06-29 00:00:00', 20000);
+        $query = (string) ($wpdb->queries[0] ?? '');
+
+        kiwi_assert_same(1, $processed_rows, 'Expected the fake DB to report one compact candidate.');
+        kiwi_assert_contains("COALESCE(NULLIF(landing_key, ''), JSON_UNQUOTE(JSON_EXTRACT(raw_context, '$.landing_page.key')))", $query, 'Expected empty landing_key columns to fall back to legacy raw_context data.');
+        kiwi_assert_contains("COALESCE(NULLIF(country, ''), JSON_UNQUOTE(JSON_EXTRACT(raw_context, '$.landing_page.country')))", $query, 'Expected empty country columns to fall back to legacy raw_context data.');
+        kiwi_assert_contains("COALESCE(NULLIF(flow_key, ''), JSON_UNQUOTE(JSON_EXTRACT(raw_context, '$.landing_page.flow')))", $query, 'Expected empty flow_key columns to fall back to legacy raw_context data.');
+        kiwi_assert_contains("COALESCE(NULLIF(provider_key, ''), JSON_UNQUOTE(JSON_EXTRACT(raw_context, '$.landing_page.provider')))", $query, 'Expected empty provider_key columns to fall back to legacy raw_context data.');
+        kiwi_assert_contains("COALESCE(NULLIF(service_key, ''), JSON_UNQUOTE(JSON_EXTRACT(raw_context, '$.landing_page.service_key')))", $query, 'Expected empty service_key columns to fall back to legacy raw_context data.');
+    } finally {
+        $wpdb = $previous_wpdb;
+    }
 });
 
 kiwi_run_test('Kiwi_Landing_Session_Raw_Context_Compaction_Service disabled mode avoids diagnostics scans', function (): void {
