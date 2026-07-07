@@ -39,3 +39,4 @@ Scope:
 
 Cache behavior:
 - Protected tool responses and login forms send no-cache headers, including `CDN-Cache-Control: no-store` and `X-LiteSpeed-Cache-Control: no-cache`, to avoid serving stale authenticated or logged-out tool pages through edge caches.
+- Protected tool responses also call LiteSpeed's `litespeed_control_set_nocache` hook, and successful auth redirects purge the target URL with `litespeed_purge_url` so stale login pages are not reused after a timeout login.
