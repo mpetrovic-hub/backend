@@ -15932,6 +15932,28 @@ kiwi_run_test('Kiwi frontend auth can purge LiteSpeed cache for auth redirect ta
     );
 });
 
+kiwi_run_test('Kiwi frontend auth does not purge logout targets for unauthenticated requests', function (): void {
+    $GLOBALS['kiwi_test_actions'] = [];
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-secret-logout-purge', PASSWORD_DEFAULT),
+    ]);
+    $reflection = new ReflectionClass(Kiwi_Frontend_Auth_Gate::class);
+    $method = $reflection->getMethod('purge_litespeed_logout_url_if_authenticated');
+
+    $method->invoke($gate, 'https://backend.example.test/some-page/', false);
+
+    $purge_actions = array_values(array_filter(
+        $GLOBALS['kiwi_test_actions'],
+        static function (array $action): bool {
+            return ($action['hook'] ?? '') === 'litespeed_purge_url';
+        }
+    ));
+
+    kiwi_assert_same(0, count($purge_actions), 'Expected unauthenticated logout requests not to purge arbitrary same-site URLs.');
+});
+
 kiwi_run_test('Kiwi frontend auth denies unauthenticated access to tool shortcodes', function (): void {
     $_GET = [];
     $_POST = [];

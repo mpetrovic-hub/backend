@@ -49,8 +49,9 @@ class Kiwi_Frontend_Auth_Gate
         }
         if ($action === self::ACTION_LOGOUT) {
             $redirect_url = $this->resolve_redirect_target_from_request();
+            $was_authenticated = $this->is_authenticated();
             $this->logout();
-            $this->purge_litespeed_url($redirect_url);
+            $this->purge_litespeed_logout_url_if_authenticated($redirect_url, $was_authenticated);
             $this->redirect($redirect_url);
         }
     }
@@ -403,6 +404,15 @@ class Kiwi_Frontend_Auth_Gate
         }
 
         do_action('litespeed_purge_url', $url);
+    }
+
+    private function purge_litespeed_logout_url_if_authenticated(string $url, bool $was_authenticated): void
+    {
+        if (!$was_authenticated) {
+            return;
+        }
+
+        $this->purge_litespeed_url($url);
     }
 
     private function read_error_code(): string
