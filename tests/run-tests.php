@@ -15,6 +15,7 @@ if (!defined('ARRAY_A')) {
 }
 
 $GLOBALS['kiwi_test_hooks'] = [];
+$GLOBALS['kiwi_test_actions'] = [];
 $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
 $GLOBALS['kiwi_test_transients'] = [];
@@ -32,6 +33,20 @@ $GLOBALS['kiwi_test_cleared_hooks'] = [];
 function add_action($hook, $callback): void
 {
     $GLOBALS['kiwi_test_hooks'][$hook][] = $callback;
+}
+
+function do_action($hook, ...$args): void
+{
+    $GLOBALS['kiwi_test_actions'][] = [
+        'hook' => (string) $hook,
+        'args' => $args,
+    ];
+
+    foreach ($GLOBALS['kiwi_test_hooks'][$hook] ?? [] as $callback) {
+        if (is_callable($callback)) {
+            $callback(...$args);
+        }
+    }
 }
 
 function add_shortcode($tag, $callback): void
@@ -15856,6 +15871,65 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode applies flow_key filter to fraud
     kiwi_assert_true(strpos($output, 'session-flow-b') === false, 'Expected flow_key filter to remove rows from other flows.');
 
     $_GET = [];
+});
+
+kiwi_run_test('Kiwi frontend auth marks protected tool responses as LiteSpeed no-cache', function (): void {
+    $_GET = [];
+    $_POST = [];
+    $GLOBALS['kiwi_test_actions'] = [];
+    unset($_COOKIE['kiwi_frontend_auth']);
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-secret-cache', PASSWORD_DEFAULT),
+    ]);
+
+    $output = $gate->render_login_form([
+        'message' => 'Please sign in to access the DIMOCO blacklist tool.',
+        'redirect_url' => 'https://backend.example.test/blacklist/',
+    ]);
+
+    $nocache_actions = array_values(array_filter(
+        $GLOBALS['kiwi_test_actions'],
+        static function (array $action): bool {
+            return ($action['hook'] ?? '') === 'litespeed_control_set_nocache';
+        }
+    ));
+
+    kiwi_assert_contains('Kiwi Tools Login', $output, 'Expected the protected tool login form to render.');
+    kiwi_assert_same(1, count($nocache_actions), 'Expected protected tool auth responses to tell LiteSpeed not to cache the page.');
+    kiwi_assert_same(
+        ['kiwi frontend auth tool response'],
+        $nocache_actions[0]['args'],
+        'Expected the LiteSpeed no-cache action to include a traceable reason.'
+    );
+});
+
+kiwi_run_test('Kiwi frontend auth can purge LiteSpeed cache for auth redirect targets', function (): void {
+    $GLOBALS['kiwi_test_actions'] = [];
+
+    $gate = new Kiwi_Frontend_Auth_Gate([
+        'username' => 'admin',
+        'password_hash' => password_hash('kiwi-secret-purge', PASSWORD_DEFAULT),
+    ]);
+    $reflection = new ReflectionClass(Kiwi_Frontend_Auth_Gate::class);
+    $method = $reflection->getMethod('purge_litespeed_url');
+
+    $method->invoke($gate, 'https://backend.example.test/blacklist/');
+
+    $purge_actions = array_values(array_filter(
+        $GLOBALS['kiwi_test_actions'],
+        static function (array $action): bool {
+            return ($action['hook'] ?? '') === 'litespeed_purge_url';
+        }
+    ));
+
+    kiwi_assert_same(1, count($purge_actions), 'Expected successful auth redirects to be able to purge the cached target URL.');
+    kiwi_assert_same(
+        ['https://backend.example.test/blacklist/'],
+        $purge_actions[0]['args'],
+        'Expected LiteSpeed purge to target only the auth redirect URL.'
+    );
 });
 
 kiwi_run_test('Kiwi frontend auth denies unauthenticated access to tool shortcodes', function (): void {

@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-07-07:
+- [Auth Cache] Extended the frontend tool auth gate to mark protected tool responses as LiteSpeed no-cache via `litespeed_control_set_nocache` and purge auth redirect targets with `litespeed_purge_url`, preventing stale cached login pages from persisting after timeout re-login.
+
 2026-07-06:
 - [Landing Analytics] Added a safe default-off/dry-run worker for compacting old `wp_kiwi_landing_page_sessions.raw_context` rows into `landing_session_raw_context_compact_v1`. The worker uses bounded set-based SQL, persists its last result in `wp_options`, and leaves existing SQLite retention archives untouched.
 

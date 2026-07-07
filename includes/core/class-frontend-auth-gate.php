@@ -48,8 +48,10 @@ class Kiwi_Frontend_Auth_Gate
             return;
         }
         if ($action === self::ACTION_LOGOUT) {
+            $redirect_url = $this->resolve_redirect_target_from_request();
             $this->logout();
-            $this->redirect($this->resolve_redirect_target_from_request());
+            $this->purge_litespeed_url($redirect_url);
+            $this->redirect($redirect_url);
         }
     }
     public function can_access_tools(): bool
@@ -234,7 +236,9 @@ class Kiwi_Frontend_Auth_Gate
                 self::ERROR_QUERY_ARG => 'invalid_credentials',
             ]));
         }
-        $this->redirect($this->remove_query_args($redirect_url, [self::ERROR_QUERY_ARG]));
+        $redirect_url = $this->remove_query_args($redirect_url, [self::ERROR_QUERY_ARG]);
+        $this->purge_litespeed_url($redirect_url);
+        $this->redirect($redirect_url);
     }
     private function is_valid_nonce_from_request(): bool
     {
@@ -366,6 +370,8 @@ class Kiwi_Frontend_Auth_Gate
 
     private function send_tool_nocache_headers(): void
     {
+        $this->mark_litespeed_nocache();
+
         if (headers_sent()) {
             return;
         }
@@ -380,6 +386,23 @@ class Kiwi_Frontend_Auth_Gate
 
         header('CDN-Cache-Control: no-store', false);
         header('X-LiteSpeed-Cache-Control: no-cache', false);
+    }
+
+    private function mark_litespeed_nocache(): void
+    {
+        if (function_exists('do_action')) {
+            do_action('litespeed_control_set_nocache', 'kiwi frontend auth tool response');
+        }
+    }
+
+    private function purge_litespeed_url(string $url): void
+    {
+        $url = trim($url);
+        if ($url === '' || !function_exists('do_action')) {
+            return;
+        }
+
+        do_action('litespeed_purge_url', $url);
     }
 
     private function read_error_code(): string
