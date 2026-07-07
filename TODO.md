@@ -226,9 +226,26 @@ Hinweise:
 - Als Vorlage kann `.github/workflows/php-tests.yml` aus `receipt-generator` dienen.
 - Vor Umsetzung im `backend` Repo zuerst pruefen, welche lokalen Test-/Lint-Befehle dort bereits existieren.
 
+
+
 ## 6: "Ordentliches" Menü
 
 Ein linksseitiges Menü-Bar erstellen mit Submenüs
 
 - Workflow: Codex mit /product-design(?)
 - Design.md's benutzen (welche?)
+
+
+
+## 7: `kiwi_landing_funnel_daily_summary_refresh` komplett retiren
+
+Wenn nach Audit nicht mehr benötigt komplett aus der Codebase entfernen
+
+
+## 8: Dokumentations .md files aufräumen / besser aufteilen
+
+Es wird zB Error-Logging Doku in docs/operations/landing-page-prod-behaviour.md - warum dort? Ergibt vom Namen her keinen Sinn.
+
+- Alle Dokus durchgehen und checken, ob diese besser aufgesplittet werden können.
+- Ein .md file für jeden Bereich / Funktion / Grobe Aufgabe
+- Index kommt in AGENTS.md
