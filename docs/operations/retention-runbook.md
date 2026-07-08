@@ -130,12 +130,16 @@ The worker uses a temporary table and set-based `INSERT ... SELECT` plus `UPDATE
 
 The last result records success, dry-run state, cutoff, age, row/time limits, eligible and processed counts, skip counts, before/after byte estimates, saved bytes, lock skips, remaining-work flag, and error details.
 
+`enabled` is the master switch. With `enabled=false`, the worker exits as a disabled no-op and stores `error_code=compaction_disabled`, even if `dry_run=true`. A measurement-only dry run requires `enabled=true` and `dry_run=true`.
+
 Activation procedure:
 
 1. Keep `enabled=false` until the dry-run result is reviewed.
 2. Set `enabled=true` while leaving `dry_run=true`; trigger `kiwi_landing_session_raw_context_compaction_worker` and review `eligible_rows`, `bytes_before`, `bytes_after`, and `saving_bytes`.
 3. For a controlled active run, set `dry_run=false`, use the default `row_limit=20000`, and validate a sample of older rows plus newer rows that must remain unchanged.
 4. Return to dry-run or disabled if the compact evidence is not acceptable.
+
+On 2026-07-08, production was set to `enabled=true`, `dry_run=true` for a manual measurement run. With cutoff `2026-07-01 00:00:00`, the worker reported `67,353` eligible rows, processed the first `20,000` row chunk in dry-run mode, estimated `40,338,708` bytes before and `16,300,642` bytes after, and wrote `0` compacted rows as expected.
 
 Planning sandbox measurements showed about `59.8%` logical `raw_context` byte savings on the `2026-07-02` sample and about `59.7%` on the then-current eligible backlog. This does not promise immediate physical MySQL file shrink: InnoDB may only reuse freed space internally unless a separate maintenance plan such as `OPTIMIZE TABLE` is explicitly approved.
 
@@ -151,4 +155,3 @@ When validating retention behavior:
 6. Confirm archive evidence exists before MySQL delete.
 7. Confirm failed archive, quick-check, delete, integrity-check, or audit persistence stops destructive progress.
 8. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.
-
