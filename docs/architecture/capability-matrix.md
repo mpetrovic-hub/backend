@@ -1,5 +1,20 @@
 # Capability Matrix
 
+## Read when
+
+- You need documented capability coverage by aggregator, country, or flow.
+- You are deciding whether a change should extend an existing capability.
+
+## Source of truth for
+
+- Capability inventory and status labels.
+
+## Not here
+
+- Capability design details; use the relevant architecture doc.
+- Provider API behavior; use `../integrations/INDEX.md`.
+- Freshness proof. Verify `implemented` status against code/tests before changing this file.
+
 This file tracks which business capabilities are currently available, documented, planned, or known per aggregator, country, and flow.
 
 Use this file as an inventory, not as a design document.
@@ -8,7 +23,7 @@ For architecture and coding rules, see:
 - `../../AGENTS.md`
 
 For aggregator-specific details, see:
-- `../integrations/README.md`
+- `../integrations/INDEX.md`
 
 ## Status meanings
 

@@ -249,3 +249,6 @@ Es wird zB Error-Logging Doku in docs/operations/landing-page-prod-behaviour.md 
 - Alle Dokus durchgehen und checken, ob diese besser aufgesplittet werden können.
 - Ein .md file für jeden Bereich / Funktion / Grobe Aufgabe
 - Index kommt in AGENTS.md
+
+
+## 9: Retire `wp_kiwi_landing_kpi_summary`

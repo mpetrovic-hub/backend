@@ -1,6 +1,20 @@
 # Landing Page Architecture
 
-## Purpose
+## Read when
+
+- Work touches filesystem landing-page folders, discovery, metadata validation, or migration away from legacy landing definitions.
+
+## Source of truth for
+
+- Landing-page folder contract.
+- Landing-page discovery and metadata model.
+- The boundary between page-local presentation and centralized business logic.
+
+## Not here
+
+- Production runtime checks, multi-domain operations, gallery behavior, and rollback: see `../operations/landing-page-runtime.md`.
+- Landing KPI, Statistics UI, and daily summary analytics: see `../operations/landing-funnel-analytics.md`.
+- Provider setup details: see `../integrations/INDEX.md`.
 
 This document defines the target architecture for landing pages in this project.
 
@@ -62,12 +76,12 @@ This architecture introduces a folder-per-landing-page model so each landing pag
   landing-page-architecture.md
 
 /integrations
-  nth-fr-one-off.md
-  dimoco-at-subscription.md
-  ...
+  /nth/fr/one-off/fr-one-off-nth-api.md
+  /dimoco/at/subscription/at-subscription-dimoco-api.md
+  /...
 
 /operations
-  landing-page-prod-behaviour.md
+  landing-page-runtime.md
   ...
 
 /landing-pages
@@ -75,7 +89,7 @@ This architecture introduces a folder-per-landing-page model so each landing pag
     index.html
     styles.css
     integration.php
-    README.md              # optional
+    README.md              # optional, human notes only
   /lp14-at
     index.html
     styles.css
@@ -91,7 +105,7 @@ This architecture introduces a folder-per-landing-page model so each landing pag
 - Each landing-page folder represents one concrete landing-page version.
 - Media files are not stored in the folder unless there is an explicit future exception.
 - Media can be referenced by URL or by existing shared asset paths.
-- `README.md` at repository root remains the entry-point document and should link to this architecture file.
+- `README.md` at repository root remains the human entry-point document and should link to the documentation index.
 
 ---
 
@@ -117,7 +131,7 @@ These three files are the minimum contract for a valid landing page:
 
 A landing-page folder may also contain:
 
-- `README.md` for landing-page-specific notes for designers or developers
+- `README.md` for landing-page-specific human notes for designers or developers
 - additional local static files only if explicitly approved by project conventions
 
 By default, media should not be stored in the landing-page folder. Media can remain external and be referenced from `index.html`.
@@ -176,7 +190,7 @@ return [
     'service_type' => 'premium_sms',
     'business_number' => '84072',
     'keyword' => 'Jplay*',
-    'documentation' => '/integrations/nth-fr-one-off.md',
+    'documentation' => '/integrations/nth/fr/one-off/fr-one-off-nth-api.md',
     'title' => 'France One-off LP2',
     'active' => true,
 ];
@@ -365,7 +379,7 @@ Example:
 
 Both may reference:
 
-- `/integrations/nth-fr-one-off.md`
+- `/integrations/nth/fr/one-off/fr-one-off-nth-api.md`
 
 This allows multiple landing-page variants to share one technical integration source of truth.
 
@@ -387,7 +401,7 @@ Contains country-specific and flow-specific technical documentation.
 
 Example:
 
-- `nth-fr-one-off.md`
+- `nth/fr/one-off/fr-one-off-nth-api.md`
 
 This document should preserve operational and compliance details such as:
 
@@ -480,7 +494,7 @@ return [
     'service_type' => 'premium_sms',
     'business_number' => '84072',
     'keyword' => 'Jplay*',
-    'documentation' => '/integrations/nth-fr-one-off.md',
+    'documentation' => '/integrations/nth/fr/one-off/fr-one-off-nth-api.md',
     'title' => 'LP2 France One-off',
     'active' => true,
 ];
@@ -631,6 +645,6 @@ This keeps the system easier to maintain while preserving explicit technical and
 
 ## Related Documents
 
-- `/README.md`
-- `/integrations/nth-fr-one-off.md`
-- `/operations/landing-page-prod-behaviour.md`
+- `../../README.md`
+- `../integrations/nth/fr/one-off/fr-one-off-nth-api.md`
+- `../operations/landing-page-runtime.md`

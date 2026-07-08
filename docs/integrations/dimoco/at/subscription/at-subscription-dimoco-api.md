@@ -1,10 +1,24 @@
 # Dimoco AT Subscription
 
+## Read when
+
+- Work touches the Dimoco Austria subscription setup, identify/operator lookup, start/renew/close subscription, refund, prompt, or blocklist behavior for this setup.
+
+## Source of truth for
+
+- Dimoco AT subscription setup behavior.
+
+## Not here
+
+- Aggregator-wide Dimoco behavior; see `../../general-api-dimoco.md`.
+- Shared capability architecture; see `../../../../architecture/INDEX.md`.
+- Real credentials or secrets.
+
 This document describes the Austria-specific Dimoco subscription integration used in this repository.
 
 It complements:
 - `../../general-api-dimoco.md`
-- `../../../operations/credentials-and-environments.md`
+- `../../../../operations/credentials-and-environments.md`
 
 This file is specific to:
 - country: `AT`

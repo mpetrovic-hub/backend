@@ -1,6 +1,18 @@
 # NTH FR One-off
 
-## Purpose
+## Read when
+
+- Work touches the NTH France one-off Premium SMS setup, click-to-SMS landing flow, MO callback, MT submission, delivery report, sale persistence, or FR compliance mapping.
+
+## Source of truth for
+
+- NTH FR one-off setup behavior.
+
+## Not here
+
+- Aggregator-wide NTH Premium SMS behavior; see `../../general-api-premium-sms-nth.md`.
+- Shared attribution and analytics design; see `../../../../architecture/INDEX.md` and `../../../../operations/INDEX.md`.
+- Real credentials or secrets.
 
 This document is the canonical repository reference for the **France (`FR`) NTH Premium SMS one-off flow**.
 
@@ -319,7 +331,7 @@ return [
     'provider' => 'nth',
     'business_number' => '84072',
     'keyword' => 'Jplay*',
-    'documentation' => '/integrations/nth-fr-one-off.md',
+    'documentation' => '/integrations/nth/fr/one-off/fr-one-off-nth-api.md',
 ];
 ```
 

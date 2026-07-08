@@ -41,30 +41,42 @@ Current operating interpretation:
 - The confirming `OK` MO is currently treated as a TP-bound MO that Kiwi should receive from Lily, although the API documentation is not perfectly explicit about that in one single sentence.
 - The Free Welcome MT and later Billing MTs are handled by **Kiwi / SP**, not automatically by MOBIVAS/Lily.
 
+## Read when
+
+- Work touches the Greece Premium SMS subscription setup through Lily/MOBIVAS.
+- You need Web2SMS, Double-MO, `OK` confirmation, Welcome/Billing MT ownership, STOP handling, HLR, or Greece compliance assumptions.
+
+## Source of truth for
+
+- The concrete Greece subscription flow.
+- Kiwi's current setup assumptions for this Lily/MOBIVAS market.
+- Greece-specific compliance and operational rules.
+
+## Not here
+
+- Generic Lily API reference: see `../../general-api-premium-sms-lily.md`.
+- Lily documentation navigation: see `../../INDEX.md`.
+- Real credentials or secrets.
+
 ## Files to read together
 
-- `../../lily-mobile-general-api-mt-platform.md`  
+- `../../general-api-premium-sms-lily.md`
   General Lily Mobile / MT Platform API summary for this repository.
-
-- `README.md`  
-  This file. Use it for the concrete Greece subscription flow.
-
-- `../../source/MOBIVAS - ON POINT GUIDE TO GREECE 2022.pdf`  
-  Greece market rules, flow diagrams, and compliance guidance.
-
-- `../../source/Mobivas MT Platform Documentation_v1.0.1.docx`  
-  API endpoints, payloads, and generic platform behavior.
+- `../../INDEX.md`
+  Lily documentation index.
+- `../../source/`
+  Source material when implementing or verifying payload details.
 
 ## Start here
 
-1. Read `../../lily-mobile-general-api-mt-platform.md`
+1. Read `../../general-api-premium-sms-lily.md`
 2. Then read this file
-3. Then review the original source documents under `source/` when implementing or verifying payload details
+3. Then review original source documents under `../../source/` when implementing or verifying payload details
 4. Check repository credential/config documentation if endpoints, credentials, callbacks, or secrets are involved
 
 ## Documentation split
 
-### `../../lily-mobile-general-api-mt-platform.md`
+### `../../general-api-premium-sms-lily.md`
 Use the general API file for information that is broadly true for Lily Mobile integrations, for example:
 - authentication model
 - generic endpoint groups
@@ -75,7 +87,7 @@ Use the general API file for information that is broadly true for Lily Mobile in
 - HLR lookup behavior
 - platform-wide status codes and response envelope
 
-### `README.md`
+### `gr/subscription/gr-subscription-lily-api.md`
 Use this file for information that is specific to this Greece subscription setup, for example:
 - Web2SMS vs Double-MO flow choice
 - the role of free short code `54988`
@@ -198,7 +210,7 @@ Documented source material contains a payload inconsistency:
 - the table describes `MSISDN` + `Keyword`
 - the screenshot example appears to use `MSISDN` + `ServiceId`
 
-For this integration, confirm the exact payload shape with the live/provisioned setup and keep this README updated when confirmed.
+For this integration, confirm the exact payload shape with the live/provisioned setup and keep this document updated when confirmed.
 
 Important:
 - Using the endpoint does **not** replace the requirement to send a free STOP confirmation MT.

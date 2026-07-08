@@ -1,5 +1,19 @@
 # Lily Mobile General API — MT Platform (JSON)
 
+## Read when
+
+- Work touches Lily Mobile MT Platform endpoint behavior, MO/DLR callback shapes, HLR lookup, unsubscribe, subscription initiation, or generic Lily response/status interpretation.
+
+## Source of truth for
+
+- Aggregator-wide Lily Mobile API behavior and repository interpretation notes.
+
+## Not here
+
+- Greece subscription setup behavior; see `gr/subscription/gr-subscription-lily-api.md`.
+- Shared capability design; see `../../architecture/INDEX.md`.
+- Real credentials or secrets.
+
 This document summarizes the generic Lily Mobile MT Platform JSON API for use in this repository.
 
 It is based on the attached Lily Mobile Word documentation together with the embedded request/response screenshots. It is intended to be the practical integration summary for what appears to be generally true for this API, while explicitly calling out places where the screenshots and the body text do not fully agree.
@@ -356,6 +370,7 @@ Documented HLR response values in the appendix:
 Implementation note:
 - the screenshot shows `hlrStatus: "SUCCESS"`, while the appendix lists `OK` and other textual response values.
 - this looks like another documentation mismatch or a difference between transport-level and business-level wording.
+- Repository interpretation separates transport success from business success: HTTP `2xx` only means the request was transported successfully; HLR business success requires top-level `status=OK` and a payload `hlrStatus` interpreted as `OK` or `SUCCESS`. Preserve provider `messages`, status code, and raw body context for non-success diagnostics.
 
 ## SMS subscription initiation (`subsms`)
 

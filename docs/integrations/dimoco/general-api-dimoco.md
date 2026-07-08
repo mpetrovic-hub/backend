@@ -1,14 +1,28 @@
 # Dimoco General API
 
+## Read when
+
+- Work touches Dimoco-wide action behavior, authentication/digest handling, callbacks, result codes, or shared Dimoco request/response mapping.
+
+## Source of truth for
+
+- Aggregator-wide Dimoco API behavior and repository mapping notes.
+
+## Not here
+
+- Country/flow-specific setup behavior; see the relevant setup doc under this folder.
+- Shared capability design; see `../../architecture/INDEX.md`.
+- Real credentials or secrets.
+
 This document summarizes the generic DIMOCO pay:smart API for use in this repository.
 
 It is intentionally **not country-specific** and **not flow-specific**.  
 Use this file for everything that is generally true for DIMOCO pay:smart across actions, countries, and integrations.
 
 For country- or setup-specific behavior, add separate files such as:
-- `at/<flow>/README.md`
-- `pl/<flow>/README.md`
-- `de/<flow>/README.md`
+- `at/<flow>/at-<flow>-dimoco-api.md`
+- `pl/<flow>/pl-<flow>-dimoco-api.md`
+- `de/<flow>/de-<flow>-dimoco-api.md`
 
 Primary source:
 - `source/DIMOCO-specification_paysmart.pdf`

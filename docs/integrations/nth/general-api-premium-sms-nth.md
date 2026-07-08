@@ -1,12 +1,26 @@
 # NTH General API — Premium SMS
 
+## Read when
+
+- Work touches NTH Premium SMS operations, callback shapes, MT submission, MO delivery, delivery reports, event callbacks, or generic NTH flow concepts.
+
+## Source of truth for
+
+- Aggregator-wide NTH Premium SMS behavior and repository mapping notes.
+
+## Not here
+
+- France one-off setup behavior; see `fr/one-off/fr-one-off-nth-api.md`.
+- Shared attribution or analytics design; see `../../architecture/INDEX.md` and `../../operations/INDEX.md`.
+- Real credentials or secrets.
+
 This document summarizes the generic NTH Premium SMS HTTP API for use in this repository.
 
 It is intentionally not country-specific and not flow-specific.  
 Use this file for everything that is generally true for NTH Premium SMS integrations across markets and services. Country-, operator-, shortcode-, and service-program-specific behavior belongs in dedicated files such as:
-- `fr/<flow>/README.md`
-- `at/<flow>/README.md`
-- `gr/<flow>/README.md`
+- `fr/<flow>/fr-<flow>-nth-api.md`
+- `at/<flow>/at-<flow>-nth-api.md`
+- `gr/<flow>/gr-<flow>-nth-api.md`
 
 ## Source
 
@@ -572,7 +586,7 @@ NTH requires the customer to provide the IP addresses of servers that will send 
 
 # What belongs in country / flow docs instead
 
-Put the following into files such as `at/<flow>/README.md`, `fr/<flow>/README.md`, etc.:
+Put the following into files such as `at/<flow>/<setup-name>.md`, `fr/<flow>/<setup-name>.md`, etc.:
 
 - short codes
 - operator codes
@@ -611,7 +625,7 @@ Service resolution behavior:
 Legacy per-service callback routes are no longer used for NTH.
 
 Country- and service-specific credential usage should be referenced from:
-- `docs/integrations/nth/<country>/<flow>/README.md`
+- `docs/integrations/nth/<country>/<flow>/<setup-name>.md`
 
 ## Integration guidance for this repository
 
