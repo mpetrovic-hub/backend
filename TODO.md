@@ -31,10 +31,7 @@ Mögliche Config-Kandidaten aus der aktuellen Codebase:
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED`
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
 - `KIWI_LANDING_FUNNEL_TKZONE_SUMMARY_PIDS` (editable PID-Allowlist fuer Tkzone-Summary; Default `106`)
-- `KIWI_LANDING_PAGES_FILESYSTEM_ENABLED`
-- `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED`
 - `KIWI_LANDING_PAGES_ROOT`
-- `KIWI_LANDING_PAGES` (Legacy, nur anzeigen/retirement status)
 
 #### Click Attribution / Affiliate Postbacks
 

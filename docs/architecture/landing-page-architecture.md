@@ -327,18 +327,9 @@ The core application continues to own:
 
 This keeps landing pages easy to edit without duplicating business logic into each folder.
 
-### Backward compatibility during resolution
+### Resolution contract
 
-During migration, existing request resolution may still rely on legacy mapping from `wp-config.php`.
-
-The preferred migration approach is now in Phase 1 retirement:
-
-1. resolve via filesystem registry first
-2. keep legacy config fallback disabled by default
-3. allow fallback only through the explicit temporary rollback switch `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true`
-4. remove legacy fallback after staging proves no runtime-only routes still depend on it
-
-No new landing-page definitions should be introduced into `wp-config.php`.
+Request resolution uses the filesystem registry exclusively. `wp-config.php` does not define landing pages; the optional root-path override only changes where the registry is read from.
 
 ---
 
@@ -428,46 +419,16 @@ Contains rollout, migration, and maintenance procedures.
 
 Example topics:
 
-- how to migrate a legacy landing page from `wp-config.php`
+- how to create a landing page from the filesystem contract
 - how to validate new folders before release
 - how to disable a landing page safely
 - release checklist for design changes
 
 ---
 
-## Backward Compatibility and Migration Strategy
+## Filesystem-only configuration
 
-The migration away from `wp-config.php` should be pragmatic.
-
-### Rule
-
-`wp-config.php` should no longer contain full landing-page definitions.
-
-### Acceptable temporary use
-
-During migration, `wp-config.php` may contain only thin bootstrap configuration such as:
-
-- root path to the landing-pages directory
-- feature flag to enable filesystem loading
-- legacy fallback toggle during migration period
-
-### Preferred compatibility approach
-
-Use a staged migration:
-
-1. introduce filesystem registry and loader
-2. migrate one or more known landing pages into `/landing-pages`
-3. wire existing resolution logic to prefer filesystem entries
-4. disable legacy config fallback by default
-5. use `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true` only as a temporary rollback switch if staging finds an unmigrated route
-6. remove legacy definitions after parity is verified
-7. remove the legacy template-loading path in a later Phase 2 PR once staging has confirmed no fallback usage
-
-### Migration rule
-
-No new landing page should be added to `wp-config.php`.
-
-All new landing pages must be created as folders under `/landing-pages`.
+Landing pages are defined only as folders under `/landing-pages`. Environment configuration may override the registry root path, but it must not contain landing-page definitions or select an alternate rendering mode.
 
 ---
 
@@ -573,7 +534,7 @@ Tests should focus on:
 - metadata validation
 - registry building
 - flow lookup
-- legacy fallback behavior if still present during migration
+- filesystem-only resolution behavior
 
 ---
 
