@@ -26,11 +26,10 @@ Architecture docs describe stable internal contracts and boundaries. They are no
 |---|---|
 | `capability-matrix.md` | Inventory of documented and implemented capabilities. |
 | `click-attribution-and-postbacks.md` | Shared attribution capture, conversion matching, and affiliate postback boundary. |
-| `landing-page-architecture.md` | Filesystem landing-page contract, discovery model, metadata contract, and migration principles. |
+| `landing-page-architecture.md` | Filesystem landing-page contract, discovery model, metadata contract, and filesystem-only rendering boundary. |
 
 ## Maintenance notes
 
 - Keep provider-specific payload examples in integration docs.
 - Keep operational commands, config values, and troubleshooting in operations docs.
 - Treat `capability-matrix.md` as an inventory. Freshness must be verified against code before changing implementation status.
-

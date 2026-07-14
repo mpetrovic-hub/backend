@@ -2,7 +2,7 @@
 
 ## Read when
 
-- Work touches filesystem landing-page folders, discovery, metadata validation, or migration away from legacy landing definitions.
+- Work touches filesystem landing-page folders, discovery, metadata validation, or rendering contracts.
 
 ## Source of truth for
 
@@ -12,13 +12,13 @@
 
 ## Not here
 
-- Production runtime checks, multi-domain operations, gallery behavior, and rollback: see `../operations/landing-page-runtime.md`.
+- Production runtime checks, multi-domain operations, gallery behavior, and deployment rollback: see `../operations/landing-page-runtime.md`.
 - Landing KPI, Statistics UI, and daily summary analytics: see `../operations/landing-funnel-analytics.md`.
 - Provider setup details: see `../integrations/INDEX.md`.
 
-This document defines the target architecture for landing pages in this project.
+This document defines the active architecture for landing pages in this project.
 
-The goal is to replace the current `wp-config.php`-driven landing-page definition model with a filesystem-based structure that is easier to design, maintain, review, and extend. Landing pages should be self-contained at the folder level, while flow and country-specific integration behavior remains explicit and documented.
+Landing pages use a filesystem-based structure that is easier to design, maintain, review, and extend. Pages are self-contained at the folder level, while flow and country-specific integration behavior remains explicit and documented.
 
 This file is the source of truth for:
 
@@ -27,15 +27,15 @@ This file is the source of truth for:
 - how landing pages are linked to flows and integrations
 - which files are required in each landing-page folder
 - how related integration documentation is organized
-- how migration away from `wp-config.php` should be handled
+- which runtime configuration remains supported
 
 ---
 
-## Problem Statement
+## Architecture Rationale
 
-The current landing-page setup is too clunky for ongoing design and maintenance work because the full definition of landing pages lives in `wp-config.php`.
+Central landing-page definitions mixed page structure and business mapping into bootstrap configuration.
 
-This creates several problems:
+This caused several problems:
 
 - page structure and business mapping are mixed into bootstrap configuration
 - changing a landing page requires editing central configuration instead of local page files
@@ -43,7 +43,7 @@ This creates several problems:
 - landing-page ownership is unclear because assets, routing, and integration details are not grouped together
 - country-specific and provider-specific setup details are harder to connect to the actual landing-page implementation
 
-This architecture introduces a folder-per-landing-page model so each landing page can be added or updated with minimal central changes.
+The folder-per-landing-page model keeps those concerns local so each landing page can be added or updated with minimal central changes.
 
 ---
 
@@ -51,7 +51,7 @@ This architecture introduces a folder-per-landing-page model so each landing pag
 
 ### Primary goals
 
-- Move landing-page definitions out of `wp-config.php`
+- Keep landing-page definitions out of `wp-config.php`
 - Use one folder per landing-page version
 - Keep HTML and CSS local to the landing-page folder
 - Add a small metadata file per landing page that links the page to the required flow
@@ -329,7 +329,14 @@ This keeps landing pages easy to edit without duplicating business logic into ea
 
 ### Resolution contract
 
-Request resolution uses the filesystem registry exclusively. `wp-config.php` does not define landing pages; the optional root-path override only changes where the registry is read from.
+The filesystem registry is the only source of landing-page definitions.
+
+- request resolution reads only validated registry entries from `/landing-pages`
+- the router renders only entries marked with `render_mode=filesystem` and a readable `index_path`
+- `wp-config.php` may override only the registry root through `KIWI_LANDING_PAGES_ROOT`
+- unsupported or invalid entries are not routed or rendered
+
+Landing-page definitions in `wp-config.php` are unsupported.
 
 ---
 
@@ -415,20 +422,36 @@ This document should preserve operational and compliance details such as:
 
 ### `/operations`
 
-Contains rollout, migration, and maintenance procedures.
+Contains rollout, validation, rollback, and maintenance procedures.
 
 Example topics:
 
-- how to create a landing page from the filesystem contract
+- how to add and validate a filesystem landing page
 - how to validate new folders before release
 - how to disable a landing page safely
 - release checklist for design changes
 
 ---
 
-## Filesystem-only configuration
+## Runtime Configuration and Compatibility
 
-Landing pages are defined only as folders under `/landing-pages`. Environment configuration may override the registry root path, but it must not contain landing-page definitions or select an alternate rendering mode.
+The filesystem registry and renderer are mandatory runtime components.
+
+### Rule
+
+`wp-config.php` must not contain landing-page definitions.
+
+### Supported configuration
+
+The only supported landing-page loader setting is:
+
+- `KIWI_LANDING_PAGES_ROOT` as an optional filesystem root override
+
+Filesystem discovery cannot be disabled through a feature flag, and there is no alternative configuration or template loader.
+
+### Compatibility rule
+
+All landing pages must be created as folders under `/landing-pages`. Deploying the previous application version is the rollback path for loader regressions.
 
 ---
 
@@ -534,7 +557,7 @@ Tests should focus on:
 - metadata validation
 - registry building
 - flow lookup
-- filesystem-only resolution behavior
+- rejection of invalid or incomplete filesystem entries
 
 ---
 
@@ -573,23 +596,19 @@ Broken folder structure or invalid metadata should produce clear errors.
 
 ---
 
-## Open Questions
+## Resolved Implementation Choices
 
-These topics should be resolved during implementation against the real codebase:
-
-- Which existing bootstrap or router component should own the landing-page registry?
-- Which current request parameter or campaign mapping resolves the landing-page key?
-- Whether HTML should be rendered directly or wrapped by an existing WordPress template layer
-- Whether `documentation` paths should be repo-relative or resolved from a fixed docs root
-- How long legacy `wp-config.php` fallback needs to remain enabled
-
-These must be answered from the codebase, not guessed.
+- `Kiwi_Config` owns registry construction and caching.
+- `Kiwi_Landing_Page_Router` resolves configured backend paths and hostnames from registry metadata.
+- HTML and CSS are rendered directly from the validated landing-page folder.
+- Documentation paths are validated against approved repository documentation locations.
+- The filesystem registry has no alternate loader or configuration fallback.
 
 ---
 
 ## Implementation Summary
 
-The target architecture is:
+The active architecture is:
 
 - filesystem-based landing pages under `/landing-pages`
 - one folder per landing-page version
@@ -598,7 +617,7 @@ The target architecture is:
 - automatic discovery and validation
 - flow linkage through metadata, not `wp-config.php`
 - country/provider technical behavior documented under `/integrations`
-- migration and operational procedures documented under `/operations`
+- validation, rollback, and operational procedures documented under `/operations`
 
 This keeps the system easier to maintain while preserving explicit technical and compliance documentation.
 

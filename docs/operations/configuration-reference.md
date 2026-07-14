@@ -27,6 +27,8 @@ Do not store real secret values in repository docs.
   - optional filesystem root override
   - default: `<plugin-root>/landing-pages`
 
+Filesystem discovery is always active. No configuration-based alternative loader or landing-page definition source is supported.
+
 ## Attribution and postbacks
 
 - `KIWI_CLICK_ATTRIBUTION_COOKIE_NAME`
