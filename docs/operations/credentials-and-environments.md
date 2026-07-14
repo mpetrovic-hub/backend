@@ -104,5 +104,5 @@ For landing pages specifically:
 - create `landing-pages/lp<version>-<country>/`
 - provide `integration.php`, `index.html`, and `styles.css`
 - link `documentation` to the relevant integration doc
-- do not add landing-page definitions to `wp-config.php`
-
+- use `KIWI_LANDING_PAGES_ROOT` only when the deployment needs a non-default filesystem root
+- do not define landing pages or alternate loaders in `wp-config.php`

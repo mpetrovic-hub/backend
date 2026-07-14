@@ -9,7 +9,7 @@
 
 - Production landing-page runtime behavior.
 - Operational validation and troubleshooting.
-- Filesystem-only landing-page runtime and deployment checks.
+- Filesystem-only loading and deployment rollback.
 
 ## Not here
 
@@ -140,13 +140,27 @@ Analytics-specific checks live in `landing-funnel-analytics.md`; retention check
 - Duplicate callback confusion: event dedupe is expected; conversion can re-attempt postback only while `postback_sent_at` is empty.
 - Broken page route: check folder naming, required files, `integration.php`, `backend_path`, and `hostnames`.
 
-## Filesystem-only runtime and rollback
+## Filesystem-only loading and rollback
 
-Landing pages are loaded and rendered exclusively from `landing-pages/*`. The migration is complete; no configuration switch or template fallback remains.
+Landing pages are discovered only from validated folders under `landing-pages/*`. The registry cannot be disabled through configuration, and the router has no alternate template-loading path.
 
-After deployment, smoke-test active routes including `lp4-fr`, `lp5-fr`, `lp5-fr-v2`, `lp6-fr`, and `lp6-fr-v2` through backend paths and the public hostname-plus-backend-path routes used in production. Confirm CTA output, SMS target/body, price disclosure, local asset rendering, and absence of new WordPress debug-log warnings or errors.
+### Deployment verification
 
-If a deployment causes an unexpected route failure, roll back by deploying the preceding plugin version. Do not introduce a runtime configuration fallback.
+1. Open active filesystem landing routes including `lp4-fr`, `lp5-fr`, `lp5-fr-v2`, `lp6-fr`, and `lp6-fr-v2` through their backend paths.
+2. Verify any public hostname plus backend-path routing used in production.
+3. Confirm CTA output, SMS target/body, price disclosure, and local asset rendering.
+4. Check WordPress debug logs for missing landing keys, unreadable filesystem files, warnings, or errors.
+
+### Rollback
+
+There is no configuration switch for an alternate loader. If a deployment introduces a loader or renderer regression, deploy the previous application version, then correct the filesystem folder or registry code before redeploying.
+
+### Adding a landing route
+
+1. Create filesystem folder `landing-pages/lp<version>-<country>/`.
+2. Add `index.html`, `styles.css`, `integration.php`.
+3. Set routing metadata in `integration.php` (`backend_path`, optional `hostnames`/`dedicated_path`).
+4. Run registry and router tests.
+5. Verify the route and rendering on staging before production deployment.
 
 In debug mode (`KIWI_DEBUG=true`), invalid landing pages fail loudly. In production, invalid entries are skipped and logged.
-

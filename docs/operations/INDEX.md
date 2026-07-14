@@ -23,7 +23,7 @@ Operations docs describe production behavior, runbooks, configuration, and troub
 
 | File | Source of truth for |
 |---|---|
-| `landing-page-runtime.md` | Landing-page routing, filesystem rendering, gallery, multi-domain exposure, runtime checks, and troubleshooting. |
+| `landing-page-runtime.md` | Landing-page routing, rendering, gallery, multi-domain exposure, runtime checks, troubleshooting, legacy fallback. |
 | `landing-funnel-analytics.md` | Landing KPI, Statistics UI, daily funnel summaries, TK-zone summaries, analytics storage/read behavior. |
 | `premium-sms-fraud-monitoring.md` | Premium SMS fraud monitor UI, MO/engagement soft flags, hidden filters, and block/observe behavior. |
 | `retention-runbook.md` | Landing-session raw retention coverage gate, archive/delete worker, raw-context compaction. |
