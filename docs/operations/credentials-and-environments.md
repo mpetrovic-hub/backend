@@ -104,5 +104,5 @@ For landing pages specifically:
 - create `landing-pages/lp<version>-<country>/`
 - provide `integration.php`, `index.html`, and `styles.css`
 - link `documentation` to the relevant integration doc
-- do not add new `KIWI_LANDING_PAGES` entries
+- do not add landing-page definitions to `wp-config.php`
 

@@ -197,8 +197,7 @@ class Kiwi_Config
     /**
      * Dedicated landing page configuration.
      *
-     * Filesystem entries are the primary source of truth.
-     * Legacy wp-config landing pages are an explicit rollback/migration fallback.
+     * Filesystem entries are the only source of truth.
      */
     public function get_landing_pages(): array
     {
@@ -207,35 +206,15 @@ class Kiwi_Config
         }
 
         $this->landing_pages_loaded = true;
-        $filesystem_landing_pages = [];
         $this->landing_page_registry_errors = [];
+        $registry = new Kiwi_Landing_Page_Registry(
+            $this->get_landing_pages_root_path(),
+            dirname(__DIR__, 2)
+        );
 
-        if ($this->is_landing_pages_filesystem_enabled()) {
-            $registry = new Kiwi_Landing_Page_Registry(
-                $this->get_landing_pages_root_path(),
-                dirname(__DIR__, 2)
-            );
-
-            $filesystem_landing_pages = $registry->get_registry();
-            $this->landing_page_registry_errors = $registry->get_errors();
-            $this->handle_landing_page_registry_errors($this->landing_page_registry_errors);
-        }
-
-        $landing_pages = $filesystem_landing_pages;
-
-        if ($this->is_landing_pages_legacy_fallback_enabled()) {
-            foreach ($this->get_legacy_landing_pages() as $legacy_key => $legacy_landing_page) {
-                if (!is_array($legacy_landing_page)) {
-                    continue;
-                }
-
-                if (!isset($landing_pages[$legacy_key])) {
-                    $landing_pages[$legacy_key] = $legacy_landing_page;
-                }
-            }
-        }
-
-        $this->landing_pages_cache = $landing_pages;
+        $this->landing_pages_cache = $registry->get_registry();
+        $this->landing_page_registry_errors = $registry->get_errors();
+        $this->handle_landing_page_registry_errors($this->landing_page_registry_errors);
 
         return $this->landing_pages_cache;
     }
@@ -420,25 +399,6 @@ class Kiwi_Config
         $this->get_landing_pages();
 
         return $this->landing_page_registry_errors;
-    }
-
-    protected function get_legacy_landing_pages(): array
-    {
-        return defined('KIWI_LANDING_PAGES') && is_array(KIWI_LANDING_PAGES)
-            ? KIWI_LANDING_PAGES
-            : [];
-    }
-
-    protected function is_landing_pages_filesystem_enabled(): bool
-    {
-        return !defined('KIWI_LANDING_PAGES_FILESYSTEM_ENABLED')
-            || (bool) KIWI_LANDING_PAGES_FILESYSTEM_ENABLED;
-    }
-
-    protected function is_landing_pages_legacy_fallback_enabled(): bool
-    {
-        return defined('KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED')
-            && (bool) KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED;
     }
 
     protected function get_landing_pages_root_path(): string

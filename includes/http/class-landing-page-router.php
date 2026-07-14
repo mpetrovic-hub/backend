@@ -128,8 +128,6 @@ class Kiwi_Landing_Page_Router
             ],
         ]);
 
-        $template = $this->resolve_template_path((string) ($landing_page['template'] ?? ''));
-
         if (function_exists('status_header')) {
             status_header(200);
         }
@@ -138,23 +136,14 @@ class Kiwi_Landing_Page_Router
             nocache_headers();
         }
 
-        $landing_key = $match['landing_key'];
-        $asset_base_url = $this->plugin_base_url;
-
-        if ($this->is_filesystem_landing_page($landing_page)) {
-            $this->maybe_record_kpi_click($landing_key, $landing_page);
-
-            return $this->render_filesystem_landing_page($landing_page, $landing_key, $session_token);
-        }
-
-        if ($template === null) {
+        if (!$this->is_filesystem_landing_page($landing_page)) {
             return false;
         }
 
+        $landing_key = $match['landing_key'];
         $this->maybe_record_kpi_click($landing_key, $landing_page);
 
-        include $template;
-        exit;
+        return $this->render_filesystem_landing_page($landing_page, $landing_key, $session_token);
     }
 
     public function resolve_request(string $host, string $request_uri): ?array
@@ -195,19 +184,6 @@ class Kiwi_Landing_Page_Router
         }
 
         return null;
-    }
-
-    private function resolve_template_path(string $template): ?string
-    {
-        $template = trim($template);
-
-        if ($template === '') {
-            return null;
-        }
-
-        $path = dirname(__DIR__, 2) . '/templates/landing-pages/' . $template . '.php';
-
-        return file_exists($path) ? $path : null;
     }
 
     private function is_filesystem_landing_page(array $landing_page): bool

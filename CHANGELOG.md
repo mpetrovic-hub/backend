@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-07-13:
+- [Landing Pages] Completed the filesystem-only landing-page migration: removed retired configuration/template fallbacks, kept the registry-root override, and updated runtime documentation and regression coverage. Rollback is now deployment-based.
+
 2026-07-07:
 - [Auth Cache] Extended the frontend tool auth gate to mark protected tool responses as LiteSpeed no-cache via `litespeed_control_set_nocache` and purge auth redirect targets with `litespeed_purge_url`, preventing stale cached login pages from persisting after timeout re-login.
 

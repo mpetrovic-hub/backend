@@ -5,7 +5,7 @@ return [
     'country' => 'FR',
     'flow' => 'nth-fr-one-off',
     'provider' => 'nth',
-    'documentation' => '/integrations/nth/fr/one-off/README.md',
+    'documentation' => '/integrations/nth/fr/one-off/fr-one-off-nth-api.md',
 
     'locale' => 'fr',
     'service_type' => 'premium_sms',

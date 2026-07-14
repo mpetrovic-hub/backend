@@ -540,7 +540,7 @@ function kiwi_write_landing_page_fixture(
         'country' => 'FR',
         'flow' => 'nth-fr-one-off',
         'provider' => 'nth',
-        'documentation' => '/integrations/nth/fr/one-off/README.md',
+        'documentation' => '/integrations/nth/fr/one-off/fr-one-off-nth-api.md',
         'active' => true,
         'backend_path' => '/lp/fr/myjoyplay',
         'dedicated_path' => '/',
@@ -823,24 +823,15 @@ class Kiwi_Test_Trusted_Proxy_Debug_Config extends Kiwi_Test_Trusted_Proxy_Confi
 class Kiwi_Test_Runtime_Config extends Kiwi_Config
 {
     private $landing_pages_root;
-    private $legacy_landing_pages;
-    private $filesystem_enabled;
-    private $legacy_fallback_enabled;
     private $debug;
     private $nth_services;
 
     public function __construct(
         string $landing_pages_root,
-        array $legacy_landing_pages = [],
-        bool $filesystem_enabled = true,
-        bool $legacy_fallback_enabled = false,
         bool $debug = false,
         array $nth_services = []
     ) {
         $this->landing_pages_root = $landing_pages_root;
-        $this->legacy_landing_pages = $legacy_landing_pages;
-        $this->filesystem_enabled = $filesystem_enabled;
-        $this->legacy_fallback_enabled = $legacy_fallback_enabled;
         $this->debug = $debug;
         $this->nth_services = $nth_services;
     }
@@ -860,20 +851,6 @@ class Kiwi_Test_Runtime_Config extends Kiwi_Config
         return $this->landing_pages_root;
     }
 
-    protected function get_legacy_landing_pages(): array
-    {
-        return $this->legacy_landing_pages;
-    }
-
-    protected function is_landing_pages_filesystem_enabled(): bool
-    {
-        return $this->filesystem_enabled;
-    }
-
-    protected function is_landing_pages_legacy_fallback_enabled(): bool
-    {
-        return $this->legacy_fallback_enabled;
-    }
 }
 
 class Kiwi_Test_Attribution_Config extends Kiwi_Test_Config
@@ -4873,7 +4850,7 @@ kiwi_run_test('Kiwi_Landing_Page_Registry discovers folder landing pages and par
         kiwi_assert_true(isset($landing_pages['lp4-fr-img-preload-test']), 'Expected suffix test variants to be discovered from the filesystem.');
         kiwi_assert_same('nth-fr-one-off', $landing_pages['lp2-fr']['flow'] ?? '', 'Expected landing page flow metadata to be parsed from integration.php.');
         kiwi_assert_same('/lp/fr/myjoyplay4-img-preload-test', $landing_pages['lp4-fr-img-preload-test']['backend_path'] ?? '', 'Expected suffix test variant backend path metadata to be parsed.');
-        kiwi_assert_same('/integrations/nth/fr/one-off/README.md', $landing_pages['lp2-fr']['documentation'] ?? '', 'Expected documentation path to normalize to /integrations/.');
+        kiwi_assert_same('/integrations/nth/fr/one-off/fr-one-off-nth-api.md', $landing_pages['lp2-fr']['documentation'] ?? '', 'Expected documentation path to normalize to /integrations/.');
         kiwi_assert_true(is_file((string) ($landing_pages['lp2-fr']['documentation_resolved_path'] ?? '')), 'Expected documentation link to resolve to an existing docs file.');
         kiwi_assert_same('filesystem', $landing_pages['lp2-fr']['render_mode'] ?? '', 'Expected discovered entries to be marked as filesystem-rendered.');
     } finally {
@@ -4912,9 +4889,6 @@ kiwi_run_test('Kiwi_Config fails loudly in debug mode when filesystem landing pa
 
         $config = new Kiwi_Test_Runtime_Config(
             $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [],
-            true,
-            false,
             true
         );
 
@@ -4968,7 +4942,7 @@ kiwi_run_test('Kiwi_Landing_Page_Registry validates documentation linkage safety
     }
 });
 
-kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and disables legacy fallback by default', function (): void {
+kiwi_run_test('Kiwi_Config loads landing pages exclusively from the filesystem registry', function (): void {
     $project_root = kiwi_create_temp_directory('kiwi_lp_fallback');
 
     try {
@@ -4976,73 +4950,14 @@ kiwi_run_test('Kiwi_Config keeps filesystem landing pages primary and disables l
             'flow' => 'filesystem-flow',
         ]);
 
-        $config = new Kiwi_Test_Runtime_Config(
-            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [
-                'lp2-fr' => [
-                    'flow' => 'legacy-flow',
-                    'backend_path' => '/legacy/lp2-fr',
-                ],
-                'legacy-only-fr' => [
-                    'flow' => 'legacy-only-flow',
-                    'backend_path' => '/legacy/only',
-                ],
-            ],
-            true
-        );
+        $config = new Kiwi_Test_Runtime_Config($project_root . DIRECTORY_SEPARATOR . 'landing-pages');
 
         $landing_pages = $config->get_landing_pages();
 
         kiwi_assert_same(
             'filesystem-flow',
             $landing_pages['lp2-fr']['flow'] ?? '',
-            'Expected filesystem landing pages to override same-key legacy entries.'
-        );
-        kiwi_assert_same(
-            false,
-            isset($landing_pages['legacy-only-fr']),
-            'Expected legacy-only landing pages to stay disabled unless the rollback fallback is explicit.'
-        );
-    } finally {
-        kiwi_remove_directory($project_root);
-    }
-});
-
-kiwi_run_test('Kiwi_Config allows explicit legacy fallback as a rollback switch', function (): void {
-    $project_root = kiwi_create_temp_directory('kiwi_lp_fallback_on');
-
-    try {
-        kiwi_write_landing_page_fixture($project_root, 'lp2-fr', [
-            'flow' => 'filesystem-flow',
-        ]);
-
-        $config = new Kiwi_Test_Runtime_Config(
-            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [
-                'lp2-fr' => [
-                    'flow' => 'legacy-flow',
-                    'backend_path' => '/legacy/lp2-fr',
-                ],
-                'legacy-only-fr' => [
-                    'flow' => 'legacy-only-flow',
-                    'backend_path' => '/legacy/only',
-                ],
-            ],
-            true,
-            true
-        );
-
-        $landing_pages = $config->get_landing_pages();
-
-        kiwi_assert_same(
-            'filesystem-flow',
-            $landing_pages['lp2-fr']['flow'] ?? '',
-            'Expected filesystem landing pages to remain primary when rollback fallback is explicit.'
-        );
-        kiwi_assert_same(
-            'legacy-only-flow',
-            $landing_pages['legacy-only-fr']['flow'] ?? '',
-            'Expected explicit rollback fallback to restore unmigrated legacy landing pages.'
+            'Expected filesystem landing pages to come from the registry.'
         );
     } finally {
         kiwi_remove_directory($project_root);
@@ -5066,11 +4981,7 @@ kiwi_run_test('Kiwi_Landing_Page_Gallery_Service normalizes metadata and dedicat
         ]);
 
         $config = new Kiwi_Test_Runtime_Config(
-            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [],
-            true,
-            false,
-            false
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages'
         );
         $service = new Kiwi_Landing_Page_Gallery_Service($config);
         $gallery_data = $service->build_gallery_data();
@@ -5122,11 +5033,7 @@ kiwi_run_test('Kiwi_Landing_Page_Gallery_Service derives inferred URL for backen
         ]);
 
         $config = new Kiwi_Test_Runtime_Config(
-            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [],
-            true,
-            false,
-            false
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages'
         );
         $service = new Kiwi_Landing_Page_Gallery_Service($config);
         $gallery_data = $service->build_gallery_data();
@@ -5155,11 +5062,7 @@ kiwi_run_test('Kiwi_Landing_Page_Gallery_Service keeps valid entries when discov
         kiwi_write_landing_page_fixture($project_root, 'lp3-fr', [], false);
 
         $config = new Kiwi_Test_Runtime_Config(
-            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [],
-            true,
-            false,
-            false
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages'
         );
         $service = new Kiwi_Landing_Page_Gallery_Service($config);
         $gallery_data = $service->build_gallery_data();
@@ -5200,11 +5103,7 @@ kiwi_run_test('Kiwi_Landing_Pages_Gallery_Shortcode renders preview cards and UR
         );
 
         $config = new Kiwi_Test_Runtime_Config(
-            $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [],
-            true,
-            false,
-            false
+            $project_root . DIRECTORY_SEPARATOR . 'landing-pages'
         );
         $service = new Kiwi_Landing_Page_Gallery_Service($config);
         $shortcode = new Kiwi_Landing_Pages_Gallery_Shortcode($service);
@@ -5407,9 +5306,6 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves filesystem landing pages to the
 
         $config = new Kiwi_Test_Runtime_Config(
             $project_root . DIRECTORY_SEPARATOR . 'landing-pages',
-            [],
-            true,
-            false,
             false,
             [
                 'nth_fr_one_off_jplay' => [
@@ -5571,13 +5467,9 @@ kiwi_run_test('Kiwi_Landing_Page_Router stores client IP debug diagnostics only 
     kiwi_assert_true(strpos($encoded_debug_on, '2a02:4780:79:a1e9::1') === false, 'Expected debug raw context not to include raw proxy IPs.');
 });
 
-kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing variants without legacy fallback', function (): void {
+kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing variants', function (): void {
     $config = new Kiwi_Test_Runtime_Config(
-        __DIR__ . '/../landing-pages',
-        [],
-        true,
-        false,
-        false
+        __DIR__ . '/../landing-pages'
     );
     $router = new Kiwi_Landing_Page_Router(
         $config,
@@ -5599,7 +5491,7 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing varia
         kiwi_assert_same(
             $landing_key,
             $match['landing_key'] ?? '',
-            'Expected active filesystem landing route ' . $backend_path . ' to resolve without legacy fallback.'
+            'Expected active filesystem landing route ' . $backend_path . ' to resolve.'
         );
         kiwi_assert_same(
             'filesystem',
@@ -5610,7 +5502,7 @@ kiwi_run_test('Kiwi_Landing_Page_Router resolves active filesystem landing varia
 
     $dedicated_host_match = $router->resolve_request('frlp2.joy-play.com', '/');
 
-    kiwi_assert_same('lp5-fr', $dedicated_host_match['landing_key'] ?? '', 'Expected lp5-fr dedicated host routing to resolve without legacy fallback.');
+    kiwi_assert_same('lp5-fr', $dedicated_host_match['landing_key'] ?? '', 'Expected lp5-fr dedicated host routing to resolve.');
 });
 
 kiwi_run_test('Kiwi_Landing_Page_Router inlines readable filesystem styles and removes stylesheet link', function (): void {

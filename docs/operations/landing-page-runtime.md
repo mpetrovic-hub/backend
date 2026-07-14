@@ -3,13 +3,13 @@
 ## Read when
 
 - You need to operate, validate, debug, or roll back landing-page runtime behavior.
-- Work touches routing, rendering, the gallery shortcode, CTA rendering, multi-domain exposure, or legacy fallback.
+- Work touches routing, rendering, the gallery shortcode, CTA rendering, or multi-domain exposure.
 
 ## Source of truth for
 
 - Production landing-page runtime behavior.
 - Operational validation and troubleshooting.
-- Legacy landing-page fallback and rollback.
+- Filesystem-only landing-page runtime and deployment checks.
 
 ## Not here
 
@@ -140,40 +140,13 @@ Analytics-specific checks live in `landing-funnel-analytics.md`; retention check
 - Duplicate callback confusion: event dedupe is expected; conversion can re-attempt postback only while `postback_sent_at` is empty.
 - Broken page route: check folder naming, required files, `integration.php`, `backend_path`, and `hostnames`.
 
-## Legacy retirement and rollback
+## Filesystem-only runtime and rollback
 
-The legacy `KIWI_LANDING_PAGES` fallback is in retirement. Phase 1 keeps the code path available but disables it by default. Phase 2 should remove the legacy template loading path and `templates/landing-pages` code only after staging confirms there are no remaining runtime-only legacy routes.
+Landing pages are loaded and rendered exclusively from `landing-pages/*`. The migration is complete; no configuration switch or template fallback remains.
 
-### Staging verification before Phase 2
+After deployment, smoke-test active routes including `lp4-fr`, `lp5-fr`, `lp5-fr-v2`, `lp6-fr`, and `lp6-fr-v2` through backend paths and the public hostname-plus-backend-path routes used in production. Confirm CTA output, SMS target/body, price disclosure, local asset rendering, and absence of new WordPress debug-log warnings or errors.
 
-1. Open active filesystem landing routes including `lp4-fr`, `lp5-fr`, `lp5-fr-v2`, `lp6-fr`, and `lp6-fr-v2` through their backend paths.
-2. Verify any public hostname plus backend-path routing used in production.
-3. Confirm CTA output, SMS target/body, price disclosure, and local asset rendering.
-4. Check WordPress debug logs for missing landing keys, missing templates, warnings, or errors.
-5. Confirm no required route depends on `KIWI_LANDING_PAGES` or `templates/landing-pages/<template>.php`.
-
-### Temporary rollback
-
-If staging or production shows an unmigrated legacy-only route, temporarily define:
-
-```php
-define('KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED', true);
-```
-
-Use this only to restore service while the route is migrated into a filesystem folder. Remove the flag again after the filesystem route is verified.
-
-### Migrating a discovered legacy route
-
-Use only if a remaining legacy `KIWI_LANDING_PAGES` entry is found.
-
-1. Create filesystem folder `landing-pages/lp<version>-<country>/`.
-2. Add `index.html`, `styles.css`, `integration.php`.
-3. Set routing metadata in `integration.php` (`backend_path`, optional `hostnames`/`dedicated_path`).
-4. Temporarily deploy with `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED=true` only if rollback coverage is needed during migration.
-5. Verify parity.
-6. Remove migrated key from `KIWI_LANDING_PAGES`.
-7. Repeat until no legacy keys remain.
-8. Remove the temporary fallback flag.
+If a deployment causes an unexpected route failure, roll back by deploying the preceding plugin version. Do not introduce a runtime configuration fallback.
 
 In debug mode (`KIWI_DEBUG=true`), invalid landing pages fail loudly. In production, invalid entries are skipped and logged.
 

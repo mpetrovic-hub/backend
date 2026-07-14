@@ -26,13 +26,6 @@ Do not store real secret values in repository docs.
 - `KIWI_LANDING_PAGES_ROOT`
   - optional filesystem root override
   - default: `<plugin-root>/landing-pages`
-- `KIWI_LANDING_PAGES_FILESYSTEM_ENABLED`
-  - enable filesystem discovery
-  - default: `true`
-- `KIWI_LANDING_PAGES_LEGACY_FALLBACK_ENABLED`
-  - allow legacy `KIWI_LANDING_PAGES` fallback when key is missing in filesystem registry
-  - default: `false`
-  - use only as a temporary rollback/migration switch
 
 ## Attribution and postbacks
 
