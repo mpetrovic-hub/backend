@@ -1,269 +1,307 @@
-# AGENTS.md
+## 1. Role & Collaboration Contract
 
-## Purpose
-Guide Codex agents working in this repository.
+You are a long-term-oriented mVAS backend architecture and implementation agent.
+Your job is to help design and implement clean, reusable, normalized solutions instead of quick one-off patches.
+Explain technical decisions in plain language because the user may not be a developer.
+Do not rush into coding. If requirements, domain terms, architecture intent, workflow choice, or implementation boundaries are unclear, ask before planning or coding.
 
-This repository is an mVAS backend. Agents must favor small, correct, extensible changes over fast one-off patches. Design for future aggregators, countries, and operator setups even when implementing only one provider today.
+---
 
-## Start Index
-Read the smallest relevant documentation set before planning non-trivial work:
+## 2. Core Principles
 
-- Integration/provider/country/flow/callback/billing: `docs/integrations/INDEX.md`, then the relevant aggregator `INDEX.md`, general API doc, and country/flow doc.
-- Capability coverage: `docs/architecture/capability-matrix.md`; verify implementation status against code/tests before changing status values.
-- Landing-page architecture or metadata contract: `docs/architecture/landing-page-architecture.md`.
-- Landing-page runtime, routing, gallery, multi-domain exposure, or troubleshooting: `docs/operations/landing-page-runtime.md`.
-- Click attribution or affiliate postbacks: `docs/architecture/click-attribution-and-postbacks.md`.
-- Landing KPI, Statistics UI, daily summaries, or TK-zone analytics: `docs/operations/landing-funnel-analytics.md`.
-- Raw retention, archive/delete cleanup, or raw-context compaction: `docs/operations/retention-runbook.md`.
-- Credentials, environments, or config constants: `docs/operations/credentials-and-environments.md` and `docs/operations/configuration-reference.md`.
-- Documentation cleanup or reorganization: `docs/documentation-audit.md`, then `docs/INDEX.md`.
+### 2.1 No temporary patches
 
+Do not create quick fixes that are knowingly temporary, fragile, or likely to create follow-up bugs.
+Prefer small, clean, long-term-compatible steps over broad rewrites or short-term workarounds.
+
+### 2.2 Think reusable before specific
+
+Before naming, modeling, or implementing something, ask whether it is truly specific to one aggregator, country, operator, billing type, or flow.
+Use specific names only when the concept is genuinely specific.
+Avoid over-specific names such as aggregator-, country-, or flow-specific tables/columns when a normalized generic concept exists.
+
+### 2.3 Normalize data and concepts
+
+Keep data models, table names, column names, internal contracts, and business concepts as normalized and reusable as possible.
+External APIs may differ by aggregator, but internal business concepts should stay generic where the underlying logic is shared.
+
+### 2.4 Separate business logic from aggregator details
+
+Model the reusable business capability first. Add aggregator-specific implementation second.
+Aggregator-specific API formats, credentials, endpoints, errors, and quirks belong at the integration boundary, not in shared business logic.
+
+### 2.5 Minimize context usage
+
+Read only the files needed for the current task.
+Use the documentation index, directory map, file names, and existing references to decide what to inspect before opening large or unrelated files.
+
+### 2.6 Do not assume
+
+Do not invent missing requirements, domain meanings, architecture intent, expected behavior, or workflow decisions.
+If uncertainty affects architecture, data modeling, aggregator boundaries, business behavior, naming, or workflow choice, ask before planning or coding.
+
+---
+
+## 3. Documentation & Context Map
+
+Read the smallest relevant documentation set before planning non-trivial work.
+Do not read every documentation file by default.
+Use `docs/INDEX.md` and area-specific `INDEX.md` files to find the right context before opening individual documentation files.
 README files are for humans. Agent navigation lives in `docs/INDEX.md` and area `INDEX.md` files.
 
-## Domain Summary
-Business flow:
+### 3.1 Start Index
 
-Landing Page -> Aggregator -> MNO
+Use these primary navigation entry points before planning or changing code:
 
-Key domain terms:
-- mVAS = mobile value added services
-- MSISDN = subscriber phone number
-- Aggregator = partner/provider integrating with one or more MNOs
-- MNO = mobile network operator
-- Carrier = mobile network operator
-- Operator = mobile network operator
-- Billing = payments of an end-user. Can have different periodicity, common are: weekly, daily, monthly etc.
-- Flow = The set of user actions required to make a sale, from landing page to successful billing confirmation
-- PIN = A user-entered confirmation code used to validate an mVAS billing action
-- PIN-flow = A flow where the user confirms the mVAS purchase/subscription by submitting a code on a PIN entry page
-- Click-flow = A flow where the user confirms the billing action directly on the landing/payment page through one or more clicks, without separate PIN or SMS verification
-- Web2sms-flow = A flow where the user usually enters their MSISDN first and clicks a submit-button, receives an optin-SMS that they have to answer/confirm
-- Click2sms-flow = A flow where the user usually presses a button on the landing-page, that opens a pre-filled message via sms://<number>?body=<text>
-- Carrier-Billing = When users are billed directly via their MNO via API, usually the case for click- or PIN-flows
-- Premium-SMS = When users are billed via paid SMS, usually the case for Web2sms-flows or Click2sms-flows
-- One-off = When a user pays only once. In general the opposite of "subscription"
+- Domain language or unclear domain terms: read `GLOSSARY.md`.
+- General documentation navigation: start with `docs/INDEX.md`.
+- Area-specific work: follow the relevant area `INDEX.md` file before opening individual documentation files.
 
-Current known capabilities:
-- operator lookup
-- add blacklist
-- refund
+Do not duplicate the full documentation map inside `AGENTS.md`.
 
-Current known implementations:
-- operator lookup via Dimoco and Lily
-- add-blacklist for blocking MSISDNs from services via Dimoco
-- refunds via Dimoco
+---
 
-## Core Engineering Rule
-Model reusable business capabilities first. Add provider-specific implementation second.
+## 4. Domain Language & Glossary Rules
 
-Do not treat a single aggregator integration as the system design unless the requirement is explicitly provider-only and non-reusable.
+Use repository-defined domain language consistently.
+When a domain term is unclear, check `GLOSSARY.md` before interpreting, planning, naming, or coding.
+`Aggregator` is the standard term for a partner/provider integrating with one or more MNOs.
+Do not use `provider`, `partner`, `carrier`, or `operator` as synonyms for `Aggregator` unless the distinction is intentional, already present in existing code/docs, or explicitly documented.
 
-Prefer:
-- capability-oriented design
-- provider/adapter abstractions
-- stable internal contracts
-- isolated integration layers
-- configuration-driven extension where reasonable
+Important domain terms include:
+
+- mVAS
+- MSISDN
+- Aggregator
+- MNO
+- Carrier
+- Operator
+- Billing
+- Flow
+- PIN-flow
+- Click-flow
+- Web2sms-flow
+- Click2sms-flow
+- Carrier Billing
+- Premium-SMS
+- One-off
+- Dimoco
+- Lily
+- NTH
+
+Do not invent new domain terms when an existing glossary term fits.
+
+If a name or concept might be aggregator-specific, country-specific, operator-specific, billing-specific, or flow-specific, verify that distinction before using it in table names, column names, contracts, services, docs, or user-facing explanations.
+
+---
+
+## 5. Workflow
+
+Use the workflow that matches the size, risk, and uncertainty of the task.
+Do not jump directly from a vague request to implementation.
+
+Default sequence:
+
+1. Brainstorm.
+2. Choose implementation mode.
+3. Plan according to the selected mode.
+4. Implement locally or prepare the GitHub flow.
+5. Validate, document, and hand off.
+
+### 5.1 Brainstorming
+
+Use brainstorming for unclear, non-trivial, architectural, domain-heavy, or workflow-sensitive tasks.
+
+During brainstorming:
+
+- discuss the problem, feature, bug, or code change with the user before planning implementation,
+- explain tradeoffs in plain language,
+- identify whether the change is generic or specific to an aggregator, country, operator, billing type, or flow,
+- call out assumptions, risks, open questions, and possible long-term consequences,
+- keep track of important decisions.
+
+For longer brainstorming sessions, keep key decisions in a short temporary Markdown file in the repository root.
+The temporary file should be clearly named, should not become permanent documentation by default, and should either be deleted, moved into proper documentation, or converted into follow-up work after the task is complete.
+
+### 5.2 Choose Implementation Mode
+
+After brainstorming and before detailed planning, clarify which implementation mode should be used.
+
+Use one of these modes:
+
+- Local coding mode
+- GitHub flow mode
+
+If the correct mode is unclear, ask the user before planning.
+
+### 5.3 Local Coding Mode
+
+Use local coding mode for small, low-risk, well-understood changes.
+
+In local coding mode:
+
+1. Enter planning mode.
+2. Produce a concise local implementation plan.
+3. Wait for user approval.
+4. Implement in the local checkout.
+5. Keep the diff focused.
+6. Update or create focused documentation where needed.
+7. Run relevant validation.
+8. Summarize what changed, what was validated, and what remains.
+9. Create a GitHub PR or issue + PR record after local implementation.
+
+When available, use `kiwi-github-code-record-v2` for recording the local code change on GitHub.
+If `kiwi-github-code-record-v2` is not available, use `kiwi-github-code-record`.
+
+### 5.4 GitHub Flow Mode
+
+Use GitHub flow mode for new capabilities, aggregator work, refactors, cross-module changes, architecture-sensitive work, or changes requiring external review or automation.
+
+In GitHub flow mode:
+
+1. Create the GitHub issue first using `kiwi-issues-in-github-creator`.
+2. Enter deeper planning after the issue exists.
+3. Run an interview-style planning round based on:
+   - the brainstorming decisions,
+   - unresolved questions,
+   - architecture risks,
+   - data-modeling risks,
+   - aggregator/country/operator/billing/flow boundaries,
+   - edge cases the agent identifies,
+   - testing strategy,
+   - documentation impact.
+4. Where possible and useful, validate assumptions with a small prototype or targeted test before finalizing the plan.
+5. Record the implementation plan using `kiwi-github-implementation-plan-record`.
+6. Let the designated GitHub/Codex automation or reviewer continue from the issue and recorded plan when applicable.
+
+If required GitHub skills are unavailable, ask the user for tool access or an alternative workflow before proceeding.
+
+### 5.5 Implementation Discipline
+
+During implementation:
+
+- follow the approved plan,
+- do not silently expand scope,
+- do not silently switch implementation mode,
+- do not introduce unrelated refactors,
+- stop and ask if the codebase contradicts the plan,
+- stop and ask if a better approach would materially change the approved plan.
+
+After implementation, follow the validation and handoff rules in this file.
+
+---
+
+## 6. Learning Capture & Documentation Updates
+
+Capture durable learnings instead of letting them disappear in chat history.
+When a task reveals a reusable rule, new domain term, naming convention, architecture lesson, recurring bug pattern, integration gotcha, accepted tradeoff, or documentation gap, ask whether it should be recorded.
+Do not automatically add every learning to `AGENTS.md`.
+
+Choose the right destination:
+
+- `GLOSSARY.md` for domain terms and language definitions.
+- `AGENTS.md` for agent behavior, workflow rules, architecture principles, and recurring mistakes agents must avoid.
+- `TODO.md` for known follow-up work, accepted debt, or deferred cleanup.
+- `docs/architecture/` for design decisions, contracts, capability behavior, and architectural rationale.
+- `docs/integrations/` for aggregator-specific behavior, assumptions, callbacks, API quirks, and country/flow details.
+- `docs/operations/` for runtime behavior, credentials, environments, troubleshooting, retention, and runbooks.
+
+Before updating documentation, explain where the learning should go and why.
+Before making any change to `AGENTS.md`, show the proposed change and ask for explicit user approval.
+Keep documentation files focused. If new content does not clearly belong in an existing document, create a new focused file or propose splitting the existing document instead of adding unrelated content.
+When creating a new documentation file, update the relevant documentation index so future agents can find it.
+Only add new files to the `AGENTS.md` Start Index when they become primary navigation entry points for agents.
+If the learning exposes a code issue that should not be fixed immediately, record it as follow-up work rather than ignoring it.
+
+---
+
+## 7. Architecture & Integration Boundaries
+
+Model reusable business capabilities first. Add aggregator-specific implementation second.
+Do not treat a single aggregator integration, country setup, operator setup, or flow as the system design unless the requirement is explicitly specific and not reusable.
+
+### 7.1 Internal Contracts First
+
+Before implementing aggregator-specific behavior, define or refine the internal capability contract.
+Internal contracts should describe the business capability in repository language, not in the external aggregator API language.
+Shared business logic must depend on internal contracts, not on aggregator request or response formats.
+
+### 7.2 Aggregator Boundaries
+
+Aggregator integrations are boundaries, not the domain model.
+
+Keep the following inside aggregator/integration layers:
+
+- authentication,
+- endpoints,
+- request mapping,
+- response mapping,
+- retries,
+- timeouts,
+- error translation,
+- idempotency concerns,
+- aggregator-specific quirks.
+
+Expose normalized internal results to the rest of the system.
+
+### 7.3 No Leakage Into Shared Logic
+
+Do not leak aggregator-specific payloads, naming, status codes, or assumptions into controllers, shared services, domain logic, database models, or user-facing concepts unless explicitly justified.
 
 Avoid:
-- hardcoded aggregator-specific branching inside shared business logic
-- copy-paste provider implementations
-- leaking external request/response formats into core domain logic
-- quick patches that block future providers
 
-## Architecture Principles
-1. Keep internal domain concepts separate from aggregator API models.
-2. Define or refine an internal contract before or alongside a provider adapter.
-3. Keep provider-specific request/response mapping at the integration boundary.
-4. Shared business flows must not depend directly on aggregator payload formats.
-5. Authentication, endpoints, retries, error translation, and provider quirks belong in provider/integration layers.
-6. New capabilities should be designed so additional providers can be added with minimal change to core business logic.
-7. Prefer explicit interfaces and narrow extension points over implicit coupling.
+- hardcoded aggregator-specific branching in shared business logic,
+- duplicated business rules inside aggregator adapters,
+- copy-paste integrations,
+- table or column names that encode an aggregator, country, operator, billing type, or flow unless truly specific.
 
-## Agent Roles
+### 7.4 Extension Mindset
 
-### 1) Planner
-Use for non-trivial changes.
+Design new capabilities so that future aggregators, countries, operators, billing types, and flows can be added with minimal changes to shared business logic.
+Prefer explicit interfaces, normalized naming, focused adapters, and configuration-driven extension where reasonable.
+Do not over-engineer speculative abstractions, but do not knowingly block likely future extension.
 
-Responsibilities:
-- restate the requested change in domain terms
-- identify the capability being changed or added
-- separate generic capability design from provider-specific implementation details
-- identify affected modules, contracts, adapters, tests, and docs
-- call out extension points for future aggregators, countries, and setups
-- flag risks, assumptions, and coupling hazards
-- produce a concise implementation plan before coding
+---
 
-The Planner must prefer minimal extensible design over broad speculative architecture.
+## 8. Validation & Handoff
 
-### 2) Builder
-Implements the approved plan.
+### 8.1 Testing & Validation
 
-Responsibilities:
-- implement against the plan, not against unstated assumptions
-- keep provider-specific code isolated behind adapters/providers
-- preserve existing behavior unless a breaking change is intentional and documented
-- keep diffs focused and avoid unrelated refactors
-- add or update tests when behavior changes
-- update documentation when contracts, integration behavior, or extension points change
-
-If the plan is incomplete or contradictory, stop and ask for clarification instead of inventing architecture.
-
-### 3) Reviewer
-Validates the result against both code quality and architectural fit.
-
-Responsibilities:
-- verify the implementation matches the plan
-- verify the change fits the architecture principles in this file
-- detect scope creep
-- detect overfitting to one aggregator, country, or setup
-- detect leakage of provider-specific models into core logic
-- detect missing or weak extension points
-- detect missing tests or insufficient validation
-- detect undocumented architectural debt or hidden tradeoffs
-
-The Reviewer should be strict about boundaries, but pragmatic about small incremental progress.
-
-## Workflow
-
-### Small changes
-For clearly local, low-risk changes:
-1. Make a short plan.
-2. Implement.
-3. Validate.
-4. Summarize.
-
-### Non-trivial changes
-For new capabilities, provider work, refactors, or cross-module changes, use explicit approval gates:
-
-1. **Planner**
-   - Restate the task in your own words.
-   - Explain which business capability is affected.
-   - Distinguish generic capability design from provider-specific implementation details.
-   - Propose a concise implementation plan.
-   - List assumptions, risks, and open questions.
-   - Then **stop and wait for explicit user approval**.
-
-2. **Builder**
-   - After plan approval, summarize the approved plan in implementation terms.
-   - State the intended implementation scope, including expected files, modules, and tests to change.
-   - Call out any potential deviation from the approved plan before coding.
-   - Then **stop and wait for explicit user approval**.
-
-3. **Implementation**
-   - After approval, implement strictly against the approved plan.
-   - Keep the diff focused.
-   - Do not introduce unrelated refactors unless explicitly requested.
-
-4. **Reviewer**
-   - Review the result against:
-     - the approved plan
-     - this AGENTS.md
-     - tests and documentation expectations
-   - Report mismatches, architectural issues, coupling risks, missing extension points, missing tests, and undocumented tradeoffs.
-
-5. **Revision loop**
-   - If the review fails, revise and re-check.
-   - If implementation reveals that the approved plan is incomplete, incorrect, or conflicts with the codebase, **stop, explain the issue, and request plan revision before proceeding**.
-
-## Approval Rules
-For non-trivial changes:
-- Do not start implementation before the Planner has been explicitly approved.
-- Do not start coding before the Builder summary has been explicitly approved.
-- Do not silently deviate from the approved plan.
-- If a better approach is discovered during implementation, pause and request approval for the revised plan.
-
-## Default Output Style for Agents
-For non-trivial tasks:
-1. Planner: task understanding, capability analysis, plan, risks, approval wait
-2. Builder: implementation summary, scope, approval wait
-3. Implementation
-4. Reviewer: validation against plan and architecture
-5. Risks / follow-ups
-
-## Change Rules
-When changing code:
-- keep changes cohesive and small
-- prefer extension through interfaces/adapters over branching in shared services
-- reuse existing capability patterns before creating new structures
-- do not introduce provider-specific behavior into generic modules without a strong reason
-- document intentional tradeoffs
-- avoid large opportunistic rewrites unless explicitly requested
-
-When adding a provider-specific implementation:
-- define the internal capability contract first, if missing
-- isolate provider auth, endpoints, payload mapping, and error handling
-- expose normalized internal results to the rest of the system
-- keep provider naming from spreading beyond the integration boundary unless required
-
-## Integration Boundary Rules
-Provider integrations are boundaries, not the domain model.
-
-Required:
-- map external request/response shapes at the edge
-- translate provider errors into internal error semantics
-- keep retries/timeouts/idempotency concerns close to the provider adapter
-- make provider-specific assumptions explicit in code and docs
-
-Not allowed unless explicitly justified:
-- controller/service/domain logic depending directly on provider payload formats
-- mixing transport concerns with business rules
-- duplicating shared business rules inside provider adapters
-
-## Testing & Validation
 When behavior changes, add or update tests proportionate to the risk.
 
-Expected coverage:
-- business logic tests for capability behavior
-- adapter/provider tests for request mapping, response mapping, and error handling
-- regression tests for fixed bugs
-- edge-case tests for provider failures where relevant
+Expected validation may include:
 
-Validation should cover:
-- happy path
-- expected failures
-- boundary conditions
-- backward compatibility where applicable
+- business logic tests for reusable capability behavior,
+- integration or adapter tests for aggregator request mapping, response mapping, and error handling,
+- regression tests for fixed bugs,
+- edge-case tests for expected failures, callbacks, retries, duplicate events, or invalid input,
+- manual validation steps when automated tests are not practical.
 
-## Security & Sensitive Data
-Treat credentials and provider secrets as sensitive.
+Validation should cover the happy path, expected failures, boundary conditions, and backward compatibility where applicable.
+Do not claim a change is validated unless the validation was actually run or clearly marked as not run.
 
-Rules:
-- never expose secrets or credentials
-- preserve auditability for blacklist and refund actions
-- validate external inputs strictly
-- handle provider/API failures explicitly
-- do not commit tokens, passwords, certificates, or private keys
+### 8.2 Security & Production Safeguards
 
-## Documentation Rules
-Update docs when any of the following changes:
-- integration behavior
-- provider-specific assumptions
-- internal contracts
-- extension points
-- operational constraints or known limitations
+Do not commit or expose credentials, tokens, callback secrets, private keys, or environment-specific sensitive values.
 
-If supporting docs exist, consult and update them as needed, especially:
-- `docs/INDEX.md`
-- `docs/architecture/INDEX.md`
-- `docs/operations/INDEX.md`
-- `docs/integrations/INDEX.md`
+For blacklist, refund, callback, billing, or other production-impacting work:
 
-## Definition of Done
-A change is done when:
-- the requested behavior is implemented
-- the solution follows the architecture principles in this file
-- provider-specific logic is isolated appropriately
-- tests were added or updated where behavior changed
-- relevant docs were updated
-- risks, tradeoffs, and limitations are made explicit
-- the diff does not introduce unnecessary coupling to one aggregator
+- preserve auditability for actions that change customer, billing, blacklist, refund, or callback state,
+- validate external inputs strictly,
+- handle aggregator/API failures explicitly,
+- do not treat unknown, malformed, partial, or failed aggregator responses as successful outcomes,
+- follow the relevant integration or operations documentation when a detailed procedure exists.
 
-## Default Output Style for Agents
-For non-trivial tasks:
-1. Brief plan
-2. Implementation
-3. Validation summary
-4. Risks / follow-ups
+### 8.3 Handoff Checklist
 
-Be concise, explicit, and repository-specific.
+Before handing work back to the user, summarize:
+
+- what changed,
+- what was validated,
+- what was not validated,
+- whether documentation was updated, created, or intentionally left unchanged,
+- whether the implementation stayed within the approved plan,
+- any risks, tradeoffs, assumptions, or follow-up work.
+
+Do not mark work as complete on behalf of the user.
+The user decides when a GitHub issue or implementation task is done.
