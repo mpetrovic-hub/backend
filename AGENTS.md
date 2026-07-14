@@ -280,9 +280,17 @@ Expected validation may include:
 Validation should cover the happy path, expected failures, boundary conditions, and backward compatibility where applicable.
 Do not claim a change is validated unless the validation was actually run or clearly marked as not run.
 
-### 8.2 Security & Sensitive Data
+### 8.2 Security & Production Safeguards
 
 Do not commit or expose credentials, tokens, callback secrets, private keys, or environment-specific sensitive values.
+
+For blacklist, refund, callback, billing, or other production-impacting work:
+
+- preserve auditability for actions that change customer, billing, blacklist, refund, or callback state,
+- validate external inputs strictly,
+- handle aggregator/API failures explicitly,
+- do not treat unknown, malformed, partial, or failed aggregator responses as successful outcomes,
+- follow the relevant integration or operations documentation when a detailed procedure exists.
 
 ### 8.3 Handoff Checklist
 
