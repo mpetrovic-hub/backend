@@ -179,7 +179,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
                      updated_at = %s
                  WHERE source_key = %s
                    AND finished_at IS NULL
-                   AND status IN ('skipped', 'running', 'partial')
+                   AND status IN ('skipped', 'running')
                    AND updated_at < DATE_SUB(%s, INTERVAL {$stale_after_minutes} MINUTE)",
                 $now,
                 $now,
