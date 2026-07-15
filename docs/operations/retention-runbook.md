@@ -38,11 +38,12 @@ The daily retention cron is only a scheduler. The active recurring hook is `kiwi
 
 The scheduler:
 
-1. Runs the coverage gate.
-2. Captures the `before_cleanup` growth snapshot.
-3. Freezes `target_max_primary_key` for rows with `created_at < cutoff_value`.
-4. Writes a pending run to `wp_kiwi_retention_cleanup_runs`.
-5. Schedules the single-event worker hook `kiwi_retention_cleanup_worker`.
+1. Marks unfinished runs with an `updated_at` heartbeat older than 30 minutes as `failed` with `error_code=cron_timeout_suspected` before looking for an active run. An existing `worker_phase` is retained; an empty phase becomes `stale_unknown`.
+2. Runs the coverage gate.
+3. Captures the `before_cleanup` growth snapshot.
+4. Freezes `target_max_primary_key` for rows with `created_at < cutoff_value`.
+5. Writes a pending run to `wp_kiwi_retention_cleanup_runs`.
+6. Schedules the single-event worker hook `kiwi_retention_cleanup_worker`.
 
 The scheduler does not archive or delete the full backlog in the daily cron request.
 
@@ -57,6 +58,8 @@ Worker state is stored on `wp_kiwi_retention_cleanup_runs` with:
 - `worker_last_finished_at`
 
 Active runs use `pending`, `running`, `partial`, `completed`, or `failed` statuses. If a scheduler run sees an existing open worker run for `landing_page_sessions`, it does not create a second cleanup run; it reschedules the worker and records that the active run was rescheduled.
+
+The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases are `coverage_gate_running`, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases are `archive_running`, `delete_running`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
 
 ## Archive/delete safety contract
 
@@ -83,6 +86,8 @@ Delete remains bound to archive evidence:
 On archive, quick-check, delete, final `integrity_check`, or audit persistence failure, the run is marked `failed` and no automatic retry counter advances destructive work. A lock-active worker invocation is not a failure; it does no work and reschedules.
 
 After the final chunk, the worker runs SQLite `integrity_check`, captures the `after_cleanup` snapshot, and marks the run `completed`.
+
+A failed `before_cleanup` snapshot is fail-closed: no worker is scheduled and the cleanup run is marked failed with `snapshot_before_failed`. If the `after_cleanup` snapshot fails after archive/delete already completed successfully, the run stays `completed` and records `error_code=snapshot_after_failed` as an operational warning; completed destructive work is not misreported as failed.
 
 ## Landing-session raw-context compaction
 
@@ -154,4 +159,5 @@ When validating retention behavior:
 5. Confirm cleanup uses the effective cutoff returned by the coverage gate.
 6. Confirm archive evidence exists before MySQL delete.
 7. Confirm failed archive, quick-check, delete, integrity-check, or audit persistence stops destructive progress.
-8. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.
+8. Confirm unfinished runs older than 30 minutes are marked `failed` with their last known phase before the next scheduler or worker proceeds.
+9. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.

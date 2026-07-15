@@ -1381,6 +1381,9 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public $updates = [];
     public $create_run_result = null;
     public $update_run_result = true;
+    public $stale_run_ids = [];
+    public $stale_detection_result = 0;
+    public $stale_detection_calls = [];
     private $next_id = 1;
 
     public function create_table(): void
@@ -1426,11 +1429,47 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
         return null;
     }
+
+    public function mark_stale_unfinished_runs(string $source_key, int $stale_after_minutes = 30): ?int
+    {
+        $this->stale_detection_calls[] = [
+            'source_key' => $source_key,
+            'stale_after_minutes' => $stale_after_minutes,
+        ];
+
+        if ($this->stale_detection_result === null) {
+            return null;
+        }
+
+        $marked = 0;
+        foreach ($this->stale_run_ids as $id) {
+            if (($this->rows[$id]['source_key'] ?? '') !== $source_key
+                || ($this->rows[$id]['finished_at'] ?? null) !== null
+            ) {
+                continue;
+            }
+
+            $this->rows[$id] = array_merge($this->rows[$id], [
+                'status' => 'failed',
+                'worker_phase' => (string) ($this->rows[$id]['worker_phase'] ?? '') !== ''
+                    ? (string) $this->rows[$id]['worker_phase']
+                    : 'stale_unknown',
+                'error_code' => 'cron_timeout_suspected',
+                'error_message' => 'Retention cleanup run was marked failed because its heartbeat became stale.',
+                'finished_at' => '2026-07-15 12:00:00',
+                'updated_at' => '2026-07-15 12:00:00',
+            ]);
+            $marked++;
+        }
+
+        return $marked;
+    }
 }
 
 class Kiwi_Test_Retention_Table_Growth_Snapshot_Repository extends Kiwi_Retention_Table_Growth_Snapshot_Repository
 {
     public $snapshots = [];
+    public $capture_results_by_phase = [];
 
     public function create_table(): void
     {
@@ -1459,7 +1498,7 @@ class Kiwi_Test_Retention_Table_Growth_Snapshot_Repository extends Kiwi_Retentio
             'deleted_rows' => $deleted_rows,
         ];
 
-        return count($this->snapshots);
+        return (int) ($this->capture_results_by_phase[$snapshot_phase] ?? count($this->snapshots));
     }
 }
 
@@ -13133,7 +13172,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when worker cannot pe
     kiwi_assert_same(['count', 'target'], $events, 'Expected worker not to archive or delete when running state cannot be persisted.');
     kiwi_assert_same([], $service->deleted_primary_keys, 'Expected worker not to delete rows without persisted running state.');
     kiwi_assert_same('pending', $run_row['status'] ?? '', 'Expected failed audit update not to mutate the stored pending audit row in the test double.');
-    kiwi_assert_same(3, count($runs->updates), 'Expected scheduler progress, running-state update, and failed worker audit update attempts.');
+    kiwi_assert_same(6, count($runs->updates), 'Expected scheduler and worker boundary heartbeats plus the failed worker audit update attempt.');
 
     $wpdb = $previous_wpdb;
 });
@@ -13192,6 +13231,245 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service fails when archived primary-key de
     kiwi_assert_same('delete_count_mismatch', $result['error_code'], 'Expected partial archived-ID delete to expose a count mismatch.');
     kiwi_assert_same([201, 202], $service->deleted_primary_keys, 'Expected cleanup to attempt deletion by archived primary keys only.');
     kiwi_assert_same(1, $runs->rows[1]['deleted_rows'] ?? 0, 'Expected partial delete count to be audited.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service marks stale unfinished runs before scheduling a new run', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => false,
+                'dry_run' => true,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->rows[99] = [
+        'id' => 99,
+        'run_id' => 'stale-run',
+        'source_key' => 'landing_page_sessions',
+        'status' => 'skipped',
+        'finished_at' => null,
+        'updated_at' => '2026-07-15 11:00:00',
+        'worker_phase' => '',
+    ];
+    $runs->stale_run_ids = [99];
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+
+    $result = $service->run_source('landing_page_sessions', 'cron');
+
+    kiwi_assert_same('failed', $runs->rows[99]['status'] ?? '', 'Expected stale unfinished run to be marked failed before scheduling.');
+    kiwi_assert_same('cron_timeout_suspected', $runs->rows[99]['error_code'] ?? '', 'Expected stale run audit error code.');
+    kiwi_assert_same('stale_unknown', $runs->rows[99]['worker_phase'] ?? '', 'Expected empty stale phase to be made explicit.');
+    kiwi_assert_same(30, $runs->stale_detection_calls[0]['stale_after_minutes'] ?? 0, 'Expected the documented 30-minute stale threshold.');
+    kiwi_assert_same('skipped', $result['status'], 'Expected a new disabled scheduler run after stale audit cleanup.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service preserves fresh open runs during stale detection', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->rows[1] = [
+        'id' => 1,
+        'run_id' => 'fresh-run',
+        'source_key' => 'landing_page_sessions',
+        'status' => 'partial',
+        'finished_at' => null,
+        'updated_at' => '2026-07-15 11:59:00',
+        'worker_phase' => 'archive_running',
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+
+    $result = $service->run_source('landing_page_sessions', 'cron');
+
+    kiwi_assert_same('partial', $result['status'], 'Expected fresh open run to remain the active worker run.');
+    kiwi_assert_same('active_run_rescheduled', $runs->rows[1]['worker_phase'] ?? '', 'Expected fresh run to follow the existing reschedule path, not the stale failure path.');
+    kiwi_assert_same('', $runs->rows[1]['error_code'] ?? '', 'Expected fresh run not to gain a timeout error.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service persists scheduler and worker phase heartbeats at job boundaries', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 1,
+        'archive_inserted_rows' => 1,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [1],
+        'last_primary_key' => 1,
+        'has_more' => false,
+        'quick_check' => 'ok',
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+    $service->eligible_rows = 1;
+    $service->target_max_primary_key = 1;
+    $service->delete_result = ['deleted_rows' => 1, 'delete_batches' => 1];
+
+    $service->run_source('landing_page_sessions', 'cron');
+    $result = $service->run_worker('landing_page_sessions');
+    $phases = array_values(array_filter(array_map(static function (array $update): string {
+        return (string) ($update['data']['worker_phase'] ?? '');
+    }, $runs->updates)));
+
+    foreach (['coverage_gate_running', 'snapshot_before_running', 'target_key_freezing', 'archive_pending', 'archive_running', 'delete_running', 'snapshot_after_running', 'finalizing'] as $phase) {
+        kiwi_assert_true(in_array($phase, $phases, true), 'Expected phase heartbeat: ' . $phase);
+    }
+    kiwi_assert_same('completed', $result['status'], 'Expected successful worker completion after boundary heartbeats.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when before-cleanup snapshot persistence fails', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $snapshots->capture_results_by_phase['before_cleanup'] = 0;
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+    $service->eligible_rows = 1;
+    $service->target_max_primary_key = 1;
+
+    $result = $service->run_source('landing_page_sessions', 'cron');
+
+    kiwi_assert_same(false, $result['success'], 'Expected before snapshot failure to stop scheduler work.');
+    kiwi_assert_same('snapshot_before_failed', $result['error_code'], 'Expected explicit before snapshot failure code.');
+    kiwi_assert_same('failed', $runs->rows[1]['status'] ?? '', 'Expected failed snapshot to be persisted on the cleanup run.');
+    kiwi_assert_same([], $archive->chunk_calls, 'Expected no archive worker work after before snapshot failure.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot failures as completed warnings', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $snapshots->capture_results_by_phase['after_cleanup'] = 0;
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 1,
+        'archive_inserted_rows' => 1,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [1],
+        'last_primary_key' => 1,
+        'has_more' => false,
+        'quick_check' => 'ok',
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+    $service->eligible_rows = 1;
+    $service->target_max_primary_key = 1;
+    $service->delete_result = ['deleted_rows' => 1, 'delete_batches' => 1];
+
+    $service->run_source('landing_page_sessions', 'cron');
+    $result = $service->run_worker('landing_page_sessions');
+
+    kiwi_assert_same(true, $result['success'], 'Expected completed cleanup to remain successful after after-snapshot warning.');
+    kiwi_assert_same('completed', $result['status'], 'Expected cleanup status to remain completed.');
+    kiwi_assert_same('snapshot_after_failed', $result['error_code'], 'Expected persisted after-snapshot warning code.');
+    kiwi_assert_same('completed', $runs->rows[1]['status'] ?? '', 'Expected audit row to remain completed after warning.');
+    kiwi_assert_same('snapshot_after_failed', $runs->rows[1]['error_code'] ?? '', 'Expected audit row to retain after-snapshot warning.');
 
     $wpdb = $previous_wpdb;
 });

@@ -8,6 +8,7 @@ class Kiwi_Retention_Cleanup_Service
 {
     private const LOCK_PREFIX = 'kiwi_retention_cleanup_lock_';
     private const WORKER_LOCK_PREFIX = 'kiwi_retention_cleanup_worker_lock_';
+    private const STALE_RUN_AFTER_MINUTES = 30;
 
     private $config;
     private $source_registry;
@@ -52,6 +53,15 @@ class Kiwi_Retention_Cleanup_Service
                 'status' => 'failed',
                 'error_code' => 'unknown_source',
                 'error_message' => 'Unknown retention source: ' . $source_key,
+            ];
+        }
+
+        if (!$this->mark_stale_runs($source_key)) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'stale_run_detection_failed',
+                'error_message' => 'Retention cleanup could not verify stale unfinished audit runs.',
             ];
         }
 
@@ -126,7 +136,7 @@ class Kiwi_Retention_Cleanup_Service
 
         try {
             if (!$enabled) {
-                $this->snapshot_repository->capture_snapshot(
+                if (!$this->capture_snapshot(
                     $source,
                     'before_cleanup',
                     $retention_days,
@@ -136,8 +146,10 @@ class Kiwi_Retention_Cleanup_Service
                     '',
                     0,
                     0
-                );
-                $this->snapshot_repository->capture_snapshot(
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_before_failure($run_id));
+                }
+                if (!$this->capture_snapshot(
                     $source,
                     'after_cleanup',
                     $retention_days,
@@ -147,7 +159,9 @@ class Kiwi_Retention_Cleanup_Service
                     '',
                     0,
                     0
-                );
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_after_failure($run_id));
+                }
 
                 return $this->finish_run($run_db_id, [
                     'success' => true,
@@ -156,6 +170,16 @@ class Kiwi_Retention_Cleanup_Service
                     'gate_status' => 'skipped',
                     'error_code' => 'cleanup_disabled',
                     'error_message' => 'Retention cleanup is disabled for this source.',
+                ]);
+            }
+
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'coverage_gate_running'])) {
+                return $this->finish_run($run_db_id, [
+                    'success' => false,
+                    'run_id' => $run_id,
+                    'status' => 'failed',
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention cleanup could not persist the coverage-gate heartbeat.',
                 ]);
             }
 
@@ -168,7 +192,16 @@ class Kiwi_Retention_Cleanup_Service
                 : $this->count_eligible_rows($source, $effective_cutoff_for_readout);
 
             if ($dry_run) {
-                $this->snapshot_repository->capture_snapshot(
+                if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_before_running'])) {
+                    return $this->finish_run($run_db_id, [
+                        'success' => false,
+                        'run_id' => $run_id,
+                        'status' => 'failed',
+                        'error_code' => 'run_audit_update_failed',
+                        'error_message' => 'Retention cleanup could not persist the before-snapshot heartbeat.',
+                    ]);
+                }
+                if (!$this->capture_snapshot(
                     $source,
                     'before_cleanup',
                     $retention_days,
@@ -178,8 +211,10 @@ class Kiwi_Retention_Cleanup_Service
                     '',
                     0,
                     0
-                );
-                $this->snapshot_repository->capture_snapshot(
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_before_failure($run_id));
+                }
+                if (!$this->capture_snapshot(
                     $source,
                     'after_cleanup',
                     $retention_days,
@@ -189,7 +224,9 @@ class Kiwi_Retention_Cleanup_Service
                     '',
                     0,
                     0
-                );
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_after_failure($run_id));
+                }
 
                 return $this->finish_run($run_db_id, [
                     'success' => true,
@@ -205,7 +242,16 @@ class Kiwi_Retention_Cleanup_Service
             if (!$this->gate_status_allows_cleanup($gate_status) || $effective_cutoff_value === '') {
                 $effective_cutoff_value = $cutoff_value;
                 $effective_eligible_rows = $eligible_rows;
-                $this->snapshot_repository->capture_snapshot(
+                if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_before_running'])) {
+                    return $this->finish_run($run_db_id, [
+                        'success' => false,
+                        'run_id' => $run_id,
+                        'status' => 'failed',
+                        'error_code' => 'run_audit_update_failed',
+                        'error_message' => 'Retention cleanup could not persist the before-snapshot heartbeat.',
+                    ]);
+                }
+                if (!$this->capture_snapshot(
                     $source,
                     'before_cleanup',
                     $retention_days,
@@ -215,8 +261,10 @@ class Kiwi_Retention_Cleanup_Service
                     '',
                     0,
                     0
-                );
-                $this->snapshot_repository->capture_snapshot(
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_before_failure($run_id));
+                }
+                if (!$this->capture_snapshot(
                     $source,
                     'after_cleanup',
                     $retention_days,
@@ -226,7 +274,9 @@ class Kiwi_Retention_Cleanup_Service
                     '',
                     0,
                     0
-                );
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_after_failure($run_id));
+                }
 
                 return $this->finish_run($run_db_id, [
                     'success' => true,
@@ -241,7 +291,16 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
-            $this->snapshot_repository->capture_snapshot(
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_before_running'])) {
+                return $this->finish_run($run_db_id, [
+                    'success' => false,
+                    'run_id' => $run_id,
+                    'status' => 'failed',
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention cleanup could not persist the before-snapshot heartbeat.',
+                ]);
+            }
+            if (!$this->capture_snapshot(
                 $source,
                 'before_cleanup',
                 $retention_days,
@@ -251,12 +310,24 @@ class Kiwi_Retention_Cleanup_Service
                 '',
                 0,
                 0
-            );
+            )) {
+                return $this->finish_run($run_db_id, $this->snapshot_before_failure($run_id));
+            }
+
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'target_key_freezing'])) {
+                return $this->finish_run($run_db_id, [
+                    'success' => false,
+                    'run_id' => $run_id,
+                    'status' => 'failed',
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention cleanup could not persist the target-key heartbeat.',
+                ]);
+            }
 
             $target_max_primary_key = $this->determine_target_max_primary_key($source, $effective_cutoff_value);
 
             if ($effective_eligible_rows <= 0) {
-                $this->snapshot_repository->capture_snapshot(
+                if (!$this->capture_snapshot(
                     $source,
                     'after_cleanup',
                     $retention_days,
@@ -265,7 +336,9 @@ class Kiwi_Retention_Cleanup_Service
                     $run_id,
                     '',
                     0
-                );
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_after_failure($run_id));
+                }
 
                 return $this->finish_run($run_db_id, [
                     'success' => true,
@@ -282,7 +355,7 @@ class Kiwi_Retention_Cleanup_Service
             }
 
             if ($target_max_primary_key <= 0) {
-                $this->snapshot_repository->capture_snapshot(
+                if (!$this->capture_snapshot(
                     $source,
                     'after_cleanup',
                     $retention_days,
@@ -292,7 +365,9 @@ class Kiwi_Retention_Cleanup_Service
                     '',
                     0,
                     0
-                );
+                )) {
+                    return $this->finish_run($run_db_id, $this->snapshot_after_failure($run_id));
+                }
 
                 return $this->finish_run($run_db_id, [
                     'success' => false,
@@ -362,6 +437,15 @@ class Kiwi_Retention_Cleanup_Service
                 'status' => 'failed',
                 'error_code' => 'unknown_source',
                 'error_message' => 'Unknown retention source: ' . $source_key,
+            ];
+        }
+
+        if (!$this->mark_stale_runs($source_key)) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'stale_run_detection_failed',
+                'error_message' => 'Retention worker could not verify stale unfinished audit runs.',
             ];
         }
 
@@ -477,6 +561,13 @@ class Kiwi_Retention_Cleanup_Service
             $delete_batches = 0;
 
             if (!empty($archived_primary_keys)) {
+                if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'delete_running'])) {
+                    return $this->fail_worker_run($run_db_id, $run, [
+                        'error_code' => 'run_audit_update_failed',
+                        'error_message' => 'Retention worker could not persist the delete heartbeat.',
+                    ]);
+                }
+
                 $deleted_rows = $this->delete_source_primary_keys($source, $archived_primary_keys);
                 $delete_batches = 1;
 
@@ -583,7 +674,14 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
-            $this->snapshot_repository->capture_snapshot(
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_after_running'])) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention worker could not persist the after-snapshot heartbeat.',
+                ]);
+            }
+
+            if (!$this->capture_snapshot(
                 $source,
                 'after_cleanup',
                 (int) ($run['retention_days_effective'] ?? 0),
@@ -593,7 +691,33 @@ class Kiwi_Retention_Cleanup_Service
                 $archive_batch_id,
                 $new_archived_rows,
                 $new_deleted_rows
-            );
+            )) {
+                return $this->finish_run($run_db_id, [
+                    'success' => true,
+                    'run_id' => $run_id,
+                    'status' => 'completed',
+                    'worker_phase' => 'completed',
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => $integrity_check,
+                    'archived_rows' => $new_archived_rows,
+                    'archive_inserted_rows' => $new_archive_inserted_rows,
+                    'archive_duplicate_rows' => $new_archive_duplicate_rows,
+                    'deleted_rows' => $new_deleted_rows,
+                    'delete_batches' => $new_delete_batches,
+                    'archive_last_primary_key' => $last_primary_key,
+                    'delete_last_primary_key' => $delete_last_primary_key,
+                    'worker_last_finished_at' => $this->current_time_mysql(),
+                    'error_code' => 'snapshot_after_failed',
+                    'error_message' => 'Retention cleanup completed, but the after-cleanup growth snapshot could not be persisted.',
+                ]);
+            }
+
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'finalizing'])) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention worker could not persist the finalization heartbeat.',
+                ]);
+            }
 
             return $this->finish_run($run_db_id, [
                 'success' => true,
@@ -624,6 +748,70 @@ class Kiwi_Retention_Cleanup_Service
     private function gate_status_allows_cleanup(string $gate_status): bool
     {
         return in_array($gate_status, ['passed', 'partial'], true);
+    }
+
+    private function mark_stale_runs(string $source_key): bool
+    {
+        try {
+            return $this->run_repository->mark_stale_unfinished_runs(
+                $source_key,
+                self::STALE_RUN_AFTER_MINUTES
+            ) !== null;
+        } catch (Throwable $error) {
+            return false;
+        }
+    }
+
+    private function capture_snapshot(
+        array $source,
+        string $snapshot_phase,
+        int $retention_days,
+        string $cutoff_value,
+        int $eligible_rows,
+        string $run_id,
+        string $archive_batch_id = '',
+        int $archived_rows = 0,
+        int $deleted_rows = 0
+    ): bool {
+        try {
+            return $this->snapshot_repository->capture_snapshot(
+                $source,
+                $snapshot_phase,
+                $retention_days,
+                $cutoff_value,
+                $eligible_rows,
+                $run_id,
+                $archive_batch_id,
+                $archived_rows,
+                $deleted_rows
+            ) > 0;
+        } catch (Throwable $error) {
+            return false;
+        }
+    }
+
+    private function snapshot_before_failure(string $run_id): array
+    {
+        return [
+            'success' => false,
+            'run_id' => $run_id,
+            'status' => 'failed',
+            'worker_phase' => 'failed',
+            'error_code' => 'snapshot_before_failed',
+            'error_message' => 'Retention cleanup aborted because the before-cleanup growth snapshot could not be persisted.',
+        ];
+    }
+
+    private function snapshot_after_failure(string $run_id): array
+    {
+        return [
+            'success' => false,
+            'run_id' => $run_id,
+            'status' => 'failed',
+            'worker_phase' => 'failed',
+            'error_code' => 'snapshot_after_failed',
+            'error_message' => 'Retention cleanup could not persist the after-cleanup growth snapshot.',
+        ];
     }
 
     private function resolve_effective_cutoff_value(array $gate_results, string $requested_cutoff_value): string

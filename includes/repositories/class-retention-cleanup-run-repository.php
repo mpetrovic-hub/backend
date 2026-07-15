@@ -153,6 +153,43 @@ class Kiwi_Retention_Cleanup_Run_Repository
         return is_array($row) ? $row : null;
     }
 
+    /**
+     * Marks unfinished runs as failed when their audit heartbeat has stopped.
+     *
+     * Returns null when the audit update itself could not be executed.
+     */
+    public function mark_stale_unfinished_runs(string $source_key, int $stale_after_minutes = 30): ?int
+    {
+        global $wpdb;
+
+        $stale_after_minutes = max(1, $stale_after_minutes);
+        $now = $this->current_time_mysql();
+
+        $result = $wpdb->query(
+            $wpdb->prepare(
+                "UPDATE {$this->get_table_name()}
+                 SET status = 'failed',
+                     worker_phase = CASE
+                         WHEN worker_phase IS NULL OR worker_phase = '' THEN 'stale_unknown'
+                         ELSE worker_phase
+                     END,
+                     error_code = 'cron_timeout_suspected',
+                     error_message = 'Retention cleanup run was marked failed because its heartbeat became stale.',
+                     finished_at = %s,
+                     updated_at = %s
+                 WHERE source_key = %s
+                   AND finished_at IS NULL
+                   AND updated_at < DATE_SUB(%s, INTERVAL {$stale_after_minutes} MINUTE)",
+                $now,
+                $now,
+                $source_key,
+                $now
+            )
+        );
+
+        return $result === false ? null : (int) $result;
+    }
+
     private function normalize_row(array $data): array
     {
         $allowed = [
