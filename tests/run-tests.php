@@ -1445,6 +1445,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         foreach ($this->stale_run_ids as $id) {
             if (($this->rows[$id]['source_key'] ?? '') !== $source_key
                 || ($this->rows[$id]['finished_at'] ?? null) !== null
+                || ($this->rows[$id]['status'] ?? '') === 'pending'
             ) {
                 continue;
             }
@@ -13316,6 +13317,43 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service preserves fresh open runs during s
     kiwi_assert_same('partial', $result['status'], 'Expected fresh open run to remain the active worker run.');
     kiwi_assert_same('active_run_rescheduled', $runs->rows[1]['worker_phase'] ?? '', 'Expected fresh run to follow the existing reschedule path, not the stale failure path.');
     kiwi_assert_same('', $runs->rows[1]['error_code'] ?? '', 'Expected fresh run not to gain a timeout error.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service does not stale-fail a delayed pending worker run', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->rows[1] = [
+        'id' => 1,
+        'run_id' => 'delayed-pending-run',
+        'source_key' => 'landing_page_sessions',
+        'status' => 'pending',
+        'finished_at' => null,
+        'updated_at' => '2026-07-15 11:00:00',
+        'worker_phase' => 'archive_pending',
+    ];
+    $runs->stale_run_ids = [1];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+
+    $result = $service->run_source('landing_page_sessions', 'cron');
+
+    kiwi_assert_same('pending', $result['status'], 'Expected delayed pending run to remain reschedulable.');
+    kiwi_assert_same('', $runs->rows[1]['error_code'] ?? '', 'Expected delayed pending run not to receive a timeout error.');
+    kiwi_assert_same('active_run_rescheduled', $runs->rows[1]['worker_phase'] ?? '', 'Expected delayed pending run to stay on the normal reschedule path.');
 
     $wpdb = $previous_wpdb;
 });
