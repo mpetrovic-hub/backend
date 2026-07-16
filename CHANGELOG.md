@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-07-15:
+- [DB Retention Cleanup] Added 30-minute stale-run detection and job-boundary audit heartbeats for scheduler/worker phases. Before-cleanup snapshot failures now fail closed; after-cleanup snapshot failures remain visible as completed-run warnings after successful archive/delete work.
+
 2026-07-13:
 - [Landing Pages] Completed the filesystem-only landing-page migration: removed retired configuration/template fallbacks, kept the registry-root override, and updated runtime documentation and regression coverage. Rollback is now deployment-based.
 
