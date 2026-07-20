@@ -169,7 +169,7 @@ class Kiwi_Operational_Event_Service
             return '';
         }
 
-        $sensitive = '(?:(?:[a-z0-9]+[_-])*(?:authorizations?|api[_-]?keys?|access[_-]?tokens?|client[_-]?secrets?|passwords?|passwds?|secrets?|tokens?|credentials?|private[_-]?keys?|key[_-]?materials?|signing[_-]?keys?|encryption[_-]?keys?|secret[_-]?keys?|cookies?|set[_-]?cookies?|session[_-]?cookies?|session[_-]?ids?|sessionids?|phpsessids?|logged[_-]?in)(?:[_-][a-z0-9]+)*)';
+        $sensitive = '(?:(?:[a-z0-9]+[_-])*(?:authorizations?|auths?|authentications?|oauths?|bearers?|api[_-]?keys?|access[_-]?tokens?|client[_-]?secrets?|passwords?|passwds?|secrets?|tokens?|credentials?|digests?|signatures?|hmacs?|nonces?|otps?|pins?|verification[_-]?codes?|private[_-]?keys?|key[_-]?materials?|signing[_-]?keys?|encryption[_-]?keys?|secret[_-]?keys?|cookies?|set[_-]?cookies?|session[_-]?cookies?|session[_-]?ids?|sessionids?|phpsessids?|logged[_-]?in)(?:[_-][a-z0-9]+)*)';
         $masked = preg_replace('/\b(cookie|set-cookie)\s*:[^\r\n]*/i', '$1: [redacted]', $text);
         $masked = is_string($masked) ? $masked : '[credential content removed]';
         $masked = preg_replace(
@@ -230,7 +230,7 @@ class Kiwi_Operational_Event_Service
 
         return in_array($key, self::SENSITIVE_KEYS, true)
             || preg_match(
-                '/(?:^|_)(?:authorizations?|api_keys?|access_tokens?|tokens?|client_secrets?|secrets?|passwords?|passwds?|credentials?|private_keys?|key_materials?|signing_keys?|encryption_keys?|secret_keys?|cookies?|set_cookies?|session_cookies?|session_ids?|sessionids?|phpsessids?|logged_in)(?:_|$)/',
+                '/(?:^|_)(?:authorizations?|auths?|authentications?|oauths?|bearers?|api_keys?|access_tokens?|tokens?|client_secrets?|secrets?|passwords?|passwds?|credentials?|digests?|signatures?|hmacs?|nonces?|otps?|pins?|verification_codes?|private_keys?|key_materials?|signing_keys?|encryption_keys?|secret_keys?|cookies?|set_cookies?|session_cookies?|session_ids?|sessionids?|phpsessids?|logged_in)(?:_|$)/',
                 $key
             ) === 1;
     }

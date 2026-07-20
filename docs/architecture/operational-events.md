@@ -61,7 +61,7 @@ The first producer is retention cleanup:
 
 ## Data safety
 
-Credential-like keys are masked centrally before size checks and persistence. This includes Authorization values, API keys, access tokens, generic tokens, client secrets, passwords, secrets, private/signing/encryption keys, key material, complete PEM private-key blocks, cookie headers, and session-cookie/session-ID fields. Structured sensitive values become `[redacted]`; raw text that cannot be safely isolated becomes `[credential content removed]`.
+Credential-like keys are masked centrally before size checks and persistence. This includes authorization/authentication values, API keys, access tokens, generic tokens, client secrets, passwords, secrets, digests, signatures, HMACs, nonces, OTPs/PINs, private/signing/encryption keys, key material, complete PEM private-key blocks, cookie headers, and session-cookie/session-ID fields. Structured sensitive values become `[redacted]`; raw text that cannot be safely isolated becomes `[credential content removed]`.
 
 Producers must still select small diagnostic context rather than sending full payloads, headers, or object dumps. Business identifiers such as MSISDNs may be retained when operationally required.
 
