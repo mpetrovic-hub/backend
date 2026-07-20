@@ -225,13 +225,19 @@ class Kiwi_Operational_Event_Service
 
     private function is_sensitive_key(string $key): bool
     {
+        $key = preg_replace('/([A-Z]+)([A-Z][a-z])/', '$1_$2', trim($key));
         $key = preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', trim($key));
         $key = strtolower(preg_replace('/[^a-z0-9]+/i', '_', (string) $key) ?? '');
+        $collapsed_key = str_replace('_', '', $key);
 
         return in_array($key, self::SENSITIVE_KEYS, true)
             || preg_match(
                 '/(?:^|_)(?:authorizations?|auths?|authentications?|oauths?|bearers?|api_keys?|access_tokens?|tokens?|client_secrets?|secrets?|passwords?|passwds?|credentials?|digests?|signatures?|hmacs?|nonces?|otps?|pins?|verification_codes?|private_keys?|key_materials?|signing_keys?|encryption_keys?|secret_keys?|cookies?|set_cookies?|session_cookies?|session_ids?|sessionids?|phpsessids?|logged_in)(?:_|$)/',
                 $key
+            ) === 1
+            || preg_match(
+                '/(?:authorization|authentication|oauth|bearer|apikey|accesstoken|token|clientsecret|password|passwd|secret|credential|digest|signature|hmac|nonce|otp|pin|verificationcode|privatekey|keymaterial|signingkey|encryptionkey|secretkey|cookie|setcookie|sessioncookie|sessionid|phpsessid|loggedin)s?$/',
+                $collapsed_key
             ) === 1;
     }
 

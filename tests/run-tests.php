@@ -16548,6 +16548,10 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
             'digest' => 'structured-digest-secret',
             'signature' => 'structured-signature-secret',
             'hmac' => 'structured-hmac-secret',
+            'APIKey' => 'collapsed-acronym-api-key',
+            'apikey' => 'collapsed-lower-api-key',
+            'IDToken' => 'collapsed-acronym-id-token',
+            'clientsecret' => 'collapsed-lower-client-secret',
             'msisdn' => '436641234567',
         ],
     ];
@@ -16593,6 +16597,10 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-digest-secret') === false, 'Expected structured digest fields to be redacted.');
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-signature-secret') === false, 'Expected structured signature fields to be redacted.');
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-hmac-secret') === false, 'Expected structured HMAC fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-acronym-api-key') === false, 'Expected acronym API-key fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-lower-api-key') === false, 'Expected collapsed lowercase API-key fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-acronym-id-token') === false, 'Expected acronym ID-token fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-lower-client-secret') === false, 'Expected collapsed lowercase client-secret fields to be redacted.');
     kiwi_assert_contains('436641234567', (string) $rows[0]['context_json'], 'Expected structured business identifier to remain available.');
     kiwi_assert_same(2, count($repository->get_recent(['area' => 'retention', 'severity' => 'error'])), 'Expected bounded area/severity reads to return the two failure events.');
     kiwi_assert_same([], $repository->get_open_incidents(['area' => 'retention']), 'Expected resolved correlation not to remain open.');
