@@ -16,6 +16,7 @@ class Kiwi_Retention_Cleanup_Service
     private $snapshot_repository;
     private $archive_service;
     private $coverage_gate;
+    private $operational_event_service;
 
     public function __construct(
         ?Kiwi_Config $config = null,
@@ -23,7 +24,8 @@ class Kiwi_Retention_Cleanup_Service
         ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
         ?Kiwi_Retention_Table_Growth_Snapshot_Repository $snapshot_repository = null,
         ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
-        ?Kiwi_Retention_Coverage_Gate $coverage_gate = null
+        ?Kiwi_Retention_Coverage_Gate $coverage_gate = null,
+        ?Kiwi_Operational_Event_Service $operational_event_service = null
     ) {
         $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
         $this->source_registry = $source_registry instanceof Kiwi_Retention_Source_Registry
@@ -41,6 +43,9 @@ class Kiwi_Retention_Cleanup_Service
         $this->coverage_gate = $coverage_gate instanceof Kiwi_Retention_Coverage_Gate
             ? $coverage_gate
             : new Kiwi_Retention_Coverage_Gate($this->config);
+        $this->operational_event_service = $operational_event_service instanceof Kiwi_Operational_Event_Service
+            ? $operational_event_service
+            : new Kiwi_Operational_Event_Service();
     }
 
     public function run_source(string $source_key, string $triggered_by = 'cron'): array
@@ -340,7 +345,7 @@ class Kiwi_Retention_Cleanup_Service
                     return $this->finish_run($run_db_id, $this->snapshot_after_failure($run_id));
                 }
 
-                return $this->finish_run($run_db_id, [
+                return $this->finish_successful_run($run_db_id, [
                     'success' => true,
                     'run_id' => $run_id,
                     'status' => 'completed',
@@ -351,7 +356,7 @@ class Kiwi_Retention_Cleanup_Service
                     'worker_phase' => 'completed_noop',
                     'target_max_primary_key' => $target_max_primary_key,
                     'archive_batch_id' => $archive_batch_id,
-                ]);
+                ], $source_key, $dry_run);
             }
 
             if ($target_max_primary_key <= 0) {
@@ -719,7 +724,7 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
-            return $this->finish_run($run_db_id, [
+            return $this->finish_successful_run($run_db_id, [
                 'success' => true,
                 'run_id' => $run_id,
                 'status' => 'completed',
@@ -734,7 +739,7 @@ class Kiwi_Retention_Cleanup_Service
                 'archive_last_primary_key' => $last_primary_key,
                 'delete_last_primary_key' => $delete_last_primary_key,
                 'worker_last_finished_at' => $this->current_time_mysql(),
-            ]);
+            ], $source_key, !empty($run['dry_run']));
         } catch (Throwable $error) {
             return $this->fail_worker_run($run_db_id, $run, [
                 'error_code' => 'worker_exception',
@@ -753,13 +758,79 @@ class Kiwi_Retention_Cleanup_Service
     private function mark_stale_runs(string $source_key): bool
     {
         try {
-            return $this->run_repository->mark_stale_unfinished_runs(
+            $stale_runs = $this->run_repository->mark_stale_unfinished_runs(
                 $source_key,
                 self::STALE_RUN_AFTER_MINUTES
-            ) !== null;
+            );
+            if ($stale_runs === null) {
+                return false;
+            }
+
+            foreach ($stale_runs as $stale_run) {
+                $run_id = (string) ($stale_run['run_id'] ?? '');
+                if ($run_id === '') {
+                    continue;
+                }
+
+                $this->operational_event_service->record_failure([
+                    'area' => 'retention',
+                    'severity' => 'error',
+                    'event_type' => 'retention_cleanup_timeout',
+                    'correlation_key' => 'retention_' . $source_key,
+                    'idempotency_key' => 'retention_stale_' . $run_id,
+                    'reference_type' => 'retention_cleanup_run',
+                    'reference_id' => $run_id,
+                    'message' => 'Retention cleanup run was marked failed after its heartbeat became stale.',
+                    'raw_error_text' => 'cron_timeout_suspected',
+                    'context' => [
+                        'source_key' => $source_key,
+                        'worker_phase' => (string) ($stale_run['worker_phase'] ?? ''),
+                        'audit_id' => (int) ($stale_run['id'] ?? 0),
+                        'error_code' => 'cron_timeout_suspected',
+                    ],
+                ]);
+            }
+
+            return true;
         } catch (Throwable $error) {
             return false;
         }
+    }
+
+    private function finish_successful_run(
+        int $run_db_id,
+        array $result,
+        string $source_key,
+        bool $dry_run
+    ): array {
+        $result = $this->finish_run($run_db_id, $result);
+
+        if ($dry_run
+            || empty($result['success'])
+            || ($result['audit_persisted'] ?? true) === false
+            || !in_array((string) ($result['status'] ?? ''), ['completed', 'completed_noop'], true)
+        ) {
+            return $result;
+        }
+
+        $run_id = (string) ($result['run_id'] ?? '');
+        $this->operational_event_service->record_recovery([
+            'area' => 'retention',
+            'severity' => 'info',
+            'event_type' => 'retention_cleanup_timeout',
+            'correlation_key' => 'retention_' . $source_key,
+            'idempotency_key' => $run_id === '' ? '' : 'retention_recovered_' . $run_id,
+            'reference_type' => 'retention_cleanup_run',
+            'reference_id' => $run_id,
+            'message' => 'Retention cleanup completed successfully after an earlier stale run.',
+            'context' => [
+                'source_key' => $source_key,
+                'worker_phase' => (string) ($result['worker_phase'] ?? ''),
+                'audit_id' => $run_db_id,
+            ],
+        ]);
+
+        return $result;
     }
 
     private function capture_snapshot(

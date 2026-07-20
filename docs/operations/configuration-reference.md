@@ -106,6 +106,19 @@ Postback placeholder behavior:
   - default: `300`
   - minimum: `60`
 
+## Operational events
+
+- `KIWI_OPERATIONAL_EVENTS_RETENTION_DAYS`
+  - event age retained by the daily cleanup, based on `created_at`
+  - default: `180`
+  - accepted range: `1` to `3650`
+- `KIWI_OPERATIONAL_EVENTS_CLEANUP_BATCH_SIZE`
+  - maximum rows deleted by one cleanup invocation
+  - default: `5000`
+  - accepted range: `1` to `50000`
+
+See `operational-events-runbook.md` for the daily hook, follow-up worker, lock, and recovery behavior.
+
 ## Trusted proxy client-IP resolution
 
 - `KIWI_TRUSTED_PROXY_CIDRS`

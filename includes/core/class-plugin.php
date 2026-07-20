@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Plugin
 {
     private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-07-02-1';
+    private const DB_SCHEMA_VERSION = '2026-07-20-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -30,6 +30,8 @@ class Kiwi_Plugin
     private const RETENTION_CLEANUP_LEGACY_DAILY_HOOK = 'kiwi_retention_cleanup_daily';
     private const RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK = 'kiwi_retention_cleanup_scheduler_daily';
     private const RETENTION_CLEANUP_WORKER_HOOK = 'kiwi_retention_cleanup_worker';
+    private const OPERATIONAL_EVENT_CLEANUP_DAILY_HOOK = 'kiwi_operational_event_cleanup_daily';
+    private const OPERATIONAL_EVENT_CLEANUP_WORKER_HOOK = 'kiwi_operational_event_cleanup_worker';
 
     private $plugin_root_path;
     private $plugin_base_url;
@@ -68,6 +70,7 @@ class Kiwi_Plugin
         add_action('init', [$this, 'schedule_device_model_brand_harvest']);
         add_action('init', [$this, 'schedule_landing_session_raw_context_compaction']);
         add_action('init', [$this, 'schedule_retention_cleanup']);
+        add_action('init', [$this, 'schedule_operational_event_cleanup']);
         add_action(self::LANDING_FUNNEL_DAILY_MAIN_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_main_summary_refresh']);
         add_action(self::LANDING_FUNNEL_DAILY_TKZONE_SUMMARY_REFRESH_HOOK, [$this, 'run_landing_funnel_daily_tkzone_summary_refresh']);
         add_action(self::DEVICE_MODEL_BRAND_HARVEST_HOOK, [$this, 'run_device_model_brand_harvest']);
@@ -75,6 +78,8 @@ class Kiwi_Plugin
         add_action(self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK, [$this, 'run_landing_session_raw_context_compaction_worker']);
         add_action(self::RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK, [$this, 'run_retention_cleanup_scheduler_daily']);
         add_action(self::RETENTION_CLEANUP_WORKER_HOOK, [$this, 'run_retention_cleanup_worker']);
+        add_action(self::OPERATIONAL_EVENT_CLEANUP_DAILY_HOOK, [$this, 'run_operational_event_cleanup']);
+        add_action(self::OPERATIONAL_EVENT_CLEANUP_WORKER_HOOK, [$this, 'run_operational_event_cleanup']);
         add_action('init', [$this, 'maybe_export_statistics']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
@@ -442,6 +447,36 @@ class Kiwi_Plugin
             : 'Cleanup scheduler failed for landing_page_sessions: ' . (string) ($result['error_message'] ?? 'failed without error detail');
 
         $this->log_retention_cleanup($message);
+
+        return $result;
+    }
+
+    public function schedule_operational_event_cleanup(): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+
+        if (wp_next_scheduled(self::OPERATIONAL_EVENT_CLEANUP_DAILY_HOOK) !== false) {
+            return;
+        }
+
+        wp_schedule_event(
+            time() + (20 * 60),
+            'daily',
+            self::OPERATIONAL_EVENT_CLEANUP_DAILY_HOOK
+        );
+    }
+
+    public function run_operational_event_cleanup(): array
+    {
+        $result = $this->build_operational_event_cleanup_service()->run();
+
+        if (!empty($result['schedule_worker'])) {
+            $this->schedule_operational_event_cleanup_worker(
+                (int) ($result['reschedule_delay_seconds'] ?? 60)
+            );
+        }
 
         return $result;
     }
@@ -1166,6 +1201,7 @@ TEXT;
             new Kiwi_Sms_Body_Variant_Repository(),
             new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
             new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
+            new Kiwi_Operational_Event_Repository(),
             new Kiwi_Retention_Cleanup_Run_Repository(),
             new Kiwi_Retention_Table_Growth_Snapshot_Repository(),
             new Kiwi_Landing_Funnel_Daily_Summary_Repository(),
@@ -1468,6 +1504,11 @@ TEXT;
         return new Kiwi_Retention_Cleanup_Service();
     }
 
+    protected function build_operational_event_cleanup_service(): Kiwi_Operational_Event_Cleanup_Service
+    {
+        return new Kiwi_Operational_Event_Cleanup_Service();
+    }
+
     protected function schedule_landing_session_raw_context_compaction_worker(int $delay_seconds = 0): bool
     {
         if (!function_exists('wp_schedule_single_event')) {
@@ -1501,6 +1542,24 @@ TEXT;
         return (bool) wp_schedule_single_event(
             time() + max(0, $delay_seconds),
             self::RETENTION_CLEANUP_WORKER_HOOK
+        );
+    }
+
+    protected function schedule_operational_event_cleanup_worker(int $delay_seconds = 60): bool
+    {
+        if (!function_exists('wp_schedule_single_event')) {
+            return false;
+        }
+
+        if (function_exists('wp_next_scheduled')
+            && wp_next_scheduled(self::OPERATIONAL_EVENT_CLEANUP_WORKER_HOOK) !== false
+        ) {
+            return false;
+        }
+
+        return (bool) wp_schedule_single_event(
+            time() + max(1, $delay_seconds),
+            self::OPERATIONAL_EVENT_CLEANUP_WORKER_HOOK
         );
     }
 

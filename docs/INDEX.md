@@ -31,6 +31,7 @@ This is the agent-facing map for repository documentation. Human quick-start inf
 | Click attribution and affiliate postbacks | `architecture/click-attribution-and-postbacks.md` | `operations/configuration-reference.md` for constants |
 | Landing KPI, Statistics UI, daily summary, TK-zone summary | `operations/landing-funnel-analytics.md` | `architecture/click-attribution-and-postbacks.md` for attribution boundary |
 | Raw retention, cleanup worker, raw-context compaction | `operations/retention-runbook.md` | `operations/landing-funnel-analytics.md` for summary coverage context |
+| Operational events, open incidents, event cleanup | `operations/operational-events-runbook.md` | `architecture/operational-events.md` for the stable producer contract |
 | Premium SMS fraud monitoring | `operations/premium-sms-fraud-monitoring.md` | `architecture/click-attribution-and-postbacks.md` for attribution propagation |
 | Secrets, environments, non-secret constants | `operations/credentials-and-environments.md` | `operations/configuration-reference.md` |
 | Edge/VPS endpoint operations | `operations/vps-endpoint-runbook.md` | `operations/landing-page-runtime.md` |

@@ -27,6 +27,7 @@ Architecture docs describe stable internal contracts and boundaries. They are no
 | `capability-matrix.md` | Inventory of documented and implemented capabilities. |
 | `click-attribution-and-postbacks.md` | Shared attribution capture, conversion matching, and affiliate postback boundary. |
 | `landing-page-architecture.md` | Filesystem landing-page contract, discovery model, metadata contract, and filesystem-only rendering boundary. |
+| `operational-events.md` | Append-only operational-event model, lifecycle, correlation, idempotency, sanitizing, and producer contract. |
 
 ## Maintenance notes
 

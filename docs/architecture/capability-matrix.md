@@ -45,6 +45,7 @@ For aggregator-specific details, see:
 | Shared/Core | sales persistence + enrichment | generic | confirmed sales | implemented | `wp_kiwi_sales` with transaction correlation, durable attribution/source/device snapshots, and landing-session IP prefix/hash context |
 | Shared/Core | premium-SMS inbound MO fraud monitoring (volume + engagement) | generic | premium-SMS inbound MO | implemented | `wp_kiwi_premium_sms_fraud_signals` + `wp_kiwi_premium_sms_landing_engagements`; subscriber identity rows with session refs retained as metadata, per-service 1h/24h snapshot counts, billing outcome/sale/aggregator-status snapshots, persisted landing-engagement UI soft-flag snapshots (`missing_load`, `click_before_load`, `fast_click`), MO engagement soft-flag checks (`missing_page_loaded`, `missing_cta_click`, fast MO), unknown engagement links recorded as audit context only, source context snapshots (`pid`, `click_id`), default observe mode with optional block integration |
 | Shared/Core | premium-SMS completed-sale cooldown | generic | premium-SMS one-off billing attempts | implemented | Shared completed-sale lookup on `wp_kiwi_sales`; adapters can block new billing attempts after a completed one-off sale for configurable `completed_sale_cooldown_days`, while terminal failed attempts remain retryable |
+| Shared/Core | operational event log foundation | generic | runtime operations | implemented | Append-only `wp_kiwi_operational_events`, shared sanitizing/lifecycle service, bounded incident reads, retention stale/recovery producer, and daily batched cleanup |
 | Dimoco | operator-lookup | generic / multi-country | API action | implemented | Existing backend capability routed through Dimoco where configured |
 | Dimoco | refund | generic | API action | implemented | Existing backend capability with callback persistence |
 | Dimoco | add-blacklist | generic | add-blocklist | implemented | Existing backend capability; external action name is `add-blocklist` |
@@ -79,6 +80,7 @@ Current known repository capabilities:
 - shared sales persistence/enrichment with durable attribution snapshots for confirmed sales
 - premium-SMS inbound MO fraud monitoring with volume, billing-outcome, sale-correlation, aggregator-status, and landing-engagement signals, including source-context snapshots (`pid`, `click_id`)
 - premium-SMS completed-sale cooldown based on durable `wp_kiwi_sales` facts
+- append-only operational events with correlation, idempotency, credential masking, open-incident reads, retention integration, and bounded cleanup
 
 ### Dimoco
 Current known repository capabilities:

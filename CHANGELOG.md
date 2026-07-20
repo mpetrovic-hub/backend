@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-07-20:
+- [Operational Events] Added the append-only `wp_kiwi_operational_events` foundation with centralized credential masking, incident lifecycle/correlation, idempotent writes, bounded reads, Retention stale/recovery events, and a daily batched 180-day cleanup.
+
 2026-07-15:
 - [DB Retention Cleanup] Added 30-minute stale-run detection and job-boundary audit heartbeats for scheduler/worker phases. Before-cleanup snapshot failures now fail closed; after-cleanup snapshot failures remain visible as completed-run warnings after successful archive/delete work.
 
