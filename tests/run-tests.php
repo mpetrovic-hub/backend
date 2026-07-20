@@ -16538,6 +16538,8 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
             'refresh_token' => 'refresh-credential',
             'idToken' => 'id-credential',
             'authorization_header' => 'Bearer structured-credential',
+            'tokens' => ['refresh' => 'plural-token-credential'],
+            'apiKeys' => ['primary' => 'plural-api-key-credential'],
             'msisdn' => '436641234567',
         ],
     ];
@@ -16570,6 +16572,8 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'refresh-credential') === false, 'Expected token-suffixed structured keys to be redacted.');
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'id-credential') === false, 'Expected camelCase token keys to be redacted.');
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-credential') === false, 'Expected authorization-header keys to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'plural-token-credential') === false, 'Expected plural token containers to be redacted with their children.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'plural-api-key-credential') === false, 'Expected camelCase API-key containers to be redacted with their children.');
     kiwi_assert_contains('436641234567', (string) $rows[0]['context_json'], 'Expected structured business identifier to remain available.');
     kiwi_assert_same(2, count($repository->get_recent(['area' => 'retention', 'severity' => 'error'])), 'Expected bounded area/severity reads to return the two failure events.');
     kiwi_assert_same([], $repository->get_open_incidents(['area' => 'retention']), 'Expected resolved correlation not to remain open.');
