@@ -16531,7 +16531,7 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
         'reference_type' => 'retention_cleanup_run',
         'reference_id' => 'run-1',
         'message' => str_repeat('M', 700),
-        'raw_error_text' => 'Authorization: Bearer top-secret access_token=hidden client_secret="two word secret" refresh_token=refresh two tail MSISDN=436641234567',
+        'raw_error_text' => 'Authorization: Bearer top-secret access_token=hidden client_secret="two word secret" password="abc\"def secret" refresh_token=refresh two tail MSISDN=436641234567',
         'context' => [
             'password' => 'do-not-store',
             'nested' => ['api_key' => 'also-secret'],
@@ -16563,6 +16563,7 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'top-secret') === false, 'Expected Authorization value not to persist.');
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'hidden') === false, 'Expected token value not to persist.');
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'two word secret') === false, 'Expected complete quoted credential values with spaces not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'def secret') === false, 'Expected quoted credentials with escaped delimiters to be consumed fully.');
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'refresh two tail') === false, 'Expected ambiguous unquoted credential values to be removed through the next field.');
     kiwi_assert_contains('436641234567', (string) $rows[0]['raw_error_text'], 'Expected allowed business MSISDN to remain available.');
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'do-not-store') === false, 'Expected structured password value to be redacted.');
