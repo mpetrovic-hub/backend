@@ -170,9 +170,9 @@ class Kiwi_Operational_Event_Service
         }
 
         $sensitive = '(?:(?:[a-z0-9]+[_-])*(?:authorizations?|auths?|authentications?|oauths?|bearers?|api[_-]?keys?|access[_-]?tokens?|client[_-]?secrets?|passwords?|passwds?|secrets?|tokens?|credentials?|digests?|signatures?|hmacs?|nonces?|otps?|pins?|verification[_-]?codes?|private[_-]?keys?|key[_-]?materials?|signing[_-]?keys?|encryption[_-]?keys?|secret[_-]?keys?|cookies?|set[_-]?cookies?|session[_-]?cookies?|session[_-]?ids?|sessionids?|phpsessids?|logged[_-]?in)(?:[_-][a-z0-9]+)*)';
-        $masked = preg_replace('/\b(cookie|set-cookie)\s*:[^\r\n]*/i', '$1: [redacted]', $text);
+        $masked = preg_replace('/\b(cookie|set-cookie)\s*([:=])[^\r\n]*/i', '$1$2 [redacted]', $text);
         $masked = is_string($masked) ? $masked : '[credential content removed]';
-        $masked = preg_replace('/\b(authorization|proxy-authorization)\s*:[^\r\n]*/i', '$1: [redacted]', $masked);
+        $masked = preg_replace('/\b(authorization|proxy-authorization)\s*([:=])[^\r\n]*/i', '$1$2 [redacted]', $masked);
         $masked = is_string($masked) ? $masked : '[credential content removed]';
         $masked = preg_replace(
             '/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----/is',
