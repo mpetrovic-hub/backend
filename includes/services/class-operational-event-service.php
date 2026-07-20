@@ -169,11 +169,13 @@ class Kiwi_Operational_Event_Service
             return '';
         }
 
-        $sensitive = '(?:(?:[a-z0-9]+[_-])*(?:authorizations?|api[_-]?keys?|access[_-]?tokens?|client[_-]?secrets?|passwords?|passwds?|secrets?|tokens?|credentials?|private[_-]?keys?|key[_-]?materials?|signing[_-]?keys?|encryption[_-]?keys?|secret[_-]?keys?)(?:[_-][a-z0-9]+)*)';
+        $sensitive = '(?:(?:[a-z0-9]+[_-])*(?:authorizations?|api[_-]?keys?|access[_-]?tokens?|client[_-]?secrets?|passwords?|passwds?|secrets?|tokens?|credentials?|private[_-]?keys?|key[_-]?materials?|signing[_-]?keys?|encryption[_-]?keys?|secret[_-]?keys?|cookies?|set[_-]?cookies?|session[_-]?cookies?|session[_-]?ids?|sessionids?|phpsessids?|logged[_-]?in)(?:[_-][a-z0-9]+)*)';
+        $masked = preg_replace('/\b(cookie|set-cookie)\s*:[^\r\n]*/i', '$1: [redacted]', $text);
+        $masked = is_string($masked) ? $masked : '[credential content removed]';
         $masked = preg_replace(
             '/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----/is',
             '[redacted]',
-            $text
+            $masked
         );
         $masked = is_string($masked) ? $masked : '[credential content removed]';
         $masked = preg_replace('/(authorization\s*:\s*)(?:bearer|basic)\s+[^\s,;]+/i', '$1[redacted]', $masked);
@@ -228,7 +230,7 @@ class Kiwi_Operational_Event_Service
 
         return in_array($key, self::SENSITIVE_KEYS, true)
             || preg_match(
-                '/(?:^|_)(?:authorizations?|api_keys?|access_tokens?|tokens?|client_secrets?|secrets?|passwords?|passwds?|credentials?|private_keys?|key_materials?|signing_keys?|encryption_keys?|secret_keys?)(?:_|$)/',
+                '/(?:^|_)(?:authorizations?|api_keys?|access_tokens?|tokens?|client_secrets?|secrets?|passwords?|passwds?|credentials?|private_keys?|key_materials?|signing_keys?|encryption_keys?|secret_keys?|cookies?|set_cookies?|session_cookies?|session_ids?|sessionids?|phpsessids?|logged_in)(?:_|$)/',
                 $key
             ) === 1;
     }
