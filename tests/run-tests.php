@@ -16531,7 +16531,7 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
         'reference_type' => 'retention_cleanup_run',
         'reference_id' => 'run-1',
         'message' => str_repeat('M', 700),
-        'raw_error_text' => 'Authorization: Bearer top-secret access_token=hidden MSISDN=436641234567',
+        'raw_error_text' => 'Authorization: Bearer top-secret access_token=hidden client_secret="two word secret" MSISDN=436641234567',
         'context' => [
             'password' => 'do-not-store',
             'nested' => ['api_key' => 'also-secret'],
@@ -16559,6 +16559,7 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
     kiwi_assert_same(500, strlen((string) $rows[0]['message']), 'Expected message length to be capped at 500 characters.');
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'top-secret') === false, 'Expected Authorization value not to persist.');
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'hidden') === false, 'Expected token value not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'two word secret') === false, 'Expected complete quoted credential values with spaces not to persist.');
     kiwi_assert_contains('436641234567', (string) $rows[0]['raw_error_text'], 'Expected allowed business MSISDN to remain available.');
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'do-not-store') === false, 'Expected structured password value to be redacted.');
     kiwi_assert_contains('436641234567', (string) $rows[0]['context_json'], 'Expected structured business identifier to remain available.');
@@ -16575,7 +16576,7 @@ kiwi_run_test('Kiwi_Operational_Event_Service omits oversized context and trunca
         'severity' => 'critical',
         'event_type' => 'query_failed',
         'correlation_key' => 'database_query',
-        'message' => 'Query failed with password=message-secret.',
+        'message' => 'Query failed with password="message secret".',
         'raw_error_text' => str_repeat('x', 5000),
         'context' => ['payload' => str_repeat('y', 17000)],
     ]);
@@ -16583,7 +16584,7 @@ kiwi_run_test('Kiwi_Operational_Event_Service omits oversized context and trunca
     $row = array_values($repository->rows)[0] ?? [];
     kiwi_assert_same(4000, strlen((string) ($row['raw_error_text'] ?? '')), 'Expected raw error text to be capped at 4,000 characters.');
     kiwi_assert_same('{"context_omitted":"size_limit_exceeded"}', $row['context_json'] ?? '', 'Expected oversized context to use the documented replacement object.');
-    kiwi_assert_true(strpos((string) ($row['message'] ?? ''), 'message-secret') === false, 'Expected readable messages to receive the same credential masking.');
+    kiwi_assert_true(strpos((string) ($row['message'] ?? ''), 'message secret') === false, 'Expected readable messages to mask complete quoted credential values.');
 });
 
 kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service batches, reschedules, and records failure recovery', function (): void {

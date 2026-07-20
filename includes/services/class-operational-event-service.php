@@ -173,7 +173,19 @@ class Kiwi_Operational_Event_Service
         $masked = preg_replace('/(authorization\s*:\s*)(?:bearer|basic)\s+[^\s,;]+/i', '$1[redacted]', $text);
         $masked = is_string($masked) ? $masked : '[credential content removed]';
         $masked = preg_replace(
-            '/(' . $sensitive . '\s*["\']?\s*[:=]\s*["\']?)[^\s,;"\'}]+/i',
+            '/(' . $sensitive . '\s*["\']?\s*[:=]\s*)"[^"]*"/i',
+            '$1"[redacted]"',
+            $masked
+        );
+        $masked = is_string($masked) ? $masked : '[credential content removed]';
+        $masked = preg_replace(
+            "/(" . $sensitive . "\\s*[\"']?\\s*[:=]\\s*)'[^']*'/i",
+            '$1\'[redacted]\'',
+            $masked
+        );
+        $masked = is_string($masked) ? $masked : '[credential content removed]';
+        $masked = preg_replace(
+            '/(' . $sensitive . '\s*["\']?\s*[:=]\s*)[^\s,;"\'}]+/i',
             '$1[redacted]',
             $masked
         );
