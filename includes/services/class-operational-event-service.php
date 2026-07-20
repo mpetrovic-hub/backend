@@ -169,7 +169,7 @@ class Kiwi_Operational_Event_Service
             return '';
         }
 
-        $sensitive = '(?:authorization|api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd|secret|token)';
+        $sensitive = '(?:(?:[a-z0-9]+[_-])*(?:authorization|api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd|secret|token|credential)(?:[_-][a-z0-9]+)*)';
         $masked = preg_replace('/(authorization\s*:\s*)(?:bearer|basic)\s+[^\s,;]+/i', '$1[redacted]', $text);
         $masked = is_string($masked) ? $masked : '[credential content removed]';
         $masked = preg_replace(
@@ -185,7 +185,7 @@ class Kiwi_Operational_Event_Service
         );
         $masked = is_string($masked) ? $masked : '[credential content removed]';
         $masked = preg_replace(
-            '/(' . $sensitive . '\s*["\']?\s*[:=]\s*)[^\s,;"\'}]+/i',
+            '/(' . $sensitive . '\s*["\']?\s*[:=]\s*)(?!["\'])(.*?)(?=\s+[a-z][a-z0-9_.-]*\s*[:=]|[,;\r\n]|$)/i',
             '$1[redacted]',
             $masked
         );
@@ -214,9 +214,14 @@ class Kiwi_Operational_Event_Service
 
     private function is_sensitive_key(string $key): bool
     {
-        $key = strtolower(preg_replace('/[^a-z0-9]+/i', '_', trim($key)) ?? '');
+        $key = preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', trim($key));
+        $key = strtolower(preg_replace('/[^a-z0-9]+/i', '_', (string) $key) ?? '');
 
-        return in_array($key, self::SENSITIVE_KEYS, true);
+        return in_array($key, self::SENSITIVE_KEYS, true)
+            || preg_match(
+                '/(?:^|_)(?:authorization|api_key|access_token|token|client_secret|secret|password|passwd|credential|credentials)(?:_|$)/',
+                $key
+            ) === 1;
     }
 
     private function normalize_key(string $value, int $limit): string

@@ -16531,10 +16531,13 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
         'reference_type' => 'retention_cleanup_run',
         'reference_id' => 'run-1',
         'message' => str_repeat('M', 700),
-        'raw_error_text' => 'Authorization: Bearer top-secret access_token=hidden client_secret="two word secret" MSISDN=436641234567',
+        'raw_error_text' => 'Authorization: Bearer top-secret access_token=hidden client_secret="two word secret" refresh_token=refresh two tail MSISDN=436641234567',
         'context' => [
             'password' => 'do-not-store',
             'nested' => ['api_key' => 'also-secret'],
+            'refresh_token' => 'refresh-credential',
+            'idToken' => 'id-credential',
+            'authorization_header' => 'Bearer structured-credential',
             'msisdn' => '436641234567',
         ],
     ];
@@ -16560,8 +16563,12 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'top-secret') === false, 'Expected Authorization value not to persist.');
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'hidden') === false, 'Expected token value not to persist.');
     kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'two word secret') === false, 'Expected complete quoted credential values with spaces not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'refresh two tail') === false, 'Expected ambiguous unquoted credential values to be removed through the next field.');
     kiwi_assert_contains('436641234567', (string) $rows[0]['raw_error_text'], 'Expected allowed business MSISDN to remain available.');
     kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'do-not-store') === false, 'Expected structured password value to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'refresh-credential') === false, 'Expected token-suffixed structured keys to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'id-credential') === false, 'Expected camelCase token keys to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-credential') === false, 'Expected authorization-header keys to be redacted.');
     kiwi_assert_contains('436641234567', (string) $rows[0]['context_json'], 'Expected structured business identifier to remain available.');
     kiwi_assert_same(2, count($repository->get_recent(['area' => 'retention', 'severity' => 'error'])), 'Expected bounded area/severity reads to return the two failure events.');
     kiwi_assert_same([], $repository->get_open_incidents(['area' => 'retention']), 'Expected resolved correlation not to remain open.');
@@ -16576,7 +16583,7 @@ kiwi_run_test('Kiwi_Operational_Event_Service omits oversized context and trunca
         'severity' => 'critical',
         'event_type' => 'query_failed',
         'correlation_key' => 'database_query',
-        'message' => 'Query failed with password="message secret".',
+        'message' => 'Query failed with password=message secret.',
         'raw_error_text' => str_repeat('x', 5000),
         'context' => ['payload' => str_repeat('y', 17000)],
     ]);
