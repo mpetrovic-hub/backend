@@ -13634,6 +13634,16 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot fai
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
     $snapshots->capture_results_by_phase['after_cleanup'] = 0;
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $event_service->record_failure([
+        'area' => 'retention',
+        'severity' => 'error',
+        'event_type' => 'retention_cleanup_timeout',
+        'correlation_key' => 'retention_landing_page_sessions',
+        'idempotency_key' => 'stale-before-warning-completion',
+        'message' => 'Earlier stale retention run.',
+    ]);
     $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
     $archive->chunks[] = [
         'success' => true,
@@ -13652,7 +13662,8 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot fai
         $runs,
         $snapshots,
         $archive,
-        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        $event_service
     );
     $service->eligible_rows = 1;
     $service->target_max_primary_key = 1;
@@ -13666,6 +13677,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot fai
     kiwi_assert_same('snapshot_after_failed', $result['error_code'], 'Expected persisted after-snapshot warning code.');
     kiwi_assert_same('completed', $runs->rows[1]['status'] ?? '', 'Expected audit row to remain completed after warning.');
     kiwi_assert_same('snapshot_after_failed', $runs->rows[1]['error_code'] ?? '', 'Expected audit row to retain after-snapshot warning.');
+    kiwi_assert_same(['raised', 'resolved'], array_column(array_values($events->rows), 'lifecycle_action'), 'Expected completed cleanup with a snapshot warning to resolve the stale incident.');
 
     $wpdb = $previous_wpdb;
 });
@@ -16672,14 +16684,16 @@ kiwi_run_test('Kiwi_Plugin schedules operational-event cleanup daily and follows
     $plugin->schedule_operational_event_cleanup();
     $plugin->schedule_operational_event_cleanup();
     $result = $plugin->run_operational_event_cleanup();
+    $worker_result = $plugin->run_operational_event_cleanup_worker();
 
     kiwi_assert_same(true, $result['schedule_worker'], 'Expected a full cleanup batch to request a follow-up.');
+    kiwi_assert_same(true, $worker_result['schedule_worker'], 'Expected the worker result to report a remaining full batch without scheduling another worker.');
     kiwi_assert_same(1, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event): bool {
         return ($event['hook'] ?? '') === 'kiwi_operational_event_cleanup_daily';
     })), 'Expected the daily cleanup hook to be scheduled only once.');
     kiwi_assert_same(1, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event): bool {
         return ($event['hook'] ?? '') === 'kiwi_operational_event_cleanup_worker';
-    })), 'Expected exactly one follow-up worker for a full batch.');
+    })), 'Expected exactly one follow-up worker even when the follow-up batch is also full.');
 });
 
 kiwi_run_test('Kiwi_Retention_Cleanup_Service writes stale event and one qualified recovery', function (): void {

@@ -79,7 +79,7 @@ class Kiwi_Plugin
         add_action(self::RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK, [$this, 'run_retention_cleanup_scheduler_daily']);
         add_action(self::RETENTION_CLEANUP_WORKER_HOOK, [$this, 'run_retention_cleanup_worker']);
         add_action(self::OPERATIONAL_EVENT_CLEANUP_DAILY_HOOK, [$this, 'run_operational_event_cleanup']);
-        add_action(self::OPERATIONAL_EVENT_CLEANUP_WORKER_HOOK, [$this, 'run_operational_event_cleanup']);
+        add_action(self::OPERATIONAL_EVENT_CLEANUP_WORKER_HOOK, [$this, 'run_operational_event_cleanup_worker']);
         add_action('init', [$this, 'maybe_export_statistics']);
         add_action('init', [$this, 'maybe_export_hlr_results']);
         add_action('init', [$this, 'maybe_run_dimoco_test']);
@@ -479,6 +479,11 @@ class Kiwi_Plugin
         }
 
         return $result;
+    }
+
+    public function run_operational_event_cleanup_worker(): array
+    {
+        return $this->build_operational_event_cleanup_service()->run();
     }
 
     public function run_device_model_brand_harvest(): array

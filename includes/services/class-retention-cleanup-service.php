@@ -697,7 +697,7 @@ class Kiwi_Retention_Cleanup_Service
                 $new_archived_rows,
                 $new_deleted_rows
             )) {
-                return $this->finish_run($run_db_id, [
+                return $this->finish_successful_run($run_db_id, [
                     'success' => true,
                     'run_id' => $run_id,
                     'status' => 'completed',
@@ -714,7 +714,7 @@ class Kiwi_Retention_Cleanup_Service
                     'worker_last_finished_at' => $this->current_time_mysql(),
                     'error_code' => 'snapshot_after_failed',
                     'error_message' => 'Retention cleanup completed, but the after-cleanup growth snapshot could not be persisted.',
-                ]);
+                ], $source_key, !empty($run['dry_run']));
             }
 
             if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'finalizing'])) {
