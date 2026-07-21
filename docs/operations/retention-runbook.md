@@ -38,7 +38,7 @@ The daily retention cron is only a scheduler. The active recurring hook is `kiwi
 
 The scheduler:
 
-1. Marks unfinished runs with an `updated_at` heartbeat older than 30 minutes as `failed` with `error_code=cron_timeout_suspected` before looking for an active run. An existing `worker_phase` is retained; an empty phase becomes `stale_unknown`.
+1. Marks unfinished runs with an `updated_at` heartbeat older than 30 minutes as `failed` with `error_code=cron_timeout_suspected` before looking for an active run. An existing `worker_phase` is retained; an empty phase becomes `stale_unknown`. Each run newly transitioned by this call also writes an idempotent shared operational event; see `operational-events-runbook.md`.
 2. Runs the coverage gate.
 3. Captures the `before_cleanup` growth snapshot.
 4. Freezes `target_max_primary_key` for rows with `created_at < cutoff_value`.
@@ -46,6 +46,8 @@ The scheduler:
 6. Schedules the single-event worker hook `kiwi_retention_cleanup_worker`.
 
 The scheduler does not archive or delete the full backlog in the daily cron request.
+
+The first later real, non-dry, successfully audit-persisted `completed` or `completed_noop` run resolves the shared retention operational incident. Disabled, skipped, pending, partial, and rescheduled states do not resolve it.
 
 Worker state is stored on `wp_kiwi_retention_cleanup_runs` with:
 

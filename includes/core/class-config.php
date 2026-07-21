@@ -742,6 +742,24 @@ class Kiwi_Config
             : 300;
     }
 
+    public function get_operational_events_retention_days(): int
+    {
+        $value = defined('KIWI_OPERATIONAL_EVENTS_RETENTION_DAYS')
+            ? (int) KIWI_OPERATIONAL_EVENTS_RETENTION_DAYS
+            : 180;
+
+        return min(3650, max(1, $value));
+    }
+
+    public function get_operational_events_cleanup_batch_size(): int
+    {
+        $value = defined('KIWI_OPERATIONAL_EVENTS_CLEANUP_BATCH_SIZE')
+            ? (int) KIWI_OPERATIONAL_EVENTS_CLEANUP_BATCH_SIZE
+            : 5000;
+
+        return min(50000, max(1, $value));
+    }
+
     /**
      * Operator lookup routes configuration
      * Returns a mapping of MSISDN prefixes to provider and country, used for routing operator lookup requests to the correct provider based on the phone number's prefix. Configured in wp-config.php as KIWI_OPERATOR_LOOKUP_ROUTES.

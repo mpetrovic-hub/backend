@@ -392,6 +392,7 @@ require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-re
 require_once __DIR__ . '/../includes/repositories/class-sms-body-variant-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
+require_once __DIR__ . '/../includes/repositories/class-operational-event-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-retention-cleanup-run-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-retention-table-growth-snapshot-repository.php';
 require_once __DIR__ . '/../includes/repositories/interface-statistics-read-repository.php';
@@ -425,6 +426,8 @@ require_once __DIR__ . '/../includes/services/class-landing-session-raw-context-
 require_once __DIR__ . '/../includes/services/class-retention-source-registry.php';
 require_once __DIR__ . '/../includes/services/class-retention-coverage-gate.php';
 require_once __DIR__ . '/../includes/services/class-retention-sqlite-archive-service.php';
+require_once __DIR__ . '/../includes/services/class-operational-event-service.php';
+require_once __DIR__ . '/../includes/services/class-operational-event-cleanup-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
@@ -1375,6 +1378,121 @@ class Kiwi_Test_Plugin_Landing_Session_Raw_Context_Compaction extends Kiwi_Plugi
     }
 }
 
+class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repository
+{
+    public $rows = [];
+    public $throw_on_delete = false;
+    public $delete_result = 0;
+    private $next_id = 1;
+
+    public function create_table(): void
+    {
+    }
+
+    public function insert_event(array $event): int
+    {
+        $idempotency_key = (string) ($event['idempotency_key'] ?? '');
+        if ($idempotency_key !== '') {
+            foreach ($this->rows as $row) {
+                if (($row['idempotency_key'] ?? '') === $idempotency_key) {
+                    return (int) $row['id'];
+                }
+            }
+        }
+
+        $id = $this->next_id++;
+        $this->rows[$id] = array_merge(['id' => $id], $event);
+
+        return $id;
+    }
+
+    public function find_latest_by_correlation_key(string $correlation_key): ?array
+    {
+        $matches = array_values(array_filter($this->rows, static function (array $row) use ($correlation_key): bool {
+            return ($row['correlation_key'] ?? '') === $correlation_key;
+        }));
+
+        return empty($matches) ? null : $matches[count($matches) - 1];
+    }
+
+    public function get_recent(array $filters = [], int $limit = 100): array
+    {
+        $rows = array_reverse(array_values($this->rows));
+        $rows = array_values(array_filter($rows, static function (array $row) use ($filters): bool {
+            foreach ($filters as $key => $value) {
+                if ($value !== '' && ($row[$key] ?? null) !== $value) {
+                    return false;
+                }
+            }
+
+            return true;
+        }));
+
+        return array_slice($rows, 0, max(1, $limit));
+    }
+
+    public function get_open_incidents(array $filters = [], int $limit = 100): array
+    {
+        $latest = [];
+        foreach ($this->rows as $row) {
+            $latest[(string) ($row['correlation_key'] ?? '')] = $row;
+        }
+
+        $rows = array_values(array_filter($latest, static function (array $row) use ($filters): bool {
+            if (!in_array((string) ($row['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)) {
+                return false;
+            }
+            foreach ($filters as $key => $value) {
+                if ($value !== '' && ($row[$key] ?? null) !== $value) {
+                    return false;
+                }
+            }
+
+            return true;
+        }));
+
+        return array_slice(array_reverse($rows), 0, max(1, $limit));
+    }
+
+    public function delete_created_before(string $cutoff, int $limit): int
+    {
+        if ($this->throw_on_delete) {
+            throw new RuntimeException('event table unavailable; password=do-not-store');
+        }
+
+        return min(max(0, $this->delete_result), max(1, $limit));
+    }
+}
+
+class Kiwi_Test_Operational_Event_Cleanup_Config extends Kiwi_Config
+{
+    public function get_operational_events_retention_days(): int
+    {
+        return 180;
+    }
+
+    public function get_operational_events_cleanup_batch_size(): int
+    {
+        return 2;
+    }
+}
+
+class Kiwi_Test_Plugin_Operational_Event_Cleanup extends Kiwi_Plugin
+{
+    private $cleanup_service;
+
+    public function __construct(Kiwi_Operational_Event_Cleanup_Service $cleanup_service)
+    {
+        parent::__construct(dirname(__DIR__), 'https://example.test/plugin/');
+        $this->cleanup_service = $cleanup_service;
+    }
+
+    protected function build_operational_event_cleanup_service(): Kiwi_Operational_Event_Cleanup_Service
+    {
+        return $this->cleanup_service;
+    }
+}
+
 class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_Run_Repository
 {
     public $rows = [];
@@ -1382,7 +1500,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public $create_run_result = null;
     public $update_run_result = true;
     public $stale_run_ids = [];
-    public $stale_detection_result = 0;
+    public $stale_detection_result = [];
     public $stale_detection_calls = [];
     private $next_id = 1;
 
@@ -1430,7 +1548,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         return null;
     }
 
-    public function mark_stale_unfinished_runs(string $source_key, int $stale_after_minutes = 30): ?int
+    public function mark_stale_unfinished_runs(string $source_key, int $stale_after_minutes = 30): ?array
     {
         $this->stale_detection_calls[] = [
             'source_key' => $source_key,
@@ -1441,7 +1559,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
             return null;
         }
 
-        $marked = 0;
+        $marked = [];
         foreach ($this->stale_run_ids as $id) {
             if (($this->rows[$id]['source_key'] ?? '') !== $source_key
                 || ($this->rows[$id]['finished_at'] ?? null) !== null
@@ -1460,7 +1578,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
                 'finished_at' => '2026-07-15 12:00:00',
                 'updated_at' => '2026-07-15 12:00:00',
             ]);
-            $marked++;
+            $marked[] = $this->rows[$id];
         }
 
         return $marked;
@@ -11587,6 +11705,7 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'schedule_device_model_brand_harvest',
             'schedule_landing_session_raw_context_compaction',
             'schedule_retention_cleanup',
+            'schedule_operational_event_cleanup',
             'maybe_export_statistics',
             'maybe_export_hlr_results',
             'maybe_run_dimoco_test',
@@ -11607,6 +11726,8 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_landing_session_raw_context_compaction_worker']), 'Expected landing-session raw-context compaction worker hook to be registered.');
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_retention_cleanup_scheduler_daily']), 'Expected retention scheduler cron hook to be registered.');
     kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_retention_cleanup_worker']), 'Expected retention worker cron hook to be registered.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_operational_event_cleanup_daily']), 'Expected operational-event cleanup daily hook to be registered.');
+    kiwi_assert_true(isset($GLOBALS['kiwi_test_hooks']['kiwi_operational_event_cleanup_worker']), 'Expected operational-event cleanup worker hook to be registered.');
 
     $enqueue_callback = $GLOBALS['kiwi_test_hooks']['wp_enqueue_scripts'][0];
     $enqueue_callback();
@@ -13513,6 +13634,16 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot fai
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
     $snapshots->capture_results_by_phase['after_cleanup'] = 0;
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $event_service->record_failure([
+        'area' => 'retention',
+        'severity' => 'error',
+        'event_type' => 'retention_cleanup_timeout',
+        'correlation_key' => 'retention_landing_page_sessions',
+        'idempotency_key' => 'stale-before-warning-completion',
+        'message' => 'Earlier stale retention run.',
+    ]);
     $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
     $archive->chunks[] = [
         'success' => true,
@@ -13531,7 +13662,8 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot fai
         $runs,
         $snapshots,
         $archive,
-        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        $event_service
     );
     $service->eligible_rows = 1;
     $service->target_max_primary_key = 1;
@@ -13545,6 +13677,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot fai
     kiwi_assert_same('snapshot_after_failed', $result['error_code'], 'Expected persisted after-snapshot warning code.');
     kiwi_assert_same('completed', $runs->rows[1]['status'] ?? '', 'Expected audit row to remain completed after warning.');
     kiwi_assert_same('snapshot_after_failed', $runs->rows[1]['error_code'] ?? '', 'Expected audit row to retain after-snapshot warning.');
+    kiwi_assert_same(['raised', 'resolved'], array_column(array_values($events->rows), 'lifecycle_action'), 'Expected completed cleanup with a snapshot warning to resolve the stale incident.');
 
     $wpdb = $previous_wpdb;
 });
@@ -13794,7 +13927,7 @@ kiwi_run_test('Kiwi_Plugin bumps schema version for bounded retention worker sta
     $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
     $plugin->ensure_click_attribution_table();
 
-    kiwi_assert_same('2026-07-02-1', $schema_version, 'Expected schema version to be bumped for retention worker state columns.');
+    kiwi_assert_same('2026-07-20-1', $schema_version, 'Expected schema version to include the operational-event table.');
     kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
     kiwi_assert_same(
         $schema_version,
@@ -16377,4 +16510,247 @@ kiwi_run_test('Kiwi_Config exposes device model brand harvest threshold', functi
     }
 
     kiwi_assert_same(1, $config->get_device_model_brand_harvest_min_daily_sessions(), 'Expected configured harvester thresholds to be clamped to at least one.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Repository declares append-only schema and query indexes', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Landing_Funnel_Daily_Summary();
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+
+    (new Kiwi_Operational_Event_Repository())->create_table();
+    $sql = (string) ($GLOBALS['kiwi_test_dbdelta_queries'][0] ?? '');
+
+    kiwi_assert_contains('kiwi_operational_events', $sql, 'Expected the generic operational-event table name.');
+    foreach (['occurred_at', 'created_at', 'area', 'severity', 'event_type', 'lifecycle_action', 'idempotency_key', 'correlation_key', 'reference_type', 'reference_id', 'message', 'raw_error_text', 'context_json'] as $column) {
+        kiwi_assert_contains($column, $sql, 'Expected operational-event schema column ' . $column . '.');
+    }
+    kiwi_assert_contains('UNIQUE KEY idempotency_key', $sql, 'Expected database-enforced idempotency.');
+    kiwi_assert_contains('KEY area_severity_occurred_id', $sql, 'Expected UI-oriented area/severity/time lookup index.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, limits, and credential redaction', function (): void {
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $service = new Kiwi_Operational_Event_Service($repository);
+    $base = [
+        'area' => 'Retention',
+        'severity' => 'error',
+        'event_type' => 'Cleanup Timeout',
+        'correlation_key' => 'retention_landing_page_sessions',
+        'reference_type' => 'retention_cleanup_run',
+        'reference_id' => 'run-1',
+        'message' => str_repeat('M', 700),
+        'raw_error_text' => "Authorization: Digest username=\"digest-user\", nonce=\"digest-nonce\", response=\"digest-response-secret\"\nAuthorization=Digest username=\"assignment-user\", response=\"assignment-digest-secret\"\naccess_token=hidden client_secret=\"two word secret\" password=\"abc\\\"def secret\" refresh_token=refresh two tail private_key=-----BEGIN PRIVATE KEY-----\nprivate-key-material\n-----END PRIVATE KEY-----\nCookie: wordpress_logged_in=cookie-secret; PHPSESSID=session-secret\nCookie=first=assignment-cookie-secret; other=assignment-session-secret\nSet-Cookie: secondary_cookie=set-cookie-secret\nMSISDN=436641234567",
+        'context' => [
+            'password' => 'do-not-store',
+            'nested' => ['api_key' => 'also-secret'],
+            'refresh_token' => 'refresh-credential',
+            'idToken' => 'id-credential',
+            'authorization_header' => 'Bearer structured-credential',
+            'tokens' => ['refresh' => 'plural-token-credential'],
+            'apiKeys' => ['primary' => 'plural-api-key-credential'],
+            'privateKey' => 'structured-private-key-material',
+            'cookies' => ['wordpress_logged_in' => 'structured-cookie-secret'],
+            'PHPSESSID' => 'structured-session-secret',
+            'wordpress_logged_in' => 'structured-login-cookie-secret',
+            'auth' => 'structured-auth-secret',
+            'digest' => 'structured-digest-secret',
+            'signature' => 'structured-signature-secret',
+            'hmac' => 'structured-hmac-secret',
+            'APIKey' => 'collapsed-acronym-api-key',
+            'apikey' => 'collapsed-lower-api-key',
+            'IDToken' => 'collapsed-acronym-id-token',
+            'clientsecret' => 'collapsed-lower-client-secret',
+            'msisdn' => '436641234567',
+        ],
+    ];
+
+    kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-1'])), 'Expected first failure event to persist.');
+    kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected repeated failure event to persist.');
+    kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected duplicate idempotency key to be a successful no-op.');
+    kiwi_assert_true($service->record_recovery(array_merge($base, [
+        'severity' => 'info',
+        'idempotency_key' => 'recovery-1',
+        'message' => 'Recovered.',
+    ])), 'Expected the first recovery event to persist.');
+    kiwi_assert_true($service->record_recovery(array_merge($base, [
+        'severity' => 'info',
+        'idempotency_key' => 'recovery-2',
+        'message' => 'Still healthy.',
+    ])), 'Expected later routine successes to be ignored safely.');
+
+    $rows = array_values($repository->rows);
+    kiwi_assert_same(3, count($rows), 'Expected raised, repeated, and one resolved row only.');
+    kiwi_assert_same(['raised', 'repeated', 'resolved'], array_column($rows, 'lifecycle_action'), 'Expected append-only incident lifecycle.');
+    kiwi_assert_same(500, strlen((string) $rows[0]['message']), 'Expected message length to be capped at 500 characters.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'digest-response-secret') === false, 'Expected complete Digest Authorization header values not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'assignment-digest-secret') === false, 'Expected assignment-form Authorization header values not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'hidden') === false, 'Expected token value not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'two word secret') === false, 'Expected complete quoted credential values with spaces not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'def secret') === false, 'Expected quoted credentials with escaped delimiters to be consumed fully.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'private-key-material') === false, 'Expected complete multiline private-key blocks not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'cookie-secret') === false, 'Expected complete Cookie and Set-Cookie header values not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'session-secret') === false, 'Expected session cookie values after semicolon delimiters not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'assignment-session-secret') === false, 'Expected assignment-form Cookie header values not to persist.');
+    kiwi_assert_true(strpos((string) $rows[0]['raw_error_text'], 'refresh two tail') === false, 'Expected ambiguous unquoted credential values to be removed through the next field.');
+    kiwi_assert_contains('436641234567', (string) $rows[0]['raw_error_text'], 'Expected allowed business MSISDN to remain available.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'do-not-store') === false, 'Expected structured password value to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'refresh-credential') === false, 'Expected token-suffixed structured keys to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'id-credential') === false, 'Expected camelCase token keys to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-credential') === false, 'Expected authorization-header keys to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'plural-token-credential') === false, 'Expected plural token containers to be redacted with their children.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'plural-api-key-credential') === false, 'Expected camelCase API-key containers to be redacted with their children.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-private-key-material') === false, 'Expected structured private-key fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-cookie-secret') === false, 'Expected structured cookie containers to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-session-secret') === false, 'Expected structured session-ID fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-login-cookie-secret') === false, 'Expected structured logged-in cookie fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-auth-secret') === false, 'Expected structured auth fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-digest-secret') === false, 'Expected structured digest fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-signature-secret') === false, 'Expected structured signature fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'structured-hmac-secret') === false, 'Expected structured HMAC fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-acronym-api-key') === false, 'Expected acronym API-key fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-lower-api-key') === false, 'Expected collapsed lowercase API-key fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-acronym-id-token') === false, 'Expected acronym ID-token fields to be redacted.');
+    kiwi_assert_true(strpos((string) $rows[0]['context_json'], 'collapsed-lower-client-secret') === false, 'Expected collapsed lowercase client-secret fields to be redacted.');
+    kiwi_assert_contains('436641234567', (string) $rows[0]['context_json'], 'Expected structured business identifier to remain available.');
+    kiwi_assert_same(2, count($repository->get_recent(['area' => 'retention', 'severity' => 'error'])), 'Expected bounded area/severity reads to return the two failure events.');
+    kiwi_assert_same([], $repository->get_open_incidents(['area' => 'retention']), 'Expected resolved correlation not to remain open.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Service omits oversized context and truncates raw errors', function (): void {
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $service = new Kiwi_Operational_Event_Service($repository);
+
+    $service->record_failure([
+        'area' => 'database',
+        'severity' => 'critical',
+        'event_type' => 'query_failed',
+        'correlation_key' => 'database_query',
+        'message' => 'Query failed with password=message secret.',
+        'raw_error_text' => str_repeat('x', 5000),
+        'context' => ['payload' => str_repeat('y', 17000)],
+    ]);
+
+    $row = array_values($repository->rows)[0] ?? [];
+    kiwi_assert_same(4000, strlen((string) ($row['raw_error_text'] ?? '')), 'Expected raw error text to be capped at 4,000 characters.');
+    kiwi_assert_same('{"context_omitted":"size_limit_exceeded"}', $row['context_json'] ?? '', 'Expected oversized context to use the documented replacement object.');
+    kiwi_assert_true(strpos((string) ($row['message'] ?? ''), 'message secret') === false, 'Expected readable messages to mask complete quoted credential values.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service batches, reschedules, and records failure recovery', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($repository);
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        $event_service
+    );
+
+    $repository->throw_on_delete = true;
+    $failed = $cleanup->run();
+    kiwi_assert_same(false, $failed['success'], 'Expected cleanup query failures to be explicit.');
+    kiwi_assert_same('raised', array_values($repository->rows)[0]['lifecycle_action'] ?? '', 'Expected first cleanup failure to raise an incident.');
+
+    $repository->throw_on_delete = false;
+    $repository->delete_result = 2;
+    $recovered = $cleanup->run();
+    kiwi_assert_same(true, $recovered['success'], 'Expected the next successful cleanup to recover.');
+    kiwi_assert_same(true, $recovered['schedule_worker'], 'Expected a full batch to request one follow-up worker.');
+    kiwi_assert_same('resolved', array_values($repository->rows)[1]['lifecycle_action'] ?? '', 'Expected first later cleanup success to resolve the incident.');
+
+    $repository->delete_result = 1;
+    $finished = $cleanup->run();
+    kiwi_assert_same(false, $finished['schedule_worker'], 'Expected a short batch to end the cleanup chain.');
+    kiwi_assert_same(2, count($repository->rows), 'Expected routine later cleanup success not to add events.');
+});
+
+kiwi_run_test('Kiwi_Plugin schedules operational-event cleanup daily and follows a full batch once', function (): void {
+    $GLOBALS['kiwi_test_cron_events'] = [];
+    $GLOBALS['kiwi_test_next_scheduled'] = [];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $repository->delete_result = 2;
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        new Kiwi_Operational_Event_Service($repository)
+    );
+    $plugin = new Kiwi_Test_Plugin_Operational_Event_Cleanup($cleanup);
+
+    $plugin->schedule_operational_event_cleanup();
+    $plugin->schedule_operational_event_cleanup();
+    $result = $plugin->run_operational_event_cleanup();
+    $worker_result = $plugin->run_operational_event_cleanup_worker();
+
+    kiwi_assert_same(true, $result['schedule_worker'], 'Expected a full cleanup batch to request a follow-up.');
+    kiwi_assert_same(true, $worker_result['schedule_worker'], 'Expected the worker result to report a remaining full batch without scheduling another worker.');
+    kiwi_assert_same(1, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event): bool {
+        return ($event['hook'] ?? '') === 'kiwi_operational_event_cleanup_daily';
+    })), 'Expected the daily cleanup hook to be scheduled only once.');
+    kiwi_assert_same(1, count(array_filter($GLOBALS['kiwi_test_cron_events'], static function (array $event): bool {
+        return ($event['hook'] ?? '') === 'kiwi_operational_event_cleanup_worker';
+    })), 'Expected exactly one follow-up worker even when the follow-up batch is also full.');
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service writes stale event and one qualified recovery', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 15],
+        ],
+    ];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->rows[99] = [
+        'id' => 99,
+        'run_id' => 'stale-run-99',
+        'source_key' => 'landing_page_sessions',
+        'status' => 'running',
+        'worker_phase' => 'deleting',
+        'finished_at' => null,
+    ];
+    $runs->stale_run_ids = [99];
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $gate = new Kiwi_Test_Retention_Coverage_Gate([
+        'success' => true,
+        'status' => 'passed',
+        'effective_cutoff_value' => '2026-03-17 00:00:00',
+    ]);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate,
+        $event_service
+    );
+    $service->eligible_rows = 0;
+
+    $result = $service->run_source('landing_page_sessions', 'cron');
+    $event_rows = array_values($events->rows);
+
+    kiwi_assert_same(true, $result['success'], 'Expected zero-row active retention run to complete successfully.');
+    kiwi_assert_same('completed_noop', $result['worker_phase'] ?? '', 'Expected a real completed-noop run to qualify for recovery.');
+    kiwi_assert_same(['raised', 'resolved'], array_column($event_rows, 'lifecycle_action'), 'Expected stale failure and exactly one qualified recovery.');
+    kiwi_assert_same('retention_cleanup_run', $event_rows[0]['reference_type'] ?? '', 'Expected stale event to reference the specific retention run.');
+    kiwi_assert_same('stale-run-99', $event_rows[0]['reference_id'] ?? '', 'Expected stale event reference ID to use the run ID.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Config exposes bounded operational-event cleanup defaults', function (): void {
+    $config = new Kiwi_Config();
+
+    kiwi_assert_same(180, $config->get_operational_events_retention_days(), 'Expected 180-day operational-event retention default.');
+    kiwi_assert_same(5000, $config->get_operational_events_cleanup_batch_size(), 'Expected 5,000-row cleanup batch default.');
 });
