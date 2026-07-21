@@ -33,5 +33,4 @@
 
 - Update `general-api-dimoco.md` for broadly true Dimoco behavior.
 - Update the country/flow doc for local setup behavior.
-- Keep provider payload mapping at the integration boundary; do not copy external payload shapes into shared capability docs unless they explain the boundary.
-
+- Keep Aggregator payload mapping at the integration boundary; do not copy external payload shapes into shared capability docs unless they explain the boundary.
