@@ -625,6 +625,18 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
     kiwi_assert_true(new Kiwi_Database_Deployment_Service() instanceof Kiwi_Database_Deployment_Service, 'Expected every canonical repository step to construct outside normal runtime.');
 });
 
+kiwi_run_test('Kiwi database runner executes after plugins load and before init', function (): void {
+    $runner = file_get_contents(__DIR__ . '/../tools/database/kiwi-database.php');
+    $runbook = file_get_contents(__DIR__ . '/../docs/operations/database-migrations.md');
+
+    kiwi_assert_true(is_string($runner), 'Expected the external database runner source to be readable.');
+    kiwi_assert_true(is_string($runbook), 'Expected the database migration runbook to be readable.');
+    kiwi_assert_true(strpos($runner, "did_action('plugins_loaded') < 1") !== false, 'Expected the runner to require loaded plugin classes.');
+    kiwi_assert_true(strpos($runner, "did_action('init') > 0") !== false, 'Expected the runner to reject execution after normal init side effects.');
+    kiwi_assert_true(substr_count($runbook, '--hook=plugins_loaded') >= 2, 'Expected status and apply examples to use the pre-init WP-CLI hook.');
+    kiwi_assert_true(strpos($runbook, 'do not fall back to the bare command') !== false, 'Expected the runbook to reject unsafe bare eval-file fallback.');
+});
+
 kiwi_run_test('Kiwi normal runtime contains no schema mutation path', function (): void {
     global $wpdb;
 

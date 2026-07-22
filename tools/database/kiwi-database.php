@@ -10,6 +10,17 @@ if (!defined('WP_CLI') || !WP_CLI || !defined('ABSPATH')) {
 
 require_once __DIR__ . '/class-database-deployment-service.php';
 
+if (!function_exists('did_action')
+    || did_action('plugins_loaded') < 1
+    || did_action('init') > 0
+) {
+    WP_CLI::error(
+        'Run this file with --hook=plugins_loaded so plugin classes are loaded before WordPress init side effects.',
+        false
+    );
+    WP_CLI::halt(1);
+}
+
 $required_classes = [
     Kiwi_Dimoco_Callback_Operator_Lookup_Repository::class,
     Kiwi_Dimoco_Callback_Refund_Repository::class,
@@ -45,7 +56,10 @@ foreach ($required_classes as $required_class) {
 
 $mode = strtolower(trim((string) ($args[0] ?? 'status')));
 if (!in_array($mode, ['status', 'apply'], true)) {
-    WP_CLI::error('Usage: wp eval-file tools/database/kiwi-database.php [status|apply]', false);
+    WP_CLI::error(
+        'Usage: wp eval-file tools/database/kiwi-database.php [status|apply] --hook=plugins_loaded',
+        false
+    );
     WP_CLI::halt(1);
 }
 

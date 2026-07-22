@@ -42,9 +42,11 @@ The Deployment Codex/Operator owns the later, explicitly authorized rollout:
 Run the tool from the WordPress installation with Kiwi Backend active so WP-CLI loads the plugin classes first:
 
 ```bash
-wp eval-file wp-content/plugins/kiwi-backend/tools/database/kiwi-database.php status
-wp eval-file wp-content/plugins/kiwi-backend/tools/database/kiwi-database.php apply
+wp eval-file wp-content/plugins/kiwi-backend/tools/database/kiwi-database.php status --hook=plugins_loaded
+wp eval-file wp-content/plugins/kiwi-backend/tools/database/kiwi-database.php apply --hook=plugins_loaded
 ```
+
+The `--hook=plugins_loaded` argument is mandatory. It executes the file after Kiwi Backend classes are available but before the normal WordPress `init` hook can schedule cron work, clean up rows, or perform other runtime side effects. The runner verifies this lifecycle boundary itself and exits non-zero when invoked before `plugins_loaded` or after `init`. Use a WP-CLI `eval-command` version that supports `--hook`; do not fall back to the bare command.
 
 `status` is strictly read-only. It queries real `information_schema` postconditions for all managed tables, columns, indexes, and views; verifies required device-model seed rows; and compares `kiwi_backend_db_schema_version` with the target version. It exits `0` only when the complete schema is ready. Drift produces JSON and a non-zero exit.
 
