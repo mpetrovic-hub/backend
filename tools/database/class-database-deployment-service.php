@@ -215,9 +215,10 @@ class Kiwi_Database_Deployment_Service
     protected function inspect_schema(): array
     {
         $inspection = $this->inspect_contract($this->schema_contract);
+        $contract_drift = (array) ($inspection['drift'] ?? []);
         $inspection['drift'] = array_merge(
-            (array) ($inspection['drift'] ?? []),
-            $this->inspect_seed_drift()
+            $contract_drift,
+            $this->inspect_seed_drift($contract_drift)
         );
 
         return $inspection;
@@ -423,7 +424,7 @@ class Kiwi_Database_Deployment_Service
         return ['drift' => $drift];
     }
 
-    private function inspect_seed_drift(): array
+    private function inspect_seed_drift(array $contract_drift = []): array
     {
         global $wpdb;
 
@@ -449,7 +450,18 @@ class Kiwi_Database_Deployment_Service
         }
 
         $table_name = (string) $wpdb->prefix . 'kiwi_device_model_brand_map';
+        foreach ($contract_drift as $drift) {
+            if (($drift['object'] ?? '') !== $table_name) {
+                continue;
+            }
+
+            if (in_array(($drift['kind'] ?? ''), ['missing_table', 'object_type_mismatch', 'inspection_error'], true)) {
+                return [];
+            }
+        }
+
         $placeholders = implode(', ', array_fill(0, count($model_keys), '%s'));
+        $this->reset_database_error();
         $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT model_key, brand FROM {$table_name} WHERE model_key IN ({$placeholders})",
@@ -457,6 +469,15 @@ class Kiwi_Database_Deployment_Service
             ),
             ARRAY_A
         );
+
+        if ($this->get_database_error() !== '') {
+            return [[
+                'kind' => 'inspection_error',
+                'object' => $table_name,
+                'detail' => $this->sanitize_error($this->get_database_error()),
+            ]];
+        }
+
         $actual = [];
 
         foreach (is_array($rows) ? $rows : [] as $row) {

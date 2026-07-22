@@ -12,6 +12,7 @@ class Kiwi_Test_Database_Deployment_Wpdb
     public $summary_totals = [];
     public $table_inspection_error_for = '';
     public $column_inspection_error_for = '';
+    public $seed_inspection_error = false;
 
     public function prepare($query, ...$args)
     {
@@ -83,6 +84,14 @@ class Kiwi_Test_Database_Deployment_Wpdb
             return array_map(static function (string $index): array {
                 return ['INDEX_NAME' => $index];
             }, (array) ($this->objects[$object_name]['indexes'] ?? []));
+        }
+
+        if (strpos($query, 'SELECT model_key, brand FROM ') === 0) {
+            if ($this->seed_inspection_error) {
+                $this->last_error = 'seed read denied; password=must-not-leak; MSISDN=436641234567';
+            }
+
+            return [];
         }
 
         return [];
@@ -295,6 +304,55 @@ kiwi_run_test('Kiwi database apply distinguishes table inspection errors from mi
     kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
     kiwi_assert_same('inspection_error', $result['drift'][0]['kind'] ?? '', 'Expected a table lookup failure to remain an inspection error.');
     kiwi_assert_true(strpos((string) ($result['drift'][0]['detail'] ?? ''), 'must-not-leak') === false, 'Expected table inspection errors to be sanitized.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database apply fails closed when seed inspection errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $seed_contract = [
+        'columns' => ['id', 'model_key', 'brand'],
+        'indexes' => ['PRIMARY', 'model_key'],
+    ];
+    $wpdb->objects['abc_kiwi_device_model_brand_map'] = [
+        'type' => 'BASE TABLE',
+        'columns' => $seed_contract['columns'],
+        'indexes' => $seed_contract['indexes'],
+    ];
+    $wpdb->seed_inspection_error = true;
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+    ];
+    $step = new Kiwi_Test_Database_Schema_Step(
+        $wpdb,
+        'abc_kiwi_device_model_brand_map',
+        $seed_contract
+    );
+    $service = new Kiwi_Test_Database_Deployment_Service(
+        [[
+            'name' => 'device_model_brand_map',
+            'repository' => $step,
+            'objects' => ['kiwi_device_model_brand_map'],
+        ]],
+        ['kiwi_device_model_brand_map' => $seed_contract]
+    );
+
+    $result = $service->apply();
+
+    kiwi_assert_same('schema_inspection_failed', $result['error_code'], 'Expected seed lookup failures to block generic apply.');
+    kiwi_assert_same(0, $step->calls, 'Expected no schema command after a seed inspection failure.');
+    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed seed inspection to preserve the installed version.');
+    kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
+    kiwi_assert_same('inspection_error', $result['drift'][0]['kind'] ?? '', 'Expected a seed lookup failure to remain an inspection error.');
+    kiwi_assert_true(strpos((string) ($result['drift'][0]['detail'] ?? ''), 'must-not-leak') === false, 'Expected seed inspection errors to be sanitized.');
+
+    unset($wpdb->objects['abc_kiwi_device_model_brand_map']);
+    $missing_status = $service->status();
+    kiwi_assert_true(in_array('missing_table', array_column($missing_status['drift'], 'kind'), true), 'Expected a known missing seed table to remain bootstrap drift.');
+    kiwi_assert_true(!in_array('inspection_error', array_column($missing_status['drift'], 'kind'), true), 'Expected missing-table bootstrap not to attempt a seed read.');
 
     $wpdb = $previous_wpdb;
 });
