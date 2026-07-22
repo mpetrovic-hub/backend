@@ -13,6 +13,8 @@ class Kiwi_Test_Database_Deployment_Wpdb
     public $table_inspection_error_for = '';
     public $column_inspection_error_for = '';
     public $seed_inspection_error = false;
+    public $seed_inspection_error_when_columns_missing = false;
+    public $seed_rows = [];
 
     public function prepare($query, ...$args)
     {
@@ -87,11 +89,19 @@ class Kiwi_Test_Database_Deployment_Wpdb
         }
 
         if (strpos($query, 'SELECT model_key, brand FROM ') === 0) {
-            if ($this->seed_inspection_error) {
+            $seed_columns = (array) ($this->objects['abc_kiwi_device_model_brand_map']['columns'] ?? []);
+            $required_seed_columns_missing = !in_array('model_key', $seed_columns, true)
+                || !in_array('brand', $seed_columns, true);
+
+            if ($this->seed_inspection_error
+                || ($this->seed_inspection_error_when_columns_missing && $required_seed_columns_missing)
+            ) {
                 $this->last_error = 'seed read denied; password=must-not-leak; MSISDN=436641234567';
+
+                return [];
             }
 
-            return [];
+            return $this->seed_rows;
         }
 
         return [];
@@ -353,6 +363,92 @@ kiwi_run_test('Kiwi database apply fails closed when seed inspection errors', fu
     $missing_status = $service->status();
     kiwi_assert_true(in_array('missing_table', array_column($missing_status['drift'], 'kind'), true), 'Expected a known missing seed table to remain bootstrap drift.');
     kiwi_assert_true(!in_array('inspection_error', array_column($missing_status['drift'], 'kind'), true), 'Expected missing-table bootstrap not to attempt a seed read.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database apply repairs missing seed query columns before inspecting seeds', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $seed_contract = [
+        'columns' => ['id', 'model_key', 'brand'],
+        'indexes' => ['PRIMARY', 'model_key'],
+    ];
+    $wpdb->objects['abc_kiwi_device_model_brand_map'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['id', 'model_key'],
+        'indexes' => $seed_contract['indexes'],
+    ];
+    $wpdb->seed_inspection_error_when_columns_missing = true;
+    $wpdb->seed_rows = (new Kiwi_Device_Model_Brand_Map_Repository())->get_default_model_brand_mappings();
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+    ];
+    $step = new Kiwi_Test_Database_Schema_Step(
+        $wpdb,
+        'abc_kiwi_device_model_brand_map',
+        $seed_contract
+    );
+    $service = new Kiwi_Test_Database_Deployment_Service(
+        [[
+            'name' => 'device_model_brand_map',
+            'repository' => $step,
+            'objects' => ['kiwi_device_model_brand_map'],
+        ]],
+        ['kiwi_device_model_brand_map' => $seed_contract]
+    );
+
+    $result = $service->apply();
+
+    kiwi_assert_same(true, $result['success'], 'Expected additive seed-column drift to be repaired before seed inspection.');
+    kiwi_assert_same(1, $step->calls, 'Expected dbDelta-compatible schema repair to run once.');
+    kiwi_assert_true(!in_array('inspection_error', array_column($result['drift'], 'kind'), true), 'Expected no false seed inspection error after schema repair.');
+    kiwi_assert_same(Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION, $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION] ?? '', 'Expected target version after verified additive repair.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database apply blocks object type mismatches before mutation', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $view_contract = [
+        'type' => 'view',
+        'columns' => ['id'],
+    ];
+    $wpdb->objects['abc_kiwi_test_view'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['id'],
+        'indexes' => ['PRIMARY'],
+    ];
+    $wpdb->row_counts['abc_kiwi_test_view'] = 23;
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+    ];
+    $step = new Kiwi_Test_Database_Schema_Step(
+        $wpdb,
+        'abc_kiwi_test_view',
+        $view_contract
+    );
+    $service = new Kiwi_Test_Database_Deployment_Service(
+        [[
+            'name' => 'test_view',
+            'repository' => $step,
+            'objects' => ['kiwi_test_view'],
+        ]],
+        ['kiwi_test_view' => $view_contract]
+    );
+
+    $result = $service->apply();
+
+    kiwi_assert_same('object_type_mismatch', $result['error_code'], 'Expected table/view mismatches to require an explicit migration artifact.');
+    kiwi_assert_same(0, $step->calls, 'Expected no schema command after an object type mismatch.');
+    kiwi_assert_same(23, $wpdb->row_counts['abc_kiwi_test_view'], 'Expected mismatched object data to remain unchanged.');
+    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected blocked type mismatch to preserve the installed version.');
+    kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
 
     $wpdb = $previous_wpdb;
 });

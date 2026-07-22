@@ -86,6 +86,24 @@ class Kiwi_Database_Deployment_Service
                 return $result;
             }
 
+            $object_type_mismatches = array_values(array_filter(
+                $preflight_drift,
+                static function (array $drift): bool {
+                    return ($drift['kind'] ?? '') === 'object_type_mismatch';
+                }
+            ));
+
+            if (!empty($object_type_mismatches)) {
+                $result = $this->failure_result(
+                    'preflight',
+                    'object_type_mismatch',
+                    'Object type mismatch requires a reviewed migration-specific external artifact.'
+                );
+                $result['drift'] = $object_type_mismatches;
+
+                return $result;
+            }
+
             $legacy_drift = array_values(array_filter(
                 $preflight_drift,
                 static function (array $drift): bool {
@@ -455,7 +473,12 @@ class Kiwi_Database_Deployment_Service
                 continue;
             }
 
-            if (in_array(($drift['kind'] ?? ''), ['missing_table', 'object_type_mismatch', 'inspection_error'], true)) {
+            $kind = (string) ($drift['kind'] ?? '');
+            if (in_array($kind, ['missing_table', 'object_type_mismatch', 'inspection_error'], true)) {
+                return [];
+            }
+
+            if ($kind === 'missing_column' && in_array(($drift['column'] ?? ''), ['model_key', 'brand'], true)) {
                 return [];
             }
         }
