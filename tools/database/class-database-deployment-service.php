@@ -67,8 +67,27 @@ class Kiwi_Database_Deployment_Service
 
         try {
             $before = $this->inspect_schema();
+            $preflight_drift = (array) ($before['drift'] ?? []);
+            $inspection_errors = array_values(array_filter(
+                $preflight_drift,
+                static function (array $drift): bool {
+                    return ($drift['kind'] ?? '') === 'inspection_error';
+                }
+            ));
+
+            if (!empty($inspection_errors)) {
+                $result = $this->failure_result(
+                    'preflight',
+                    'schema_inspection_failed',
+                    'Schema inspection failed; no database changes were applied.'
+                );
+                $result['drift'] = $inspection_errors;
+
+                return $result;
+            }
+
             $legacy_drift = array_values(array_filter(
-                (array) ($before['drift'] ?? []),
+                $preflight_drift,
                 static function (array $drift): bool {
                     return ($drift['kind'] ?? '') === 'legacy_column';
                 }

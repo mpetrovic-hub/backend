@@ -10,6 +10,7 @@ class Kiwi_Test_Database_Deployment_Wpdb
     public $lock_held = false;
     public $row_counts = [];
     public $summary_totals = [];
+    public $column_inspection_error_for = '';
 
     public function prepare($query, ...$args)
     {
@@ -60,6 +61,12 @@ class Kiwi_Test_Database_Deployment_Wpdb
         $object_name = (string) ($args[0] ?? '');
 
         if (strpos($query, 'SELECT COLUMN_NAME FROM information_schema.COLUMNS') === 0) {
+            if ($object_name === $this->column_inspection_error_for) {
+                $this->last_error = 'information_schema access denied; password=must-not-leak; MSISDN=436641234567';
+
+                return [];
+            }
+
             return array_map(static function (string $column): array {
                 return ['COLUMN_NAME' => $column];
             }, (array) ($this->objects[$object_name]['columns'] ?? []));
@@ -225,6 +232,37 @@ kiwi_run_test('Kiwi database status reports missing tables, columns, and indexes
 
     kiwi_assert_true(in_array('missing_column', $kinds, true), 'Expected a missing column to block status.');
     kiwi_assert_true(in_array('missing_index', $kinds, true), 'Expected a missing index to block status.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database apply fails closed when preflight inspection errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = kiwi_test_database_contract()['kiwi_test_table'];
+    $wpdb->objects['abc_kiwi_test_table'] = [
+        'type' => 'BASE TABLE',
+        'columns' => $contract['columns'],
+        'indexes' => $contract['indexes'],
+    ];
+    $wpdb->column_inspection_error_for = 'abc_kiwi_test_table';
+    $wpdb->row_counts['abc_kiwi_test_table'] = 41465;
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+    ];
+    [$service, $step] = kiwi_test_database_service($wpdb);
+
+    $result = $service->apply();
+
+    kiwi_assert_same('schema_inspection_failed', $result['error_code'], 'Expected inspection failures to block generic apply.');
+    kiwi_assert_same(0, $step->calls, 'Expected no schema command after a preflight inspection failure.');
+    kiwi_assert_same(41465, $wpdb->row_counts['abc_kiwi_test_table'], 'Expected active data to remain unchanged.');
+    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed preflight to preserve the installed version.');
+    kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
+    kiwi_assert_same('inspection_error', $result['drift'][0]['kind'] ?? '', 'Expected the inspection drift to be retained for diagnosis.');
+    kiwi_assert_true(strpos((string) ($result['drift'][0]['detail'] ?? ''), 'must-not-leak') === false, 'Expected inspection errors to be sanitized.');
 
     $wpdb = $previous_wpdb;
 });
