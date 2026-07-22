@@ -284,6 +284,8 @@ Do not claim a change is validated unless the validation was actually run or cle
 
 Do not commit or expose credentials, tokens, callback secrets, private keys, or environment-specific sensitive values.
 
+Do not run one-time database changes from production runtime; execute and verify them through an explicit external deployment process before dependent code is enabled.
+
 For blacklist, refund, callback, billing, or other production-impacting work:
 
 - preserve auditability for actions that change customer, billing, blacklist, refund, or callback state,

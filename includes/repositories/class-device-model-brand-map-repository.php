@@ -207,7 +207,7 @@ class Kiwi_Device_Model_Brand_Map_Repository
         return $result !== false;
     }
 
-    private function get_default_model_brand_mappings(): array
+    public function get_default_model_brand_mappings(): array
     {
         return [
             ['model_key' => 'M2102K1G', 'brand' => 'Xiaomi', 'notes' => 'Xiaomi numeric exact map from DeepResearch.'],

@@ -28,6 +28,7 @@ Operations docs describe production behavior, runbooks, configuration, and troub
 | `premium-sms-fraud-monitoring.md` | Premium SMS fraud monitor UI, MO/engagement soft flags, hidden filters, and block/observe behavior. |
 | `retention-runbook.md` | Landing-session raw retention coverage gate, archive/delete worker, raw-context compaction. |
 | `operational-events-runbook.md` | Operational-event reads, open incidents, cleanup, producer checks, and troubleshooting. |
+| `database-migrations.md` | External schema status/apply deployment gate, setup, restore, failure, and rollback procedure. |
 | `configuration-reference.md` | Non-secret constants and operational switches. |
 | `credentials-and-environments.md` | Where secrets and environment-specific integration settings are owned. |
 | `vps-endpoint-runbook.md` | VPS/domain endpoint procedures. |
@@ -38,3 +39,4 @@ Operations docs describe production behavior, runbooks, configuration, and troub
 - Keep detailed analytics storage behavior in `landing-funnel-analytics.md`.
 - Keep fraud monitor UI and signal interpretation in `premium-sms-fraud-monitoring.md`.
 - Keep destructive cleanup behavior in `retention-runbook.md`.
+- Keep schema deployment, one-time database changes, and restore readiness in `database-migrations.md`.

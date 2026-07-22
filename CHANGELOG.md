@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-07-22:
+- [Database Deployments] Removed automatic schema and historical one-time migrations from normal WordPress runtime. Added an explicit WP-CLI `status`/`apply` deployment gate with real schema postconditions, legacy-structure blocking, exclusive apply locking, verified static seeds, and schema-version persistence only after complete success.
+
 2026-07-20:
 - [Operational Events] Added the append-only `wp_kiwi_operational_events` foundation with centralized credential masking, incident lifecycle/correlation, idempotent writes, bounded reads, Retention stale/recovery events, and a daily batched 180-day cleanup.
 
