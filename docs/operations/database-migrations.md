@@ -51,6 +51,7 @@ wp eval-file wp-content/plugins/kiwi-backend/tools/database/kiwi-database.php ap
 `apply` is explicitly mutating. It:
 
 - obtains one database-scoped MySQL advisory lock and rejects a concurrent apply;
+- refuses a newer or unrecognized installed schema version so an older deployment artifact cannot downgrade version evidence;
 - refuses known legacy columns that require a reviewed, migration-specific external artifact;
 - applies the canonical repository table and view definitions;
 - verifies every schema step against real postconditions;

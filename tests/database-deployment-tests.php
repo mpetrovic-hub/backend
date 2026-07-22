@@ -276,7 +276,7 @@ kiwi_run_test('Kiwi database apply fails closed when preflight inspection errors
     $wpdb->column_inspection_error_for = 'abc_kiwi_test_table';
     $wpdb->row_counts['abc_kiwi_test_table'] = 41465;
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     [$service, $step] = kiwi_test_database_service($wpdb);
 
@@ -285,7 +285,7 @@ kiwi_run_test('Kiwi database apply fails closed when preflight inspection errors
     kiwi_assert_same('schema_inspection_failed', $result['error_code'], 'Expected inspection failures to block generic apply.');
     kiwi_assert_same(0, $step->calls, 'Expected no schema command after a preflight inspection failure.');
     kiwi_assert_same(41465, $wpdb->row_counts['abc_kiwi_test_table'], 'Expected active data to remain unchanged.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed preflight to preserve the installed version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed preflight to preserve the installed version.');
     kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
     kiwi_assert_same('inspection_error', $result['drift'][0]['kind'] ?? '', 'Expected the inspection drift to be retained for diagnosis.');
     kiwi_assert_true(strpos((string) ($result['drift'][0]['detail'] ?? ''), 'must-not-leak') === false, 'Expected inspection errors to be sanitized.');
@@ -301,7 +301,7 @@ kiwi_run_test('Kiwi database apply distinguishes table inspection errors from mi
     $wpdb->table_inspection_error_for = 'abc_kiwi_test_table';
     $wpdb->row_counts['abc_kiwi_test_table'] = 41465;
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     [$service, $step] = kiwi_test_database_service($wpdb);
 
@@ -310,7 +310,7 @@ kiwi_run_test('Kiwi database apply distinguishes table inspection errors from mi
     kiwi_assert_same('schema_inspection_failed', $result['error_code'], 'Expected table lookup failures to block generic apply.');
     kiwi_assert_same(0, $step->calls, 'Expected no schema command after a table inspection failure.');
     kiwi_assert_same(41465, $wpdb->row_counts['abc_kiwi_test_table'], 'Expected active data to remain unchanged.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed table inspection to preserve the installed version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed table inspection to preserve the installed version.');
     kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
     kiwi_assert_same('inspection_error', $result['drift'][0]['kind'] ?? '', 'Expected a table lookup failure to remain an inspection error.');
     kiwi_assert_true(strpos((string) ($result['drift'][0]['detail'] ?? ''), 'must-not-leak') === false, 'Expected table inspection errors to be sanitized.');
@@ -334,7 +334,7 @@ kiwi_run_test('Kiwi database apply fails closed when seed inspection errors', fu
     ];
     $wpdb->seed_inspection_error = true;
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     $step = new Kiwi_Test_Database_Schema_Step(
         $wpdb,
@@ -354,7 +354,7 @@ kiwi_run_test('Kiwi database apply fails closed when seed inspection errors', fu
 
     kiwi_assert_same('schema_inspection_failed', $result['error_code'], 'Expected seed lookup failures to block generic apply.');
     kiwi_assert_same(0, $step->calls, 'Expected no schema command after a seed inspection failure.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed seed inspection to preserve the installed version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed seed inspection to preserve the installed version.');
     kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
     kiwi_assert_same('inspection_error', $result['drift'][0]['kind'] ?? '', 'Expected a seed lookup failure to remain an inspection error.');
     kiwi_assert_true(strpos((string) ($result['drift'][0]['detail'] ?? ''), 'must-not-leak') === false, 'Expected seed inspection errors to be sanitized.');
@@ -384,7 +384,7 @@ kiwi_run_test('Kiwi database apply repairs missing seed query columns before ins
     $wpdb->seed_inspection_error_when_columns_missing = true;
     $wpdb->seed_rows = (new Kiwi_Device_Model_Brand_Map_Repository())->get_default_model_brand_mappings();
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     $step = new Kiwi_Test_Database_Schema_Step(
         $wpdb,
@@ -426,7 +426,7 @@ kiwi_run_test('Kiwi database apply blocks object type mismatches before mutation
     ];
     $wpdb->row_counts['abc_kiwi_test_view'] = 23;
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     $step = new Kiwi_Test_Database_Schema_Step(
         $wpdb,
@@ -447,8 +447,38 @@ kiwi_run_test('Kiwi database apply blocks object type mismatches before mutation
     kiwi_assert_same('object_type_mismatch', $result['error_code'], 'Expected table/view mismatches to require an explicit migration artifact.');
     kiwi_assert_same(0, $step->calls, 'Expected no schema command after an object type mismatch.');
     kiwi_assert_same(23, $wpdb->row_counts['abc_kiwi_test_view'], 'Expected mismatched object data to remain unchanged.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected blocked type mismatch to preserve the installed version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected blocked type mismatch to preserve the installed version.');
     kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database apply blocks newer and unknown schema versions', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+
+    foreach (['2026-07-21-1', 'future-release'] as $installed_version) {
+        $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+        $contract = kiwi_test_database_contract()['kiwi_test_table'];
+        $wpdb->objects['abc_kiwi_test_table'] = [
+            'type' => 'BASE TABLE',
+            'columns' => $contract['columns'],
+            'indexes' => $contract['indexes'],
+        ];
+        $GLOBALS['kiwi_test_options'] = [
+            Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => $installed_version,
+        ];
+        [$service, $step] = kiwi_test_database_service($wpdb);
+
+        $result = $service->apply();
+
+        kiwi_assert_same('schema_version_newer_or_unknown', $result['error_code'], 'Expected a newer or unknown installed version to block apply.');
+        kiwi_assert_same(0, $step->calls, 'Expected no schema command after a version downgrade guard.');
+        kiwi_assert_same($installed_version, $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected blocked apply to preserve newer or unknown version evidence.');
+        kiwi_assert_same(false, $result['mutated'], 'Expected the version guard to stop before mutation.');
+        kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
+    }
 
     $wpdb = $previous_wpdb;
 });
@@ -466,7 +496,7 @@ kiwi_run_test('Kiwi database apply refuses legacy structures without mutating th
     ];
     $wpdb->row_counts['abc_kiwi_test_table'] = 41465;
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     [$service, $step] = kiwi_test_database_service($wpdb);
 
@@ -475,7 +505,7 @@ kiwi_run_test('Kiwi database apply refuses legacy structures without mutating th
     kiwi_assert_same('legacy_migration_required', $result['error_code'], 'Expected generic apply to refuse legacy data transformations.');
     kiwi_assert_same(0, $step->calls, 'Expected no schema command after legacy preflight drift.');
     kiwi_assert_same(41465, $wpdb->row_counts['abc_kiwi_test_table'], 'Expected active data to remain unchanged.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed preflight to preserve the installed version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed preflight to preserve the installed version.');
     kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released.');
 
     $wpdb = $previous_wpdb;
@@ -488,7 +518,7 @@ kiwi_run_test('Kiwi database apply rejects a concurrent external runner', functi
     $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
     $wpdb->lock_available = false;
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     [$service, $step] = kiwi_test_database_service($wpdb);
 
@@ -496,7 +526,7 @@ kiwi_run_test('Kiwi database apply rejects a concurrent external runner', functi
 
     kiwi_assert_same('lock_unavailable', $result['error_code'], 'Expected the second apply to stop at the exclusive lock.');
     kiwi_assert_same(0, $step->calls, 'Expected lock contention to prevent schema commands.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected lock contention to preserve the installed version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected lock contention to preserve the installed version.');
 
     $wpdb = $previous_wpdb;
 });
@@ -508,14 +538,14 @@ kiwi_run_test('Kiwi database apply preserves version and data after command fail
     $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
     $wpdb->row_counts['abc_kiwi_test_table'] = 41465;
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     [$service] = kiwi_test_database_service($wpdb, 'command_failure');
 
     $result = $service->apply();
 
     kiwi_assert_same('schema_command_failed', $result['error_code'], 'Expected command errors to fail apply.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected command failure not to persist the target version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected command failure not to persist the target version.');
     kiwi_assert_same(41465, $wpdb->row_counts['abc_kiwi_test_table'], 'Expected unrelated active data to remain unchanged after command failure.');
     kiwi_assert_true(strpos($result['error_message'], 'must-not-leak') === false, 'Expected credential-like error content to be redacted.');
     kiwi_assert_true(strpos($result['error_message'], '436641234567') === false, 'Expected raw subscriber identifiers to be redacted.');
@@ -529,14 +559,14 @@ kiwi_run_test('Kiwi database apply preserves version when postconditions fail', 
     $previous_wpdb = $wpdb ?? null;
     $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
     $GLOBALS['kiwi_test_options'] = [
-        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => 'old-version',
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
     ];
     [$service] = kiwi_test_database_service($wpdb, 'postcondition_failure');
 
     $result = $service->apply();
 
     kiwi_assert_same('schema_postcondition_failed', $result['error_code'], 'Expected missing postconditions to fail apply.');
-    kiwi_assert_same('old-version', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed postconditions not to persist the target version.');
+    kiwi_assert_same('2026-05-12-1', $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION], 'Expected failed postconditions not to persist the target version.');
 
     $wpdb = $previous_wpdb;
 });

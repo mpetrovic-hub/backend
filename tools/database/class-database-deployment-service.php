@@ -66,6 +66,15 @@ class Kiwi_Database_Deployment_Service
         }
 
         try {
+            $installed_version = $this->get_installed_schema_version();
+            if ($this->is_newer_or_unknown_schema_version($installed_version)) {
+                return $this->failure_result(
+                    'preflight',
+                    'schema_version_newer_or_unknown',
+                    'Installed schema version is newer than or unknown to this deployment artifact.'
+                );
+            }
+
             $before = $this->inspect_schema();
             $preflight_drift = (array) ($before['drift'] ?? []);
             $inspection_errors = array_values(array_filter(
@@ -565,6 +574,49 @@ class Kiwi_Database_Deployment_Service
         $prefix = is_object($wpdb) ? (string) ($wpdb->prefix ?? '') : '';
 
         return self::LOCK_PREFIX . substr(hash('sha256', $prefix), 0, 20);
+    }
+
+    private function is_newer_or_unknown_schema_version(string $installed_version): bool
+    {
+        if ($installed_version === '' || $installed_version === self::TARGET_SCHEMA_VERSION) {
+            return false;
+        }
+
+        $installed_parts = $this->parse_schema_version($installed_version);
+        $target_parts = $this->parse_schema_version(self::TARGET_SCHEMA_VERSION);
+
+        if ($installed_parts === null || $target_parts === null) {
+            return true;
+        }
+
+        foreach ($target_parts as $index => $target_part) {
+            $installed_part = $installed_parts[$index];
+            if ($installed_part === $target_part) {
+                continue;
+            }
+
+            return $installed_part > $target_part;
+        }
+
+        return true;
+    }
+
+    private function parse_schema_version(string $schema_version): ?array
+    {
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})-(\d+)$/', $schema_version, $matches)) {
+            return null;
+        }
+
+        $year = (int) $matches[1];
+        $month = (int) $matches[2];
+        $day = (int) $matches[3];
+        $revision = (int) $matches[4];
+
+        if (!checkdate($month, $day, $year) || $revision < 1) {
+            return null;
+        }
+
+        return [$year, $month, $day, $revision];
     }
 
     private function reset_database_error(): void
