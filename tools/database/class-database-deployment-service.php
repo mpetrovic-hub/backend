@@ -322,6 +322,15 @@ class Kiwi_Database_Deployment_Service
                 )
             );
 
+            if ($this->get_database_error() !== '') {
+                $drift[] = [
+                    'kind' => 'inspection_error',
+                    'object' => $object_name,
+                    'detail' => $this->sanitize_error($this->get_database_error()),
+                ];
+                continue;
+            }
+
             if ($actual_type === null || $actual_type === false || $actual_type === '') {
                 $drift[] = [
                     'kind' => $expected_type === 'VIEW' ? 'missing_view' : 'missing_table',
