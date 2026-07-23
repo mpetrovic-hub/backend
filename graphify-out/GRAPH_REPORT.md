@@ -9,9 +9,9 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `088a522c`
-- Run `git rev-parse HEAD` and compare to check if the graph is stale.
-- Run `graphify update .` after code changes (no API cost).
+- Built from commit: `088a522c` (provenance only; generated artifacts are committed afterward).
+- Run `graphify check-update .` to compare the indexed source snapshot with the current repository inputs.
+- Run `graphify update .` when that check reports source changes (no API cost).
 
 ## Community Hubs (Navigation)
 - [[_COMMUNITY_Kiwi_Landing_Kpi_Rest_Routes|Kiwi_Landing_Kpi_Rest_Routes]]
