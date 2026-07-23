@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-23T11:46:15.069194+00:00",
+  "generated_at": "2026-07-23T12:16:50.514179+00:00",
   "nodes": {
     "includes_core_class_plugin_kiwi_plugin": {
       "code_fingerprint": "a84bb93f82080ab121bd32773ae8a16a3bdde2ebcd0f370acf00fa1a9bbc9d57",
@@ -12,7 +12,7 @@
           "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
         }
       ],
-      "score": 0.937651216,
+      "score": 0.937191101,
       "source_file": "includes/core/class-plugin.php",
       "status": "tentative",
       "uses": 1
@@ -28,7 +28,7 @@
           "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
         }
       ],
-      "score": 0.937651216,
+      "score": 0.937191101,
       "source_file": "includes/repositories/class-retention-cleanup-run-repository.php",
       "status": "tentative",
       "uses": 1
@@ -44,7 +44,7 @@
           "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
         }
       ],
-      "score": 0.937651216,
+      "score": 0.937191101,
       "source_file": "includes/services/class-retention-cleanup-service.php",
       "status": "tentative",
       "uses": 1
@@ -60,7 +60,7 @@
           "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
         }
       ],
-      "score": 0.937651216,
+      "score": 0.937191101,
       "source_file": "tests/run-tests.php",
       "status": "tentative",
       "uses": 1
