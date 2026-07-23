@@ -399,6 +399,7 @@ require_once __DIR__ . '/../includes/repositories/interface-statistics-read-repo
 require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-funnel-daily-tkzone-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-traffic-source-funnel-statistics-repository.php';
+require_once __DIR__ . '/../tools/database/class-database-deployment-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-premium-sms-normalizer.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-client.php';
 require_once __DIR__ . '/../includes/shortcodes/class-dimoco-blacklister-shortcode.php';
@@ -1081,14 +1082,8 @@ class Kiwi_Test_Plugin extends Kiwi_Plugin
 
 class Kiwi_Test_Plugin_Performance_Gates extends Kiwi_Plugin
 {
-    public $schema_migration_runs = 0;
     public $cleanup_limits = [];
     public $cleanup_limit = 777;
-
-    protected function run_schema_migrations(): void
-    {
-        $this->schema_migration_runs++;
-    }
 
     protected function get_click_attribution_cleanup_limit(): int
     {
@@ -1098,19 +1093,6 @@ class Kiwi_Test_Plugin_Performance_Gates extends Kiwi_Plugin
     protected function cleanup_click_attribution_records(int $limit): void
     {
         $this->cleanup_limits[] = $limit;
-    }
-}
-
-class Kiwi_Test_Plugin_Device_Dimension_Migration extends Kiwi_Plugin
-{
-    public function run_device_dimension_migration_for_test(): void
-    {
-        $this->migrate_legacy_android_version_columns();
-    }
-
-    public function run_slim_daily_summary_migration_for_test(): void
-    {
-        $this->migrate_slim_landing_funnel_daily_summary_columns();
     }
 }
 
@@ -11693,12 +11675,6 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
             'handle_frontend_auth',
             'register_shortcodes',
             'register_rest_routes',
-            'ensure_operator_lookup_callback_table',
-            'ensure_refund_callback_table',
-            'ensure_blacklist_callback_table',
-            'ensure_nth_operational_tables',
-            'ensure_click_attribution_table',
-            'ensure_sales_table',
             'cleanup_expired_click_attributions',
             'schedule_landing_funnel_daily_main_summary_refresh',
             'schedule_landing_funnel_daily_tkzone_summary_refresh',
@@ -11763,68 +11739,6 @@ kiwi_run_test('Kiwi_Plugin registers the existing hook surface and asset handles
     kiwi_assert_true(
         is_int($GLOBALS['kiwi_test_styles'][0]['version']) && $GLOBALS['kiwi_test_styles'][0]['version'] > 0,
         'Expected stylesheet versioning to keep using filemtime().'
-    );
-});
-
-kiwi_run_test('Kiwi_Plugin runs schema migrations once and persists schema version on first ensure call', function (): void {
-    $GLOBALS['kiwi_test_options'] = [];
-
-    $reflection = new ReflectionClass(Kiwi_Plugin::class);
-    $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
-    $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
-
-    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
-    $plugin->ensure_operator_lookup_callback_table();
-    $plugin->ensure_refund_callback_table();
-    $plugin->ensure_click_attribution_table();
-
-    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected schema migrations to run once per runtime when schema is outdated.');
-    kiwi_assert_same(
-        $schema_version,
-        $GLOBALS['kiwi_test_options'][$schema_option] ?? '',
-        'Expected schema migrations to persist the installed schema version.'
-    );
-});
-
-kiwi_run_test('Kiwi_Plugin includes landing analytics repositories in schema repository list', function (): void {
-    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
-    $method = new ReflectionMethod(Kiwi_Plugin::class, 'build_schema_repositories');
-    $repositories = $method->invoke($plugin);
-    $classes = array_map(static function ($repository): string {
-        return is_object($repository) ? get_class($repository) : '';
-    }, is_array($repositories) ? $repositories : []);
-
-    kiwi_assert_true(
-        in_array(Kiwi_Landing_Handoff_Event_Repository::class, $classes, true),
-        'Expected schema migrations to include the landing handoff event repository.'
-    );
-    kiwi_assert_true(
-        in_array(Kiwi_Device_Model_Brand_Map_Repository::class, $classes, true),
-        'Expected schema migrations to include the device model brand map repository.'
-    );
-    kiwi_assert_true(
-        in_array(Kiwi_Sms_Body_Variant_Repository::class, $classes, true),
-        'Expected schema migrations to include the SMS body variant repository.'
-    );
-    kiwi_assert_true(
-        in_array(Kiwi_Traffic_Source_Funnel_Statistics_Repository::class, $classes, true),
-        'Expected schema migrations to include the traffic-source funnel statistics view repository.'
-    );
-    kiwi_assert_true(
-        in_array(Kiwi_Landing_Funnel_Daily_Summary_Repository::class, $classes, true),
-        'Expected schema migrations to include the landing funnel daily summary repository.'
-    );
-    kiwi_assert_true(
-        in_array(Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository::class, $classes, true),
-        'Expected schema migrations to include the landing funnel daily tkzone summary repository.'
-    );
-    kiwi_assert_true(
-        in_array(Kiwi_Retention_Cleanup_Run_Repository::class, $classes, true),
-        'Expected schema migrations to include the retention cleanup run repository.'
-    );
-    kiwi_assert_true(
-        in_array(Kiwi_Retention_Table_Growth_Snapshot_Repository::class, $classes, true),
-        'Expected schema migrations to include the retention growth snapshot repository.'
     );
 });
 
@@ -13680,276 +13594,6 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service records after-cleanup snapshot fai
     kiwi_assert_same(['raised', 'resolved'], array_column(array_values($events->rows), 'lifecycle_action'), 'Expected completed cleanup with a snapshot warning to resolve the stale incident.');
 
     $wpdb = $previous_wpdb;
-});
-
-kiwi_run_test('Kiwi_Plugin backfills legacy Android version before dropping old columns', function (): void {
-    global $wpdb;
-
-    $previous_wpdb = $wpdb ?? null;
-    $wpdb = new class {
-        public $prefix = 'abc_';
-        public $queries = [];
-        public $columns = [
-            'abc_kiwi_sales' => [
-                'android_version' => true,
-                'os' => true,
-                'os_version' => true,
-            ],
-            'abc_kiwi_landing_funnel_daily_summary' => [
-                'android_version' => true,
-                'os' => true,
-                'os_version' => true,
-            ],
-        ];
-
-        public function prepare($query, ...$args)
-        {
-            if (count($args) === 1 && is_array($args[0])) {
-                $args = $args[0];
-            }
-
-            return [
-                'query' => (string) $query,
-                'args' => $args,
-            ];
-        }
-
-        public function get_var($statement)
-        {
-            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
-            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
-
-            if (preg_match('/SHOW COLUMNS FROM ([A-Za-z0-9_]+) LIKE %s/', $query, $matches) !== 1) {
-                return null;
-            }
-
-            $table_name = (string) ($matches[1] ?? '');
-            $column_name = (string) ($args[0] ?? '');
-
-            return !empty($this->columns[$table_name][$column_name]) ? $column_name : null;
-        }
-
-        public function query($statement)
-        {
-            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
-            $this->queries[] = $query;
-
-            if (preg_match('/ALTER TABLE ([A-Za-z0-9_]+) DROP COLUMN ([A-Za-z0-9_]+)/', $query, $matches) === 1) {
-                unset($this->columns[(string) ($matches[1] ?? '')][(string) ($matches[2] ?? '')]);
-            }
-
-            return 1;
-        }
-    };
-
-    $plugin = new Kiwi_Test_Plugin_Device_Dimension_Migration(dirname(__DIR__), 'https://example.test/plugin/');
-    $plugin->run_device_dimension_migration_for_test();
-    $sql = implode("\n", $wpdb->queries);
-    $sales_update_position = strpos($sql, 'UPDATE abc_kiwi_sales');
-    $sales_drop_position = strpos($sql, 'ALTER TABLE abc_kiwi_sales DROP COLUMN android_version');
-    $summary_update_position = strpos($sql, 'UPDATE abc_kiwi_landing_funnel_daily_summary');
-    $summary_drop_position = strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN android_version');
-
-    kiwi_assert_true(is_int($sales_update_position), 'Expected sales migration to backfill from legacy android_version before dropping it.');
-    kiwi_assert_true(is_int($summary_update_position), 'Expected summary migration to backfill from legacy android_version before dropping it.');
-    kiwi_assert_true(is_int($sales_drop_position) && $sales_drop_position > $sales_update_position, 'Expected sales legacy column drop to run after backfill.');
-    kiwi_assert_true(is_int($summary_drop_position) && $summary_drop_position > $summary_update_position, 'Expected summary legacy column drop to run after backfill.');
-    kiwi_assert_contains("THEN 'Android'", $sql, 'Expected non-empty legacy Android buckets to backfill os=Android.');
-    kiwi_assert_contains("REGEXP '^[1-9][0-9]?([._][0-9]+)*$'", $sql, 'Expected legacy Android version backfill to accept only numeric major/dotted values.');
-    kiwi_assert_contains("SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(COALESCE(android_version, '')), '.', 1), '_', 1)", $sql, 'Expected dotted legacy versions such as 16.0.0 to backfill as major-only buckets.');
-    kiwi_assert_contains("WHEN TRIM(COALESCE(android_version, '')) <> '' AND TRIM(COALESCE(android_version, '')) <> '(unknown)' THEN '(unknown)'", $sql, 'Expected non-numeric legacy Android versions to backfill as unknown os_version.');
-    kiwi_assert_true(strpos($sql, 'os_version = android_version') === false, 'Expected migration not to blindly copy diluted legacy Android version values.');
-
-    $wpdb = $previous_wpdb;
-});
-
-kiwi_run_test('Kiwi_Plugin consolidates and drops retired main daily summary columns during schema migration', function (): void {
-    global $wpdb;
-
-    $previous_wpdb = $wpdb ?? null;
-    $wpdb = new class {
-        public $prefix = 'abc_';
-        public $queries = [];
-        public $columns = [
-            'abc_kiwi_landing_funnel_daily_summary' => [
-                'tkzone' => true,
-                'median_hidden_seconds' => true,
-            ],
-        ];
-
-        public function prepare($query, ...$args)
-        {
-            if (count($args) === 1 && is_array($args[0])) {
-                $args = $args[0];
-            }
-
-            return [
-                'query' => (string) $query,
-                'args' => $args,
-            ];
-        }
-
-        public function get_var($statement)
-        {
-            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
-            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
-
-            if (preg_match('/SHOW COLUMNS FROM ([A-Za-z0-9_]+) LIKE %s/', $query, $matches) !== 1) {
-                return null;
-            }
-
-            $table_name = (string) ($matches[1] ?? '');
-            $column_name = (string) ($args[0] ?? '');
-
-            return !empty($this->columns[$table_name][$column_name]) ? $column_name : null;
-        }
-
-        public function query($statement)
-        {
-            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
-            $this->queries[] = $query;
-
-            if (preg_match('/ALTER TABLE ([A-Za-z0-9_]+) DROP COLUMN ([A-Za-z0-9_]+)/', $query, $matches) === 1) {
-                unset($this->columns[(string) ($matches[1] ?? '')][(string) ($matches[2] ?? '')]);
-            }
-
-            return 1;
-        }
-    };
-
-    $plugin = new Kiwi_Test_Plugin_Device_Dimension_Migration(dirname(__DIR__), 'https://example.test/plugin/');
-    $plugin->run_slim_daily_summary_migration_for_test();
-    $sql = implode("\n", $wpdb->queries);
-
-    $rollup_position = strpos($sql, 'CREATE TEMPORARY TABLE abc_kiwi_landing_funnel_daily_summary_slim_rollup_tmp AS');
-    $delete_position = strpos($sql, 'DELETE FROM abc_kiwi_landing_funnel_daily_summary');
-    $insert_position = strpos($sql, 'INSERT INTO abc_kiwi_landing_funnel_daily_summary (metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix, dimension_hash');
-    $drop_tkzone_position = strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN tkzone');
-
-    kiwi_assert_true(is_int($rollup_position), 'Expected migration to roll existing rows into a slim-dimension temporary table before dropping tkzone.');
-    kiwi_assert_true(is_int($delete_position) && $delete_position > $rollup_position, 'Expected migration to clear old rows only after creating the slim rollup table.');
-    kiwi_assert_true(is_int($insert_position) && $insert_position > $delete_position, 'Expected migration to restore consolidated slim rows before dropping retired columns.');
-    kiwi_assert_true(is_int($drop_tkzone_position) && $drop_tkzone_position > $insert_position, 'Expected migration to drop tkzone only after existing rows were consolidated.');
-    kiwi_assert_contains("SHA2(CONCAT_WS('|',", $sql, 'Expected migration to recompute the slim summary dimension hash.');
-    kiwi_assert_contains('GROUP BY metric_date, landing_key, service_key, provider_key, flow_key, country, pid, tksource, device_brand, os, os_version, browser, client_ip_version, client_ip_prefix', $sql, 'Expected migration to consolidate rows by the slim main summary dimensions.');
-    kiwi_assert_contains('SUM(sessions) AS sessions', $sql, 'Expected migration to preserve session totals when rolling up legacy tkzone-split rows.');
-    kiwi_assert_contains('SUM(handoff_attempts) AS handoff_attempts', $sql, 'Expected migration to preserve handoff totals when rolling up legacy tkzone-split rows.');
-    kiwi_assert_contains('WHEN SUM(handoff_attempts) <= 0 THEN 0', $sql, 'Expected migration to recalculate handoff rate from rolled-up totals.');
-    kiwi_assert_contains('START TRANSACTION', $sql, 'Expected migration to protect the delete/reinsert rollup with a transaction.');
-    kiwi_assert_contains('COMMIT', $sql, 'Expected migration to commit the successful summary rollup before dropping columns.');
-    kiwi_assert_contains('ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN tkzone', $sql, 'Expected migration to drop retired tkzone from the main summary table.');
-    kiwi_assert_contains('ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN median_hidden_seconds', $sql, 'Expected migration to drop retired hidden median from the main summary table.');
-
-    $wpdb = $previous_wpdb;
-});
-
-kiwi_run_test('Kiwi_Plugin keeps retired main daily summary columns when slim rollup fails', function (): void {
-    global $wpdb;
-
-    $previous_wpdb = $wpdb ?? null;
-    $wpdb = new class {
-        public $prefix = 'abc_';
-        public $queries = [];
-        public $columns = [
-            'abc_kiwi_landing_funnel_daily_summary' => [
-                'tkzone' => true,
-                'median_hidden_seconds' => true,
-            ],
-        ];
-
-        public function prepare($query, ...$args)
-        {
-            if (count($args) === 1 && is_array($args[0])) {
-                $args = $args[0];
-            }
-
-            return [
-                'query' => (string) $query,
-                'args' => $args,
-            ];
-        }
-
-        public function get_var($statement)
-        {
-            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
-            $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
-
-            if (preg_match('/SHOW COLUMNS FROM ([A-Za-z0-9_]+) LIKE %s/', $query, $matches) !== 1) {
-                return null;
-            }
-
-            $table_name = (string) ($matches[1] ?? '');
-            $column_name = (string) ($args[0] ?? '');
-
-            return !empty($this->columns[$table_name][$column_name]) ? $column_name : null;
-        }
-
-        public function query($statement)
-        {
-            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
-            $this->queries[] = $query;
-
-            if (strpos($query, 'CREATE TEMPORARY TABLE abc_kiwi_landing_funnel_daily_summary_slim_rollup_tmp AS') === 0) {
-                return false;
-            }
-
-            if (preg_match('/ALTER TABLE ([A-Za-z0-9_]+) DROP COLUMN ([A-Za-z0-9_]+)/', $query, $matches) === 1) {
-                unset($this->columns[(string) ($matches[1] ?? '')][(string) ($matches[2] ?? '')]);
-            }
-
-            return 1;
-        }
-    };
-
-    $plugin = new Kiwi_Test_Plugin_Device_Dimension_Migration(dirname(__DIR__), 'https://example.test/plugin/');
-    $plugin->run_slim_daily_summary_migration_for_test();
-    $sql = implode("\n", $wpdb->queries);
-
-    kiwi_assert_contains('CREATE TEMPORARY TABLE abc_kiwi_landing_funnel_daily_summary_slim_rollup_tmp AS', $sql, 'Expected migration to attempt the slim rollup before deciding whether to drop retired columns.');
-    kiwi_assert_contains('ROLLBACK', $sql, 'Expected migration to roll back when slim summary consolidation fails.');
-    kiwi_assert_true(strpos($sql, 'DELETE FROM abc_kiwi_landing_funnel_daily_summary') === false, 'Expected migration not to clear existing rows after a failed slim rollup.');
-    kiwi_assert_true(strpos($sql, 'INSERT INTO abc_kiwi_landing_funnel_daily_summary') === false, 'Expected migration not to reinsert rollup rows after a failed slim rollup.');
-    kiwi_assert_true(strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN tkzone') === false, 'Expected migration to keep tkzone when row consolidation fails.');
-    kiwi_assert_true(strpos($sql, 'ALTER TABLE abc_kiwi_landing_funnel_daily_summary DROP COLUMN median_hidden_seconds') === false, 'Expected migration to keep median_hidden_seconds when row consolidation fails.');
-
-    $wpdb = $previous_wpdb;
-});
-
-kiwi_run_test('Kiwi_Plugin bumps schema version for bounded retention worker state', function (): void {
-    $reflection = new ReflectionClass(Kiwi_Plugin::class);
-    $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
-    $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
-
-    $GLOBALS['kiwi_test_options'] = [
-        $schema_option => '2026-05-19-1',
-    ];
-
-    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
-    $plugin->ensure_click_attribution_table();
-
-    kiwi_assert_same('2026-07-20-1', $schema_version, 'Expected schema version to include the operational-event table.');
-    kiwi_assert_same(1, $plugin->schema_migration_runs, 'Expected stored pre-sales-snapshot schema version to rerun dbDelta migrations.');
-    kiwi_assert_same(
-        $schema_version,
-        $GLOBALS['kiwi_test_options'][$schema_option] ?? '',
-        'Expected schema migration rerun to persist the bumped schema version.'
-    );
-});
-
-kiwi_run_test('Kiwi_Plugin skips schema migrations when installed version already matches', function (): void {
-    $reflection = new ReflectionClass(Kiwi_Plugin::class);
-    $schema_option = (string) $reflection->getConstant('DB_SCHEMA_VERSION_OPTION');
-    $schema_version = (string) $reflection->getConstant('DB_SCHEMA_VERSION');
-
-    $GLOBALS['kiwi_test_options'] = [
-        $schema_option => $schema_version,
-    ];
-
-    $plugin = new Kiwi_Test_Plugin_Performance_Gates(dirname(__DIR__), 'https://example.test/plugin/');
-    $plugin->ensure_sales_table();
-    $plugin->ensure_nth_operational_tables();
-
-    kiwi_assert_same(0, $plugin->schema_migration_runs, 'Expected schema migrations to be skipped when the stored schema version matches.');
 });
 
 kiwi_run_test('Kiwi_Plugin throttles click attribution cleanup with transient lock', function (): void {
@@ -16754,3 +16398,5 @@ kiwi_run_test('Kiwi_Config exposes bounded operational-event cleanup defaults', 
     kiwi_assert_same(180, $config->get_operational_events_retention_days(), 'Expected 180-day operational-event retention default.');
     kiwi_assert_same(5000, $config->get_operational_events_cleanup_batch_size(), 'Expected 5,000-row cleanup batch default.');
 });
+
+require_once __DIR__ . '/database-deployment-tests.php';
