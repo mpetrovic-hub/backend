@@ -1,16 +1,16 @@
 # Integrations Index
 
-Aggregator integrations connect Kiwi backend capabilities to external provider APIs.
+Aggregator integrations connect Kiwi backend capabilities to external Aggregator APIs.
 
 ## Read when
 
 - Work touches an aggregator, MNO/operator setup, country, flow, callback, billing, refund, blacklist, HLR/operator lookup, Premium SMS, or carrier billing.
-- You need to separate reusable internal capability design from provider-specific behavior.
+- You need to separate reusable internal capability design from Aggregator-specific behavior.
 
 ## Source of truth for
 
 - Integration documentation layout.
-- Which integration docs to read for provider work.
+- Which integration docs to read for Aggregator work.
 - The distinction between aggregator-wide API docs and country/flow docs.
 
 ## Not here
@@ -22,7 +22,7 @@ Aggregator integrations connect Kiwi backend capabilities to external provider A
 ## Read path
 
 1. Start with the aggregator `INDEX.md`.
-2. Read the aggregator-wide API document.
+2. Read the Aggregator-wide API document.
 3. Read the concrete country/flow document.
 4. If capability coverage matters, check `../architecture/capability-matrix.md`.
 5. If auth, callbacks, endpoint URLs, or environment settings matter, check `../operations/credentials-and-environments.md` and `../operations/configuration-reference.md`.
@@ -38,14 +38,13 @@ Aggregator integrations connect Kiwi backend capabilities to external provider A
 ## Documentation layers
 
 - Aggregator index: quick map, supported capability links, known limitations.
-- General API doc: authentication model, endpoint families, callback patterns, status/error conventions, request/response mapping that applies across setups.
+- General API doc: authentication model, endpoint families, callback patterns, status/error conventions, request/response mapping that applies across an Aggregator's setups.
 - Country/flow doc: concrete market rules, shortcode/business number, flow behavior, payload examples, callback details, compliance requirements, unresolved setup questions.
-- `source/`: original provider documents, emails, PDFs, examples, or raw source material.
+- `source/`: original source documents, emails, PDFs, examples, or raw source material.
 
 ## Rules
 
 - Put reusable aggregator-wide information in the general API doc.
 - Put local country/flow exceptions in the concrete setup doc.
 - Do not duplicate AGENTS.md engineering workflow text here.
-- Keep original source material near the relevant aggregator and summarize it in Markdown when it is operationally relevant.
-
+- Keep original source material near the relevant Aggregator and summarize it in Markdown when it is operationally relevant.

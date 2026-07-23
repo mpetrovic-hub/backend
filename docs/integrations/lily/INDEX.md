@@ -29,10 +29,9 @@
 |---|---|
 | `general-api-premium-sms-lily.md` | Lily Mobile MT Platform API summary and repository interpretation notes. |
 | `gr/subscription/gr-subscription-lily-api.md` | Concrete Greece Premium SMS subscription setup and MOBIVAS compliance assumptions. |
-| `source/Update_Nova_2026-06-19.md` | Provider update about NOVA/WIND response behavior. |
+| `source/Update_Nova_2026-06-19.md` | Lily update about NOVA/WIND response behavior. |
 
 ## Update rules
 
 - Update the general API doc for Lily-wide endpoint, auth, callback, envelope, or status behavior.
 - Update the Greece subscription doc for Web2SMS/Double-MO, shortcode, compliance, ownership of MTs, or setup-specific assumptions.
-

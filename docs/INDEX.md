@@ -24,7 +24,7 @@ This is the agent-facing map for repository documentation. Human quick-start inf
 
 | Task | Read first | Then read |
 |---|---|---|
-| Provider, aggregator, country, flow, callback, billing | `integrations/INDEX.md` | Relevant aggregator `INDEX.md`, general API doc, country/flow doc |
+| Aggregator, country, flow, callback, billing | `integrations/INDEX.md` | Relevant Aggregator `INDEX.md`, general API doc, country/flow doc |
 | Capability coverage | `architecture/capability-matrix.md` | Supporting integration or architecture doc |
 | Landing-page folder contract, discovery, metadata | `architecture/landing-page-architecture.md` | `operations/landing-page-runtime.md` for production behavior |
 | Landing runtime, routing, gallery, multi-domain exposure, troubleshooting | `operations/landing-page-runtime.md` | `operations/configuration-reference.md` when config is involved |
@@ -35,14 +35,14 @@ This is the agent-facing map for repository documentation. Human quick-start inf
 | Premium SMS fraud monitoring | `operations/premium-sms-fraud-monitoring.md` | `architecture/click-attribution-and-postbacks.md` for attribution propagation |
 | Secrets, environments, non-secret constants | `operations/credentials-and-environments.md` | `operations/configuration-reference.md` |
 | Edge/VPS endpoint operations | `operations/vps-endpoint-runbook.md` | `operations/landing-page-runtime.md` |
-| Documentation cleanup or Changelog coverage audit | `documentation-audit.md` | `changelog-coverage-audit.md` |
+| Documentation maintenance | This `INDEX.md` | `../CHANGELOG.md` for durable behavior changes |
 | Domain vocabulary | `../GLOSSARY.md` | Relevant topic doc |
 
 ## Documentation areas
 
 - `architecture/INDEX.md`: stable system contracts, boundaries, cross-cutting architecture.
 - `operations/INDEX.md`: production behavior, runbooks, configuration, troubleshooting.
-- `integrations/INDEX.md`: external aggregator docs and provider-specific setup references.
+- `integrations/INDEX.md`: external Aggregator docs and Aggregator-specific setup references.
 
 ## Documentation maintenance rules
 

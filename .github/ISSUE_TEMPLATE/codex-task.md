@@ -1,11 +1,13 @@
 ---
 name: Codex Task
-about: Aufgabe für Codex Overnight anlegen
+about: Aufgabe für den externen Codex-Workflow anlegen
 title: "[Codex] "
 labels: 0 - codex-candidate
 assignees: ''
 
 ---
+
+> Diese Vorlage legt einen Kandidaten für den externen Codex-Workflow an. Planung und Implementierung werden nicht durch eine GitHub Action in diesem Repository gestartet.
 
 ## Ziel
 

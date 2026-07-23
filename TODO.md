@@ -74,6 +74,11 @@ Mögliche Config-Kandidaten aus der aktuellen Codebase:
 - `KIWI_LILY_PASSWORD` (secret, nicht im Klartext anzeigen)
 - `KIWI_OPERATOR_LOOKUP_ROUTES`
 
+#### Operational Events
+
+- `KIWI_OPERATIONAL_EVENTS_RETENTION_DAYS` (editierbare Aufbewahrungsdauer des append-only Operational-Event-Logs; Default `180` Tage, nicht hard-coded)
+- `KIWI_OPERATIONAL_EVENTS_CLEANUP_BATCH_SIZE` (maximale Löschmenge pro Cleanup-Ausführung; Default `5000` Events)
+
 #### Global / Tooling
 
 - `KIWI_DEBUG`
@@ -249,3 +254,17 @@ Es wird zB Error-Logging Doku in docs/operations/landing-page-prod-behaviour.md 
 
 
 ## 9: Retire `wp_kiwi_landing_kpi_summary`
+
+
+## 10: Weitere Prozesse an das Operational-Event-Log anbinden
+
+Nach der generischen Grundlage und dem Retention-Testfall aus Issue `#94` weitere betriebsrelevante Prozesse einzeln anbinden:
+
+- Main-Summary-Cron
+- TK-Summary-Cron
+- Aggregator-/API-Fehler, jeweils an der Integrationsgrenze und ohne rohe Credentials
+- Landing-Session-`raw_context`-Compaction
+- Device-Model-Brand-Harvest
+- Affiliate-Postback-Dispatch
+
+Für jede Anbindung vorab einen stabilen `correlation_key`, klare Fehler-/Recovery-Grenzen und bei potenziell hoher Ereignisrate eine Drosselungsstrategie festlegen. Es gelten die Lifecycle-Regeln `raised`, `repeated` und `resolved`; normale erfolgreiche Läufe erzeugen keine Events.

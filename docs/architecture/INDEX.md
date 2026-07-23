@@ -5,7 +5,7 @@ Architecture docs describe stable internal contracts and boundaries. They are no
 ## Read when
 
 - You need to understand or change a reusable capability.
-- You are deciding where provider-specific behavior should stop and shared domain logic should begin.
+- You are deciding where Aggregator-specific behavior should stop and shared domain logic should begin.
 - You need capability status or landing-page system contracts.
 
 ## Source of truth for
@@ -17,7 +17,7 @@ Architecture docs describe stable internal contracts and boundaries. They are no
 ## Not here
 
 - Production operations: see `../operations/INDEX.md`.
-- Provider payload details: see `../integrations/INDEX.md`.
+- Aggregator payload details: see `../integrations/INDEX.md`.
 - Temporary implementation plans.
 
 ## Docs
@@ -31,6 +31,6 @@ Architecture docs describe stable internal contracts and boundaries. They are no
 
 ## Maintenance notes
 
-- Keep provider-specific payload examples in integration docs.
+- Keep Aggregator-specific payload examples in integration docs.
 - Keep operational commands, config values, and troubleshooting in operations docs.
 - Treat `capability-matrix.md` as an inventory. Freshness must be verified against code before changing implementation status.
