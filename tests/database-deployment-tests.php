@@ -1,5 +1,180 @@
 <?php
 
+if (!defined('WP_CLI')) {
+    define('WP_CLI', true);
+}
+
+$GLOBALS['kiwi_test_did_actions'] = [];
+
+if (!function_exists('did_action')) {
+    function did_action($hook): int
+    {
+        return (int) ($GLOBALS['kiwi_test_did_actions'][(string) $hook] ?? 0);
+    }
+}
+
+class Kiwi_Test_WP_CLI_Halt_Exception extends RuntimeException
+{
+    public $return_code;
+
+    public function __construct(int $return_code)
+    {
+        parent::__construct('WP-CLI halted.', $return_code);
+        $this->return_code = $return_code;
+    }
+}
+
+class Kiwi_Test_WP_CLI_Runner
+{
+    public $load_wordpress_calls = 0;
+    public $invoke_plugins_loaded = true;
+    public $plugins_loaded_count = 1;
+    public $init_count = 0;
+    public $continued_to_init = false;
+
+    public function load_wordpress(): void
+    {
+        $this->load_wordpress_calls++;
+
+        if (!$this->invoke_plugins_loaded) {
+            return;
+        }
+
+        $GLOBALS['kiwi_test_did_actions']['plugins_loaded'] = $this->plugins_loaded_count;
+        $GLOBALS['kiwi_test_did_actions']['init'] = $this->init_count;
+
+        foreach (WP_CLI::$wp_hooks['plugins_loaded'] ?? [] as $callback) {
+            $callback();
+        }
+
+        $GLOBALS['kiwi_test_did_actions']['init'] = 1;
+        $this->continued_to_init = true;
+    }
+}
+
+class WP_CLI
+{
+    public static $commands = [];
+    public static $wp_hooks = [];
+    public static $lines = [];
+    public static $errors = [];
+    public static $halt_codes = [];
+    public static $allow_hook_registration = true;
+    public static $runner;
+
+    public static function add_command($name, $callable, $args = []): bool
+    {
+        self::$commands[(string) $name] = [
+            'callable' => $callable,
+            'args' => (array) $args,
+        ];
+
+        return true;
+    }
+
+    public static function add_wp_hook($tag, $callback, $priority = 10, $accepted_args = 1): bool
+    {
+        if (!self::$allow_hook_registration) {
+            return false;
+        }
+
+        self::$wp_hooks[(string) $tag][] = $callback;
+
+        return true;
+    }
+
+    public static function get_runner(): Kiwi_Test_WP_CLI_Runner
+    {
+        if (!(self::$runner instanceof Kiwi_Test_WP_CLI_Runner)) {
+            self::$runner = new Kiwi_Test_WP_CLI_Runner();
+        }
+
+        return self::$runner;
+    }
+
+    public static function error($message, $exit = true): void
+    {
+        self::$errors[] = (string) $message;
+
+        if ($exit) {
+            self::halt(1);
+        }
+    }
+
+    public static function halt($return_code): void
+    {
+        $return_code = (int) $return_code;
+        self::$halt_codes[] = $return_code;
+
+        throw new Kiwi_Test_WP_CLI_Halt_Exception($return_code);
+    }
+
+    public static function line($message = ''): void
+    {
+        self::$lines[] = (string) $message;
+    }
+
+    public static function reset_runtime(): void
+    {
+        self::$wp_hooks = [];
+        self::$lines = [];
+        self::$errors = [];
+        self::$halt_codes = [];
+        self::$allow_hook_registration = true;
+        self::$runner = new Kiwi_Test_WP_CLI_Runner();
+        $GLOBALS['kiwi_test_did_actions'] = [];
+    }
+}
+
+class Kiwi_Test_Incomplete_WP_CLI
+{
+    public static function add_command($name, $callable, $args = []): bool
+    {
+        return true;
+    }
+}
+
+class Kiwi_Test_Database_Command_Service
+{
+    public $calls = [];
+    private $result;
+
+    public function __construct(array $result)
+    {
+        $this->result = $result;
+    }
+
+    public function status(): array
+    {
+        $this->calls[] = 'status';
+
+        return $this->result;
+    }
+
+    public function apply(): array
+    {
+        $this->calls[] = 'apply';
+
+        return $this->result;
+    }
+}
+
+require_once __DIR__ . '/../tools/database/kiwi-database.php';
+
+function kiwi_test_expect_cli_halt(callable $callback, int $expected_code): void
+{
+    $caught = null;
+
+    try {
+        $callback();
+    } catch (Kiwi_Test_WP_CLI_Halt_Exception $error) {
+        $caught = $error;
+    }
+
+    kiwi_assert_true($caught instanceof Kiwi_Test_WP_CLI_Halt_Exception, 'Expected WP-CLI execution to halt explicitly.');
+    kiwi_assert_same($expected_code, $caught->return_code, 'Expected the planned WP-CLI exit code.');
+}
+
 class Kiwi_Test_Database_Deployment_Wpdb
 {
     public $prefix = 'abc_';
@@ -625,16 +800,161 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
     kiwi_assert_true(new Kiwi_Database_Deployment_Service() instanceof Kiwi_Database_Deployment_Service, 'Expected every canonical repository step to construct outside normal runtime.');
 });
 
-kiwi_run_test('Kiwi database runner executes after plugins load and before init', function (): void {
-    $runner = file_get_contents(__DIR__ . '/../tools/database/kiwi-database.php');
-    $runbook = file_get_contents(__DIR__ . '/../docs/operations/database-migrations.md');
+kiwi_run_test('Kiwi database runner registers only the early WP-CLI command surface', function (): void {
+    $runner_source = file_get_contents(__DIR__ . '/../tools/database/kiwi-database.php');
 
-    kiwi_assert_true(is_string($runner), 'Expected the external database runner source to be readable.');
-    kiwi_assert_true(is_string($runbook), 'Expected the database migration runbook to be readable.');
-    kiwi_assert_true(strpos($runner, "did_action('plugins_loaded') < 1") !== false, 'Expected the runner to require loaded plugin classes.');
-    kiwi_assert_true(strpos($runner, "did_action('init') > 0") !== false, 'Expected the runner to reject execution after normal init side effects.');
-    kiwi_assert_true(substr_count($runbook, '--hook=plugins_loaded') >= 2, 'Expected status and apply examples to use the pre-init WP-CLI hook.');
-    kiwi_assert_true(strpos($runbook, 'do not fall back to the bare command') !== false, 'Expected the runbook to reject unsafe bare eval-file fallback.');
+    kiwi_assert_true(is_string($runner_source), 'Expected the external database runner source to be readable.');
+    kiwi_assert_true(isset(WP_CLI::$commands['kiwi']), 'Expected the repository-owned Kiwi command container.');
+    kiwi_assert_true(isset(WP_CLI::$commands['kiwi database']), 'Expected the database command to be registered.');
+    kiwi_assert_same(
+        'before_wp_load',
+        WP_CLI::$commands['kiwi database']['args']['when'] ?? '',
+        'Expected database commands to invoke before WordPress loads normally.'
+    );
+    kiwi_assert_true(
+        WP_CLI::$commands['kiwi database']['callable'] instanceof Kiwi_Database_Command,
+        'Expected the registered database command object.'
+    );
+    kiwi_assert_same([], WP_CLI::$wp_hooks, 'Expected loading through --require to register no WordPress hook yet.');
+    kiwi_assert_same([], WP_CLI::$lines, 'Expected loading through --require to produce no command result.');
+    kiwi_assert_same([], WP_CLI::$errors, 'Expected loading through --require to produce no error.');
+    kiwi_assert_same(true, kiwi_database_cli_has_required_api(WP_CLI::class), 'Expected the WP-CLI 2.12-compatible API surface to pass.');
+    kiwi_assert_same(false, kiwi_database_cli_has_required_api(Kiwi_Test_Incomplete_WP_CLI::class), 'Expected incomplete WP-CLI APIs to fail closed.');
+    kiwi_assert_true(strpos($runner_source, "WP_CLI::add_wp_hook(") !== false, 'Expected repository-owned plugins_loaded scheduling.');
+    kiwi_assert_true(strpos($runner_source, "WP_CLI::get_runner()") !== false, 'Expected repository-owned WordPress loading.');
+});
+
+kiwi_run_test('Kiwi database status runs after plugins load and halts before init', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    WP_CLI::reset_runtime();
+    $command = WP_CLI::$commands['kiwi database']['callable'];
+
+    kiwi_test_expect_cli_halt(static function () use ($command): void {
+        $command->status([], []);
+    }, 1);
+
+    $result = json_decode(WP_CLI::$lines[0] ?? '', true);
+    $mutating_queries = array_values(array_filter(
+        $wpdb->queries,
+        static function (string $query): bool {
+            return preg_match('/\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|GET_LOCK|RELEASE_LOCK)\b/i', $query) === 1;
+        }
+    ));
+
+    kiwi_assert_same(1, WP_CLI::$runner->load_wordpress_calls, 'Expected WordPress to load exactly once.');
+    kiwi_assert_same(1, count(WP_CLI::$wp_hooks['plugins_loaded'] ?? []), 'Expected one plugins_loaded callback.');
+    kiwi_assert_same(1, did_action('plugins_loaded'), 'Expected execution after plugins_loaded.');
+    kiwi_assert_same(0, did_action('init'), 'Expected explicit halt before init.');
+    kiwi_assert_same(false, WP_CLI::$runner->continued_to_init, 'Expected no normal init continuation.');
+    kiwi_assert_true(is_array($result), 'Expected structured JSON from status.');
+    kiwi_assert_same('status', $result['mode'] ?? '', 'Expected the status mode to execute.');
+    kiwi_assert_same(false, $result['mutated'] ?? null, 'Expected status to remain read-only.');
+    kiwi_assert_true(!empty($wpdb->queries), 'Expected status to inspect real postconditions.');
+    kiwi_assert_same([], $mutating_queries, 'Expected status not to issue mutating SQL or obtain the apply lock.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database runner fails before service work on lifecycle and hook errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $cases = [
+        'before_plugins_loaded' => [0, 0, true],
+        'after_init' => [1, 1, true],
+        'hook_not_reached' => [1, 0, false],
+    ];
+
+    foreach ($cases as $name => [$plugins_loaded_count, $init_count, $invoke_hook]) {
+        $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+        WP_CLI::reset_runtime();
+        WP_CLI::$runner->plugins_loaded_count = $plugins_loaded_count;
+        WP_CLI::$runner->init_count = $init_count;
+        WP_CLI::$runner->invoke_plugins_loaded = $invoke_hook;
+        $command = WP_CLI::$commands['kiwi database']['callable'];
+
+        kiwi_test_expect_cli_halt(static function () use ($command): void {
+            $command->status([], []);
+        }, 1);
+
+        kiwi_assert_same([], $wpdb->queries, "Expected {$name} to fail before schema inspection.");
+        kiwi_assert_same([], WP_CLI::$lines, "Expected {$name} to produce no false status result.");
+        kiwi_assert_true(!empty(WP_CLI::$errors), "Expected {$name} to expose a stable CLI error.");
+    }
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database runner fails closed for missing classes and JSON errors', function (): void {
+    $missing_class_service = new Kiwi_Test_Database_Command_Service(['success' => true]);
+    $missing_class_command = new Kiwi_Database_Command(
+        ['Kiwi_Test_Missing_Database_Class'],
+        static function () use ($missing_class_service) {
+            return $missing_class_service;
+        }
+    );
+
+    WP_CLI::reset_runtime();
+    kiwi_test_expect_cli_halt(static function () use ($missing_class_command): void {
+        $missing_class_command->status([], []);
+    }, 1);
+    kiwi_assert_same([], $missing_class_service->calls, 'Expected missing plugin classes to block the service.');
+    kiwi_assert_same([], WP_CLI::$lines, 'Expected no result after missing plugin classes.');
+
+    $json_service = new Kiwi_Test_Database_Command_Service([
+        'success' => true,
+        'mode' => 'status',
+        'mutated' => false,
+    ]);
+    $json_command = new Kiwi_Database_Command(
+        [],
+        static function () use ($json_service) {
+            return $json_service;
+        },
+        static function (array $result) {
+            return false;
+        }
+    );
+
+    WP_CLI::reset_runtime();
+    kiwi_test_expect_cli_halt(static function () use ($json_command): void {
+        $json_command->status([], []);
+    }, 1);
+    kiwi_assert_same(['status'], $json_service->calls, 'Expected status to execute once before the JSON failure.');
+    kiwi_assert_same(
+        ['{"success":false,"error_code":"json_encode_failed"}'],
+        WP_CLI::$lines,
+        'Expected a stable machine-readable JSON failure.'
+    );
+    kiwi_assert_same(0, did_action('init'), 'Expected JSON failure to halt before init.');
+});
+
+kiwi_run_test('Kiwi database runner maps safe results to explicit exit codes', function (): void {
+    foreach ([true => 0, false => 1] as $success => $exit_code) {
+        $service = new Kiwi_Test_Database_Command_Service([
+            'success' => (bool) $success,
+            'mode' => 'status',
+            'mutated' => false,
+        ]);
+        $command = new Kiwi_Database_Command(
+            [],
+            static function () use ($service) {
+                return $service;
+            }
+        );
+
+        WP_CLI::reset_runtime();
+        kiwi_test_expect_cli_halt(static function () use ($command): void {
+            $command->status([], []);
+        }, $exit_code);
+
+        kiwi_assert_same(['status'], $service->calls, 'Expected exactly one explicit status call.');
+        kiwi_assert_same(0, did_action('init'), 'Expected every result to halt before init.');
+        kiwi_assert_same(false, WP_CLI::$runner->continued_to_init, 'Expected no result path to continue into init.');
+    }
 });
 
 kiwi_run_test('Kiwi normal runtime contains no schema mutation path', function (): void {

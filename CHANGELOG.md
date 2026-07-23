@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-07-23:
+- [Database Deployments] Replaced the external runner's unbundled `eval-file --hook` dependency with a repository-owned WP-CLI 2.12 command loaded through `--require`. Database `status`/`apply` now schedule on `plugins_loaded`, fail closed on lifecycle/API errors, and terminate before normal `init` side effects.
+
 2026-07-22:
 - [Database Deployments] Removed automatic schema and historical one-time migrations from normal WordPress runtime. Added an explicit WP-CLI `status`/`apply` deployment gate with real schema postconditions, legacy-structure blocking, exclusive apply locking, verified static seeds, and schema-version persistence only after complete success.
 
