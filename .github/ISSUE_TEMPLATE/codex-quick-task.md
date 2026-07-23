@@ -1,11 +1,13 @@
 ---
 name: Codex Quick Task
-about: Für Trivial, Easy-Bugfix, CSS & html Design etc.
+about: Kleine Aufgabe für den externen Codex-Workflow anlegen
 title: "[Codex]"
-labels: codex-candidate
+labels: 0 - codex-candidate
 assignees: ''
 
 ---
+
+> Diese Vorlage legt einen Kandidaten für den externen Codex-Workflow an. Planung und Implementierung werden nicht durch eine GitHub Action in diesem Repository gestartet.
 
 ## Aufgabe
 

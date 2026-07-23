@@ -1,5 +1,70 @@
 {
-  "generated_at": "2026-07-19T15:44:33.846696+00:00",
-  "nodes": {},
+  "generated_at": "2026-07-23T11:46:15.069194+00:00",
+  "nodes": {
+    "includes_core_class_plugin_kiwi_plugin": {
+      "code_fingerprint": "a84bb93f82080ab121bd32773ae8a16a3bdde2ebcd0f370acf00fa1a9bbc9d57",
+      "label": "Kiwi_Plugin",
+      "last": "2026-07-20T16:53:58.608340+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-20T16:53:58.608340+00:00",
+          "outcome": "useful",
+          "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
+        }
+      ],
+      "score": 0.937651216,
+      "source_file": "includes/core/class-plugin.php",
+      "status": "tentative",
+      "uses": 1
+    },
+    "includes_repositories_class_retention_cleanup_run_repository_kiwi_retention_cleanup_run_repository": {
+      "code_fingerprint": "2b96623932dc9312764bbda4d9c121e206ab51c85ab05474c7f372646719cf89",
+      "label": "Kiwi_Retention_Cleanup_Run_Repository",
+      "last": "2026-07-20T16:53:58.608340+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-20T16:53:58.608340+00:00",
+          "outcome": "useful",
+          "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
+        }
+      ],
+      "score": 0.937651216,
+      "source_file": "includes/repositories/class-retention-cleanup-run-repository.php",
+      "status": "tentative",
+      "uses": 1
+    },
+    "includes_services_class_retention_cleanup_service_kiwi_retention_cleanup_service": {
+      "code_fingerprint": "7545546d6841318f8d4d71f6ba3b93f1ca99c0273733d7670d458d7bacf6cf12",
+      "label": "Kiwi_Retention_Cleanup_Service",
+      "last": "2026-07-20T16:53:58.608340+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-20T16:53:58.608340+00:00",
+          "outcome": "useful",
+          "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
+        }
+      ],
+      "score": 0.937651216,
+      "source_file": "includes/services/class-retention-cleanup-service.php",
+      "status": "tentative",
+      "uses": 1
+    },
+    "tests_run_tests": {
+      "code_fingerprint": "491a4867fe6120c107766e7fae9a10f786b2dc783e7b785207c8dd938cd10650",
+      "label": "run-tests.php",
+      "last": "2026-07-20T16:53:58.608340+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-20T16:53:58.608340+00:00",
+          "outcome": "useful",
+          "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
+        }
+      ],
+      "score": 0.937651216,
+      "source_file": "tests/run-tests.php",
+      "status": "tentative",
+      "uses": 1
+    }
+  },
   "version": 1
 }
