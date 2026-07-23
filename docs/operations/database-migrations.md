@@ -39,14 +39,23 @@ The Deployment Codex/Operator owns the later, explicitly authorized rollout:
 
 ## Runner
 
-Run the tool from the WordPress installation with Kiwi Backend active so WP-CLI loads the plugin classes first:
+Run the tool from the WordPress installation with Kiwi Backend active. The
+global `--require` option loads the repository-owned command before WordPress:
 
 ```bash
-wp eval-file wp-content/plugins/kiwi-backend/tools/database/kiwi-database.php status --hook=plugins_loaded
-wp eval-file wp-content/plugins/kiwi-backend/tools/database/kiwi-database.php apply --hook=plugins_loaded
+wp --require=wp-content/plugins/backend/tools/database/kiwi-database.php kiwi database status
+wp --require=wp-content/plugins/backend/tools/database/kiwi-database.php kiwi database apply
 ```
 
-The `--hook=plugins_loaded` argument is mandatory. It executes the file after Kiwi Backend classes are available but before the normal WordPress `init` hook can schedule cron work, clean up rows, or perform other runtime side effects. The runner verifies this lifecycle boundary itself and exits non-zero when invoked before `plugins_loaded` or after `init`. Use a WP-CLI `eval-command` version that supports `--hook`; do not fall back to the bare command.
+The command bootstrap uses WP-CLI core APIs available in WP-CLI 2.12. It
+registers the selected operation on `plugins_loaded`, loads WordPress exactly
+once, verifies that `plugins_loaded` has fired and `init` has not, and exits
+before normal `init` hooks can schedule cron work, clean up rows, or perform
+other runtime side effects.
+
+Do not replace the command with `eval-file`, `wp eval`, a temporary MU-plugin,
+or direct SQL. Missing WP-CLI APIs, a missing lifecycle hook, unloaded Kiwi
+classes, or execution after `init` all stop before a schema operation.
 
 `status` is strictly read-only. It queries real `information_schema` postconditions for all managed tables, columns, indexes, and views; verifies required device-model seed rows; and compares `kiwi_backend_db_schema_version` with the target version. It exits `0` only when the complete schema is ready. Drift produces JSON and a non-zero exit.
 
