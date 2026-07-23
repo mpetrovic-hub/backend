@@ -244,15 +244,6 @@ Ein linksseitiges Menü-Bar erstellen mit Submenüs
 Wenn nach Audit nicht mehr benötigt komplett aus der Codebase entfernen
 
 
-## 8: Dokumentations .md files aufräumen / besser aufteilen
-
-Es wird zB Error-Logging Doku in docs/operations/landing-page-prod-behaviour.md - warum dort? Ergibt vom Namen her keinen Sinn.
-
-- Alle Dokus durchgehen und checken, ob diese besser aufgesplittet werden können.
-- Ein .md file für jeden Bereich / Funktion / Grobe Aufgabe
-- Index kommt in AGENTS.md
-
-
 ## 9: Retire `wp_kiwi_landing_kpi_summary`
 
 
@@ -268,3 +259,5 @@ Nach der generischen Grundlage und dem Retention-Testfall aus Issue `#94` weiter
 - Affiliate-Postback-Dispatch
 
 Für jede Anbindung vorab einen stabilen `correlation_key`, klare Fehler-/Recovery-Grenzen und bei potenziell hoher Ereignisrate eine Drosselungsstrategie festlegen. Es gelten die Lifecycle-Regeln `raised`, `repeated` und `resolved`; normale erfolgreiche Läufe erzeugen keine Events.
+
+## 11: Gibt es noch alte, im Code verankerte "Einmal-Prozesse", die irgendeinen Umbau / Feature getriggert haben, aber jetzt nicht mehr benötigt werden?
