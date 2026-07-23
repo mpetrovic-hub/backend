@@ -10,8 +10,6 @@ if (!defined('ABSPATH')) {
  */
 class Kiwi_Plugin
 {
-    private const DB_SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    private const DB_SCHEMA_VERSION = '2026-07-20-1';
     private const CLICK_ATTR_CLEANUP_LOCK_KEY = 'kiwi_click_attribution_cleanup_lock';
     private const CLICK_ATTR_CLEANUP_LOCK_TTL_SECONDS = 300;
     private const LANDING_FUNNEL_DAILY_SUMMARY_REFRESH_LEGACY_HOOK = 'kiwi_landing_funnel_daily_summary_refresh';
@@ -35,7 +33,6 @@ class Kiwi_Plugin
 
     private $plugin_root_path;
     private $plugin_base_url;
-    private $schema_checked = false;
     private $frontend_auth_gate;
 
     public function __construct(
@@ -58,12 +55,6 @@ class Kiwi_Plugin
         add_action('init', [$this, 'handle_frontend_auth']);
         add_action('init', [$this, 'register_shortcodes']);
         add_action('init', [$this, 'register_rest_routes']);
-        add_action('init', [$this, 'ensure_operator_lookup_callback_table']);
-        add_action('init', [$this, 'ensure_refund_callback_table']);
-        add_action('init', [$this, 'ensure_blacklist_callback_table']);
-        add_action('init', [$this, 'ensure_nth_operational_tables']);
-        add_action('init', [$this, 'ensure_click_attribution_table']);
-        add_action('init', [$this, 'ensure_sales_table']);
         add_action('init', [$this, 'cleanup_expired_click_attributions']);
         add_action('init', [$this, 'schedule_landing_funnel_daily_main_summary_refresh']);
         add_action('init', [$this, 'schedule_landing_funnel_daily_tkzone_summary_refresh']);
@@ -227,36 +218,6 @@ class Kiwi_Plugin
             $device_normalizer
         );
         $landing_kpi_rest_routes->register();
-    }
-
-    public function ensure_operator_lookup_callback_table(): void
-    {
-        $this->ensure_schema_if_needed();
-    }
-
-    public function ensure_refund_callback_table(): void
-    {
-        $this->ensure_schema_if_needed();
-    }
-
-    public function ensure_blacklist_callback_table(): void
-    {
-        $this->ensure_schema_if_needed();
-    }
-
-    public function ensure_nth_operational_tables(): void
-    {
-        $this->ensure_schema_if_needed();
-    }
-
-    public function ensure_sales_table(): void
-    {
-        $this->ensure_schema_if_needed();
-    }
-
-    public function ensure_click_attribution_table(): void
-    {
-        $this->ensure_schema_if_needed();
     }
 
     public function cleanup_expired_click_attributions(): void
@@ -1158,319 +1119,6 @@ TEXT;
         return $resolved_rows;
     }
 
-    private function ensure_schema_if_needed(): void
-    {
-        if ($this->schema_checked) {
-            return;
-        }
-
-        $this->schema_checked = true;
-
-        if ($this->get_installed_schema_version() === self::DB_SCHEMA_VERSION) {
-            return;
-        }
-
-        $this->run_schema_migrations();
-        $this->persist_schema_version(self::DB_SCHEMA_VERSION);
-    }
-
-    protected function run_schema_migrations(): void
-    {
-        foreach ($this->build_schema_repositories() as $repository) {
-            if (!is_object($repository) || !method_exists($repository, 'create_table')) {
-                continue;
-            }
-
-            $repository->create_table();
-        }
-
-        $this->migrate_legacy_android_version_columns();
-        $this->migrate_slim_landing_funnel_daily_summary_columns();
-        $this->seed_device_model_brand_map();
-    }
-
-    protected function build_schema_repositories(): array
-    {
-        return [
-            new Kiwi_Dimoco_Callback_Operator_Lookup_Repository(),
-            new Kiwi_Dimoco_Callback_Refund_Repository(),
-            new Kiwi_Dimoco_Callback_Blacklist_Repository(),
-            new Kiwi_Device_Model_Brand_Map_Repository(),
-            new Kiwi_Landing_Page_Session_Repository(),
-            new Kiwi_Nth_Event_Repository(),
-            new Kiwi_Nth_Flow_Transaction_Repository(),
-            new Kiwi_Click_Attribution_Repository(),
-            new Kiwi_Sales_Repository(),
-            new Kiwi_Landing_Kpi_Summary_Repository(),
-            new Kiwi_Landing_Handoff_Event_Repository(),
-            new Kiwi_Sms_Body_Variant_Repository(),
-            new Kiwi_Premium_Sms_Landing_Engagement_Repository(),
-            new Kiwi_Premium_Sms_Fraud_Signal_Repository(),
-            new Kiwi_Operational_Event_Repository(),
-            new Kiwi_Retention_Cleanup_Run_Repository(),
-            new Kiwi_Retention_Table_Growth_Snapshot_Repository(),
-            new Kiwi_Landing_Funnel_Daily_Summary_Repository(),
-            new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository(),
-            new Kiwi_Traffic_Source_Funnel_Statistics_Repository(),
-        ];
-    }
-
-    protected function seed_device_model_brand_map(): int
-    {
-        return (new Kiwi_Device_Model_Brand_Map_Repository())->seed_default_mappings();
-    }
-
-    protected function migrate_legacy_android_version_columns(): void
-    {
-        foreach ([
-            (new Kiwi_Sales_Repository())->get_table_name_for_schema(),
-            (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->get_table_name(),
-        ] as $table_name) {
-            $this->backfill_legacy_android_version_column($table_name);
-            $this->drop_column_if_exists($table_name, 'android_version');
-        }
-    }
-
-    protected function migrate_slim_landing_funnel_daily_summary_columns(): void
-    {
-        $table_name = (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->get_table_name();
-
-        if (!$this->consolidate_slim_landing_funnel_daily_summary_rows($table_name)) {
-            return;
-        }
-
-        foreach (['tkzone', 'median_hidden_seconds'] as $column_name) {
-            $this->drop_column_if_exists($table_name, $column_name);
-        }
-    }
-
-    private function consolidate_slim_landing_funnel_daily_summary_rows(string $table_name): bool
-    {
-        global $wpdb;
-
-        if (preg_match('/^[A-Za-z0-9_]+$/', $table_name) !== 1) {
-            return false;
-        }
-
-        $temp_table_name = $table_name . '_slim_rollup_tmp';
-
-        $dimension_columns = [
-            'metric_date',
-            'landing_key',
-            'service_key',
-            'provider_key',
-            'flow_key',
-            'country',
-            'pid',
-            'tksource',
-            'device_brand',
-            'os',
-            'os_version',
-            'browser',
-            'client_ip_version',
-            'client_ip_prefix',
-        ];
-        $dimension_select = implode(",\n                ", $dimension_columns);
-        $dimension_group_by = implode(', ', $dimension_columns);
-        $dimension_hash_expression = "SHA2(CONCAT_WS('|',
-                landing_key,
-                service_key,
-                provider_key,
-                flow_key,
-                country,
-                pid,
-                tksource,
-                device_brand,
-                os,
-                os_version,
-                browser,
-                client_ip_version,
-                client_ip_prefix
-            ), 256)";
-        $metric_columns = [
-            'sessions',
-            'page_loaded_sessions',
-            'cta1_sessions',
-            'cta1_click_events',
-            'cta2_sessions',
-            'cta2_click_events',
-            'cta3_sessions',
-            'cta3_click_events',
-            'handoff_attempts',
-            'handoff_successes',
-            'handoff_fails',
-            'sales',
-            'sales_amount_minor',
-        ];
-        $insert_columns = array_merge(
-            $dimension_columns,
-            ['dimension_hash'],
-            $metric_columns,
-            ['handoff_rate_pct', 'min_hidden_seconds', 'max_hidden_seconds', 'created_at', 'updated_at']
-        );
-
-        if ($wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}") === false) {
-            return false;
-        }
-
-        if ($wpdb->query('START TRANSACTION') === false) {
-            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
-
-            return false;
-        }
-
-        $created_temp_table = $wpdb->query(
-            "CREATE TEMPORARY TABLE {$temp_table_name} AS
-            SELECT
-                {$dimension_select},
-                {$dimension_hash_expression} AS dimension_hash,
-                SUM(sessions) AS sessions,
-                SUM(page_loaded_sessions) AS page_loaded_sessions,
-                SUM(cta1_sessions) AS cta1_sessions,
-                SUM(cta1_click_events) AS cta1_click_events,
-                SUM(cta2_sessions) AS cta2_sessions,
-                SUM(cta2_click_events) AS cta2_click_events,
-                SUM(cta3_sessions) AS cta3_sessions,
-                SUM(cta3_click_events) AS cta3_click_events,
-                SUM(handoff_attempts) AS handoff_attempts,
-                SUM(handoff_successes) AS handoff_successes,
-                SUM(handoff_fails) AS handoff_fails,
-                SUM(sales) AS sales,
-                SUM(sales_amount_minor) AS sales_amount_minor,
-                CASE
-                    WHEN SUM(handoff_attempts) <= 0 THEN 0
-                    ELSE ROUND(SUM(handoff_successes) / SUM(handoff_attempts) * 100, 2)
-                END AS handoff_rate_pct,
-                MIN(min_hidden_seconds) AS min_hidden_seconds,
-                MAX(max_hidden_seconds) AS max_hidden_seconds,
-                MIN(created_at) AS created_at,
-                MAX(updated_at) AS updated_at
-            FROM {$table_name}
-            GROUP BY {$dimension_group_by}"
-        );
-
-        if ($created_temp_table === false) {
-            $wpdb->query('ROLLBACK');
-            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
-
-            return false;
-        }
-
-        $deleted_rows = $wpdb->query("DELETE FROM {$table_name}");
-        if ($deleted_rows === false) {
-            $wpdb->query('ROLLBACK');
-            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
-
-            return false;
-        }
-
-        $inserted_rows = $wpdb->query(
-            "INSERT INTO {$table_name} (" . implode(', ', $insert_columns) . ")
-             SELECT " . implode(', ', $insert_columns) . "
-             FROM {$temp_table_name}"
-        );
-
-        if ($inserted_rows === false) {
-            $wpdb->query('ROLLBACK');
-            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
-
-            return false;
-        }
-
-        if ($wpdb->query('COMMIT') === false) {
-            $wpdb->query('ROLLBACK');
-            $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
-
-            return false;
-        }
-
-        $wpdb->query("DROP TEMPORARY TABLE IF EXISTS {$temp_table_name}");
-
-        return true;
-    }
-
-    private function backfill_legacy_android_version_column(string $table_name): void
-    {
-        global $wpdb;
-
-        if (!$this->column_exists($table_name, 'android_version')) {
-            return;
-        }
-
-        if (!$this->column_exists($table_name, 'os') || !$this->column_exists($table_name, 'os_version')) {
-            return;
-        }
-
-        $legacy_value = "TRIM(COALESCE(android_version, ''))";
-        $legacy_has_value = "{$legacy_value} <> '' AND {$legacy_value} <> '(unknown)'";
-        $legacy_major_expression = "SUBSTRING_INDEX(SUBSTRING_INDEX({$legacy_value}, '.', 1), '_', 1)";
-
-        $wpdb->query(
-            "UPDATE {$table_name}
-             SET os = CASE
-                    WHEN {$legacy_has_value}
-                         AND (os = '' OR os = '(unknown)')
-                    THEN 'Android'
-                    ELSE os
-                 END,
-                 os_version = CASE
-                    WHEN os_version <> '' AND os_version <> '(unknown)' THEN os_version
-                    WHEN {$legacy_has_value}
-                         AND {$legacy_value} REGEXP '^[1-9][0-9]?([._][0-9]+)*$'
-                    THEN {$legacy_major_expression}
-                    WHEN {$legacy_has_value} THEN '(unknown)'
-                    ELSE os_version
-                 END
-             WHERE {$legacy_has_value}"
-        );
-    }
-
-    private function drop_column_if_exists(string $table_name, string $column_name): void
-    {
-        global $wpdb;
-
-        if (!$this->column_exists($table_name, $column_name)) {
-            return;
-        }
-
-        $wpdb->query("ALTER TABLE {$table_name} DROP COLUMN {$column_name}");
-    }
-
-    private function column_exists(string $table_name, string $column_name): bool
-    {
-        global $wpdb;
-
-        $table_name = trim($table_name);
-        $column_name = trim($column_name);
-
-        if ($table_name === '' || $column_name === '') {
-            return false;
-        }
-
-        if (!is_object($wpdb)
-            || !method_exists($wpdb, 'get_var')
-            || !method_exists($wpdb, 'prepare')
-            || !method_exists($wpdb, 'query')
-        ) {
-            return false;
-        }
-
-        if (preg_match('/^[A-Za-z0-9_]+$/', $table_name) !== 1
-            || preg_match('/^[A-Za-z0-9_]+$/', $column_name) !== 1
-        ) {
-            return false;
-        }
-
-        $exists = $wpdb->get_var(
-            $wpdb->prepare(
-                "SHOW COLUMNS FROM {$table_name} LIKE %s",
-                $column_name
-            )
-        );
-
-        return !($exists === null || $exists === false || $exists === '');
-    }
-
     protected function get_click_attribution_cleanup_limit(): int
     {
         $config = new Kiwi_Config();
@@ -1930,26 +1578,6 @@ TEXT;
         }
 
         return time();
-    }
-
-    private function get_installed_schema_version(): string
-    {
-        if (!function_exists('get_option')) {
-            return '';
-        }
-
-        $version = get_option(self::DB_SCHEMA_VERSION_OPTION, '');
-
-        return is_string($version) ? $version : '';
-    }
-
-    private function persist_schema_version(string $schema_version): void
-    {
-        if (!function_exists('update_option')) {
-            return;
-        }
-
-        update_option(self::DB_SCHEMA_VERSION_OPTION, $schema_version, true);
     }
 
     private function enqueue_style_asset(
