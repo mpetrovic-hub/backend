@@ -1,51 +1,217 @@
 {
-  "generated_at": "2026-07-23T12:16:50.514179+00:00",
+  "generated_at": "2026-07-27T14:20:45.441670+00:00",
   "nodes": {
+    "docs_architecture_operational_events_operational_events": {
+      "code_fingerprint": "0eec8234efe06df2fbd1f747426123238f6b91ece49fcf219a8f9bd44d3dfaf0",
+      "label": "Operational Events",
+      "last": "2026-07-24T06:55:06.335319+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-24T06:55:06.335319+00:00",
+          "outcome": "useful",
+          "q": "check bitte die wp_kiwi_retention_cleanup_runs, die laufen seit dem 21.7. nicht mehr (skipped). Dazu kommt, das dies nicht in der wp_kiwi_operational_events geloggt wurde, sollte es aber schon, oder?"
+        }
+      ],
+      "score": 0.926385121,
+      "source_file": "docs/architecture/operational-events.md",
+      "status": "tentative",
+      "uses": 1
+    },
+    "docs_operations_database_migrations_database_migrations": {
+      "code_fingerprint": "a4fcaba2c417008b70ea68be227e44fa210827dee0c699d01e4dae8d8f1161a5",
+      "label": "Database Migrations",
+      "last": "2026-07-26T11:39:54.168474+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-26T11:39:54.168474+00:00",
+          "outcome": "useful",
+          "q": "How does the new tools/database premise constrain the external retention archive health checker for Issue #110?"
+        },
+        {
+          "date": "2026-07-24T10:51:33.543537+00:00",
+          "outcome": "useful",
+          "q": "Do the current repository database deployment tests exercise a real MySQL rename migration or only simulated wpdb behavior?"
+        },
+        {
+          "date": "2026-07-24T06:50:12.772070+00:00",
+          "outcome": "useful",
+          "q": "How should Issue 96 migration-specific status, apply, and rollback integrate into the existing WP-CLI database runner?"
+        },
+        {
+          "date": "2026-07-23T17:53:24.526812+00:00",
+          "outcome": "useful",
+          "q": "Compare the existing landing-engagement rename plan with the new external schema deployment design from Issue 103 and tools/database."
+        }
+      ],
+      "score": 3.745698671,
+      "source_file": "docs/operations/database-migrations.md",
+      "status": "preferred",
+      "uses": 4
+    },
+    "docs_operations_retention_runbook_retention_runbook": {
+      "code_fingerprint": "b2b607e14b46c78360007d7a5dc6a3c0d704f6a1d60c0fce9534ef2f2df176f3",
+      "label": "Retention Runbook",
+      "last": "2026-07-27T13:14:43.071737+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-27T13:14:43.071737+00:00",
+          "outcome": "useful",
+          "q": "Warum waren die letzten drei Retention-Runs completed, obwohl der globale quick_check auf der grossen Archivdatei den früheren Run unterbrochen hatte und sonst nichts geändert wurde?"
+        },
+        {
+          "date": "2026-07-27T12:00:27.632268+00:00",
+          "outcome": "useful",
+          "q": "Ich hätte gerne die einfachste Lösung ohne weitere Tabelle. Können wir nicht einfach einmal pro Jahr einen integrity_check auf alle Archive nacheinander ausführen?"
+        },
+        {
+          "date": "2026-07-27T11:54:17.065906+00:00",
+          "outcome": "useful",
+          "q": "Das bräuchten wir gesetzt den Fall, dass entweder ein altes Archiv kaputt ist und ein neues angelegt werden muss, oder das Jahr zu Ende ist und eine neue angefangen wird. Wie ist der Jahr-ist-zu-Ende-Prozess aktuell aufgesetzt?"
+        },
+        {
+          "date": "2026-07-27T10:22:56.403881+00:00",
+          "outcome": "useful",
+          "q": "Wir brauchen kein Backup vom Backup. Idee: falls die Prüfung ergibt, dass die Archivdatei fehlerhaft ist, soll der Archivierer einfach eine neue Datei anlegen, und mit der weitermachen?"
+        },
+        {
+          "date": "2026-07-27T08:42:19.094141+00:00",
+          "outcome": "useful",
+          "q": "Frage: Eine neue Archivdatei aus einer nachweislich gesunden Sicherung erstellen. - woher soll die nachweislich gesunden Sicherung herkommen?"
+        }
+      ],
+      "score": 9.892062513,
+      "source_file": "docs/operations/retention-runbook.md",
+      "status": "preferred",
+      "uses": 10
+    },
     "includes_core_class_plugin_kiwi_plugin": {
       "code_fingerprint": "a84bb93f82080ab121bd32773ae8a16a3bdde2ebcd0f370acf00fa1a9bbc9d57",
       "label": "Kiwi_Plugin",
-      "last": "2026-07-20T16:53:58.608340+00:00",
+      "last": "2026-07-26T20:22:34.057802+00:00",
       "provenance": [
+        {
+          "date": "2026-07-26T20:22:34.057802+00:00",
+          "outcome": "useful",
+          "q": "When should the automatic quick and full SQLite archive health checks run relative to the retention worker?"
+        },
+        {
+          "date": "2026-07-26T10:52:14.686837+00:00",
+          "outcome": "useful",
+          "q": "Plan Issue #110: Move SQLite integrity checks out of retention WP-Cron while preserving archive-before-delete safety."
+        },
         {
           "date": "2026-07-20T16:53:58.608340+00:00",
           "outcome": "useful",
           "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
         }
       ],
-      "score": 0.937191101,
+      "score": 2.809506419,
       "source_file": "includes/core/class-plugin.php",
-      "status": "tentative",
-      "uses": 1
+      "status": "preferred",
+      "uses": 3
     },
     "includes_repositories_class_retention_cleanup_run_repository_kiwi_retention_cleanup_run_repository": {
       "code_fingerprint": "2b96623932dc9312764bbda4d9c121e206ab51c85ab05474c7f372646719cf89",
       "label": "Kiwi_Retention_Cleanup_Run_Repository",
-      "last": "2026-07-20T16:53:58.608340+00:00",
+      "last": "2026-07-27T12:17:18.269728+00:00",
       "provenance": [
+        {
+          "date": "2026-07-27T12:17:18.269728+00:00",
+          "outcome": "useful",
+          "q": "Wo wird receipt_verified notiert?"
+        },
         {
           "date": "2026-07-20T16:53:58.608340+00:00",
           "outcome": "useful",
           "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
         }
       ],
-      "score": 0.937191101,
+      "score": 1.850782179,
       "source_file": "includes/repositories/class-retention-cleanup-run-repository.php",
+      "status": "preferred",
+      "uses": 2
+    },
+    "includes_services_class_operational_event_service_kiwi_operational_event_service": {
+      "code_fingerprint": "f73edbe03472d3caf2090754fc2b90403fbadb3140ccb06b95925a09da10cfc1",
+      "label": "Kiwi_Operational_Event_Service",
+      "last": "2026-07-26T20:12:01.472055+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-26T20:12:01.472055+00:00",
+          "outcome": "useful",
+          "q": "How should Issue #110 handle a resumed retention run when persisted SQLite batch evidence does not match?"
+        }
+      ],
+      "score": 0.982682896,
+      "source_file": "includes/services/class-operational-event-service.php",
       "status": "tentative",
       "uses": 1
     },
     "includes_services_class_retention_cleanup_service_kiwi_retention_cleanup_service": {
       "code_fingerprint": "7545546d6841318f8d4d71f6ba3b93f1ca99c0273733d7670d458d7bacf6cf12",
       "label": "Kiwi_Retention_Cleanup_Service",
-      "last": "2026-07-20T16:53:58.608340+00:00",
+      "last": "2026-07-27T13:14:43.071737+00:00",
       "provenance": [
         {
-          "date": "2026-07-20T16:53:58.608340+00:00",
+          "date": "2026-07-27T13:14:43.071737+00:00",
           "outcome": "useful",
-          "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
+          "q": "Warum waren die letzten drei Retention-Runs completed, obwohl der globale quick_check auf der grossen Archivdatei den früheren Run unterbrochen hatte und sonst nichts geändert wurde?"
+        },
+        {
+          "date": "2026-07-27T12:17:18.269728+00:00",
+          "outcome": "useful",
+          "q": "Wo wird receipt_verified notiert?"
+        },
+        {
+          "date": "2026-07-27T12:00:27.632268+00:00",
+          "outcome": "useful",
+          "q": "Ich hätte gerne die einfachste Lösung ohne weitere Tabelle. Können wir nicht einfach einmal pro Jahr einen integrity_check auf alle Archive nacheinander ausführen?"
+        },
+        {
+          "date": "2026-07-27T11:54:17.065906+00:00",
+          "outcome": "useful",
+          "q": "Das bräuchten wir gesetzt den Fall, dass entweder ein altes Archiv kaputt ist und ein neues angelegt werden muss, oder das Jahr zu Ende ist und eine neue angefangen wird. Wie ist der Jahr-ist-zu-Ende-Prozess aktuell aufgesetzt?"
+        },
+        {
+          "date": "2026-07-27T10:22:56.403881+00:00",
+          "outcome": "useful",
+          "q": "Wir brauchen kein Backup vom Backup. Idee: falls die Prüfung ergibt, dass die Archivdatei fehlerhaft ist, soll der Archivierer einfach eine neue Datei anlegen, und mit der weitermachen?"
         }
       ],
-      "score": 0.937191101,
+      "score": 11.674645376,
       "source_file": "includes/services/class-retention-cleanup-service.php",
+      "status": "preferred",
+      "uses": 12
+    },
+    "tests_database_deployment_tests": {
+      "code_fingerprint": "46c09e58d6bc6402e7b781334b96f6ed52a1fc96fd734e575a35308c5120b1db",
+      "label": "database-deployment-tests.php",
+      "last": "2026-07-24T10:51:33.543537+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-24T10:51:33.543537+00:00",
+          "outcome": "useful",
+          "q": "Do the current repository database deployment tests exercise a real MySQL rename migration or only simulated wpdb behavior?"
+        }
+      ],
+      "score": 0.929906421,
+      "source_file": "tests/database-deployment-tests.php",
+      "status": "tentative",
+      "uses": 1
+    },
+    "tests_database_deployment_tests_kiwi_test_database_deployment_wpdb": {
+      "code_fingerprint": "46c09e58d6bc6402e7b781334b96f6ed52a1fc96fd734e575a35308c5120b1db",
+      "label": "Kiwi_Test_Database_Deployment_Wpdb",
+      "last": "2026-07-24T10:51:33.543537+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-24T10:51:33.543537+00:00",
+          "outcome": "useful",
+          "q": "Do the current repository database deployment tests exercise a real MySQL rename migration or only simulated wpdb behavior?"
+        }
+      ],
+      "score": 0.929906421,
+      "source_file": "tests/database-deployment-tests.php",
       "status": "tentative",
       "uses": 1
     },
@@ -60,10 +226,83 @@
           "q": "Plan the repository integration points for GitHub issue 94 global operational event log foundation"
         }
       ],
-      "score": 0.937191101,
+      "score": 0.852761029,
       "source_file": "tests/run-tests.php",
       "status": "tentative",
       "uses": 1
+    },
+    "tools_database_class_database_deployment_service_kiwi_database_deployment_service": {
+      "code_fingerprint": "3eb605c3593c5f3fd005d3d121b191cf8200dd19ff2fd82f4bc927833e161be0",
+      "label": "Kiwi_Database_Deployment_Service",
+      "last": "2026-07-26T11:39:54.168474+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-26T11:39:54.168474+00:00",
+          "outcome": "useful",
+          "q": "How does the new tools/database premise constrain the external retention archive health checker for Issue #110?"
+        },
+        {
+          "date": "2026-07-24T06:50:12.772070+00:00",
+          "outcome": "useful",
+          "q": "How should Issue 96 migration-specific status, apply, and rollback integrate into the existing WP-CLI database runner?"
+        },
+        {
+          "date": "2026-07-23T17:53:24.526812+00:00",
+          "outcome": "useful",
+          "q": "Compare the existing landing-engagement rename plan with the new external schema deployment design from Issue 103 and tools/database."
+        }
+      ],
+      "score": 2.81579225,
+      "source_file": "tools/database/class-database-deployment-service.php",
+      "status": "preferred",
+      "uses": 3
+    },
+    "tools_database_kiwi_database_kiwi_database_command": {
+      "code_fingerprint": "581bfe265b1c5c46fbf40070e0e8467c9baf1ff0ff1f69de892e0882478061a5",
+      "label": "Kiwi_Database_Command",
+      "last": "2026-07-26T11:39:54.168474+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-26T11:39:54.168474+00:00",
+          "outcome": "useful",
+          "q": "How does the new tools/database premise constrain the external retention archive health checker for Issue #110?"
+        },
+        {
+          "date": "2026-07-24T07:29:18.147247+00:00",
+          "outcome": "useful",
+          "q": "Ja, führ das durch. Bedenke: die WP Instanz hat WP-CLI-Version 2.12."
+        },
+        {
+          "date": "2026-07-24T06:50:12.772070+00:00",
+          "outcome": "useful",
+          "q": "How should Issue 96 migration-specific status, apply, and rollback integrate into the existing WP-CLI database runner?"
+        }
+      ],
+      "score": 2.827847204,
+      "source_file": "tools/database/kiwi-database.php",
+      "status": "preferred",
+      "uses": 3
+    },
+    "tools_database_schema_contract": {
+      "code_fingerprint": "99062621215c7fc15d6200ab12420f1b2ab2ebeb4862fcd878c9b3db8acc7596",
+      "label": "schema-contract.php",
+      "last": "2026-07-26T11:39:54.168474+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-26T11:39:54.168474+00:00",
+          "outcome": "useful",
+          "q": "How does the new tools/database premise constrain the external retention archive health checker for Issue #110?"
+        },
+        {
+          "date": "2026-07-23T17:53:24.526812+00:00",
+          "outcome": "useful",
+          "q": "Compare the existing landing-engagement rename plan with the new external schema deployment design from Issue 103 and tools/database."
+        }
+      ],
+      "score": 1.889479851,
+      "source_file": "tools/database/schema-contract.php",
+      "status": "preferred",
+      "uses": 2
     }
   },
   "version": 1

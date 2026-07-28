@@ -261,3 +261,43 @@ Nach der generischen Grundlage und dem Retention-Testfall aus Issue `#94` weiter
 Für jede Anbindung vorab einen stabilen `correlation_key`, klare Fehler-/Recovery-Grenzen und bei potenziell hoher Ereignisrate eine Drosselungsstrategie festlegen. Es gelten die Lifecycle-Regeln `raised`, `repeated` und `resolved`; normale erfolgreiche Läufe erzeugen keine Events.
 
 ## 11: Gibt es noch alte, im Code verankerte "Einmal-Prozesse", die irgendeinen Umbau / Feature getriggert haben, aber jetzt nicht mehr benötigt werden?
+
+## 12: Tests aufräumen?
+
+
+## 13: Automatische E-Mail-Benachrichtigung für offene Operational Incidents
+
+### Ziel
+
+Eine allgemeine, wiederverwendbare E-Mail-Benachrichtigung für relevante offene Incidents aus `wp_kiwi_operational_events` planen und implementieren.
+
+### Hintergrund
+
+Operational Events werden aktuell append-only gespeichert und können über interne Repository-Methoden beziehungsweise SQL gelesen werden. Es gibt jedoch noch keine automatische Benachrichtigung. Dadurch erfordern auch wichtige Events wie `retention_archive_health_check_incomplete` oder `retention_archive_corruption_detected` eine aktive manuelle Kontrolle.
+
+Diese Folgearbeit ist bewusst nicht Bestandteil von Issue `#110`. Die Benachrichtigung soll als gemeinsame Operational-Event-Fähigkeit entstehen und nicht als Retention-spezifischer E-Mail-Sonderweg.
+
+### Erwartetes Verhalten
+
+- Relevante neu `raised` Incidents lösen eine E-Mail an konfigurierte betriebliche Empfänger aus.
+- `repeated` Events werden dedupliziert beziehungsweise sinnvoll gedrosselt, damit eine länger bestehende Störung keine E-Mail-Flut erzeugt.
+- Qualifizierte `resolved` Events können eine eindeutige Entwarnung für denselben Incident versenden.
+- Betroffene Event-Typen und Schweregrade sind zentral konfigurierbar.
+- Die Nachricht enthält nur begrenzte, sanitiserte Diagnosen und einen stabilen Incident-Bezug; Secrets, Credentials, vollständige Payloads und unmaskierte sensible Serverpfade werden nie versendet.
+- Ein Fehler beim E-Mail-Versand verändert nicht das fachliche Ergebnis des ursprünglichen Producers und erzeugt keine rekursive Benachrichtigungsschleife.
+- Die Lösung verwendet den gemeinsamen Operational-Event-Lifecycle und funktioniert später auch für andere Bereiche als Retention.
+
+### Akzeptanzkriterien
+
+- [ ] Es gibt einen zentralen, wiederverwendbaren Benachrichtigungsvertrag statt direkter E-Mails aus einzelnen Producern.
+- [ ] Empfänger, aktivierte Schweregrade und Wiederholungsdrosselung sind sicher konfigurierbar.
+- [ ] `raised`, gedrosselte `repeated` und `resolved` Lifecycle-Fälle sind automatisiert getestet.
+- [ ] Sanitizing und Größenbegrenzungen sind automatisiert getestet.
+- [ ] Versandfehler beeinflussen den ursprünglichen Geschäfts- oder Retention-Ablauf nicht.
+- [ ] Operations-Dokumentation beschreibt Einrichtung, Test, Fehlerdiagnose und Deaktivierung.
+
+### Nicht-Ziele
+
+- Keine Retention-spezifische Direktmail aus dem Archiv-Health-Runner.
+- Keine E-Mail mit vollständigen Rohfehlern, Archivdaten, Credentials oder Secrets.
+- Keine Umsetzung innerhalb von Issue `#110`.
