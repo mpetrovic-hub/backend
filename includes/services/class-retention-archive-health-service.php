@@ -478,20 +478,33 @@ class Kiwi_Retention_Archive_Health_Service
         $state['daily']['archive'] = $archive_name;
         $state['daily']['check'] = $check;
         $state['daily']['attempts'] = (int) ($state['daily']['attempts'] ?? 0) + 1;
-        $outcome = $this->run_locked_check((string) $archive['path'], $check);
+        $outcome = $this->run_locked_check(
+            (string) $archive['path'],
+            $check,
+            function (array $corruption_outcome) use ($archive, $archive_name, $check): bool {
+                $corruption_reason = (string) (
+                    $corruption_outcome['reason_code'] ?? 'sqlite_check_reported_corruption'
+                );
+
+                return $this->record_corruption_incident(
+                    $archive_name,
+                    true,
+                    $check,
+                    $corruption_reason
+                ) && $this->archive_service->mark_quarantined((string) $archive['path'], [
+                    'detected_at' => $this->now(),
+                    'check' => $check,
+                    'reason_code' => $corruption_reason,
+                ]);
+            }
+        );
         $result_name = (string) ($outcome['result'] ?? 'error');
         $reason_code = (string) ($outcome['reason_code'] ?? 'health_check_failed');
 
         if (in_array($result_name, ['ok', 'corruption_detected'], true)) {
             $incident_action = 'none';
             if ($result_name === 'corruption_detected') {
-                if (!$this->record_corruption_incident($archive_name, true, $check, $reason_code)
-                    || !$this->archive_service->mark_quarantined((string) $archive['path'], [
-                    'detected_at' => $this->now(),
-                    'check' => $check,
-                    'reason_code' => $reason_code,
-                ])
-                ) {
+                if (empty($outcome['quarantine_transition_success'])) {
                     return $this->result(
                         'error',
                         'failed',
@@ -618,7 +631,7 @@ class Kiwi_Retention_Archive_Health_Service
         }
 
         $archive = $this->find_archive((string) $pending[0]);
-        if (!is_array($archive) || !empty($archive['quarantined'])) {
+        if (!is_array($archive)) {
             $state['annual']['completed'][] = (string) $pending[0];
             $state['annual']['results'][(string) $pending[0]] = 'skipped';
             if (!$this->write_state($state)) {
@@ -636,20 +649,59 @@ class Kiwi_Retention_Archive_Health_Service
                 $started_at
             );
         }
+        if (!empty($archive['quarantined'])) {
+            $archive_name = (string) $archive['name'];
+            $marker = $this->read_quarantine_marker_details((string) $archive['path']);
+            $reason_code = trim((string) ($marker['reason_code'] ?? ''));
+            $state['annual']['completed'][] = $archive_name;
+            $state['annual']['completed'] = array_values(array_unique($state['annual']['completed']));
+            $state['annual']['results'][$archive_name] = 'corruption_detected';
+            $remaining = array_diff($state['annual']['snapshot'], $state['annual']['completed']);
+            $state['annual']['status'] = empty($remaining) ? 'completed' : 'running';
+            if (!$this->write_state($state)) {
+                return $this->state_write_failure('integrity', 'annual', $archive_name, $started_at);
+            }
+
+            return $this->result(
+                'corruption_detected',
+                'completed',
+                0,
+                'integrity',
+                'annual',
+                $archive_name,
+                $reason_code !== '' ? $reason_code : 'sqlite_quarantine_marker_present',
+                $started_at,
+                ['incident_action' => 'raised']
+            );
+        }
 
         $archive_name = (string) $archive['name'];
-        $outcome = $this->run_locked_check((string) $archive['path'], 'integrity');
+        $outcome = $this->run_locked_check(
+            (string) $archive['path'],
+            'integrity',
+            function (array $corruption_outcome) use ($archive, $archive_name): bool {
+                $corruption_reason = (string) (
+                    $corruption_outcome['reason_code'] ?? 'sqlite_check_reported_corruption'
+                );
+
+                return $this->record_corruption_incident(
+                    $archive_name,
+                    $this->is_active_generation($archive),
+                    'integrity',
+                    $corruption_reason
+                ) && $this->archive_service->mark_quarantined((string) $archive['path'], [
+                    'detected_at' => $this->now(),
+                    'check' => 'integrity',
+                    'reason_code' => $corruption_reason,
+                ]);
+            }
+        );
         $result_name = (string) ($outcome['result'] ?? 'error');
         $reason_code = (string) ($outcome['reason_code'] ?? 'health_check_failed');
 
         if (in_array($result_name, ['ok', 'corruption_detected'], true)) {
             if ($result_name === 'corruption_detected'
-                && (!$this->record_corruption_incident($archive_name, false, 'integrity', $reason_code)
-                    || !$this->archive_service->mark_quarantined((string) $archive['path'], [
-                    'detected_at' => $this->now(),
-                    'check' => 'integrity',
-                    'reason_code' => $reason_code,
-                ]))
+                && empty($outcome['quarantine_transition_success'])
             ) {
                 return $this->result(
                     'error',
@@ -684,7 +736,11 @@ class Kiwi_Retention_Archive_Health_Service
         );
     }
 
-    private function run_locked_check(string $archive_path, string $check): array
+    private function run_locked_check(
+        string $archive_path,
+        string $check,
+        ?callable $corruption_transition = null
+    ): array
     {
         $lock = $this->lock_service->acquire_for_archive($archive_path);
         if (empty($lock['success'])) {
@@ -705,7 +761,21 @@ class Kiwi_Retention_Archive_Health_Service
         }
 
         try {
-            return call_user_func($this->check_runner, $archive_path, $check);
+            $outcome = call_user_func($this->check_runner, $archive_path, $check);
+            if ((string) ($outcome['result'] ?? '') === 'corruption_detected'
+                && is_callable($corruption_transition)
+            ) {
+                try {
+                    $outcome['quarantine_transition_success'] = (bool) call_user_func(
+                        $corruption_transition,
+                        $outcome
+                    );
+                } catch (Throwable $error) {
+                    $outcome['quarantine_transition_success'] = false;
+                }
+            }
+
+            return $outcome;
         } catch (Throwable $error) {
             return [
                 'result' => 'error',
@@ -1249,6 +1319,17 @@ class Kiwi_Retention_Archive_Health_Service
         $details = is_string($raw) ? json_decode($raw, true) : null;
 
         return is_array($details) ? $details : [];
+    }
+
+    private function is_active_generation(array $archive): bool
+    {
+        $latest = $this->find_latest_current_year_archive();
+
+        return is_array($latest)
+            && empty($latest['quarantined'])
+            && (string) ($archive['year'] ?? '') === $this->current_datetime()->format('Y')
+            && (int) ($archive['generation'] ?? 0) === (int) ($latest['generation'] ?? -1)
+            && (string) ($archive['name'] ?? '') === (string) ($latest['name'] ?? '');
     }
 
     private function find_archive(string $archive_name): ?array
