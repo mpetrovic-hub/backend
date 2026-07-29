@@ -26,7 +26,10 @@ if (PHP_SAPI === 'cli'
                 throw new RuntimeException('archive_path_unresolvable');
             }
 
-            $uri_path = str_replace('\\', '/', $real_path);
+            $uri_path = implode('/', array_map(
+                'rawurlencode',
+                explode('/', str_replace('\\', '/', $real_path))
+            ));
             $pdo = new PDO('sqlite:file:' . $uri_path . '?mode=ro');
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $pdo->exec('PRAGMA query_only = ON');

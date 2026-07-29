@@ -1068,6 +1068,45 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service supervises read-only child 
     }
 });
 
+kiwi_run_test('Kiwi retention archive health child encodes URI-significant archive paths', function (): void {
+    if (!class_exists('PDO') || !in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        return;
+    }
+
+    $root = kiwi_create_temp_directory('kiwi_retention_health_uri_path');
+    $special_root = $root
+        . DIRECTORY_SEPARATOR
+        . (DIRECTORY_SEPARATOR === '\\' ? 'archive # fragment' : 'archive ?# fragment');
+    if (!mkdir($special_root, 0770, true) && !is_dir($special_root)) {
+        throw new RuntimeException('Unable to create URI-significant archive test directory.');
+    }
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($special_root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        static function () use ($now): DateTimeImmutable {
+            return $now;
+        }
+    );
+
+    try {
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $result = $service->diagnose('kiwi_retention_archive_2026.sqlite', 'quick');
+
+        kiwi_assert_same('ok', $result['result'] ?? '', 'Expected read-only child to inspect the real URI-significant archive path.');
+        kiwi_assert_same('sqlite_check_ok', $result['reason_code'] ?? '', 'Expected successful SQLite check for encoded path.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service preflight exposes safe environment result', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_preflight');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
