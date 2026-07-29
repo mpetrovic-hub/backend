@@ -563,6 +563,63 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service annual campaign processes o
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service persists annual snapshot before first check', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_annual_snapshot');
+    $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $state_path = $root
+        . DIRECTORY_SEPARATOR
+        . 'sqlite'
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_health_state.json';
+    $annual_state_at_check = null;
+    $calls = 0;
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (string $path, string $check) use (&$calls, &$annual_state_at_check, $state_path): array {
+            $calls++;
+            if ($calls > 1) {
+                $raw = @file_get_contents($state_path);
+                $persisted = is_string($raw) ? json_decode($raw, true) : null;
+                $annual_state_at_check = is_array($persisted) ? ($persisted['annual'] ?? null) : null;
+            }
+
+            return [
+                'result' => $calls === 1 ? 'ok' : 'deferred',
+                'reason_code' => $calls === 1 ? 'sqlite_check_ok' : 'archive_lock_active',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+
+    try {
+        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2025.sqlite');
+        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2026.sqlite');
+        $service->scheduled();
+        $first_annual = $service->scheduled();
+
+        kiwi_assert_same('deferred', $first_annual['result'] ?? '', 'Expected first annual check to remain retryable.');
+        kiwi_assert_same(
+            ['kiwi_retention_archive_2025.sqlite', 'kiwi_retention_archive_2026.sqlite'],
+            $annual_state_at_check['snapshot'] ?? [],
+            'Expected frozen annual snapshot to be durable before invoking its first check.'
+        );
+        kiwi_assert_same('running', $annual_state_at_check['status'] ?? '', 'Expected persisted annual campaign to be running.');
+
+        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2026_part_2.sqlite');
+        $service->scheduled();
+        $status = $service->status();
+        kiwi_assert_same(
+            ['kiwi_retention_archive_2025.sqlite', 'kiwi_retention_archive_2026.sqlite'],
+            $status['state']['annual']['snapshot'] ?? [],
+            'Expected retry to keep the original annual scope after archive discovery changes.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service quarantines confirmed corruption without older fallback', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_quarantine');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
@@ -600,6 +657,57 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service quarantines confirmed corru
             'Expected deterministic successor generation instead of fallback to an older archive.'
         );
         kiwi_assert_same(1, count($events->rows), 'Expected one corruption incident.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined daily generation', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_quarantine_reconcile');
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $check_calls = 0;
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
+            return [
+                'result' => 'ok',
+                'reason_code' => 'unexpected_check',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+
+    try {
+        $archive_path = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        kiwi_assert_true($archive_service->mark_quarantined($archive_path, [
+            'detected_at' => '2026-07-27T01:25:00+02:00',
+            'check' => 'quick',
+            'reason_code' => 'sqlite_check_reported_corruption',
+        ]), 'Expected crash-window quarantine marker fixture.');
+
+        $result = $service->scheduled();
+        $status = $service->status();
+
+        kiwi_assert_same('corruption_detected', $result['result'] ?? '', 'Expected quarantine marker reconciliation instead of no work.');
+        kiwi_assert_same(0, $check_calls, 'Expected reconciliation not to rerun a check against the quarantined generation.');
+        kiwi_assert_same(
+            'kiwi_retention_archive_2026.sqlite',
+            $status['state']['daily']['archive'] ?? '',
+            'Expected reconciled daily state to retain the quarantined generation.'
+        );
+        kiwi_assert_same('corruption_detected', $status['state']['daily']['result'] ?? '', 'Expected durable corruption result.');
+        kiwi_assert_same(
+            'sqlite_check_reported_corruption',
+            $status['state']['daily']['reason_code'] ?? '',
+            'Expected durable marker reason after reconciliation.'
+        );
     } finally {
         kiwi_remove_directory($root);
     }

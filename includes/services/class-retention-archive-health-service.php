@@ -412,7 +412,47 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
 
-        $archive = $this->find_active_archive();
+        $archive = $this->find_latest_current_year_archive();
+        if (is_array($archive) && !empty($archive['quarantined'])) {
+            $archive_name = (string) ($archive['name'] ?? '');
+            $marker = $this->read_quarantine_marker_details((string) ($archive['path'] ?? ''));
+            $marker_check = $this->normalize_check((string) ($marker['check'] ?? ''));
+            $reason_code = trim((string) ($marker['reason_code'] ?? ''));
+            $completed_at = (string) ($marker['detected_at'] ?? '');
+            $state['daily']['archive'] = $archive_name;
+            $state['daily']['check'] = $marker_check !== '' ? $marker_check : $check;
+            $state['daily']['attempts'] = max(1, (int) ($state['daily']['attempts'] ?? 0));
+            $state['daily']['status'] = 'completed';
+            $state['daily']['result'] = 'corruption_detected';
+            $state['daily']['reason_code'] = $reason_code !== ''
+                ? $reason_code
+                : 'sqlite_quarantine_marker_present';
+            $state['daily']['completed_at'] = $this->is_valid_timestamp($completed_at)
+                ? $completed_at
+                : $this->now();
+            if (!$this->record_incomplete_recovery($archive_name, 'corruption_detected')
+                || !$this->write_state($state)
+            ) {
+                return $this->state_write_failure(
+                    (string) $state['daily']['check'],
+                    'daily',
+                    $archive_name,
+                    $started_at
+                );
+            }
+
+            return $this->result(
+                'corruption_detected',
+                'completed',
+                0,
+                (string) $state['daily']['check'],
+                'daily',
+                $archive_name,
+                (string) $state['daily']['reason_code'],
+                $started_at,
+                ['incident_action' => 'raised']
+            );
+        }
         if (!is_array($archive)) {
             $state['daily']['status'] = 'completed';
             $state['daily']['result'] = 'no_work';
@@ -550,6 +590,9 @@ class Kiwi_Retention_Archive_Health_Service
                 'results' => [],
                 'status' => empty($snapshot) ? 'completed' : 'running',
             ];
+            if (!$this->write_state($state)) {
+                return $this->state_write_failure('integrity', 'annual', '', $started_at);
+            }
         }
 
         $pending = array_values(array_diff(
@@ -1174,7 +1217,7 @@ class Kiwi_Retention_Archive_Health_Service
             . self::STATE_FILENAME;
     }
 
-    private function find_active_archive(): ?array
+    private function find_latest_current_year_archive(): ?array
     {
         $year = $this->current_datetime()->format('Y');
         $matches = array_values(array_filter(
@@ -1187,9 +1230,25 @@ class Kiwi_Retention_Archive_Health_Service
             return null;
         }
 
-        $highest = $matches[count($matches) - 1];
+        return $matches[count($matches) - 1];
+    }
 
-        return !empty($highest['quarantined']) ? null : $highest;
+    private function read_quarantine_marker_details(string $archive_path): array
+    {
+        if ($archive_path === '' || !$this->archive_service->is_quarantined($archive_path)) {
+            return [];
+        }
+
+        try {
+            $marker_path = $this->archive_service->get_quarantine_marker_path($archive_path);
+        } catch (Throwable $error) {
+            return [];
+        }
+
+        $raw = @file_get_contents($marker_path);
+        $details = is_string($raw) ? json_decode($raw, true) : null;
+
+        return is_array($details) ? $details : [];
     }
 
     private function find_archive(string $archive_name): ?array
