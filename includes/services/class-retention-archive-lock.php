@@ -49,6 +49,16 @@ class Kiwi_Retention_Archive_Lock
         return $this->acquire_lock_file($archive_db_path . '.lock');
     }
 
+    public function acquire_shared_for_archive(string $archive_db_path): array
+    {
+        $archive_db_path = trim($archive_db_path);
+        if ($archive_db_path === '' || !$this->is_archive_filename(basename($archive_db_path))) {
+            return $this->failure('archive_lock_path_invalid', 'Archive lock path is invalid.');
+        }
+
+        return $this->acquire_lock_file($archive_db_path . '.lock', LOCK_SH | LOCK_NB);
+    }
+
     public function acquire_controller(string $archive_directory): array
     {
         $archive_directory = rtrim(trim($archive_directory), '/\\');
@@ -71,7 +81,10 @@ class Kiwi_Retention_Archive_Lock
         }
     }
 
-    private function acquire_lock_file(string $lock_path): array
+    private function acquire_lock_file(
+        string $lock_path,
+        int $lock_operation = LOCK_EX | LOCK_NB
+    ): array
     {
         $directory = dirname($lock_path);
         if (!is_dir($directory) || !is_writable($directory)) {
@@ -86,7 +99,7 @@ class Kiwi_Retention_Archive_Lock
             return $this->failure('archive_lock_open_failed', 'Archive lock file could not be opened.');
         }
 
-        $locked = @flock($resource, LOCK_EX | LOCK_NB);
+        $locked = @flock($resource, $lock_operation);
         if (!$locked) {
             @fclose($resource);
 

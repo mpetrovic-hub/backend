@@ -132,7 +132,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'error',
                 'failed',
                 2,
-                $check,
+                '',
                 'diagnose',
                 $this->normalize_archive_name($archive_name),
                 'archive_discovery_failed',
@@ -145,7 +145,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'error',
                 'failed',
                 2,
-                $check,
+                '',
                 'diagnose',
                 $this->normalize_archive_name($archive_name),
                 'diagnose_input_invalid',
@@ -167,6 +167,7 @@ class Kiwi_Retention_Archive_Health_Service
     public function preflight(): array
     {
         $started_at = $this->start_operation();
+        $preflight_check_started = false;
         $checks = [
             'pdo_sqlite' => class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true),
             'proc_open' => function_exists('proc_open'),
@@ -179,7 +180,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'error',
                 'failed',
                 2,
-                'quick',
+                '',
                 'preflight',
                 '',
                 'preflight_api_unavailable',
@@ -197,7 +198,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'error',
                 'failed',
                 2,
-                'quick',
+                '',
                 'preflight',
                 '',
                 'preflight_archive_directory_unavailable',
@@ -305,6 +306,9 @@ class Kiwi_Retention_Archive_Health_Service
             }
 
             $child = call_user_func($this->check_runner, $scratch_path, 'quick');
+            $preflight_check_started = array_key_exists('check_started', $child)
+                ? !empty($child['check_started'])
+                : (string) ($child['result'] ?? '') !== 'deferred';
             $checks['child_completed'] = (string) ($child['result'] ?? '') === 'ok';
             $checks['child_cleanup'] = empty($child['child_running']);
             if (!$checks['child_completed'] || !$checks['child_cleanup']) {
@@ -315,7 +319,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'ok',
                 'completed',
                 0,
-                'quick',
+                $preflight_check_started ? 'quick' : '',
                 'preflight',
                 '',
                 'preflight_passed',
@@ -327,7 +331,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'error',
                 'failed',
                 2,
-                'quick',
+                $preflight_check_started ? 'quick' : '',
                 'preflight',
                 '',
                 $this->normalize_reason_code($error->getMessage(), 'preflight_failed'),
@@ -463,7 +467,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'inconclusive',
                 'incomplete',
                 1,
-                $check,
+                '',
                 'daily',
                 (string) ($state['daily']['archive'] ?? ''),
                 'daily_attempt_limit_reached',
@@ -488,7 +492,7 @@ class Kiwi_Retention_Archive_Health_Service
                         'error',
                         'failed',
                         2,
-                        $check,
+                        '',
                         'daily',
                         '',
                         'incomplete_incident_persist_failed',
@@ -498,14 +502,14 @@ class Kiwi_Retention_Archive_Health_Service
                 $incident_action = 'raised';
             }
             if (!$this->write_state($state)) {
-                return $this->state_write_failure($check, 'daily', '', $started_at);
+                return $this->state_write_failure('', 'daily', '', $started_at);
             }
 
             return $this->result(
                 'error',
                 'failed',
                 2,
-                $check,
+                '',
                 'daily',
                 '',
                 $reason_code,
@@ -534,7 +538,7 @@ class Kiwi_Retention_Archive_Health_Service
                 : $this->now();
             if (!$this->write_state($state)) {
                 return $this->state_write_failure(
-                    (string) $state['daily']['check'],
+                    '',
                     'daily',
                     $archive_name,
                     $started_at
@@ -546,7 +550,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'corruption_detected',
                 'completed',
                 0,
-                (string) $state['daily']['check'],
+                '',
                 'daily',
                 $archive_name,
                 (string) $state['daily']['reason_code'],
@@ -562,14 +566,14 @@ class Kiwi_Retention_Archive_Health_Service
             $state['daily']['reason_code'] = 'active_archive_unavailable';
             $state['daily']['completed_at'] = $this->now();
             if (!$this->write_state($state)) {
-                return $this->state_write_failure($check, 'daily', '', $started_at);
+                return $this->state_write_failure('', 'daily', '', $started_at);
             }
 
             return $this->result(
                 'no_work',
                 'completed',
                 0,
-                $check,
+                '',
                 'daily',
                 '',
                 'active_archive_unavailable',
@@ -683,7 +687,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'no_work',
                 'completed',
                 0,
-                'integrity',
+                '',
                 'annual',
                 '',
                 'annual_campaign_not_due',
@@ -706,7 +710,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'status' => empty($snapshot) ? 'completed' : 'running',
             ];
             if (!$this->write_state($state)) {
-                return $this->state_write_failure('integrity', 'annual', '', $started_at);
+                return $this->state_write_failure('', 'annual', '', $started_at);
             }
         }
 
@@ -717,14 +721,14 @@ class Kiwi_Retention_Archive_Health_Service
         if (empty($pending)) {
             $state['annual']['status'] = 'completed';
             if (!$this->write_state($state)) {
-                return $this->state_write_failure('integrity', 'annual', '', $started_at);
+                return $this->state_write_failure('', 'annual', '', $started_at);
             }
 
             return $this->result(
                 'no_work',
                 'completed',
                 0,
-                'integrity',
+                '',
                 'annual',
                 '',
                 'annual_campaign_complete',
@@ -738,7 +742,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'error',
                 'failed',
                 2,
-                'integrity',
+                '',
                 'annual',
                 (string) $pending[0],
                 'annual_archive_unavailable',
@@ -755,14 +759,14 @@ class Kiwi_Retention_Archive_Health_Service
             $remaining = array_diff($state['annual']['snapshot'], $state['annual']['completed']);
             $state['annual']['status'] = empty($remaining) ? 'completed' : 'running';
             if (!$this->write_state($state)) {
-                return $this->state_write_failure('integrity', 'annual', $archive_name, $started_at);
+                return $this->state_write_failure('', 'annual', $archive_name, $started_at);
             }
 
             return $this->result(
                 'corruption_detected',
                 'completed',
                 0,
-                'integrity',
+                '',
                 'annual',
                 $archive_name,
                 $reason_code !== '' ? $reason_code : 'sqlite_quarantine_marker_present',
@@ -778,7 +782,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'error',
                 'failed',
                 2,
-                'integrity',
+                '',
                 'annual',
                 $archive_name,
                 (string) ($active_lookup['error_code'] ?? 'active_archive_lookup_failed'),
@@ -856,13 +860,14 @@ class Kiwi_Retention_Archive_Health_Service
         ?callable $corruption_transition = null
     ): array
     {
-        $lock = $this->lock_service->acquire_for_archive($archive_path);
+        $lock = $this->lock_service->acquire_shared_for_archive($archive_path);
         if (empty($lock['success'])) {
             return [
                 'result' => 'error',
                 'reason_code' => (string) ($lock['error_code'] ?? 'archive_lock_failed'),
                 'duration_seconds' => 0.0,
                 'child_running' => false,
+                'check_started' => false,
             ];
         }
         if (empty($lock['acquired'])) {
@@ -871,11 +876,15 @@ class Kiwi_Retention_Archive_Health_Service
                 'reason_code' => 'archive_lock_active',
                 'duration_seconds' => 0.0,
                 'child_running' => false,
+                'check_started' => false,
             ];
         }
 
         try {
             $outcome = call_user_func($this->check_runner, $archive_path, $check);
+            if (!array_key_exists('check_started', $outcome)) {
+                $outcome['check_started'] = (string) ($outcome['result'] ?? '') !== 'deferred';
+            }
             if ((string) ($outcome['result'] ?? '') === 'corruption_detected'
                 && is_callable($corruption_transition)
             ) {
@@ -896,6 +905,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'reason_code' => 'health_child_exception',
                 'duration_seconds' => 0.0,
                 'child_running' => false,
+                'check_started' => false,
             ];
         } finally {
             $this->lock_service->release($lock['handle'] ?? null);
@@ -915,16 +925,33 @@ class Kiwi_Retention_Archive_Health_Service
                 'reason_code' => 'health_child_api_unavailable',
                 'duration_seconds' => 0.0,
                 'child_running' => false,
+                'check_started' => false,
             ];
         }
 
-        $payload = json_encode(['archive_path' => $archive_path, 'check' => $check]);
+        try {
+            $readiness_token = bin2hex(random_bytes(16));
+        } catch (Throwable $error) {
+            $readiness_token = substr(hash('sha256', uniqid('', true)), 0, 32);
+        }
+        $readiness_path = dirname($archive_path)
+            . DIRECTORY_SEPARATOR
+            . '.kiwi_retention_health_child_'
+            . $readiness_token
+            . '.ready';
+        @unlink($readiness_path);
+        $payload = json_encode([
+            'archive_path' => $archive_path,
+            'check' => $check,
+            'readiness_path' => $readiness_path,
+        ]);
         if (!is_string($payload)) {
             return [
                 'result' => 'error',
                 'reason_code' => 'health_child_payload_invalid',
                 'duration_seconds' => 0.0,
                 'child_running' => false,
+                'check_started' => false,
             ];
         }
 
@@ -948,11 +975,14 @@ class Kiwi_Retention_Archive_Health_Service
             ['bypass_shell' => true]
         );
         if (!is_resource($process)) {
+            @unlink($readiness_path);
+
             return [
                 'result' => 'error',
                 'reason_code' => 'health_child_start_failed',
                 'duration_seconds' => microtime(true) - $started,
                 'child_running' => false,
+                'check_started' => false,
             ];
         }
 
@@ -961,11 +991,14 @@ class Kiwi_Retention_Archive_Health_Service
         @stream_set_blocking($pipes[2], false);
         $stdout = '';
         $stderr = '';
+        $child_lock_acquired = false;
         $timed_out = false;
         $timeout_seconds = $this->config->get_retention_archive_health_timeout_seconds();
         $last_status = ['running' => true, 'exitcode' => -1];
 
         while (true) {
+            $child_lock_acquired = $child_lock_acquired
+                || @file_get_contents($readiness_path) === 'locked';
             $last_status = proc_get_status($process);
 
             if (empty($last_status['running'])) {
@@ -994,14 +1027,19 @@ class Kiwi_Retention_Archive_Health_Service
             usleep(20000);
         }
 
-        $stdout .= (string) @stream_get_contents($pipes[1]);
-        $stderr .= (string) @stream_get_contents($pipes[2]);
-        @fclose($pipes[1]);
-        @fclose($pipes[2]);
         $status_after = proc_get_status($process);
         $status_after = is_array($status_after) ? $status_after : ['running' => true];
-        $close_exit_code = $this->close_process_if_stopped($process, $status_after);
         $child_running = !empty($status_after['running']);
+        $child_lock_acquired = $child_lock_acquired
+            || @file_get_contents($readiness_path) === 'locked';
+        if (!$child_running) {
+            $stdout .= (string) @stream_get_contents($pipes[1]);
+            $stderr .= (string) @stream_get_contents($pipes[2]);
+            @unlink($readiness_path);
+        }
+        @fclose($pipes[1]);
+        @fclose($pipes[2]);
+        $close_exit_code = $this->close_process_if_stopped($process, $status_after);
         $child_exit_code = isset($last_status['exitcode'])
             ? (int) $last_status['exitcode']
             : -1;
@@ -1016,31 +1054,40 @@ class Kiwi_Retention_Archive_Health_Service
                 'reason_code' => 'health_child_timeout',
                 'duration_seconds' => $duration,
                 'child_running' => $child_running,
+                'check_started' => $child_lock_acquired,
             ];
         }
 
         $stdout = trim($stdout);
-        if ($stdout === '' || strpos($stdout, "\n") !== false || trim($stderr) !== '') {
+        if ($stdout === ''
+            || strpos($stdout, "\n") !== false
+            || trim($stderr) !== ''
+        ) {
             return [
                 'result' => 'error',
                 'reason_code' => 'health_child_output_invalid',
                 'duration_seconds' => $duration,
                 'child_running' => $child_running,
+                'check_started' => $child_lock_acquired,
             ];
         }
 
         $decoded = json_decode($stdout, true);
         if (!is_array($decoded)
             || !in_array((string) ($decoded['result'] ?? ''), ['ok', 'corruption_detected', 'error'], true)
+            || !array_key_exists('check_started', $decoded)
+            || !is_bool($decoded['check_started'])
         ) {
             return [
                 'result' => 'error',
                 'reason_code' => 'health_child_result_invalid',
                 'duration_seconds' => $duration,
                 'child_running' => $child_running,
+                'check_started' => $child_lock_acquired,
             ];
         }
 
+        $decoded_check_started = !empty($decoded['check_started']);
         $expected_exit_code = (string) $decoded['result'] === 'error' ? 2 : 0;
         if ($child_exit_code !== $expected_exit_code) {
             return [
@@ -1048,6 +1095,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'reason_code' => 'health_child_exit_invalid',
                 'duration_seconds' => $duration,
                 'child_running' => $child_running,
+                'check_started' => $decoded_check_started,
             ];
         }
 
@@ -1059,6 +1107,7 @@ class Kiwi_Retention_Archive_Health_Service
             ),
             'duration_seconds' => $duration,
             'child_running' => $child_running,
+            'check_started' => $decoded_check_started,
         ];
     }
 
@@ -1588,7 +1637,7 @@ class Kiwi_Retention_Archive_Health_Service
                     'error',
                     'failed',
                     2,
-                    $this->normalize_check((string) ($marker['check'] ?? '')) ?: $daily_check,
+                    '',
                     'daily',
                     $archive_name,
                     'quarantine_marker_reconciliation_failed',
@@ -1602,7 +1651,7 @@ class Kiwi_Retention_Archive_Health_Service
                     'corruption_detected',
                     'completed',
                     0,
-                    (string) $state['daily']['check'],
+                    '',
                     'daily',
                     $archive_name,
                     (string) $state['daily']['reason_code'],
@@ -1730,7 +1779,7 @@ class Kiwi_Retention_Archive_Health_Service
             isset($mapping[$result]) ? $result : 'error',
             $status_and_exit[0],
             $status_and_exit[1],
-            $check,
+            !empty($outcome['check_started']) ? $check : '',
             $scope,
             $archive,
             (string) ($outcome['reason_code'] ?? 'health_check_failed'),
@@ -1759,20 +1808,35 @@ class Kiwi_Retention_Archive_Health_Service
             ? (float) $extra['duration_seconds']
             : max(0.0, microtime(true) - $this->operation_started_microtime);
 
-        return array_merge([
+        $payload = array_merge([
             'schema_version' => 1,
             'status' => $status,
             'exit_code' => $exit_code,
-            'check' => $check,
+            'check' => null,
             'scope' => $scope,
-            'archive' => $archive,
+            'archive' => null,
             'result' => $result,
             'reason_code' => $this->normalize_reason_code($reason_code, 'health_check_failed'),
             'started_at' => $started_at,
             'finished_at' => $finished_at,
             'duration_seconds' => round($duration_seconds, 6),
-            'incident_action' => 'none',
+            'incident_action' => null,
         ], $extra);
+
+        $normalized_check = $this->normalize_check($check);
+        $payload['check'] = $normalized_check === 'quick'
+            ? 'quick_check'
+            : ($normalized_check === 'integrity' ? 'integrity_check' : null);
+        $normalized_archive = $this->normalize_archive_name($archive);
+        $payload['archive'] = $normalized_archive !== '' ? $normalized_archive : null;
+        $incident_action = strtolower(trim((string) ($payload['incident_action'] ?? '')));
+        $payload['incident_action'] = in_array(
+            $incident_action,
+            ['raised', 'repeated', 'resolved'],
+            true
+        ) ? $incident_action : null;
+
+        return $payload;
     }
 
     private function state_write_failure(

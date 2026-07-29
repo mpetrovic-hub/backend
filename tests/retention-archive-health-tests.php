@@ -201,7 +201,7 @@ kiwi_run_test('Kiwi_Config exposes bounded retention archive health timeout', fu
     );
 });
 
-kiwi_run_test('Kiwi_Retention_Archive_Lock is shared and non-blocking per generation', function (): void {
+kiwi_run_test('Kiwi_Retention_Archive_Lock supports shared health readers and exclusive writers', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_archive_lock');
     $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
     $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
@@ -212,15 +212,23 @@ kiwi_run_test('Kiwi_Retention_Archive_Lock is shared and non-blocking per genera
     $locks = new Kiwi_Retention_Archive_Lock();
 
     try {
-        $first = $locks->acquire_for_archive($path);
-        $second = $locks->acquire_for_archive($path);
-        kiwi_assert_true(!empty($first['success']) && !empty($first['acquired']), 'Expected first generation lock acquisition.');
-        kiwi_assert_true(!empty($second['success']) && empty($second['acquired']), 'Expected concurrent generation lock to defer without blocking.');
+        $first_reader = $locks->acquire_shared_for_archive($path);
+        $second_reader = $locks->acquire_shared_for_archive($path);
+        $blocked_writer = $locks->acquire_for_archive($path);
+        kiwi_assert_true(!empty($first_reader['success']) && !empty($first_reader['acquired']), 'Expected first shared health lock acquisition.');
+        kiwi_assert_true(!empty($second_reader['success']) && !empty($second_reader['acquired']), 'Expected concurrent shared health lock acquisition.');
+        kiwi_assert_true(!empty($blocked_writer['success']) && empty($blocked_writer['acquired']), 'Expected exclusive writer to defer while health readers are active.');
 
-        $locks->release($first['handle'] ?? null);
-        $third = $locks->acquire_for_archive($path);
-        kiwi_assert_true(!empty($third['success']) && !empty($third['acquired']), 'Expected released generation lock to be reacquired.');
-        $locks->release($third['handle'] ?? null);
+        $locks->release($first_reader['handle'] ?? null);
+        $still_blocked_writer = $locks->acquire_for_archive($path);
+        kiwi_assert_true(!empty($still_blocked_writer['success']) && empty($still_blocked_writer['acquired']), 'Expected writer to remain deferred until every shared health lock is released.');
+
+        $locks->release($second_reader['handle'] ?? null);
+        $writer = $locks->acquire_for_archive($path);
+        $second_writer = $locks->acquire_for_archive($path);
+        kiwi_assert_true(!empty($writer['success']) && !empty($writer['acquired']), 'Expected writer acquisition after shared health locks are released.');
+        kiwi_assert_true(!empty($second_writer['success']) && empty($second_writer['acquired']), 'Expected concurrent exclusive writer to defer without blocking.');
+        $locks->release($writer['handle'] ?? null);
     } finally {
         kiwi_remove_directory($root);
     }
@@ -588,6 +596,12 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service status is read-only and rej
         $status = $service->status();
         kiwi_assert_same('ok', $status['result'] ?? '', 'Expected read-only status without an existing state file.');
         kiwi_assert_same(false, $status['state_exists'] ?? true, 'Expected status to report absent state.');
+        kiwi_assert_true(array_key_exists('check', $status), 'Expected required check field.');
+        kiwi_assert_same(null, $status['check'], 'Expected no check value when status did not start SQLite.');
+        kiwi_assert_true(array_key_exists('archive', $status), 'Expected required archive field.');
+        kiwi_assert_same(null, $status['archive'], 'Expected no archive value for repository status.');
+        kiwi_assert_true(array_key_exists('incident_action', $status), 'Expected required incident action field.');
+        kiwi_assert_same(null, $status['incident_action'], 'Expected no incident action for repository status.');
         kiwi_assert_true(!is_dir($archive_service->get_archive_directory()), 'Expected status not to create the archive directory.');
 
         mkdir($archive_service->get_archive_directory(), 0770, true);
@@ -611,8 +625,8 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service status is read-only and rej
 
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service schedules weekday quick and Sunday integrity checks', function (): void {
     foreach ([
-        ['2026-07-27 01:30:00', 'quick'],
-        ['2026-08-02 01:30:00', 'integrity'],
+        ['2026-07-27 01:30:00', 'quick', 'quick_check'],
+        ['2026-08-02 01:30:00', 'integrity', 'integrity_check'],
     ] as $case) {
         $root = kiwi_create_temp_directory('kiwi_retention_health_calendar');
         $now = new DateTimeImmutable($case[0], new DateTimeZone('Europe/Berlin'));
@@ -639,9 +653,16 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service schedules weekday quick and
             );
             $result = $service->scheduled();
             kiwi_assert_same('ok', $result['result'] ?? '', 'Expected scheduled daily health check to pass.');
-            kiwi_assert_same($case[1], $result['check'] ?? '', 'Expected Europe/Berlin weekday check selection.');
+            kiwi_assert_same($case[2], $result['check'] ?? '', 'Expected normalized public check value.');
             kiwi_assert_same($case[1], $calls[0]['check'] ?? '', 'Expected child check to receive selected check type.');
             kiwi_assert_same(0, $result['exit_code'] ?? -1, 'Expected successful scheduled exit code 0.');
+            kiwi_assert_same(
+                'kiwi_retention_archive_2026.sqlite',
+                $result['archive'] ?? '',
+                'Expected public archive to remain a relative filename.'
+            );
+            kiwi_assert_true(array_key_exists('incident_action', $result), 'Expected required incident action field.');
+            kiwi_assert_same(null, $result['incident_action'], 'Expected no incident action for a successful check.');
         } finally {
             kiwi_remove_directory($root);
         }
@@ -1576,6 +1597,7 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service supervises read-only child 
             );
             $quick = $service->diagnose(basename($path), 'quick');
             kiwi_assert_same('ok', $quick['result'] ?? '', 'Expected supervised read-only quick_check to pass.');
+            kiwi_assert_same('quick_check', $quick['check'] ?? '', 'Expected normalized public quick_check value.');
             kiwi_assert_same(false, $quick['child_running'] ?? true, 'Expected completed child to be reaped.');
 
             $corrupt_path = $archive_service->get_archive_directory()
@@ -1611,10 +1633,25 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service supervises read-only child 
                 . DIRECTORY_SEPARATOR . 'retention-archive-health-sleep-child.php'
         );
         $timeout = $timeout_service->diagnose(basename($path), 'quick');
-        kiwi_assert_same('inconclusive', $timeout['result'] ?? '', 'Expected timed-out child to be inconclusive.');
+        kiwi_assert_same(
+            'inconclusive',
+            $timeout['result'] ?? '',
+            'Expected timed-out child to be inconclusive: ' . json_encode($timeout)
+        );
         kiwi_assert_same('health_child_timeout', $timeout['reason_code'] ?? '', 'Expected explicit timeout reason.');
+        kiwi_assert_same('quick_check', $timeout['check'] ?? '', 'Expected timed-out child marker to prove the check started.');
         kiwi_assert_same(false, $timeout['child_running'] ?? true, 'Expected timed-out child to be killed and reaped.');
         kiwi_assert_same(1, $timeout['exit_code'] ?? 0, 'Expected timeout exit code 1.');
+        $readiness_files = glob(
+            $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . '.kiwi_retention_health_child_*.ready'
+        );
+        kiwi_assert_same(
+            [],
+            is_array($readiness_files) ? $readiness_files : [],
+            'Expected reaped child readiness markers to be removed.'
+        );
 
         $exit_mismatch_service = new Kiwi_Retention_Archive_Health_Service(
             $config,
@@ -1835,6 +1872,16 @@ kiwi_run_test('Kiwi retention archive health runner declares command surface and
         1,
         substr_count($health_service, 'proc_close('),
         'Expected proc_close only inside the stopped-process guard.'
+    );
+    kiwi_assert_contains(
+        'acquire_shared_for_archive',
+        $health_service,
+        'Expected the health controller to use a shared generation lock.'
+    );
+    kiwi_assert_contains(
+        '.kiwi_retention_health_child_',
+        $health_service,
+        'Expected non-blocking child lock-readiness observation.'
     );
 });
 
