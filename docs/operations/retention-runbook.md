@@ -61,7 +61,7 @@ Worker state is stored on `wp_kiwi_retention_cleanup_runs` with:
 
 Runs use `pending`, `running`, `partial`, `blocked`, `completed`, or `failed` statuses. If a scheduler run sees an existing open worker run for `landing_page_sessions`, it does not create a second cleanup run; it reschedules the worker and records that the active run was rescheduled. A `blocked` receipt run remains unfinished and owns its frozen source scope, but normal scheduler and worker invocations do not retry it; only the bounded repository-owned recovery path may make it resumable again.
 
-The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases are `coverage_gate_running`, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases include `archive_running`, `receipt_repair_running`, `receipt_blocked`, `receipt_verified`, `delete_running`, `archive_partial`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
+The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases are `coverage_gate_running`, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases include `archive_running`, `archive_corruption_blocked`, `receipt_repair_running`, `receipt_blocked`, `receipt_verified`, `delete_running`, `archive_partial`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
 
 ## Archive/delete safety contract
 
@@ -75,7 +75,7 @@ It reads only:
 
 Rows are ordered by primary key. Later old imports below the same cutoff but above the frozen target are left for a later gated run.
 
-The first worker chunk's `archive_db_path` remains the archive generation of record for all resumed chunks in the same cleanup run. The worker and the external health controller share a non-blocking OS `flock` file beside that generation. The worker holds it from the start of SQLite archive work through persisted receipt verification, the bounded MySQL delete, and the following audit update.
+The first worker chunk's `archive_db_path` remains the archive generation of record for all resumed chunks in the same cleanup run. The worker and the external health controller share a non-blocking OS `flock` file beside that generation. The worker holds it from the start of SQLite archive work through persisted receipt verification, the bounded MySQL delete, and the following audit update. After a check confirms corruption and its read-only child exits, the controller persists a generation-specific write-block sentinel beside the still-held lock before attempting the Operational Incident and quarantine marker independently. The worker inspects the sentinel after acquiring its exclusive lock and performs no SQLite write or MySQL delete while it is present, even if another read-only diagnostic shares the generation lock or either later persistence step failed.
 
 Delete remains bound to archive evidence:
 

@@ -13314,6 +13314,79 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker lock skip reschedules witho
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks archive and delete work after confirmed corruption', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+    $archive_path = sys_get_temp_dir()
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_2026_part_'
+        . random_int(1000000, 9999999)
+        . '.sqlite';
+    $locks = new Kiwi_Retention_Archive_Lock();
+
+    try {
+        $health_lock = $locks->acquire_shared_for_archive($archive_path);
+        kiwi_assert_true(
+            !empty($health_lock['success'])
+                && !empty($health_lock['acquired'])
+                && ($health_lock['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
+                && $health_lock['handle']->persist_write_blocked(),
+            'Expected confirmed corruption fixture to persist its write block.'
+        );
+        $locks->release($health_lock['handle'] ?? null);
+
+        $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+        $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+        $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+        $archive->new_archive_db_path = $archive_path;
+        $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+        $service = new Kiwi_Test_Retention_Cleanup_Service(
+            new Kiwi_Config(),
+            new Kiwi_Retention_Source_Registry(),
+            $runs,
+            $snapshots,
+            $archive,
+            $gate
+        );
+        $service->eligible_rows = 2;
+        $service->target_max_primary_key = 2;
+
+        $service->run_source('landing_page_sessions', 'cron');
+        $result = $service->run_worker('landing_page_sessions');
+
+        kiwi_assert_same(false, $result['success'], 'Expected a corruption write block to fail closed.');
+        kiwi_assert_same('archive_corruption_write_blocked', $result['error_code'] ?? '', 'Expected explicit corruption write-block result.');
+        kiwi_assert_true(!empty($result['schedule_worker']), 'Expected controlled recovery to retain the same unfinished run.');
+        kiwi_assert_same([], $archive->chunk_calls, 'Expected no SQLite archive work after confirmed corruption.');
+        kiwi_assert_same([], $service->deleted_primary_keys, 'Expected no MySQL delete after confirmed corruption.');
+        kiwi_assert_same('partial', $runs->rows[1]['status'] ?? '', 'Expected the cleanup run to remain resumable.');
+        kiwi_assert_same('archive_corruption_blocked', $runs->rows[1]['worker_phase'] ?? '', 'Expected an explicit corruption-blocked audit phase.');
+    } finally {
+        $lock_path = $archive_path . '.lock';
+        $write_block_path = $lock_path . '.write-blocked';
+        if (is_file($write_block_path)) {
+            unlink($write_block_path);
+        }
+        if (is_file($lock_path)) {
+            unlink($lock_path);
+        }
+        $wpdb = $previous_wpdb;
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks deletes after one failed receipt repair', function (): void {
     global $wpdb;
 

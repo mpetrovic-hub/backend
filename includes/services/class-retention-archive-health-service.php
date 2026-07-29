@@ -641,16 +641,30 @@ class Kiwi_Retention_Archive_Health_Service
                     $corruption_outcome['reason_code'] ?? 'sqlite_check_reported_corruption'
                 );
 
-                return $this->record_corruption_incident(
-                    $archive_name,
-                    true,
-                    $check,
-                    $corruption_reason
-                ) && $this->archive_service->mark_quarantined((string) $archive['path'], [
-                    'detected_at' => $this->now(),
-                    'check' => $check,
-                    'reason_code' => $corruption_reason,
-                ]);
+                try {
+                    $marker_persisted = $this->archive_service->mark_quarantined(
+                        (string) $archive['path'],
+                        [
+                            'detected_at' => $this->now(),
+                            'check' => $check,
+                            'reason_code' => $corruption_reason,
+                        ]
+                    );
+                } catch (Throwable $error) {
+                    $marker_persisted = false;
+                }
+                try {
+                    $incident_persisted = $this->record_corruption_incident(
+                        $archive_name,
+                        true,
+                        $check,
+                        $corruption_reason
+                    );
+                } catch (Throwable $error) {
+                    $incident_persisted = false;
+                }
+
+                return $marker_persisted && $incident_persisted;
             }
         );
         $result_name = (string) ($outcome['result'] ?? 'error');
@@ -849,16 +863,30 @@ class Kiwi_Retention_Archive_Health_Service
                     $corruption_outcome['reason_code'] ?? 'sqlite_check_reported_corruption'
                 );
 
-                return $this->record_corruption_incident(
-                    $archive_name,
-                    $archive_name === $active_archive_name,
-                    'integrity',
-                    $corruption_reason
-                ) && $this->archive_service->mark_quarantined((string) $archive['path'], [
-                    'detected_at' => $this->now(),
-                    'check' => 'integrity',
-                    'reason_code' => $corruption_reason,
-                ]);
+                try {
+                    $marker_persisted = $this->archive_service->mark_quarantined(
+                        (string) $archive['path'],
+                        [
+                            'detected_at' => $this->now(),
+                            'check' => 'integrity',
+                            'reason_code' => $corruption_reason,
+                        ]
+                    );
+                } catch (Throwable $error) {
+                    $marker_persisted = false;
+                }
+                try {
+                    $incident_persisted = $this->record_corruption_incident(
+                        $archive_name,
+                        $archive_name === $active_archive_name,
+                        'integrity',
+                        $corruption_reason
+                    );
+                } catch (Throwable $error) {
+                    $incident_persisted = false;
+                }
+
+                return $marker_persisted && $incident_persisted;
             }
         );
         $result_name = (string) ($outcome['result'] ?? 'error');
@@ -936,14 +964,17 @@ class Kiwi_Retention_Archive_Health_Service
             if ((string) ($outcome['result'] ?? '') === 'corruption_detected'
                 && is_callable($corruption_transition)
             ) {
+                $outcome['archive_write_block_persisted'] = ($lock['handle'] ?? null)
+                    instanceof Kiwi_Retention_Archive_Lock_Handle
+                    && $lock['handle']->persist_write_blocked();
                 try {
-                    $outcome['quarantine_transition_success'] = (bool) call_user_func(
-                        $corruption_transition,
-                        $outcome
-                    );
+                    $transition_persisted = (bool) call_user_func($corruption_transition, $outcome);
                 } catch (Throwable $error) {
-                    $outcome['quarantine_transition_success'] = false;
+                    $transition_persisted = false;
                 }
+                $outcome['quarantine_transition_success'] = !empty(
+                    $outcome['archive_write_block_persisted']
+                ) && $transition_persisted;
             }
 
             return $outcome;

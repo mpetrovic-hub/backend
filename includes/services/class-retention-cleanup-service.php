@@ -609,6 +609,29 @@ class Kiwi_Retention_Cleanup_Service
                     $archive_db_path
                 );
             }
+            if (!$archive_lock_handle instanceof Kiwi_Retention_Archive_Lock_Handle
+                || $archive_lock_handle->is_write_blocked()
+            ) {
+                $progress = [
+                    'status' => 'partial',
+                    'worker_phase' => 'archive_corruption_blocked',
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => 'corruption_write_blocked',
+                    'worker_last_finished_at' => $this->current_time_mysql(),
+                ];
+                if (!$this->update_run_progress($run_db_id, $progress)) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention worker observed a corruption write block but could not persist that audit phase.'
+                    );
+                }
+
+                return $this->reschedule_worker_result($run, $progress, [
+                    'success' => false,
+                    'error_code' => 'archive_corruption_write_blocked',
+                    'error_message' => 'Retention archive writes remain blocked after confirmed corruption.',
+                ]);
+            }
 
             $archive_last_primary_key = (int) ($run['archive_last_primary_key'] ?? 0);
             $delete_last_primary_key = (int) ($run['delete_last_primary_key'] ?? 0);

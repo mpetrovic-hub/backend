@@ -6,6 +6,9 @@ if (!defined('ABSPATH')) {
 
 final class Kiwi_Retention_Archive_Lock_Handle
 {
+    private const WRITE_BLOCKED_SENTINEL = "kiwi_retention_archive_write_blocked_v1\n";
+    private const WRITE_BLOCKED_SUFFIX = '.write-blocked';
+
     private $resource;
     private $lock_path;
 
@@ -18,6 +21,46 @@ final class Kiwi_Retention_Archive_Lock_Handle
     public function get_lock_path(): string
     {
         return $this->lock_path;
+    }
+
+    public function persist_write_blocked(): bool
+    {
+        if (!is_resource($this->resource)) {
+            return false;
+        }
+
+        $write_block = @fopen($this->get_write_block_path(), 'c+b');
+        if (!is_resource($write_block)) {
+            return false;
+        }
+
+        $sentinel = self::WRITE_BLOCKED_SENTINEL;
+        try {
+            if (!@rewind($write_block) || !@ftruncate($write_block, 0)) {
+                return false;
+            }
+
+            $written = @fwrite($write_block, $sentinel);
+            if ($written !== strlen($sentinel) || !@fflush($write_block)) {
+                return false;
+            }
+
+            return !function_exists('fsync') || @fsync($write_block);
+        } finally {
+            @fclose($write_block);
+        }
+    }
+
+    public function is_write_blocked(): bool
+    {
+        if (!is_resource($this->resource)) {
+            return true;
+        }
+
+        $write_block_path = $this->get_write_block_path();
+        clearstatcache(true, $write_block_path);
+
+        return file_exists($write_block_path);
     }
 
     public function release(): void
@@ -34,6 +77,11 @@ final class Kiwi_Retention_Archive_Lock_Handle
     public function __destruct()
     {
         $this->release();
+    }
+
+    private function get_write_block_path(): string
+    {
+        return $this->lock_path . self::WRITE_BLOCKED_SUFFIX;
     }
 }
 

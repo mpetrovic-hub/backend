@@ -39,6 +39,14 @@ class Kiwi_Test_Lock_Observed_Retention_Sqlite_Archive_Service extends Kiwi_Rete
     }
 }
 
+class Kiwi_Test_Failing_Quarantine_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_Archive_Service
+{
+    public function mark_quarantined(string $archive_db_path, array $details): bool
+    {
+        return false;
+    }
+}
+
 class Kiwi_Test_Wpdb_Retention_Quarantine_Transition
 {
     public $prefix = 'wp_';
@@ -221,6 +229,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Lock supports shared health readers and ex
         kiwi_assert_true(!empty($first_reader['success']) && !empty($first_reader['acquired']), 'Expected first shared health lock acquisition.');
         kiwi_assert_true(!empty($second_reader['success']) && !empty($second_reader['acquired']), 'Expected concurrent shared health lock acquisition.');
         kiwi_assert_true(!empty($blocked_writer['success']) && empty($blocked_writer['acquired']), 'Expected exclusive writer to defer while health readers are active.');
+        kiwi_assert_true(
+            ($first_reader['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
+                && $first_reader['handle']->persist_write_blocked(),
+            'Expected a health reader to persist the corruption write block while another diagnostic reader is active.'
+        );
 
         $locks->release($first_reader['handle'] ?? null);
         $still_blocked_writer = $locks->acquire_for_archive($path);
@@ -231,6 +244,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Lock supports shared health readers and ex
         $second_writer = $locks->acquire_for_archive($path);
         kiwi_assert_true(!empty($writer['success']) && !empty($writer['acquired']), 'Expected writer acquisition after shared health locks are released.');
         kiwi_assert_true(!empty($second_writer['success']) && empty($second_writer['acquired']), 'Expected concurrent exclusive writer to defer without blocking.');
+        kiwi_assert_true(
+            ($writer['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
+                && $writer['handle']->is_write_blocked(),
+            'Expected a later writer to observe the persisted corruption write block.'
+        );
         $locks->release($writer['handle'] ?? null);
     } finally {
         kiwi_remove_directory($root);
@@ -1455,6 +1473,101 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service holds generation lock throu
         $locks->release($reacquired['handle'] ?? null);
     } finally {
         kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps corruption write-blocked when later persistence fails', function (): void {
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $runner = static function (): array {
+        return [
+            'result' => 'corruption_detected',
+            'reason_code' => 'sqlite_check_reported_corruption',
+            'duration_seconds' => 0.01,
+            'child_running' => false,
+        ];
+    };
+
+    $event_failure_root = kiwi_create_temp_directory('kiwi_retention_health_event_failure');
+    $event_failure_config = new Kiwi_Test_Retention_Archive_Health_Config($event_failure_root);
+    $event_failure_archive = new Kiwi_Retention_Sqlite_Archive_Service($event_failure_config);
+    $event_failure_events = new Kiwi_Test_Flaky_Operational_Event_Repository();
+    $event_failure_events->fail_next_insert = true;
+    $event_failure_locks = new Kiwi_Retention_Archive_Lock();
+    $event_failure_service = new Kiwi_Retention_Archive_Health_Service(
+        $event_failure_config,
+        $event_failure_archive,
+        $event_failure_locks,
+        new Kiwi_Operational_Event_Service($event_failure_events),
+        static function () use ($now): DateTimeImmutable {
+            return $now;
+        },
+        $runner,
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    try {
+        $event_failure_path = kiwi_test_create_retention_archive(
+            $event_failure_archive,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $event_failure_result = $event_failure_service->scheduled();
+        $event_failure_writer = $event_failure_locks->acquire_for_archive($event_failure_path);
+
+        kiwi_assert_same('error', $event_failure_result['result'] ?? '', 'Expected failed incident persistence not to report completed corruption handling.');
+        kiwi_assert_same('corruption_state_persist_failed', $event_failure_result['reason_code'] ?? '', 'Expected explicit corruption persistence failure.');
+        kiwi_assert_true($event_failure_archive->is_quarantined($event_failure_path), 'Expected quarantine marker attempt despite Incident persistence failure.');
+        kiwi_assert_true(
+            !empty($event_failure_writer['acquired'])
+                && ($event_failure_writer['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
+                && $event_failure_writer['handle']->is_write_blocked(),
+            'Expected the durable write block to survive Incident persistence failure.'
+        );
+        $event_failure_locks->release($event_failure_writer['handle'] ?? null);
+    } finally {
+        kiwi_remove_directory($event_failure_root);
+    }
+
+    $marker_failure_root = kiwi_create_temp_directory('kiwi_retention_health_marker_failure');
+    $marker_failure_config = new Kiwi_Test_Retention_Archive_Health_Config($marker_failure_root);
+    $marker_failure_archive = new Kiwi_Test_Failing_Quarantine_Retention_Sqlite_Archive_Service(
+        $marker_failure_config
+    );
+    $marker_failure_events = new Kiwi_Test_Operational_Event_Repository();
+    $marker_failure_locks = new Kiwi_Retention_Archive_Lock();
+    $marker_failure_service = new Kiwi_Retention_Archive_Health_Service(
+        $marker_failure_config,
+        $marker_failure_archive,
+        $marker_failure_locks,
+        new Kiwi_Operational_Event_Service($marker_failure_events),
+        static function () use ($now): DateTimeImmutable {
+            return $now;
+        },
+        $runner,
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    try {
+        $marker_failure_path = kiwi_test_create_retention_archive(
+            $marker_failure_archive,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $marker_failure_result = $marker_failure_service->scheduled();
+        $marker_failure_writer = $marker_failure_locks->acquire_for_archive($marker_failure_path);
+
+        kiwi_assert_same('error', $marker_failure_result['result'] ?? '', 'Expected failed marker persistence not to report completed corruption handling.');
+        kiwi_assert_same('corruption_state_persist_failed', $marker_failure_result['reason_code'] ?? '', 'Expected explicit quarantine persistence failure.');
+        kiwi_assert_same(1, count($marker_failure_events->rows), 'Expected Incident persistence attempt despite quarantine marker failure.');
+        kiwi_assert_true(
+            !empty($marker_failure_writer['acquired'])
+                && ($marker_failure_writer['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
+                && $marker_failure_writer['handle']->is_write_blocked(),
+            'Expected the durable write block to survive quarantine marker failure.'
+        );
+        $marker_failure_locks->release($marker_failure_writer['handle'] ?? null);
+    } finally {
+        kiwi_remove_directory($marker_failure_root);
     }
 });
 

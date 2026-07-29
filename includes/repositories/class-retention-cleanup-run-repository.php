@@ -208,6 +208,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
             'active_run_rescheduled',
             'archive_pending',
             'archive_running',
+            'archive_corruption_blocked',
             'receipt_repair_running',
             'receipt_verified',
             'delete_running',
