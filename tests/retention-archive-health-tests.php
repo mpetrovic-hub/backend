@@ -1040,6 +1040,55 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps missing annual snapsh
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service resolves incomplete incident after annual success', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_annual_recovery');
+    $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (): array {
+            return [
+                'result' => 'ok',
+                'reason_code' => 'sqlite_check_ok',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        },
+        $events
+    );
+
+    try {
+        $archive_name = 'kiwi_retention_archive_2025.sqlite';
+        kiwi_test_create_retention_archive($archive_service, $archive_name);
+        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2026.sqlite');
+        $event_service = new Kiwi_Operational_Event_Service($events);
+        $correlation_key = 'retention_archive_health_incomplete_' . hash('sha256', $archive_name);
+        kiwi_assert_true($event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'error',
+            'event_type' => 'retention_archive_health_check_incomplete',
+            'correlation_key' => $correlation_key,
+            'idempotency_key' => 'retention_archive_health_annual_recovery_test',
+            'reference_type' => 'retention_archive',
+            'reference_id' => $archive_name,
+            'message' => 'Synthetic incomplete daily cycle before annual recovery.',
+        ]), 'Expected incomplete incident fixture.');
+
+        $service->scheduled();
+        $annual = $service->scheduled();
+        $latest = $events->find_latest_by_correlation_key($correlation_key);
+
+        kiwi_assert_same('ok', $annual['result'] ?? '', 'Expected complete annual integrity result.');
+        kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected annual success to resolve incomplete incident.');
+        kiwi_assert_same([], $events->get_open_incidents([
+            'event_type' => 'retention_archive_health_check_incomplete',
+        ]), 'Expected no open incomplete incident after annual success.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined annual snapshot entry', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_annual_quarantine_reconcile');
     $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));

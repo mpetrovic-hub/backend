@@ -753,6 +753,7 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('integrity', 'annual', $archive_name, $started_at);
             }
+            $this->record_incomplete_recovery($archive_name, $result_name);
         }
 
         return $this->result_from_check(
