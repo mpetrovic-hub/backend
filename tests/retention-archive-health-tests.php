@@ -751,6 +751,43 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service distinguishes unsafe and pr
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service counts active archive lookup failures', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_lookup_attempts');
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    [$service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (): array {
+            throw new RuntimeException('Child check must not run after lookup failure.');
+        },
+        $events,
+        new Kiwi_Test_Failing_Open_Archive_Run_Repository()
+    );
+
+    try {
+        $first = $service->scheduled();
+        $second = $service->scheduled();
+        $third = $service->scheduled();
+        $status = $service->status();
+        $fourth = $service->scheduled();
+
+        kiwi_assert_same('active_archive_lookup_failed', $first['reason_code'] ?? '', 'Expected first lookup failure.');
+        kiwi_assert_same('active_archive_lookup_failed', $second['reason_code'] ?? '', 'Expected second lookup failure.');
+        kiwi_assert_same('raised', $third['incident_action'] ?? '', 'Expected third lookup failure to raise an incident.');
+        kiwi_assert_same(3, $status['state']['daily']['attempts'] ?? 0, 'Expected persisted lookup attempt limit.');
+        kiwi_assert_same('incomplete', $status['state']['daily']['status'] ?? '', 'Expected retryable lookup state.');
+        kiwi_assert_same('', $status['state']['daily']['archive'] ?? 'unexpected', 'Expected unresolved archive identity.');
+        kiwi_assert_same('daily_attempt_limit_reached', $fourth['reason_code'] ?? '', 'Expected bounded fourth slot.');
+        kiwi_assert_same(1, count($events->rows), 'Expected one central lookup incident.');
+        $event = array_values($events->rows)[0] ?? [];
+        kiwi_assert_same('retention_archive_lookup', $event['reference_type'] ?? '', 'Expected lookup incident reference.');
+        kiwi_assert_same('active_archive_lookup', $event['reference_id'] ?? '', 'Expected stable lookup correlation subject.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service raises incomplete incident only after third attempt', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_attempts');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
@@ -1711,6 +1748,27 @@ kiwi_run_test('Kiwi retention archive health runner declares command surface and
         "strpos(\$json, \"\\n\")",
         $runner,
         'Expected exactly-one-JSON-line output guard.'
+    );
+
+    $health_service = file_get_contents(
+        dirname(__DIR__)
+        . DIRECTORY_SEPARATOR
+        . 'includes'
+        . DIRECTORY_SEPARATOR
+        . 'services'
+        . DIRECTORY_SEPARATOR
+        . 'class-retention-archive-health-service.php'
+    );
+    $health_service = is_string($health_service) ? $health_service : '';
+    kiwi_assert_contains(
+        'private function close_process_if_stopped',
+        $health_service,
+        'Expected a bounded process-close guard.'
+    );
+    kiwi_assert_same(
+        1,
+        substr_count($health_service, 'proc_close('),
+        'Expected proc_close only inside the stopped-process guard.'
     );
 });
 

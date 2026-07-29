@@ -9,6 +9,11 @@ class Kiwi_Retention_Archive_Health_Service
     private const STATE_SCHEMA_VERSION = 1;
     private const STATE_FILENAME = 'kiwi_retention_archive_health_state.json';
     private const DAILY_ATTEMPT_LIMIT = 3;
+    private const ACTIVE_ARCHIVE_RESOLUTION_FAILURES = [
+        'active_archive_lookup_failed',
+        'active_archive_path_invalid',
+        'active_archive_missing',
+    ];
 
     private $config;
     private $archive_service;
@@ -428,6 +433,34 @@ class Kiwi_Retention_Archive_Health_Service
 
         $active_lookup = $this->resolve_active_archive();
         if (empty($active_lookup['success'])) {
+            $reason_code = (string) ($active_lookup['error_code'] ?? 'active_archive_lookup_failed');
+            $state['daily']['archive'] = '';
+            $state['daily']['check'] = $check;
+            $state['daily']['attempts'] = (int) ($state['daily']['attempts'] ?? 0) + 1;
+            $state['daily']['status'] = 'incomplete';
+            $state['daily']['result'] = 'error';
+            $state['daily']['reason_code'] = $reason_code;
+            $state['daily']['completed_at'] = '';
+            $incident_action = 'none';
+            if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
+                if (!$this->record_incomplete_incident('', $check, $reason_code)) {
+                    return $this->result(
+                        'error',
+                        'failed',
+                        2,
+                        $check,
+                        'daily',
+                        '',
+                        'incomplete_incident_persist_failed',
+                        $started_at
+                    );
+                }
+                $incident_action = 'raised';
+            }
+            if (!$this->write_state($state)) {
+                return $this->state_write_failure($check, 'daily', '', $started_at);
+            }
+
             return $this->result(
                 'error',
                 'failed',
@@ -435,10 +468,12 @@ class Kiwi_Retention_Archive_Health_Service
                 $check,
                 'daily',
                 '',
-                (string) ($active_lookup['error_code'] ?? 'active_archive_lookup_failed'),
-                $started_at
+                $reason_code,
+                $started_at,
+                ['incident_action' => $incident_action]
             );
         }
+        $this->record_incomplete_recovery('', 'active_archive_lookup_recovered');
         $archive = $active_lookup['archive'] ?? null;
         if (is_array($archive) && !empty($archive['quarantined'])) {
             $archive_name = (string) ($archive['name'] ?? '');
@@ -924,7 +959,8 @@ class Kiwi_Retention_Archive_Health_Service
         @fclose($pipes[1]);
         @fclose($pipes[2]);
         $status_after = proc_get_status($process);
-        $close_exit_code = @proc_close($process);
+        $status_after = is_array($status_after) ? $status_after : ['running' => true];
+        $close_exit_code = $this->close_process_if_stopped($process, $status_after);
         $child_running = !empty($status_after['running']);
         $child_exit_code = isset($last_status['exitcode'])
             ? (int) $last_status['exitcode']
@@ -1064,7 +1100,8 @@ class Kiwi_Retention_Archive_Health_Service
         @fclose($pipes[1]);
         @fclose($pipes[2]);
         $status_after = proc_get_status($process);
-        @proc_close($process);
+        $status_after = is_array($status_after) ? $status_after : ['running' => true];
+        $this->close_process_if_stopped($process, $status_after);
 
         return [
             'started' => true,
@@ -1074,6 +1111,17 @@ class Kiwi_Retention_Archive_Health_Service
             'stdout' => $stdout,
             'stderr' => $stderr,
         ];
+    }
+
+    private function close_process_if_stopped($process, array $status): int
+    {
+        if (!is_resource($process) || !empty($status['running'])) {
+            return -1;
+        }
+
+        $exit_code = @proc_close($process);
+
+        return is_int($exit_code) ? $exit_code : -1;
     }
 
     private function read_state(): array
@@ -1158,10 +1206,12 @@ class Kiwi_Retention_Archive_Health_Service
         ) {
             return false;
         }
+        $incomplete_archive_valid = $daily_archive !== ''
+            || in_array($daily_reason, self::ACTIVE_ARCHIVE_RESOLUTION_FAILURES, true);
         if ($daily_status === 'incomplete'
             && (!$this->is_valid_calendar_date($daily_date)
                 || !in_array($daily_check, ['quick', 'integrity'], true)
-                || $daily_archive === ''
+                || !$incomplete_archive_valid
                 || $daily_attempts < 1
                 || !in_array($daily_result, ['deferred', 'inconclusive', 'error'], true)
                 || $daily_reason === ''
@@ -1543,17 +1593,19 @@ class Kiwi_Retention_Archive_Health_Service
 
     private function record_incomplete_incident(string $archive, string $check, string $reason_code): bool
     {
+        $subject = $archive !== '' ? $archive : 'active_archive_lookup';
+
         return $this->operational_event_service->record_failure([
             'area' => 'retention',
             'severity' => 'error',
             'event_type' => 'retention_archive_health_check_incomplete',
-            'correlation_key' => 'retention_archive_health_incomplete_' . hash('sha256', $archive),
+            'correlation_key' => 'retention_archive_health_incomplete_' . hash('sha256', $subject),
             'idempotency_key' => 'retention_archive_health_incomplete_' . hash(
                 'sha256',
-                $archive . ':' . $this->current_datetime()->format('Y-m-d')
+                $subject . ':' . $this->current_datetime()->format('Y-m-d')
             ),
-            'reference_type' => 'retention_archive',
-            'reference_id' => $archive,
+            'reference_type' => $archive !== '' ? 'retention_archive' : 'retention_archive_lookup',
+            'reference_id' => $subject,
             'message' => 'Retention archive health check remained incomplete after all daily attempts.',
             'raw_error_text' => $reason_code,
             'context' => [
@@ -1568,14 +1620,18 @@ class Kiwi_Retention_Archive_Health_Service
 
     private function record_incomplete_recovery(string $archive, string $result): bool
     {
+        $subject = $archive !== '' ? $archive : 'active_archive_lookup';
+
         return $this->operational_event_service->record_recovery([
             'area' => 'retention',
             'severity' => 'info',
             'event_type' => 'retention_archive_health_check_incomplete',
-            'correlation_key' => 'retention_archive_health_incomplete_' . hash('sha256', $archive),
-            'reference_type' => 'retention_archive',
-            'reference_id' => $archive,
-            'message' => 'Retention archive health check completed after an earlier incomplete daily cycle.',
+            'correlation_key' => 'retention_archive_health_incomplete_' . hash('sha256', $subject),
+            'reference_type' => $archive !== '' ? 'retention_archive' : 'retention_archive_lookup',
+            'reference_id' => $subject,
+            'message' => $archive !== ''
+                ? 'Retention archive health check completed after an earlier incomplete daily cycle.'
+                : 'Retention archive lookup recovered after an earlier incomplete daily cycle.',
             'context' => [
                 'archive' => $archive,
                 'result' => $result,
