@@ -155,6 +155,16 @@ class Kiwi_Test_Failing_Open_Archive_Run_Repository extends Kiwi_Test_Retention_
     }
 }
 
+class Kiwi_Test_Controllable_Open_Archive_Run_Repository extends Kiwi_Test_Retention_Cleanup_Run_Repository
+{
+    public $fail_lookup = true;
+
+    public function find_open_archive_state(): ?array
+    {
+        return $this->fail_lookup ? null : parent::find_open_archive_state();
+    }
+}
+
 class Kiwi_Test_Failing_Archive_Discovery_Service extends Kiwi_Retention_Sqlite_Archive_Service
 {
     public function list_archive_files(): array
@@ -633,7 +643,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive 
         'error_message' => '',
         'finished_at' => null,
     ];
-    $runs->quarantine_successor_result = [
+    $successor = [
         'id' => 2,
         'run_id' => 'quarantine_race_successor',
         'triggered_by' => 'archive_recovery',
@@ -643,7 +653,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive 
     ];
     $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
     $archive->new_archive_db_path = $new_archive_path;
-    $archive->quarantine_results = [true, true];
+    $archive->quarantine_results = [true, true, true];
     $events = new Kiwi_Test_Operational_Event_Repository();
     $lock_service = new Kiwi_Retention_Archive_Lock();
     $service = new Kiwi_Test_Retention_Cleanup_Service(
@@ -671,6 +681,19 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive 
         kiwi_assert_same('running', $runs->rows[1]['status'] ?? '', 'Expected original run to remain resumable.');
         kiwi_assert_same(0, count($runs->quarantine_successor_calls), 'Expected no successor before count succeeds.');
 
+        $transition_retry = $service->run_worker('landing_page_sessions');
+        kiwi_assert_same(false, $transition_retry['success'] ?? true, 'Expected successor persistence failure to stay visible.');
+        kiwi_assert_same(true, $transition_retry['reschedule_worker'] ?? false, 'Expected successor persistence failure to reschedule.');
+        kiwi_assert_same(
+            'archive_quarantine_transition_retry',
+            $transition_retry['error_code'] ?? '',
+            'Expected the same retryable quarantine transition reason.'
+        );
+        kiwi_assert_same('running', $runs->rows[1]['status'] ?? '', 'Expected original run to remain open after successor failure.');
+        kiwi_assert_same(null, $runs->rows[1]['finished_at'] ?? null, 'Expected no terminal finish timestamp after successor failure.');
+        kiwi_assert_same(1, count($runs->quarantine_successor_calls), 'Expected one failed atomic successor attempt.');
+
+        $runs->quarantine_successor_result = $successor;
         $result = $service->run_worker('landing_page_sessions');
         $reacquired = $lock_service->acquire_for_archive($old_archive_path);
 
@@ -678,7 +701,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive 
         kiwi_assert_same(true, $result['schedule_worker'] ?? false, 'Expected successor worker scheduling.');
         kiwi_assert_same([], $archive->chunk_calls, 'Expected no archive write after locked quarantine recheck.');
         kiwi_assert_same([], $service->deleted_primary_keys, 'Expected no source delete after quarantine detection.');
-        kiwi_assert_same(1, count($runs->quarantine_successor_calls), 'Expected one atomic successor transition.');
+        kiwi_assert_same(2, count($runs->quarantine_successor_calls), 'Expected the atomic successor transition to retry once.');
         kiwi_assert_true(
             !empty($reacquired['success']) && !empty($reacquired['acquired']),
             'Expected the quarantined generation lock to be released after transition.'
@@ -1072,6 +1095,83 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service counts active archive looku
         $event = array_values($events->rows)[0] ?? [];
         kiwi_assert_same('retention_archive_lookup', $event['reference_type'] ?? '', 'Expected lookup incident reference.');
         kiwi_assert_same('active_archive_lookup', $event['reference_id'] ?? '', 'Expected stable lookup correlation subject.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service resolves lookup incident only after a completed check', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_lookup_recovery');
+    $current_time = new DateTimeImmutable(
+        '2026-07-27 01:30:00',
+        new DateTimeZone('Europe/Berlin')
+    );
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $runs = new Kiwi_Test_Controllable_Open_Archive_Run_Repository();
+    $outcomes = [
+        [
+            'result' => 'inconclusive',
+            'reason_code' => 'health_child_timeout',
+            'duration_seconds' => 600.0,
+            'child_running' => false,
+        ],
+        [
+            'result' => 'ok',
+            'reason_code' => 'sqlite_check_ok',
+            'duration_seconds' => 0.01,
+            'child_running' => false,
+        ],
+    ];
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service($events),
+        static function () use (&$current_time): DateTimeImmutable {
+            return $current_time;
+        },
+        static function () use (&$outcomes): array {
+            return array_shift($outcomes);
+        },
+        '',
+        $runs
+    );
+
+    try {
+        $service->scheduled();
+        $service->scheduled();
+        $raised = $service->scheduled();
+        kiwi_assert_same('raised', $raised['incident_action'] ?? '', 'Expected lookup incident after three failures.');
+
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $runs->fail_lookup = false;
+        $current_time = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+
+        $inconclusive = $service->scheduled();
+        kiwi_assert_same('inconclusive', $inconclusive['result'] ?? '', 'Expected the first post-lookup check to stay incomplete.');
+        kiwi_assert_same(
+            ['raised'],
+            array_column(array_values($events->rows), 'lifecycle_action'),
+            'Expected lookup incident to remain open until a completed SQLite result.'
+        );
+        kiwi_assert_same(1, count($events->get_open_incidents()), 'Expected the lookup incident to remain open.');
+
+        $completed = $service->scheduled();
+        kiwi_assert_same('ok', $completed['result'] ?? '', 'Expected the next SQLite check to complete.');
+        kiwi_assert_same(
+            ['raised', 'resolved'],
+            array_column(array_values($events->rows), 'lifecycle_action'),
+            'Expected lookup incident resolution only after the completed check.'
+        );
+        kiwi_assert_same([], $events->get_open_incidents(), 'Expected completed check to close the lookup incident.');
     } finally {
         kiwi_remove_directory($root);
     }

@@ -1044,11 +1044,15 @@ class Kiwi_Retention_Cleanup_Service
             $context
         );
         if (!is_array($successor)) {
-            return $this->fail_worker_run($run_db_id, $run, [
+            return $this->reschedule_worker_result($run, [
+                'status' => 'running',
+                'worker_phase' => 'archive_pending',
                 'archive_db_path' => $quarantined_archive_path,
                 'archive_integrity_check' => 'corruption_confirmed',
-                'error_code' => 'archive_quarantine_transition_failed',
-                'error_message' => 'Retention worker could not atomically create the quarantine successor run.',
+            ], [
+                'success' => false,
+                'error_code' => 'archive_quarantine_transition_retry',
+                'error_message' => 'Retention worker could not persist the quarantine successor and will retry.',
             ]);
         }
 

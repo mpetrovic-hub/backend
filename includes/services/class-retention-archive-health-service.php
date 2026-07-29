@@ -573,7 +573,6 @@ class Kiwi_Retention_Archive_Health_Service
                 ['incident_action' => $incident_action]
             );
         }
-        $this->record_incomplete_recovery('', 'active_archive_lookup_recovered');
         $archive = $active_lookup['archive'] ?? null;
         if (is_array($archive) && !empty($archive['quarantined'])) {
             $archive_name = (string) ($archive['name'] ?? '');
@@ -600,6 +599,7 @@ class Kiwi_Retention_Archive_Health_Service
                     $started_at
                 );
             }
+            $this->record_incomplete_recovery('', 'corruption_detected');
             $this->record_incomplete_recovery($archive_name, 'corruption_detected');
 
             return $this->result(
@@ -624,6 +624,7 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('', 'daily', '', $started_at);
             }
+            $this->record_incomplete_recovery('', 'no_work');
 
             return $this->result(
                 'no_work',
@@ -705,6 +706,7 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure($check, 'daily', $archive_name, $started_at);
             }
+            $this->record_incomplete_recovery('', $result_name);
             $this->record_incomplete_recovery($archive_name, $result_name);
 
             return $this->result_from_check(
