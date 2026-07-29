@@ -4,6 +4,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+class Kiwi_Retention_Archive_Discovery_Exception extends RuntimeException
+{
+}
+
 class Kiwi_Retention_Sqlite_Archive_Service
 {
     private $config;
@@ -67,8 +71,10 @@ class Kiwi_Retention_Sqlite_Archive_Service
             return [];
         }
 
-        $paths = glob($directory . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_*.sqlite');
-        $paths = is_array($paths) ? $paths : [];
+        $paths = @glob($directory . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_*.sqlite');
+        if ($paths === false) {
+            throw new Kiwi_Retention_Archive_Discovery_Exception('archive_discovery_failed');
+        }
         $archives = [];
 
         foreach ($paths as $path) {

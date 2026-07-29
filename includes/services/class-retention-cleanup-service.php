@@ -980,12 +980,25 @@ class Kiwi_Retention_Cleanup_Service
         int $target_max_primary_key,
         string $quarantined_archive_path
     ): array {
-        $new_archive_path = $this->archive_service->resolve_archive_db_path('');
-        $remaining_rows = $this->count_remaining_source_rows(
-            $source,
-            $cutoff_value,
-            $target_max_primary_key
-        );
+        try {
+            $new_archive_path = $this->archive_service->resolve_archive_db_path('');
+            $remaining_rows = $this->count_remaining_source_rows(
+                $source,
+                $cutoff_value,
+                $target_max_primary_key
+            );
+        } catch (Throwable $error) {
+            return $this->reschedule_worker_result($run, [
+                'status' => 'running',
+                'worker_phase' => 'archive_pending',
+                'archive_db_path' => $quarantined_archive_path,
+                'archive_integrity_check' => 'corruption_confirmed',
+            ], [
+                'success' => false,
+                'error_code' => 'archive_quarantine_transition_retry',
+                'error_message' => 'Retention worker could not prepare the quarantine successor and will retry.',
+            ]);
+        }
         $context = [
             'old_run_id' => (string) ($run['run_id'] ?? ''),
             'old_archive' => basename($quarantined_archive_path),

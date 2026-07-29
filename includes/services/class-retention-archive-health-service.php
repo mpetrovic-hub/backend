@@ -78,6 +78,22 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
 
+        try {
+            $archive_files = $this->archive_service->list_archive_files();
+        } catch (Kiwi_Retention_Archive_Discovery_Exception $error) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                '',
+                'status',
+                '',
+                'archive_discovery_failed',
+                $started_at,
+                ['state_exists' => !empty($state_read['exists'])]
+            );
+        }
+
         $archives = array_map(static function (array $archive): array {
             return [
                 'archive' => (string) ($archive['name'] ?? ''),
@@ -86,7 +102,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'quarantined' => !empty($archive['quarantined']),
                 'size_bytes' => (int) ($archive['size_bytes'] ?? 0),
             ];
-        }, $this->archive_service->list_archive_files());
+        }, $archive_files);
 
         return $this->result(
             'ok',
@@ -109,7 +125,20 @@ class Kiwi_Retention_Archive_Health_Service
     {
         $started_at = $this->start_operation();
         $check = $this->normalize_check($check);
-        $archive = $this->find_archive($archive_name);
+        try {
+            $archive = $this->find_archive($archive_name);
+        } catch (Kiwi_Retention_Archive_Discovery_Exception $error) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                $check,
+                'diagnose',
+                $this->normalize_archive_name($archive_name),
+                'archive_discovery_failed',
+                $started_at
+            );
+        }
 
         if ($check === '' || !is_array($archive)) {
             return $this->result(
@@ -411,6 +440,17 @@ class Kiwi_Retention_Archive_Health_Service
             }
 
             return $this->run_scheduled_annual($state, $started_at);
+        } catch (Kiwi_Retention_Archive_Discovery_Exception $error) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                '',
+                'scheduled',
+                '',
+                'archive_discovery_failed',
+                $started_at
+            );
         } finally {
             $this->lock_service->release($controller['handle'] ?? null);
         }

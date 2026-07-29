@@ -1952,6 +1952,7 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
     public $deleted_primary_key_batches = [];
     public $existing_primary_keys = null;
     public $events = [];
+    public $remaining_row_count_failures = 0;
 
     protected function count_eligible_rows(array $source, string $cutoff_value): int
     {
@@ -1995,6 +1996,11 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
         string $cutoff_value,
         int $target_max_primary_key
     ): int {
+        if ($this->remaining_row_count_failures > 0) {
+            $this->remaining_row_count_failures--;
+            throw new RuntimeException('Synthetic remaining-row count failure.');
+        }
+
         return $this->eligible_rows;
     }
 }

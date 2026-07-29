@@ -130,6 +130,14 @@ class Kiwi_Test_Failing_Open_Archive_Run_Repository extends Kiwi_Test_Retention_
     }
 }
 
+class Kiwi_Test_Failing_Archive_Discovery_Service extends Kiwi_Retention_Sqlite_Archive_Service
+{
+    public function list_archive_files(): array
+    {
+        throw new Kiwi_Retention_Archive_Discovery_Exception('archive_discovery_failed');
+    }
+}
+
 function kiwi_test_create_retention_archive(
     Kiwi_Retention_Sqlite_Archive_Service $archive_service,
     string $name
@@ -469,7 +477,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive 
     ];
     $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
     $archive->new_archive_db_path = $new_archive_path;
-    $archive->quarantine_results = [true];
+    $archive->quarantine_results = [true, true];
     $events = new Kiwi_Test_Operational_Event_Repository();
     $lock_service = new Kiwi_Retention_Archive_Lock();
     $service = new Kiwi_Test_Retention_Cleanup_Service(
@@ -483,8 +491,20 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive 
         $lock_service
     );
     $service->eligible_rows = 2;
+    $service->remaining_row_count_failures = 1;
 
     try {
+        $retry = $service->run_worker('landing_page_sessions');
+        kiwi_assert_same(false, $retry['success'] ?? true, 'Expected count failure to stay visible.');
+        kiwi_assert_same(true, $retry['reschedule_worker'] ?? false, 'Expected count failure to reschedule recovery.');
+        kiwi_assert_same(
+            'archive_quarantine_transition_retry',
+            $retry['error_code'] ?? '',
+            'Expected explicit quarantine transition retry reason.'
+        );
+        kiwi_assert_same('running', $runs->rows[1]['status'] ?? '', 'Expected original run to remain resumable.');
+        kiwi_assert_same(0, count($runs->quarantine_successor_calls), 'Expected no successor before count succeeds.');
+
         $result = $service->run_worker('landing_page_sessions');
         $reacquired = $lock_service->acquire_for_archive($old_archive_path);
 
@@ -501,6 +521,52 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive 
     } finally {
         $wpdb = $previous_wpdb;
         kiwi_remove_directory($test_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when archive discovery fails', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_discovery_failure');
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Test_Failing_Archive_Discovery_Service($config);
+    $check_calls = 0;
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        static function () use ($now): DateTimeImmutable {
+            return $now;
+        },
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
+            return [
+                'result' => 'ok',
+                'reason_code' => 'unexpected_check',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+
+    try {
+        foreach ([
+            $service->status(),
+            $service->scheduled(),
+            $service->diagnose('kiwi_retention_archive_2026.sqlite', 'quick'),
+        ] as $result) {
+            kiwi_assert_same('error', $result['result'] ?? '', 'Expected discovery failure to return an error.');
+            kiwi_assert_same(2, $result['exit_code'] ?? 0, 'Expected nonzero discovery failure exit.');
+            kiwi_assert_same(
+                'archive_discovery_failed',
+                $result['reason_code'] ?? '',
+                'Expected explicit archive discovery reason.'
+            );
+        }
+        kiwi_assert_same(0, $check_calls, 'Expected no child check after discovery failure.');
+    } finally {
+        kiwi_remove_directory($root);
     }
 });
 
