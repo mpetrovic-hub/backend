@@ -1693,6 +1693,7 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
     public $verified_receipt_batches = [];
     public $quarantined = false;
     public $quarantine_results = [];
+    public $quarantined_predecessor = null;
     public $new_archive_db_path = '';
     public $result = [
         'success' => true,
@@ -1724,6 +1725,13 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
         }
 
         return $this->quarantined;
+    }
+
+    public function find_quarantined_predecessor(string $successor_archive_db_path): ?array
+    {
+        return is_array($this->quarantined_predecessor)
+            ? $this->quarantined_predecessor
+            : null;
     }
 
     public function archive_eligible_rows(

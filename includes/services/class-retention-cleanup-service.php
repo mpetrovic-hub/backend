@@ -1184,6 +1184,25 @@ class Kiwi_Retention_Cleanup_Service
             return false;
         }
         $recovery_runs = array_merge($recovery_runs, $carried_recoveries);
+        try {
+            $quarantined_predecessor = $this->archive_service
+                ->find_quarantined_predecessor((string) ($run['archive_db_path'] ?? ''));
+        } catch (Throwable $error) {
+            return false;
+        }
+        if (is_array($quarantined_predecessor)) {
+            $predecessor_context = json_encode([
+                'old_archive' => (string) ($quarantined_predecessor['name'] ?? ''),
+                'new_archive' => $current_archive,
+            ]);
+            if (!is_string($predecessor_context)) {
+                return false;
+            }
+            $recovery_runs[] = [
+                'run_id' => (string) ($run['run_id'] ?? ''),
+                'error_message' => $predecessor_context,
+            ];
+        }
 
         $recoveries_by_old_archive = [];
         foreach ($recovery_runs as $recovery_run) {

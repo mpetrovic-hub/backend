@@ -107,6 +107,30 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return $archives;
     }
 
+    public function find_quarantined_predecessor(string $successor_archive_db_path): ?array
+    {
+        if (!$this->is_safe_archive_path($successor_archive_db_path)) {
+            throw new InvalidArgumentException('Retention successor archive path is invalid.');
+        }
+
+        $successor = $this->parse_generation_filename(basename($successor_archive_db_path));
+        if (!is_array($successor) || (int) ($successor['generation'] ?? 0) <= 1) {
+            return null;
+        }
+
+        $predecessor_generation = (int) $successor['generation'] - 1;
+        foreach ($this->list_archive_files() as $archive) {
+            if ((string) ($archive['year'] ?? '') === (string) ($successor['year'] ?? '')
+                && (int) ($archive['generation'] ?? 0) === $predecessor_generation
+                && !empty($archive['quarantined'])
+            ) {
+                return $archive;
+            }
+        }
+
+        return null;
+    }
+
     public function is_quarantined(string $archive_db_path): bool
     {
         return $this->is_safe_archive_path($archive_db_path)
