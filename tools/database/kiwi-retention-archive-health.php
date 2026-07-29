@@ -131,6 +131,7 @@ final class Kiwi_Retention_Archive_Health_Command
                 'Kiwi_Retention_Sqlite_Archive_Service',
                 'Kiwi_Retention_Archive_Health_Service',
                 'Kiwi_Operational_Event_Service',
+                'Kiwi_Retention_Cleanup_Run_Repository',
             ];
         $this->service_factory = $service_factory ?? static function () {
             return new Kiwi_Retention_Archive_Health_Service();

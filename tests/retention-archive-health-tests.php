@@ -110,6 +110,14 @@ class Kiwi_Test_Flaky_Operational_Event_Repository extends Kiwi_Test_Operational
     }
 }
 
+class Kiwi_Test_Failing_Open_Archive_Run_Repository extends Kiwi_Test_Retention_Cleanup_Run_Repository
+{
+    public function find_open_archive_db_path(): ?string
+    {
+        return null;
+    }
+}
+
 function kiwi_test_create_retention_archive(
     Kiwi_Retention_Sqlite_Archive_Service $archive_service,
     string $name
@@ -140,11 +148,13 @@ function kiwi_test_health_service(
     string $archive_root,
     DateTimeImmutable $now,
     callable $runner,
-    ?Kiwi_Test_Operational_Event_Repository $events = null
+    ?Kiwi_Test_Operational_Event_Repository $events = null,
+    ?Kiwi_Test_Retention_Cleanup_Run_Repository $runs = null
 ): array {
     $config = new Kiwi_Test_Retention_Archive_Health_Config($archive_root);
     $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
     $events = $events ?? new Kiwi_Test_Operational_Event_Repository();
+    $runs = $runs ?? new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $service = new Kiwi_Retention_Archive_Health_Service(
         $config,
         $archive_service,
@@ -153,10 +163,12 @@ function kiwi_test_health_service(
         static function () use ($now): DateTimeImmutable {
             return $now;
         },
-        $runner
+        $runner,
+        '',
+        $runs
     );
 
-    return [$service, $archive_service, $events];
+    return [$service, $archive_service, $events, $runs];
 }
 
 kiwi_run_test('Kiwi_Config exposes bounded retention archive health timeout', function (): void {
@@ -558,6 +570,125 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service schedules weekday quick and
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service follows an open run archive across year rollover', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_year_rollover');
+    $now = new DateTimeImmutable('2027-01-01 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $calls = [];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (string $path, string $check) use (&$calls): array {
+            $calls[] = [basename($path), $check];
+
+            return [
+                'result' => 'ok',
+                'reason_code' => 'sqlite_check_ok',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        },
+        null,
+        $runs
+    );
+
+    try {
+        $prior_year_path = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2027.sqlite'
+        );
+        $runs->rows[1] = [
+            'id' => 1,
+            'status' => 'partial',
+            'finished_at' => null,
+            'archive_db_path' => $prior_year_path,
+        ];
+
+        $result = $service->scheduled();
+
+        kiwi_assert_same('ok', $result['result'] ?? '', 'Expected rollover daily check to complete.');
+        kiwi_assert_same(
+            'kiwi_retention_archive_2026.sqlite',
+            $result['archive'] ?? '',
+            'Expected the open run frozen archive instead of the new calendar-year archive.'
+        );
+        kiwi_assert_same(
+            [['kiwi_retention_archive_2026.sqlite', 'quick']],
+            $calls,
+            'Expected exactly one recurring check against the actively written prior-year generation.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed on unsafe active archive resolution', function (): void {
+    $now = new DateTimeImmutable('2027-01-01 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $cases = [
+        [
+            'name' => 'lookup_failure',
+            'runs' => new Kiwi_Test_Failing_Open_Archive_Run_Repository(),
+            'reason_code' => 'active_archive_lookup_failed',
+        ],
+        [
+            'name' => 'invalid_path',
+            'runs' => new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+            'reason_code' => 'active_archive_path_invalid',
+        ],
+    ];
+
+    foreach ($cases as $case) {
+        $root = kiwi_create_temp_directory('kiwi_retention_health_' . $case['name']);
+        $check_calls = 0;
+        $runs = $case['runs'];
+        [$service, $archive_service] = kiwi_test_health_service(
+            $root,
+            $now,
+            static function () use (&$check_calls): array {
+                $check_calls++;
+
+                return [
+                    'result' => 'ok',
+                    'reason_code' => 'unexpected_check',
+                    'duration_seconds' => 0.01,
+                    'child_running' => false,
+                ];
+            },
+            null,
+            $runs
+        );
+
+        try {
+            kiwi_test_create_retention_archive(
+                $archive_service,
+                'kiwi_retention_archive_2027.sqlite'
+            );
+            if ($case['name'] === 'invalid_path') {
+                $runs->rows[1] = [
+                    'id' => 1,
+                    'status' => 'running',
+                    'finished_at' => null,
+                    'archive_db_path' => $root
+                        . DIRECTORY_SEPARATOR
+                        . 'kiwi_retention_archive_2026.sqlite',
+                ];
+            }
+
+            $result = $service->scheduled();
+
+            kiwi_assert_same('error', $result['result'] ?? '', 'Expected unsafe active archive resolution to fail.');
+            kiwi_assert_same($case['reason_code'], $result['reason_code'] ?? '', 'Expected explicit active archive failure reason.');
+            kiwi_assert_same(0, $check_calls, 'Expected no SQLite child against a guessed archive.');
+        } finally {
+            kiwi_remove_directory($root);
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service raises incomplete incident only after third attempt', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_attempts');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
@@ -899,7 +1030,9 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service holds generation lock throu
                 'duration_seconds' => 0.01,
                 'child_running' => false,
             ];
-        }
+        },
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
     );
 
     try {

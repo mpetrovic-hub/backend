@@ -154,6 +154,35 @@ class Kiwi_Retention_Cleanup_Run_Repository
     }
 
     /**
+     * Returns null on lookup failure, an empty string when no run is actively
+     * writing, or the oldest open run's frozen archive path.
+     */
+    public function find_open_archive_db_path(): ?string
+    {
+        global $wpdb;
+
+        $rows = $wpdb->get_results(
+            "SELECT archive_db_path
+             FROM {$this->get_table_name()}
+             WHERE status IN ('pending', 'running', 'partial')
+               AND finished_at IS NULL
+               AND archive_db_path IS NOT NULL
+               AND archive_db_path <> ''
+             ORDER BY started_at ASC, id ASC
+             LIMIT 1",
+            ARRAY_A
+        );
+        if (!is_array($rows)) {
+            return null;
+        }
+        if (empty($rows)) {
+            return '';
+        }
+
+        return trim((string) ($rows[0]['archive_db_path'] ?? ''));
+    }
+
+    /**
      * Marks unfinished runs as failed when their audit heartbeat has stopped.
      *
      * Returns the rows that this call actually transitioned, or null when the

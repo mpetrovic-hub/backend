@@ -14,6 +14,7 @@ class Kiwi_Retention_Archive_Health_Service
     private $archive_service;
     private $lock_service;
     private $operational_event_service;
+    private $run_repository;
     private $clock;
     private $check_runner;
     private $child_script_path;
@@ -26,7 +27,8 @@ class Kiwi_Retention_Archive_Health_Service
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
         ?callable $clock = null,
         ?callable $check_runner = null,
-        string $child_script_path = ''
+        string $child_script_path = '',
+        ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null
     ) {
         $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
         $this->archive_service = $archive_service instanceof Kiwi_Retention_Sqlite_Archive_Service
@@ -38,6 +40,9 @@ class Kiwi_Retention_Archive_Health_Service
         $this->operational_event_service = $operational_event_service instanceof Kiwi_Operational_Event_Service
             ? $operational_event_service
             : new Kiwi_Operational_Event_Service();
+        $this->run_repository = $run_repository instanceof Kiwi_Retention_Cleanup_Run_Repository
+            ? $run_repository
+            : new Kiwi_Retention_Cleanup_Run_Repository();
         $this->clock = $clock ?? static function (): DateTimeImmutable {
             return new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin'));
         };
@@ -412,7 +417,20 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
 
-        $archive = $this->find_latest_current_year_archive();
+        $active_lookup = $this->resolve_active_archive();
+        if (empty($active_lookup['success'])) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                $check,
+                'daily',
+                '',
+                (string) ($active_lookup['error_code'] ?? 'active_archive_lookup_failed'),
+                $started_at
+            );
+        }
+        $archive = $active_lookup['archive'] ?? null;
         if (is_array($archive) && !empty($archive['quarantined'])) {
             $archive_name = (string) ($archive['name'] ?? '');
             $marker = $this->read_quarantine_marker_details((string) ($archive['path'] ?? ''));
@@ -676,17 +694,34 @@ class Kiwi_Retention_Archive_Health_Service
         }
 
         $archive_name = (string) $archive['name'];
+        $active_lookup = $this->resolve_active_archive();
+        if (empty($active_lookup['success'])) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                'integrity',
+                'annual',
+                $archive_name,
+                (string) ($active_lookup['error_code'] ?? 'active_archive_lookup_failed'),
+                $started_at
+            );
+        }
+        $active_archive = $active_lookup['archive'] ?? null;
+        $active_archive_name = is_array($active_archive)
+            ? (string) ($active_archive['name'] ?? '')
+            : '';
         $outcome = $this->run_locked_check(
             (string) $archive['path'],
             'integrity',
-            function (array $corruption_outcome) use ($archive, $archive_name): bool {
+            function (array $corruption_outcome) use ($archive, $archive_name, $active_archive_name): bool {
                 $corruption_reason = (string) (
                     $corruption_outcome['reason_code'] ?? 'sqlite_check_reported_corruption'
                 );
 
                 return $this->record_corruption_incident(
                     $archive_name,
-                    $this->is_active_generation($archive),
+                    $archive_name === $active_archive_name,
                     'integrity',
                     $corruption_reason
                 ) && $this->archive_service->mark_quarantined((string) $archive['path'], [
@@ -1303,6 +1338,46 @@ class Kiwi_Retention_Archive_Health_Service
         return $matches[count($matches) - 1];
     }
 
+    private function resolve_active_archive(): array
+    {
+        try {
+            $open_archive_path = $this->run_repository->find_open_archive_db_path();
+        } catch (Throwable $error) {
+            $open_archive_path = null;
+        }
+        if ($open_archive_path === null) {
+            return [
+                'success' => false,
+                'archive' => null,
+                'error_code' => 'active_archive_lookup_failed',
+            ];
+        }
+
+        if ($open_archive_path !== '') {
+            try {
+                $safe_path = $this->archive_service->resolve_archive_db_path($open_archive_path);
+            } catch (Throwable $error) {
+                return [
+                    'success' => false,
+                    'archive' => null,
+                    'error_code' => 'active_archive_path_invalid',
+                ];
+            }
+
+            return [
+                'success' => true,
+                'archive' => $this->find_archive(basename($safe_path)),
+                'error_code' => '',
+            ];
+        }
+
+        return [
+            'success' => true,
+            'archive' => $this->find_latest_current_year_archive(),
+            'error_code' => '',
+        ];
+    }
+
     private function read_quarantine_marker_details(string $archive_path): array
     {
         if ($archive_path === '' || !$this->archive_service->is_quarantined($archive_path)) {
@@ -1319,17 +1394,6 @@ class Kiwi_Retention_Archive_Health_Service
         $details = is_string($raw) ? json_decode($raw, true) : null;
 
         return is_array($details) ? $details : [];
-    }
-
-    private function is_active_generation(array $archive): bool
-    {
-        $latest = $this->find_latest_current_year_archive();
-
-        return is_array($latest)
-            && empty($latest['quarantined'])
-            && (string) ($archive['year'] ?? '') === $this->current_datetime()->format('Y')
-            && (int) ($archive['generation'] ?? 0) === (int) ($latest['generation'] ?? -1)
-            && (string) ($archive['name'] ?? '') === (string) ($latest['name'] ?? '');
     }
 
     private function find_archive(string $archive_name): ?array
