@@ -16537,8 +16537,8 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
         ],
     ];
 
-    kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-1'])), 'Expected first failure event to persist.');
-    kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected repeated failure event to persist.');
+    kiwi_assert_same('raised', $service->record_failure_action(array_merge($base, ['idempotency_key' => 'failure-1'])), 'Expected first failure action to match its persisted lifecycle.');
+    kiwi_assert_same('repeated', $service->record_failure_action(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected repeated failure action to match its persisted lifecycle.');
     kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected duplicate idempotency key to be a successful no-op.');
     kiwi_assert_true($service->record_recovery(array_merge($base, [
         'severity' => 'info',

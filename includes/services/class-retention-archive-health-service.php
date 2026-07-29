@@ -458,8 +458,7 @@ class Kiwi_Retention_Archive_Health_Service
                 return $this->run_scheduled_daily(
                     $state,
                     $daily_check,
-                    $started_at,
-                    $daily_overdue
+                    $started_at
                 );
             }
 
@@ -483,8 +482,7 @@ class Kiwi_Retention_Archive_Health_Service
     private function run_scheduled_daily(
         array $state,
         string $check,
-        string $started_at,
-        bool $overdue = false
+        string $started_at
     ): array
     {
         if ((int) ($state['daily']['attempts'] ?? 0) >= self::DAILY_ATTEMPT_LIMIT) {
@@ -507,11 +505,11 @@ class Kiwi_Retention_Archive_Health_Service
             $persisted_archive = $this->find_archive($persisted_archive_name);
             $active_lookup = is_array($persisted_archive)
                 ? ['success' => true, 'archive' => $persisted_archive, 'error_code' => '']
-                : ($overdue ? [
+                : [
                     'success' => false,
                     'archive' => null,
                     'error_code' => 'daily_archive_unavailable',
-                ] : ['success' => true, 'archive' => null, 'error_code' => '']);
+                ];
         } else {
             $active_lookup = $this->resolve_active_archive();
         }
@@ -526,11 +524,12 @@ class Kiwi_Retention_Archive_Health_Service
             $state['daily']['completed_at'] = '';
             $incident_action = 'none';
             if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
-                if (!$this->record_incomplete_incident(
+                $incident_action = $this->record_incomplete_incident(
                     $persisted_archive_name,
                     $check,
                     $reason_code
-                )) {
+                );
+                if ($incident_action === '') {
                     return $this->result(
                         'error',
                         'failed',
@@ -542,7 +541,6 @@ class Kiwi_Retention_Archive_Health_Service
                         $started_at
                     );
                 }
-                $incident_action = 'raised';
             }
             if (!$this->write_state($state)) {
                 return $this->state_write_failure(
@@ -648,6 +646,7 @@ class Kiwi_Retention_Archive_Health_Service
                             'detected_at' => $this->now(),
                             'check' => $check,
                             'reason_code' => $corruption_reason,
+                            'active_generation' => true,
                         ]
                     );
                 } catch (Throwable $error) {
@@ -659,7 +658,7 @@ class Kiwi_Retention_Archive_Health_Service
                         true,
                         $check,
                         $corruption_reason
-                    );
+                    ) !== '';
                 } catch (Throwable $error) {
                     $incident_persisted = false;
                 }
@@ -711,19 +710,25 @@ class Kiwi_Retention_Archive_Health_Service
         $state['daily']['status'] = 'incomplete';
         $state['daily']['result'] = $result_name;
         $state['daily']['reason_code'] = $reason_code;
-        if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT
-            && !$this->record_incomplete_incident($archive_name, $check, $reason_code)
-        ) {
-            return $this->result(
-                'error',
-                'failed',
-                2,
-                $check,
-                'daily',
+        $incident_action = 'none';
+        if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
+            $incident_action = $this->record_incomplete_incident(
                 $archive_name,
-                'incomplete_incident_persist_failed',
-                $started_at
+                $check,
+                $reason_code
             );
+            if ($incident_action === '') {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    $check,
+                    'daily',
+                    $archive_name,
+                    'incomplete_incident_persist_failed',
+                    $started_at
+                );
+            }
         }
         if (!$this->write_state($state)) {
             return $this->state_write_failure($check, 'daily', $archive_name, $started_at);
@@ -735,7 +740,7 @@ class Kiwi_Retention_Archive_Health_Service
             'daily',
             $archive_name,
             $started_at,
-            (int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT ? 'raised' : 'none'
+            $incident_action
         );
     }
 
@@ -815,6 +820,27 @@ class Kiwi_Retention_Archive_Health_Service
             $archive_name = (string) $archive['name'];
             $marker = $this->read_quarantine_marker_details((string) $archive['path']);
             $reason_code = trim((string) ($marker['reason_code'] ?? ''));
+            $incident_action = 'none';
+            if (!$this->is_valid_timestamp((string) ($marker['controller_recorded_at'] ?? ''))) {
+                $incident_action = $this->record_corruption_incident(
+                    $archive_name,
+                    !empty($marker['active_generation']),
+                    'integrity',
+                    $reason_code !== '' ? $reason_code : 'sqlite_quarantine_marker_present'
+                );
+                if ($incident_action === '') {
+                    return $this->result(
+                        'error',
+                        'failed',
+                        2,
+                        '',
+                        'annual',
+                        $archive_name,
+                        'corruption_incident_reconciliation_failed',
+                        $started_at
+                    );
+                }
+            }
             $state['annual']['completed'][] = $archive_name;
             $state['annual']['completed'] = array_values(array_unique($state['annual']['completed']));
             $state['annual']['results'][$archive_name] = 'corruption_detected';
@@ -833,7 +859,7 @@ class Kiwi_Retention_Archive_Health_Service
                 $archive_name,
                 $reason_code !== '' ? $reason_code : 'sqlite_quarantine_marker_present',
                 $started_at,
-                ['incident_action' => 'raised']
+                ['incident_action' => $incident_action]
             );
         }
 
@@ -870,6 +896,7 @@ class Kiwi_Retention_Archive_Health_Service
                             'detected_at' => $this->now(),
                             'check' => 'integrity',
                             'reason_code' => $corruption_reason,
+                            'active_generation' => $archive_name === $active_archive_name,
                         ]
                     );
                 } catch (Throwable $error) {
@@ -881,7 +908,7 @@ class Kiwi_Retention_Archive_Health_Service
                         $archive_name === $active_archive_name,
                         'integrity',
                         $corruption_reason
-                    );
+                    ) !== '';
                 } catch (Throwable $error) {
                     $incident_persisted = false;
                 }
@@ -1690,10 +1717,29 @@ class Kiwi_Retention_Archive_Health_Service
                 (string) ($state['daily']['archive'] ?? '') === $archive_name
                 && (string) ($state['daily']['result'] ?? '') === 'corruption_detected'
             ) || (string) ($state['annual']['results'][$archive_name] ?? '') === 'corruption_detected';
+            $incident_action = 'none';
             if (!$already_recorded) {
                 $marker_check = $this->normalize_check((string) ($marker['check'] ?? ''));
                 $reason_code = trim((string) ($marker['reason_code'] ?? ''));
                 $completed_at = (string) ($marker['detected_at'] ?? '');
+                $incident_action = $this->record_corruption_incident(
+                    $archive_name,
+                    !empty($marker['active_generation']),
+                    $marker_check !== '' ? $marker_check : $daily_check,
+                    $reason_code !== '' ? $reason_code : 'sqlite_quarantine_marker_present'
+                );
+                if ($incident_action === '') {
+                    return $this->result(
+                        'error',
+                        'failed',
+                        2,
+                        '',
+                        'daily',
+                        $archive_name,
+                        'corruption_incident_reconciliation_failed',
+                        $started_at
+                    );
+                }
                 $state['daily'] = [
                     'date' => $date,
                     'attempt_date' => $date,
@@ -1730,7 +1776,7 @@ class Kiwi_Retention_Archive_Health_Service
                     $archive_name,
                     'quarantine_marker_reconciliation_failed',
                     $started_at,
-                    ['incident_action' => 'raised']
+                    ['incident_action' => $incident_action]
                 );
             }
 
@@ -1744,7 +1790,7 @@ class Kiwi_Retention_Archive_Health_Service
                     $archive_name,
                     (string) $state['daily']['reason_code'],
                     $started_at,
-                    ['incident_action' => 'raised']
+                    ['incident_action' => $incident_action]
                 );
             }
         }
@@ -1768,11 +1814,11 @@ class Kiwi_Retention_Archive_Health_Service
         return null;
     }
 
-    private function record_incomplete_incident(string $archive, string $check, string $reason_code): bool
+    private function record_incomplete_incident(string $archive, string $check, string $reason_code): string
     {
         $subject = $archive !== '' ? $archive : 'active_archive_lookup';
 
-        return $this->operational_event_service->record_failure([
+        return $this->operational_event_service->record_failure_action([
             'area' => 'retention',
             'severity' => 'error',
             'event_type' => 'retention_archive_health_check_incomplete',
@@ -1821,8 +1867,8 @@ class Kiwi_Retention_Archive_Health_Service
         bool $active_generation,
         string $check,
         string $reason_code
-    ): bool {
-        return $this->operational_event_service->record_failure([
+    ): string {
+        return $this->operational_event_service->record_failure_action([
             'area' => 'retention',
             'severity' => 'critical',
             'event_type' => 'retention_archive_corruption_detected',

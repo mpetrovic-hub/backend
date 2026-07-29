@@ -139,6 +139,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
             'detected_at' => (string) ($details['detected_at'] ?? $this->current_time_mysql()),
             'check' => (string) ($details['check'] ?? ''),
             'reason_code' => (string) ($details['reason_code'] ?? 'sqlite_corruption_confirmed'),
+            'active_generation' => !empty($details['active_generation']),
         ];
         $json = function_exists('wp_json_encode')
             ? wp_json_encode($payload)

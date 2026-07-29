@@ -903,11 +903,18 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service counts active archive looku
 
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service raises incomplete incident only after third attempt', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_attempts');
-    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $current_time = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
     $events = new Kiwi_Test_Operational_Event_Repository();
-    [$service, $archive_service] = kiwi_test_health_service(
-        $root,
-        $now,
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service($events),
+        static function () use (&$current_time): DateTimeImmutable {
+            return $current_time;
+        },
         static function (): array {
             return [
                 'result' => 'inconclusive',
@@ -916,7 +923,8 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service raises incomplete incident 
                 'child_running' => false,
             ];
         },
-        $events
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
     );
 
     try {
@@ -928,15 +936,28 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service raises incomplete incident 
         $second = $service->scheduled();
         $third = $service->scheduled();
         $fourth = $service->scheduled();
+        $current_time = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+        $service->scheduled();
+        $service->scheduled();
+        $repeated = $service->scheduled();
         kiwi_assert_same(1, $first['exit_code'] ?? 0, 'Expected first incomplete attempt exit code 1.');
         kiwi_assert_same(1, $second['exit_code'] ?? 0, 'Expected second incomplete attempt exit code 1.');
         kiwi_assert_same('raised', $third['incident_action'] ?? '', 'Expected third incomplete attempt to raise an incident.');
         kiwi_assert_same('daily_attempt_limit_reached', $fourth['reason_code'] ?? '', 'Expected no unbounded fourth daily attempt.');
-        kiwi_assert_same(1, count($events->rows), 'Expected exactly one incomplete Operational Incident.');
+        kiwi_assert_same('repeated', $repeated['incident_action'] ?? '', 'Expected the next daily attempt cycle to report a repeated incident.');
+        kiwi_assert_same(2, count($events->rows), 'Expected one raised and one repeated incomplete Operational Incident.');
         kiwi_assert_same(
             'retention_archive_health_check_incomplete',
             array_values($events->rows)[0]['event_type'] ?? '',
             'Expected central incomplete health event type.'
+        );
+        kiwi_assert_same(
+            ['raised', 'repeated'],
+            array_column(array_values($events->rows), 'lifecycle_action'),
+            'Expected JSON lifecycle actions to match the append-only Incident rows.'
         );
     } finally {
         kiwi_remove_directory($root);
@@ -1094,7 +1115,7 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service persists daily success when
     }
 });
 
-kiwi_run_test('Kiwi_Retention_Archive_Health_Service resets stale daily attempt state for no work', function (): void {
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when a persisted daily target disappears', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_no_work_reset');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
     [$service, $archive_service] = kiwi_test_health_service(
@@ -1119,13 +1140,18 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service resets stale daily attempt 
         kiwi_assert_same('deferred', $first['result'] ?? '', 'Expected persisted incomplete daily attempt fixture.');
         @unlink($archive_path);
 
-        $no_work = $service->scheduled();
+        $missing = $service->scheduled();
         $status = $service->status();
 
-        kiwi_assert_same('no_work', $no_work['result'] ?? '', 'Expected no work after the incomplete archive disappears.');
-        kiwi_assert_same('ok', $status['result'] ?? '', 'Expected controller to accept its persisted no-work state.');
-        kiwi_assert_same('', $status['state']['daily']['archive'] ?? 'unexpected', 'Expected no-work archive identity reset.');
-        kiwi_assert_same(0, $status['state']['daily']['attempts'] ?? -1, 'Expected no-work attempt counter reset.');
+        kiwi_assert_same('error', $missing['result'] ?? '', 'Expected a missing persisted daily target to fail closed.');
+        kiwi_assert_same('daily_archive_unavailable', $missing['reason_code'] ?? '', 'Expected explicit persisted-target loss evidence.');
+        kiwi_assert_same('ok', $status['result'] ?? '', 'Expected controller state to remain readable after target loss.');
+        kiwi_assert_same(
+            'kiwi_retention_archive_2026.sqlite',
+            $status['state']['daily']['archive'] ?? '',
+            'Expected the missing persisted target identity to remain audited.'
+        );
+        kiwi_assert_same(2, $status['state']['daily']['attempts'] ?? 0, 'Expected target loss to consume the next bounded attempt.');
     } finally {
         kiwi_remove_directory($root);
     }
@@ -1524,6 +1550,21 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps corruption write-bloc
             'Expected the durable write block to survive Incident persistence failure.'
         );
         $event_failure_locks->release($event_failure_writer['handle'] ?? null);
+        $event_failure_reconciled = $event_failure_service->scheduled();
+        $event_failure_marker = json_decode(
+            (string) file_get_contents(
+                $event_failure_archive->get_quarantine_marker_path($event_failure_path)
+            ),
+            true
+        );
+        kiwi_assert_same('corruption_detected', $event_failure_reconciled['result'] ?? '', 'Expected the next slot to retry and persist the missing corruption Incident.');
+        kiwi_assert_same('raised', $event_failure_reconciled['incident_action'] ?? '', 'Expected reconciled Incident lifecycle action.');
+        kiwi_assert_same(1, count($event_failure_events->rows), 'Expected exactly one persisted corruption Incident after retry.');
+        kiwi_assert_true(
+            is_array($event_failure_marker)
+                && trim((string) ($event_failure_marker['controller_recorded_at'] ?? '')) !== '',
+            'Expected marker acknowledgement only after corruption Incident persistence.'
+        );
     } finally {
         kiwi_remove_directory($event_failure_root);
     }
@@ -1660,12 +1701,25 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined dail
             'detected_at' => '2026-07-27T01:25:00+02:00',
             'check' => 'quick',
             'reason_code' => 'sqlite_check_reported_corruption',
+            'active_generation' => true,
         ]), 'Expected crash-window quarantine marker fixture.');
         $events->fail_next_insert = true;
 
+        $failed = $service->scheduled();
+        $failed_marker = json_decode(
+            (string) file_get_contents($archive_service->get_quarantine_marker_path($archive_path)),
+            true
+        );
         $result = $service->scheduled();
         $status = $service->status();
 
+        kiwi_assert_same('error', $failed['result'] ?? '', 'Expected failed corruption Incident retry to keep reconciliation incomplete.');
+        kiwi_assert_same('corruption_incident_reconciliation_failed', $failed['reason_code'] ?? '', 'Expected explicit Incident retry failure.');
+        kiwi_assert_true(
+            is_array($failed_marker)
+                && trim((string) ($failed_marker['controller_recorded_at'] ?? '')) === '',
+            'Expected marker to remain unacknowledged until the corruption Incident is persisted.'
+        );
         kiwi_assert_same('corruption_detected', $result['result'] ?? '', 'Expected quarantine marker reconciliation instead of no work.');
         kiwi_assert_same(0, $check_calls, 'Expected reconciliation not to rerun a check against the quarantined generation.');
         kiwi_assert_same(

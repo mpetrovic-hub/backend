@@ -30,21 +30,36 @@ class Kiwi_Operational_Event_Service
 
     public function record_failure(array $event): bool
     {
+        return $this->record_failure_action($event) !== '';
+    }
+
+    public function record_failure_action(array $event): string
+    {
         $correlation_key = $this->normalize_key((string) ($event['correlation_key'] ?? ''), 191);
         if ($correlation_key === '') {
-            return false;
+            return '';
         }
 
         try {
             $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
-            $event['lifecycle_action'] = is_array($latest)
+            $lifecycle_action = is_array($latest)
                 && in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
                     ? 'repeated'
                     : 'raised';
+            $event['lifecycle_action'] = $lifecycle_action;
+            if (!$this->persist($event, $correlation_key)) {
+                return '';
+            }
+            $persisted = $this->repository->find_latest_by_correlation_key($correlation_key);
+            $persisted_action = is_array($persisted)
+                ? (string) ($persisted['lifecycle_action'] ?? '')
+                : '';
 
-            return $this->persist($event, $correlation_key);
+            return in_array($persisted_action, ['raised', 'repeated'], true)
+                ? $persisted_action
+                : $lifecycle_action;
         } catch (Throwable $error) {
-            return false;
+            return '';
         }
     }
 
