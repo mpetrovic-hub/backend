@@ -194,6 +194,63 @@ kiwi_run_test('Kiwi_Retention_Archive_Lock is shared and non-blocking per genera
     }
 });
 
+kiwi_run_test('Retention archive validators accept every successor generation of two or greater', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_archive_generation_names');
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $locks = new Kiwi_Retention_Archive_Lock();
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $health_service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        $locks,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        static function () use ($now): DateTimeImmutable {
+            return $now;
+        },
+        static function (): array {
+            return [
+                'result' => 'ok',
+                'reason_code' => 'sqlite_check_ok',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+
+    try {
+        $valid_generations = [2, 9, 10, 19, 20, 1000000];
+        foreach ($valid_generations as $generation) {
+            $name = 'kiwi_retention_archive_2026_part_' . $generation . '.sqlite';
+            $path = kiwi_test_create_retention_archive($archive_service, $name);
+            $lock = $locks->acquire_for_archive($path);
+            kiwi_assert_true(
+                !empty($lock['success']) && !empty($lock['acquired']),
+                'Expected lock validator to accept generation ' . $generation . '.'
+            );
+            $locks->release($lock['handle'] ?? null);
+            kiwi_assert_same('ok', $health_service->diagnose($name, 'quick')['result'] ?? '', 'Expected health validator to accept generation ' . $generation . '.');
+        }
+
+        foreach ([1, '01', '02'] as $generation) {
+            $name = 'kiwi_retention_archive_2026_part_' . $generation . '.sqlite';
+            $path = kiwi_test_create_retention_archive($archive_service, $name);
+            $lock = $locks->acquire_for_archive($path);
+            kiwi_assert_same(false, $lock['success'] ?? true, 'Expected invalid generation rejection for ' . $generation . '.');
+            kiwi_assert_same('error', $health_service->diagnose($name, 'quick')['result'] ?? '', 'Expected health validator rejection for ' . $generation . '.');
+        }
+
+        $discovered_generations = array_column($archive_service->list_archive_files(), 'generation');
+        kiwi_assert_same(
+            $valid_generations,
+            $discovered_generations,
+            'Expected archive discovery to retain all and only valid successor generations.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves active corruption only after successor receipt delete audit', function (): void {
     global $wpdb;
 

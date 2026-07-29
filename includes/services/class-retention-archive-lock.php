@@ -125,7 +125,7 @@ class Kiwi_Retention_Archive_Lock
     private function is_archive_filename(string $filename): bool
     {
         return preg_match(
-            '/^kiwi_retention_archive_[0-9]{4}(?:_part_[2-9][0-9]*)?\.sqlite$/',
+            '/^kiwi_retention_archive_[0-9]{4}(?:_part_(?:[2-9]|[1-9][0-9]+))?\.sqlite$/',
             $filename
         ) === 1;
     }

@@ -1509,7 +1509,7 @@ class Kiwi_Retention_Archive_Health_Service
         $archive_name = trim($archive_name);
 
         return preg_match(
-            '/^kiwi_retention_archive_[0-9]{4}(?:_part_[2-9][0-9]*)?\.sqlite$/',
+            '/^kiwi_retention_archive_[0-9]{4}(?:_part_(?:[2-9]|[1-9][0-9]+))?\.sqlite$/',
             $archive_name
         ) === 1 ? $archive_name : '';
     }
