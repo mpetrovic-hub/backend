@@ -430,9 +430,7 @@ class Kiwi_Retention_Archive_Health_Service
             $state['daily']['completed_at'] = $this->is_valid_timestamp($completed_at)
                 ? $completed_at
                 : $this->now();
-            if (!$this->record_incomplete_recovery($archive_name, 'corruption_detected')
-                || !$this->write_state($state)
-            ) {
+            if (!$this->write_state($state)) {
                 return $this->state_write_failure(
                     (string) $state['daily']['check'],
                     'daily',
@@ -440,6 +438,7 @@ class Kiwi_Retention_Archive_Health_Service
                     $started_at
                 );
             }
+            $this->record_incomplete_recovery($archive_name, 'corruption_detected');
 
             return $this->result(
                 'corruption_detected',
@@ -526,11 +525,10 @@ class Kiwi_Retention_Archive_Health_Service
             $state['daily']['result'] = $result_name;
             $state['daily']['reason_code'] = $reason_code;
             $state['daily']['completed_at'] = $this->now();
-            if (!$this->record_incomplete_recovery($archive_name, $result_name)
-                || !$this->write_state($state)
-            ) {
+            if (!$this->write_state($state)) {
                 return $this->state_write_failure($check, 'daily', $archive_name, $started_at);
             }
+            $this->record_incomplete_recovery($archive_name, $result_name);
 
             return $this->result_from_check(
                 $outcome,

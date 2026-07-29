@@ -1044,6 +1044,7 @@ class Kiwi_Retention_Cleanup_Service
             'area' => 'retention',
             'severity' => 'warning',
             'event_type' => 'retention_archive_recovery_transition',
+            'lifecycle_action' => 'resolved',
             'correlation_key' => 'retention_archive_recovery_' . hash('sha256', $old_archive),
             'idempotency_key' => 'retention_archive_recovery_transition_' . hash(
                 'sha256',
