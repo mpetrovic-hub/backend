@@ -33,6 +33,15 @@ class Kiwi_Operational_Event_Service
         return $this->record_failure_action($event) !== '';
     }
 
+    public function get_open_incidents(array $filters = [], int $limit = 100): ?array
+    {
+        try {
+            return $this->repository->get_open_incidents($filters, $limit);
+        } catch (Throwable $error) {
+            return null;
+        }
+    }
+
     public function record_failure_action(array $event): string
     {
         $correlation_key = $this->normalize_key((string) ($event['correlation_key'] ?? ''), 191);

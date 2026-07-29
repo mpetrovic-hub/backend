@@ -103,6 +103,39 @@ class Kiwi_Retention_Archive_Health_Service
                 'size_bytes' => (int) ($archive['size_bytes'] ?? 0),
             ];
         }, $archive_files);
+        $active_lookup = $this->resolve_active_archive();
+        $open_incidents = $this->operational_event_service->get_open_incidents([], 100);
+        if ($open_incidents === null) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                '',
+                'status',
+                '',
+                'operational_incident_lookup_failed',
+                $started_at
+            );
+        }
+        $active_archive = $active_lookup['archive'] ?? null;
+        $relevant_types = [
+            'retention_archive_health_check_incomplete',
+            'retention_archive_corruption_detected',
+            'retention_archive_receipt_invalid',
+        ];
+        $open_incidents = array_values(array_map(static function (array $incident): array {
+            return [
+                'severity' => (string) ($incident['severity'] ?? ''),
+                'event_type' => (string) ($incident['event_type'] ?? ''),
+                'lifecycle_action' => (string) ($incident['lifecycle_action'] ?? ''),
+                'reference_type' => (string) ($incident['reference_type'] ?? ''),
+                'reference_id' => (string) ($incident['reference_id'] ?? ''),
+                'message' => (string) ($incident['message'] ?? ''),
+                'created_at' => (string) ($incident['created_at'] ?? ''),
+            ];
+        }, array_filter($open_incidents, static function (array $incident) use ($relevant_types): bool {
+            return in_array((string) ($incident['event_type'] ?? ''), $relevant_types, true);
+        })));
 
         return $this->result(
             'ok',
@@ -117,6 +150,13 @@ class Kiwi_Retention_Archive_Health_Service
                 'state_exists' => !empty($state_read['exists']),
                 'state' => $state_read['state'],
                 'archives' => $archives,
+                'active_archive' => is_array($active_archive)
+                    ? (string) ($active_archive['name'] ?? '')
+                    : null,
+                'active_archive_error' => empty($active_lookup['success'])
+                    ? (string) ($active_lookup['error_code'] ?? 'active_archive_lookup_failed')
+                    : null,
+                'open_incidents' => $open_incidents,
             ]
         );
     }

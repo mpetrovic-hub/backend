@@ -618,6 +618,18 @@ class Kiwi_Retention_Cleanup_Service
             }
             $archive_lock_handle = $archive_lock['handle'];
             if ($this->archive_service->is_quarantined($archive_db_path)) {
+                if (!$this->archive_service->is_quarantine_reconciled($archive_db_path)) {
+                    return $this->reschedule_worker_result($run, [
+                        'status' => 'running',
+                        'worker_phase' => 'archive_corruption_blocked',
+                        'archive_db_path' => $archive_db_path,
+                        'archive_integrity_check' => 'corruption_incident_pending',
+                    ], [
+                        'success' => false,
+                        'error_code' => 'archive_corruption_incident_pending',
+                        'error_message' => 'Retention archive recovery waits for the confirmed corruption Incident.',
+                    ]);
+                }
                 return $this->transition_quarantined_run(
                     $run_db_id,
                     $run,

@@ -108,7 +108,7 @@ wp --require=wp-content/plugins/backend/tools/database/kiwi-retention-archive-he
 wp --require=wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health diagnose --archive=kiwi_retention_archive_2026.sqlite --check=integrity
 ```
 
-`status` reads state and archive discovery only. `diagnose` accepts an exact discovered archive basename and `--check=quick|integrity`; it does not accept arbitrary paths. `preflight` verifies PDO SQLite, process supervision, the shared non-blocking lock, atomic state exchange, a scratch SQLite check, and child cleanup. Its production-shaped scratch database lives in a hidden unique subdirectory, outside the root-only archive discovery surface, and is removed after the check.
+`status` reads controller state, archive discovery, the resolved active generation (or its lookup error), and sanitized relevant open Incidents without mutation. `diagnose` accepts an exact discovered archive basename and `--check=quick|integrity`; it does not accept arbitrary paths. `preflight` verifies PDO SQLite, process supervision, the shared non-blocking lock, atomic state exchange, a scratch SQLite check, and child cleanup. Its production-shaped scratch database lives in a hidden unique subdirectory, outside the root-only archive discovery surface, and is removed after the check.
 
 Every command prints exactly one compact JSON line. Important fields are `status`, `exit_code`, `check`, `scope`, `archive`, `result`, `reason_code`, timestamps, `duration_seconds`, and `incident_action`. Exit mapping:
 

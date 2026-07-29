@@ -218,6 +218,28 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return is_string($json) && $this->write_atomic_file($marker_path, $json . "\n");
     }
 
+    public function is_quarantine_reconciled(string $archive_db_path): bool
+    {
+        if (!$this->is_quarantined($archive_db_path)) {
+            return false;
+        }
+        $raw = @file_get_contents($this->get_quarantine_marker_path($archive_db_path));
+        $payload = is_string($raw) ? json_decode($raw, true) : null;
+        $recorded_at = is_array($payload)
+            ? trim((string) ($payload['controller_recorded_at'] ?? ''))
+            : '';
+        if ($recorded_at === '') {
+            return false;
+        }
+        try {
+            $timestamp = new DateTimeImmutable($recorded_at);
+        } catch (Throwable $error) {
+            return false;
+        }
+
+        return $timestamp->format(DATE_ATOM) === $recorded_at;
+    }
+
     public function get_relative_archive_name(string $archive_db_path): string
     {
         return $this->is_safe_archive_path($archive_db_path) ? basename($archive_db_path) : '';

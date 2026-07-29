@@ -352,6 +352,15 @@ kiwi_run_test('Retention archive validators accept every successor generation of
             ]),
             'Expected quarantined predecessor fixture.'
         );
+        kiwi_assert_same(false, $archive_service->is_quarantine_reconciled($base_archive), 'Expected fresh marker to block recovery.');
+        kiwi_assert_true(
+            $archive_service->mark_quarantine_reconciled(
+                $base_archive,
+                '2026-07-27T01:36:00+02:00'
+            ),
+            'Expected marker acknowledgement after Incident persistence.'
+        );
+        kiwi_assert_same(true, $archive_service->is_quarantine_reconciled($base_archive), 'Expected acknowledged marker to permit recovery.');
         $predecessor = $archive_service->find_quarantined_predecessor(
             $archive_service->get_archive_directory()
             . DIRECTORY_SEPARATOR
