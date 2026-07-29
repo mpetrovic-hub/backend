@@ -378,6 +378,15 @@ class Kiwi_Retention_Archive_Health_Service
             $now = $this->current_datetime();
             $date = $now->format('Y-m-d');
             $daily_check = $now->format('N') === '7' ? 'integrity' : 'quick';
+            $quarantine_reconciliation = $this->reconcile_unrecorded_quarantine_markers(
+                $state,
+                $date,
+                $daily_check,
+                $started_at
+            );
+            if (is_array($quarantine_reconciliation)) {
+                return $quarantine_reconciliation;
+            }
 
             if ((string) ($state['daily']['date'] ?? '') !== $date) {
                 $state['daily'] = [
@@ -1415,6 +1424,105 @@ class Kiwi_Retention_Archive_Health_Service
         $details = is_string($raw) ? json_decode($raw, true) : null;
 
         return is_array($details) ? $details : [];
+    }
+
+    private function reconcile_unrecorded_quarantine_markers(
+        array $state,
+        string $date,
+        string $daily_check,
+        string $started_at
+    ): ?array {
+        foreach ($this->archive_service->list_archive_files() as $archive) {
+            if (empty($archive['quarantined'])) {
+                continue;
+            }
+
+            $archive_name = (string) ($archive['name'] ?? '');
+            $archive_path = (string) ($archive['path'] ?? '');
+            $marker = $this->read_quarantine_marker_details($archive_path);
+            if ($this->is_valid_timestamp((string) ($marker['controller_recorded_at'] ?? ''))) {
+                continue;
+            }
+
+            $annual_pending = in_array(
+                $archive_name,
+                (array) ($state['annual']['snapshot'] ?? []),
+                true
+            ) && !in_array(
+                $archive_name,
+                (array) ($state['annual']['completed'] ?? []),
+                true
+            );
+            if ($annual_pending
+                && (string) ($state['daily']['date'] ?? '') === $date
+                && (string) ($state['daily']['status'] ?? '') === 'completed'
+            ) {
+                continue;
+            }
+
+            $already_recorded = (
+                (string) ($state['daily']['archive'] ?? '') === $archive_name
+                && (string) ($state['daily']['result'] ?? '') === 'corruption_detected'
+            ) || (string) ($state['annual']['results'][$archive_name] ?? '') === 'corruption_detected';
+            if (!$already_recorded) {
+                $marker_check = $this->normalize_check((string) ($marker['check'] ?? ''));
+                $reason_code = trim((string) ($marker['reason_code'] ?? ''));
+                $completed_at = (string) ($marker['detected_at'] ?? '');
+                $state['daily'] = [
+                    'date' => $date,
+                    'archive' => $archive_name,
+                    'check' => $marker_check !== '' ? $marker_check : $daily_check,
+                    'attempts' => 1,
+                    'status' => 'completed',
+                    'result' => 'corruption_detected',
+                    'reason_code' => $reason_code !== ''
+                        ? $reason_code
+                        : 'sqlite_quarantine_marker_present',
+                    'completed_at' => $this->is_valid_timestamp($completed_at)
+                        ? $completed_at
+                        : $this->now(),
+                ];
+                if (!$this->write_state($state)) {
+                    return $this->state_write_failure(
+                        (string) $state['daily']['check'],
+                        'daily',
+                        $archive_name,
+                        $started_at
+                    );
+                }
+                $this->record_incomplete_recovery($archive_name, 'corruption_detected');
+            }
+
+            if (!$this->archive_service->mark_quarantine_reconciled($archive_path, $this->now())) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    $this->normalize_check((string) ($marker['check'] ?? '')) ?: $daily_check,
+                    'daily',
+                    $archive_name,
+                    'quarantine_marker_reconciliation_failed',
+                    $started_at,
+                    ['incident_action' => 'raised']
+                );
+            }
+
+            if (!$already_recorded) {
+                return $this->result(
+                    'corruption_detected',
+                    'completed',
+                    0,
+                    (string) $state['daily']['check'],
+                    'daily',
+                    $archive_name,
+                    (string) $state['daily']['reason_code'],
+                    $started_at,
+                    ['incident_action' => 'raised']
+                );
+            }
+        }
+
+        return null;
     }
 
     private function find_archive(string $archive_name): ?array

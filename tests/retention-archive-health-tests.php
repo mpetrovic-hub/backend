@@ -1339,6 +1339,82 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined dail
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles predecessor quarantine before active successor', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_predecessor_quarantine');
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $check_calls = 0;
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
+            return [
+                'result' => 'ok',
+                'reason_code' => 'sqlite_check_ok',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        },
+        $events,
+        $runs
+    );
+
+    try {
+        $predecessor_name = 'kiwi_retention_archive_2026.sqlite';
+        $predecessor = kiwi_test_create_retention_archive($archive_service, $predecessor_name);
+        kiwi_assert_true($archive_service->mark_quarantined($predecessor, [
+            'detected_at' => '2026-07-27T01:25:00+02:00',
+            'check' => 'quick',
+            'reason_code' => 'sqlite_check_reported_corruption',
+        ]), 'Expected unreconciled predecessor quarantine marker fixture.');
+        $successor = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026_part_2.sqlite'
+        );
+        $runs->rows[1] = [
+            'status' => 'running',
+            'finished_at' => null,
+            'archive_db_path' => $successor,
+            'archived_rows' => 1,
+            'deleted_rows' => 1,
+            'archive_last_primary_key' => 1,
+            'delete_last_primary_key' => 1,
+        ];
+
+        $reconciled = $service->scheduled();
+        $status = $service->status();
+        $marker_raw = @file_get_contents($archive_service->get_quarantine_marker_path($predecessor));
+        $marker = is_string($marker_raw) ? json_decode($marker_raw, true) : null;
+
+        kiwi_assert_same('corruption_detected', $reconciled['result'] ?? '', 'Expected predecessor marker reconciliation.');
+        kiwi_assert_same($predecessor_name, $reconciled['archive'] ?? '', 'Expected predecessor to win before successor lookup.');
+        kiwi_assert_same(0, $check_calls, 'Expected no successor check before predecessor reconciliation.');
+        kiwi_assert_same(
+            $predecessor_name,
+            $status['state']['daily']['archive'] ?? '',
+            'Expected durable predecessor corruption state.'
+        );
+        kiwi_assert_true(
+            is_array($marker) && trim((string) ($marker['controller_recorded_at'] ?? '')) !== '',
+            'Expected durable marker acknowledgement after controller state.'
+        );
+
+        $next_slot = $service->scheduled();
+        kiwi_assert_same('annual', $next_slot['scope'] ?? '', 'Expected the next free slot to enter the annual campaign.');
+        kiwi_assert_same(
+            basename($successor),
+            $next_slot['archive'] ?? '',
+            'Expected acknowledged predecessor not to reconcile repeatedly.'
+        );
+        kiwi_assert_same(1, $check_calls, 'Expected successor check only after predecessor reconciliation.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service diagnose is exact-name scoped and lock aware', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_diagnose');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));

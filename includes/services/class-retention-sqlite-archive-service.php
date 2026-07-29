@@ -144,6 +144,49 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return $this->write_atomic_file($marker_path, $json . "\n");
     }
 
+    public function mark_quarantine_reconciled(string $archive_db_path, string $recorded_at): bool
+    {
+        if (!$this->is_quarantined($archive_db_path) || trim($recorded_at) === '') {
+            return false;
+        }
+
+        try {
+            $timestamp = new DateTimeImmutable($recorded_at);
+        } catch (Throwable $error) {
+            return false;
+        }
+        if ($timestamp->format(DATE_ATOM) !== $recorded_at) {
+            return false;
+        }
+
+        $marker_path = $this->get_quarantine_marker_path($archive_db_path);
+        $raw = @file_get_contents($marker_path);
+        $payload = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($payload)
+            || (int) ($payload['schema_version'] ?? 0) !== 1
+            || (string) ($payload['archive'] ?? '') !== basename($archive_db_path)
+        ) {
+            return false;
+        }
+        $existing_recorded_at = trim((string) ($payload['controller_recorded_at'] ?? ''));
+        if ($existing_recorded_at !== '') {
+            try {
+                $existing_timestamp = new DateTimeImmutable($existing_recorded_at);
+            } catch (Throwable $error) {
+                return false;
+            }
+
+            return $existing_timestamp->format(DATE_ATOM) === $existing_recorded_at;
+        }
+
+        $payload['controller_recorded_at'] = $recorded_at;
+        $json = function_exists('wp_json_encode')
+            ? wp_json_encode($payload)
+            : json_encode($payload);
+
+        return is_string($json) && $this->write_atomic_file($marker_path, $json . "\n");
+    }
+
     public function get_relative_archive_name(string $archive_db_path): string
     {
         return $this->is_safe_archive_path($archive_db_path) ? basename($archive_db_path) : '';
