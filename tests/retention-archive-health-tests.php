@@ -180,6 +180,21 @@ class Kiwi_Test_Failing_Archive_Discovery_Service extends Kiwi_Retention_Sqlite_
     }
 }
 
+class Kiwi_Test_Chained_Predecessor_Retention_Sqlite_Archive_Service extends Kiwi_Test_Retention_Sqlite_Archive_Service
+{
+    public $predecessors_by_archive = [];
+
+    public function find_quarantined_predecessor(string $successor_archive_db_path): ?array
+    {
+        $successor = basename($successor_archive_db_path);
+
+        return array_key_exists($successor, $this->predecessors_by_archive)
+            && is_array($this->predecessors_by_archive[$successor])
+                ? $this->predecessors_by_archive[$successor]
+                : null;
+    }
+}
+
 function kiwi_test_create_retention_archive(
     Kiwi_Retention_Sqlite_Archive_Service $archive_service,
     string $name
@@ -740,6 +755,129 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves quarantined predecessor w
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Cleanup_Service carries recovery through repeated quarantine generations', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $test_root = kiwi_create_temp_directory('kiwi_retention_chained_recovery');
+    $archive_a = 'kiwi_retention_archive_2026.sqlite';
+    $archive_b = 'kiwi_retention_archive_2026_part_2.sqlite';
+    $archive_c = 'kiwi_retention_archive_2026_part_3.sqlite';
+    $archive_b_path = $test_root . DIRECTORY_SEPARATOR . $archive_b;
+    $archive_c_path = $test_root . DIRECTORY_SEPARATOR . $archive_c;
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->rows[1] = [
+        'id' => 1,
+        'run_id' => 'retention_empty_a_to_b',
+        'source_key' => 'landing_page_sessions',
+        'status' => 'completed',
+        'triggered_by' => 'archive_recovery',
+        'eligible_rows' => 0,
+        'archive_db_path' => $archive_b_path,
+        'error_message' => json_encode([
+            'old_run_id' => 'retention_quarantined_a',
+            'old_archive' => $archive_a,
+            'new_archive' => $archive_b,
+            'remaining_rows' => 0,
+        ]),
+        'finished_at' => '2026-07-29 10:00:00',
+    ];
+    $runs->rows[2] = [
+        'id' => 2,
+        'run_id' => 'retention_first_batch_on_c',
+        'source_key' => 'landing_page_sessions',
+        'source_table' => 'wp_kiwi_landing_page_sessions',
+        'status' => 'running',
+        'triggered_by' => 'cron',
+        'enabled' => 1,
+        'dry_run' => 0,
+        'retention_days_effective' => 14,
+        'cutoff_value' => '2026-07-01 00:00:00',
+        'eligible_rows' => 2,
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0,
+        'deleted_rows' => 0,
+        'delete_batches' => 0,
+        'gate_status' => 'passed',
+        'worker_phase' => 'receipt_verified',
+        'target_max_primary_key' => 2,
+        'archive_last_primary_key' => 2,
+        'delete_last_primary_key' => 0,
+        'worker_runs' => 0,
+        'archive_batch_id' => 'first_batch_on_c',
+        'archive_db_path' => $archive_c_path,
+        'archive_integrity_check' => 'receipt_verified',
+        'error_code' => '',
+        'error_message' => '',
+        'finished_at' => null,
+    ];
+    $archive = new Kiwi_Test_Chained_Predecessor_Retention_Sqlite_Archive_Service();
+    $archive->predecessors_by_archive = [
+        $archive_c => [
+            'name' => $archive_b,
+            'path' => $archive_b_path,
+        ],
+        $archive_b => [
+            'name' => $archive_a,
+            'path' => $test_root . DIRECTORY_SEPARATOR . $archive_a,
+        ],
+    ];
+    $archive->verified_receipt_batches[] = [
+        'success' => true,
+        'primary_keys' => [1, 2],
+        'last_primary_key' => 2,
+        'has_more' => false,
+        'error_code' => '',
+        'error_message' => '',
+    ];
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    foreach ([$archive_a, $archive_b] as $quarantined_archive) {
+        $event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'critical',
+            'event_type' => 'retention_archive_corruption_detected',
+            'correlation_key' => 'retention_archive_corruption_' . hash('sha256', $quarantined_archive),
+            'reference_type' => 'retention_archive',
+            'reference_id' => $quarantined_archive,
+            'message' => 'Synthetic chained archive corruption.',
+            'idempotency_key' => 'retention_archive_chained_' . hash('sha256', $quarantined_archive),
+        ]);
+    }
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        $event_service
+    );
+    $service->existing_primary_keys = [1, 2];
+    $service->delete_result = ['deleted_rows' => 2];
+
+    try {
+        $result = $service->run_worker('landing_page_sessions');
+        kiwi_assert_same('completed', $result['status'] ?? '', 'Expected the batch on generation C to complete.');
+        foreach ([$archive_a, $archive_b] as $quarantined_archive) {
+            $latest = $events->find_latest_by_correlation_key(
+                'retention_archive_corruption_' . hash('sha256', $quarantined_archive)
+            );
+            $context = json_decode((string) ($latest['context_json'] ?? ''), true);
+            kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected every carried corruption incident to resolve.');
+            kiwi_assert_same($archive_c, $context['new_archive'] ?? '', 'Expected generation C as qualifying replacement.');
+        }
+        kiwi_assert_same([], $events->get_open_incidents(), 'Expected no corruption incident to remain open.');
+    } finally {
+        $wpdb = $previous_wpdb;
+        kiwi_remove_directory($test_root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service rechecks quarantine after archive lock before any write', function (): void {
     global $wpdb;
 
@@ -947,6 +1085,54 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service status is read-only and rej
         $contradictory = $service->status();
         kiwi_assert_same('error', $contradictory['result'] ?? '', 'Expected contradictory completed state to fail closed.');
         kiwi_assert_same(2, $contradictory['exit_code'] ?? 0, 'Expected contradictory state exit code 2.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service filters relevant incidents before status limits', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_status_incidents');
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $events->rows[] = [
+        'correlation_key' => 'retention_archive_relevant_old',
+        'lifecycle_action' => 'raised',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'reference_type' => 'retention_archive',
+        'reference_id' => 'kiwi_retention_archive_2025.sqlite',
+        'message' => 'Older relevant archive incident.',
+        'created_at' => '2026-07-01 00:00:00',
+    ];
+    for ($index = 0; $index < 101; $index++) {
+        $events->rows[] = [
+            'correlation_key' => 'unrelated_incident_' . $index,
+            'lifecycle_action' => 'raised',
+            'severity' => 'warning',
+            'event_type' => 'unrelated_operational_event',
+            'reference_type' => 'test',
+            'reference_id' => (string) $index,
+            'message' => 'Newer unrelated incident.',
+            'created_at' => '2026-07-02 00:00:00',
+        ];
+    }
+    [$service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (): array {
+            throw new RuntimeException('Status must not run a check.');
+        },
+        $events
+    );
+
+    try {
+        $status = $service->status();
+        kiwi_assert_same('ok', $status['result'] ?? '', 'Expected status incident lookup to succeed.');
+        kiwi_assert_same(
+            ['retention_archive_corruption_detected'],
+            array_column($status['open_incidents'] ?? [], 'event_type'),
+            'Expected the older relevant incident to survive newer unrelated incident volume.'
+        );
     } finally {
         kiwi_remove_directory($root);
     }
@@ -1744,6 +1930,67 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps missing annual snapsh
             $retried_status['state']['annual']['completed'] ?? [],
             'Expected restored archive to complete only after a successful check.'
         );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service carries unfinished annual campaign across year rollover', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_annual_rollover');
+    $now = new DateTimeImmutable('2027-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (): array {
+            return [
+                'result' => 'ok',
+                'reason_code' => 'sqlite_check_ok',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+    $archive_name = 'kiwi_retention_archive_2025.sqlite';
+    $state_path = $archive_service->get_archive_directory()
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_health_state.json';
+
+    try {
+        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2027.sqlite');
+        kiwi_write_file($state_path, json_encode([
+            'schema_version' => 1,
+            'daily' => [
+                'date' => '2027-01-02',
+                'archive' => 'kiwi_retention_archive_2027.sqlite',
+                'check' => 'quick',
+                'attempts' => 1,
+                'status' => 'completed',
+                'result' => 'ok',
+                'reason_code' => 'sqlite_check_ok',
+                'completed_at' => '2027-01-02T01:30:00+01:00',
+            ],
+            'annual' => [
+                'cycle_year' => '2026',
+                'snapshot' => [$archive_name],
+                'completed' => [],
+                'results' => [],
+                'status' => 'running',
+            ],
+        ]));
+
+        $missing = $service->scheduled();
+        $status = $service->status();
+        kiwi_assert_same('error', $missing['result'] ?? '', 'Expected the carried unavailable archive to fail visibly.');
+        kiwi_assert_same('annual_archive_unavailable', $missing['reason_code'] ?? '', 'Expected the carried campaign to remain pending.');
+        kiwi_assert_same('2026', $status['state']['annual']['cycle_year'] ?? '', 'Expected the unfinished prior cycle to remain active.');
+        kiwi_assert_same([$archive_name], $status['state']['annual']['snapshot'] ?? [], 'Expected the prior frozen snapshot to remain intact.');
+
+        kiwi_test_create_retention_archive($archive_service, $archive_name);
+        $completed = $service->scheduled();
+        kiwi_assert_same('ok', $completed['result'] ?? '', 'Expected the restored prior-cycle archive to complete.');
+        $service->scheduled();
+        $new_cycle = $service->status();
+        kiwi_assert_same('2027', $new_cycle['state']['annual']['cycle_year'] ?? '', 'Expected the current cycle to start only after prior completion.');
     } finally {
         kiwi_remove_directory($root);
     }

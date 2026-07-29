@@ -103,26 +103,39 @@ class Kiwi_Retention_Archive_Health_Service
                 'size_bytes' => (int) ($archive['size_bytes'] ?? 0),
             ];
         }, $archive_files);
-        $active_lookup = $this->resolve_active_archive();
-        $open_incidents = $this->operational_event_service->get_open_incidents([], 100);
-        if ($open_incidents === null) {
-            return $this->result(
-                'error',
-                'failed',
-                2,
-                '',
-                'status',
-                '',
-                'operational_incident_lookup_failed',
-                $started_at
-            );
-        }
-        $active_archive = $active_lookup['archive'] ?? null;
         $relevant_types = [
             'retention_archive_health_check_incomplete',
             'retention_archive_corruption_detected',
             'retention_archive_receipt_invalid',
         ];
+        $active_lookup = $this->resolve_active_archive();
+        $active_archive = $active_lookup['archive'] ?? null;
+        $open_incidents = [];
+        foreach ($relevant_types as $event_type) {
+            $typed_incidents = $this->operational_event_service->get_open_incidents(
+                ['event_type' => $event_type],
+                100
+            );
+            if ($typed_incidents === null) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'status',
+                    '',
+                    'operational_incident_lookup_failed',
+                    $started_at
+                );
+            }
+            $open_incidents = array_merge($open_incidents, $typed_incidents);
+        }
+        usort($open_incidents, static function (array $left, array $right): int {
+            $left_time = (string) ($left['occurred_at'] ?? $left['created_at'] ?? '');
+            $right_time = (string) ($right['occurred_at'] ?? $right['created_at'] ?? '');
+
+            return strcmp($right_time, $left_time);
+        });
         $open_incidents = array_values(array_map(static function (array $incident): array {
             return [
                 'severity' => (string) ($incident['severity'] ?? ''),
@@ -133,9 +146,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'message' => (string) ($incident['message'] ?? ''),
                 'created_at' => (string) ($incident['created_at'] ?? ''),
             ];
-        }, array_filter($open_incidents, static function (array $incident) use ($relevant_types): bool {
-            return in_array((string) ($incident['event_type'] ?? ''), $relevant_types, true);
-        })));
+        }, $open_incidents));
 
         return $this->result(
             'ok',
@@ -814,7 +825,16 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
 
-        if ((string) ($state['annual']['cycle_year'] ?? '') !== $year) {
+        $annual_cycle_year = (string) ($state['annual']['cycle_year'] ?? '');
+        $annual_pending = array_values(array_diff(
+            (array) ($state['annual']['snapshot'] ?? []),
+            (array) ($state['annual']['completed'] ?? [])
+        ));
+        $unfinished_previous_campaign = $annual_cycle_year !== ''
+            && $annual_cycle_year !== $year
+            && (string) ($state['annual']['status'] ?? '') !== 'completed'
+            && !empty($annual_pending);
+        if ($annual_cycle_year !== $year && !$unfinished_previous_campaign) {
             $snapshot = [];
             foreach ($this->archive_service->list_archive_files() as $archive) {
                 if (empty($archive['quarantined'])) {

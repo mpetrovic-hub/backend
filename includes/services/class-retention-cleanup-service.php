@@ -1211,43 +1211,78 @@ class Kiwi_Retention_Cleanup_Service
             return false;
         }
 
-        $recovery_runs = [];
+        $recovery_candidates = [];
         if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
             && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
         ) {
-            $recovery_runs[] = $run;
+            $recovery_candidates[] = [
+                'run' => $run,
+                'expected_new_archive' => $current_archive,
+            ];
         }
 
-        $carried_recoveries = $this->run_repository
-            ->find_completed_empty_recovery_contexts_for_archive(
-                (string) ($run['archive_db_path'] ?? '')
-            );
-        if ($carried_recoveries === null) {
-            return false;
-        }
-        $recovery_runs = array_merge($recovery_runs, $carried_recoveries);
-        try {
-            $quarantined_predecessor = $this->archive_service
-                ->find_quarantined_predecessor((string) ($run['archive_db_path'] ?? ''));
-        } catch (Throwable $error) {
-            return false;
-        }
-        if (is_array($quarantined_predecessor)) {
+        $cursor_path = (string) ($run['archive_db_path'] ?? '');
+        $visited_archives = [];
+        while ($cursor_path !== '') {
+            $cursor_archive = basename($cursor_path);
+            if ($cursor_archive === '' || isset($visited_archives[$cursor_archive])) {
+                break;
+            }
+            $visited_archives[$cursor_archive] = true;
+
+            $carried_recoveries = $this->run_repository
+                ->find_completed_empty_recovery_contexts_for_archive($cursor_path);
+            if ($carried_recoveries === null) {
+                return false;
+            }
+            foreach ($carried_recoveries as $carried_recovery) {
+                $recovery_candidates[] = [
+                    'run' => $carried_recovery,
+                    'expected_new_archive' => $cursor_archive,
+                ];
+            }
+
+            try {
+                $quarantined_predecessor = $this->archive_service
+                    ->find_quarantined_predecessor($cursor_path);
+            } catch (Throwable $error) {
+                return false;
+            }
+            if (!is_array($quarantined_predecessor)) {
+                break;
+            }
+
+            $predecessor_name = basename((string) (
+                $quarantined_predecessor['name']
+                    ?? $quarantined_predecessor['path']
+                    ?? ''
+            ));
+            if ($predecessor_name === '' || isset($visited_archives[$predecessor_name])) {
+                break;
+            }
             $predecessor_context = json_encode([
-                'old_archive' => (string) ($quarantined_predecessor['name'] ?? ''),
+                'old_archive' => $predecessor_name,
                 'new_archive' => $current_archive,
             ]);
             if (!is_string($predecessor_context)) {
                 return false;
             }
-            $recovery_runs[] = [
-                'run_id' => (string) ($run['run_id'] ?? ''),
-                'error_message' => $predecessor_context,
+            $recovery_candidates[] = [
+                'run' => [
+                    'run_id' => (string) ($run['run_id'] ?? ''),
+                    'error_message' => $predecessor_context,
+                ],
+                'expected_new_archive' => $current_archive,
             ];
+            $predecessor_path = trim((string) ($quarantined_predecessor['path'] ?? ''));
+            $cursor_path = $predecessor_path !== ''
+                ? $predecessor_path
+                : dirname($cursor_path) . DIRECTORY_SEPARATOR . $predecessor_name;
         }
 
         $recoveries_by_old_archive = [];
-        foreach ($recovery_runs as $recovery_run) {
+        foreach ($recovery_candidates as $candidate) {
+            $recovery_run = (array) ($candidate['run'] ?? []);
             $context = json_decode((string) ($recovery_run['error_message'] ?? ''), true);
             $old_archive = is_array($context)
                 ? basename((string) ($context['old_archive'] ?? ''))
@@ -1255,7 +1290,9 @@ class Kiwi_Retention_Cleanup_Service
             $new_archive = is_array($context)
                 ? basename((string) ($context['new_archive'] ?? ''))
                 : '';
-            if ($old_archive === '' || $new_archive !== $current_archive) {
+            if ($old_archive === ''
+                || $new_archive !== (string) ($candidate['expected_new_archive'] ?? '')
+            ) {
                 return false;
             }
             if (!isset($recoveries_by_old_archive[$old_archive])) {
