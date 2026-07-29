@@ -697,29 +697,30 @@ class Kiwi_Retention_Cleanup_Service
                 }
             }
 
-            if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
-                && (int) ($run['delete_last_primary_key'] ?? 0) > 0
-                && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
-            ) {
-                if (!$this->resolve_quarantine_recovery($run)) {
+            if ((int) ($run['delete_last_primary_key'] ?? 0) > 0) {
+                if (!$this->resolve_quarantine_recoveries_after_batch($run)) {
                     return $this->reschedule_worker_result($run, [
                         'status' => 'partial',
                         'worker_phase' => 'archive_partial',
                     ], [
                         'success' => false,
                         'error_code' => 'archive_recovery_resolution_failed',
-                        'error_message' => 'Retention successor progress is safe, but the corruption incident could not yet be resolved.',
+                        'error_message' => 'Replacement archive progress is safe, but a corruption incident could not yet be resolved.',
                     ]);
                 }
-                if (!$this->update_run_progress($run_db_id, [
-                    'error_code' => 'archive_recovery_resolved',
-                ])) {
-                    return $this->audit_retry_result(
-                        $run,
-                        'Retention successor could not persist the resolved recovery transition.'
-                    );
+                if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
+                    && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
+                ) {
+                    if (!$this->update_run_progress($run_db_id, [
+                        'error_code' => 'archive_recovery_resolved',
+                    ])) {
+                        return $this->audit_retry_result(
+                            $run,
+                            'Retention successor could not persist the resolved recovery transition.'
+                        );
+                    }
+                    $run['error_code'] = 'archive_recovery_resolved';
                 }
-                $run['error_code'] = 'archive_recovery_resolved';
             }
 
             $archive_cursor_before = (int) ($run['archive_last_primary_key'] ?? 0);
@@ -883,16 +884,16 @@ class Kiwi_Retention_Cleanup_Service
             }
             $run = array_merge($run, $progress);
 
+            if (!$this->resolve_quarantine_recoveries_after_batch($run)) {
+                return $this->reschedule_worker_result($run, $progress, [
+                    'success' => false,
+                    'error_code' => 'archive_recovery_resolution_failed',
+                    'error_message' => 'Replacement archive progress is safe, but a corruption incident could not yet be resolved.',
+                ]);
+            }
             if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
                 && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
             ) {
-                if (!$this->resolve_quarantine_recovery($run)) {
-                    return $this->reschedule_worker_result($run, $progress, [
-                        'success' => false,
-                        'error_code' => 'archive_recovery_resolution_failed',
-                        'error_message' => 'Retention successor progress is safe, but the corruption incident could not yet be resolved.',
-                    ]);
-                }
                 if (!$this->update_run_progress($run_db_id, [
                     'error_code' => 'archive_recovery_resolved',
                 ])) {
@@ -1157,29 +1158,72 @@ class Kiwi_Retention_Cleanup_Service
         return $blocked;
     }
 
-    private function resolve_quarantine_recovery(array $run): bool
+    private function resolve_quarantine_recoveries_after_batch(array $run): bool
     {
-        $context = json_decode((string) ($run['error_message'] ?? ''), true);
-        $old_archive = is_array($context) ? basename((string) ($context['old_archive'] ?? '')) : '';
-        if ($old_archive === '') {
+        $current_archive = basename((string) ($run['archive_db_path'] ?? ''));
+        if ($current_archive === '') {
             return false;
         }
 
-        return $this->operational_event_service->record_recovery([
-            'area' => 'retention',
-            'severity' => 'info',
-            'event_type' => 'retention_archive_corruption_detected',
-            'correlation_key' => 'retention_archive_corruption_' . hash('sha256', $old_archive),
-            'reference_type' => 'retention_archive',
-            'reference_id' => $old_archive,
-            'message' => 'The successor archive completed its first verified receipt/delete/audit batch.',
-            'context' => [
-                'resolution_reason' => 'quarantined_and_replaced',
-                'old_archive' => $old_archive,
-                'new_archive' => basename((string) ($run['archive_db_path'] ?? '')),
-                'successor_run_id' => (string) ($run['run_id'] ?? ''),
-            ],
-        ]);
+        $recovery_runs = [];
+        if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
+            && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
+        ) {
+            $recovery_runs[] = $run;
+        }
+
+        $carried_recoveries = $this->run_repository
+            ->find_completed_empty_recovery_contexts_for_archive(
+                (string) ($run['archive_db_path'] ?? '')
+            );
+        if ($carried_recoveries === null) {
+            return false;
+        }
+        $recovery_runs = array_merge($recovery_runs, $carried_recoveries);
+
+        $recoveries_by_old_archive = [];
+        foreach ($recovery_runs as $recovery_run) {
+            $context = json_decode((string) ($recovery_run['error_message'] ?? ''), true);
+            $old_archive = is_array($context)
+                ? basename((string) ($context['old_archive'] ?? ''))
+                : '';
+            $new_archive = is_array($context)
+                ? basename((string) ($context['new_archive'] ?? ''))
+                : '';
+            if ($old_archive === '' || $new_archive !== $current_archive) {
+                return false;
+            }
+            if (!isset($recoveries_by_old_archive[$old_archive])) {
+                $recoveries_by_old_archive[$old_archive] = [
+                    'old_archive' => $old_archive,
+                    'successor_run_id' => (string) ($recovery_run['run_id'] ?? ''),
+                ];
+            }
+        }
+
+        foreach ($recoveries_by_old_archive as $recovery) {
+            $old_archive = (string) $recovery['old_archive'];
+            if (!$this->operational_event_service->record_recovery([
+                'area' => 'retention',
+                'severity' => 'info',
+                'event_type' => 'retention_archive_corruption_detected',
+                'correlation_key' => 'retention_archive_corruption_' . hash('sha256', $old_archive),
+                'reference_type' => 'retention_archive',
+                'reference_id' => $old_archive,
+                'message' => 'The replacement archive completed its first verified receipt/delete/audit batch.',
+                'context' => [
+                    'resolution_reason' => 'quarantined_and_replaced',
+                    'old_archive' => $old_archive,
+                    'new_archive' => $current_archive,
+                    'successor_run_id' => (string) $recovery['successor_run_id'],
+                    'qualifying_run_id' => (string) ($run['run_id'] ?? ''),
+                ],
+            ])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function reschedule_worker_result(array $run, array $progress, array $extra = []): array

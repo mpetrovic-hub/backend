@@ -212,17 +212,26 @@ class Kiwi_Retention_Archive_Health_Service
         } catch (Throwable $error) {
             $scratch_generation = (int) substr((string) time(), -7);
         }
-        $scratch_name = 'kiwi_retention_archive_9999_part_' . max(2, $scratch_generation) . '.sqlite';
-        $scratch_path = $archive_directory . DIRECTORY_SEPARATOR . $scratch_name;
-        $state_probe = $archive_directory
+        $scratch_directory = $archive_directory
             . DIRECTORY_SEPARATOR
-            . '.kiwi_retention_health_preflight_state_'
+            . '.kiwi_retention_health_preflight_'
             . max(2, $scratch_generation);
+        $scratch_name = 'kiwi_retention_archive_9999_part_' . max(2, $scratch_generation) . '.sqlite';
+        $scratch_path = $scratch_directory . DIRECTORY_SEPARATOR . $scratch_name;
+        $state_probe = $scratch_directory
+            . DIRECTORY_SEPARATOR
+            . 'state';
         $state_probe_temp = $state_probe . '.tmp';
         $lock_ready_probe = $state_probe . '.lock-ready';
         $lock = null;
 
         try {
+            if (!is_dir($scratch_directory)
+                && !@mkdir($scratch_directory, 0770)
+                && !is_dir($scratch_directory)
+            ) {
+                throw new RuntimeException('preflight_scratch_directory_unavailable');
+            }
             @unlink($scratch_path);
             @unlink($scratch_path . '.lock');
             @unlink($state_probe);
@@ -348,6 +357,7 @@ class Kiwi_Retention_Archive_Health_Service
             @unlink($state_probe);
             @unlink($state_probe_temp);
             @unlink($lock_ready_probe);
+            @rmdir($scratch_directory);
         }
     }
 

@@ -154,6 +154,43 @@ class Kiwi_Retention_Cleanup_Run_Repository
     }
 
     /**
+     * Returns null on lookup failure, or completed zero-row recovery contexts
+     * that must remain eligible for resolution by a later non-empty batch.
+     */
+    public function find_completed_empty_recovery_contexts_for_archive(
+        string $archive_db_path
+    ): ?array {
+        global $wpdb;
+
+        $archive_db_path = trim($archive_db_path);
+        if ($archive_db_path === '') {
+            return null;
+        }
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT run_id, archive_db_path, error_message
+                 FROM {$this->get_table_name()}
+                 WHERE archive_db_path = %s
+                   AND triggered_by = 'archive_recovery'
+                   AND status IN ('completed', 'completed_noop')
+                   AND eligible_rows = 0
+                   AND finished_at IS NOT NULL
+                   AND error_message IS NOT NULL
+                   AND error_message <> ''
+                 ORDER BY id ASC",
+                $archive_db_path
+            ),
+            ARRAY_A
+        );
+        if (!is_array($rows) || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            return null;
+        }
+
+        return array_values(array_filter($rows, 'is_array'));
+    }
+
+    /**
      * Returns null on lookup failure, an empty array when no run is open or
      * receipt-blocked, or the oldest such run's frozen archive state.
      */

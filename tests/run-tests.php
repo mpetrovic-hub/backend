@@ -1538,6 +1538,35 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         return null;
     }
 
+    public function find_completed_empty_recovery_contexts_for_archive(
+        string $archive_db_path
+    ): ?array {
+        $matches = [];
+        foreach ($this->rows as $row) {
+            if ((string) ($row['archive_db_path'] ?? '') !== $archive_db_path
+                || (string) ($row['triggered_by'] ?? '') !== 'archive_recovery'
+                || !in_array(
+                    (string) ($row['status'] ?? ''),
+                    ['completed', 'completed_noop'],
+                    true
+                )
+                || (int) ($row['eligible_rows'] ?? -1) !== 0
+                || ($row['finished_at'] ?? null) === null
+                || trim((string) ($row['error_message'] ?? '')) === ''
+            ) {
+                continue;
+            }
+
+            $matches[] = [
+                'run_id' => (string) ($row['run_id'] ?? ''),
+                'archive_db_path' => (string) ($row['archive_db_path'] ?? ''),
+                'error_message' => (string) ($row['error_message'] ?? ''),
+            ];
+        }
+
+        return $matches;
+    }
+
     public function find_open_archive_state(): ?array
     {
         foreach ($this->rows as $row) {

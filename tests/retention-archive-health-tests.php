@@ -108,10 +108,24 @@ class Kiwi_Test_Wpdb_Open_Archive_Lookup
     public $last_error = '';
     public $rows = [];
     public $last_query = '';
+    public $last_args = [];
 
-    public function get_results($query, $output = null)
+    public function prepare($query, ...$args): array
     {
-        $this->last_query = (string) $query;
+        return [
+            'query' => (string) $query,
+            'args' => $args,
+        ];
+    }
+
+    public function get_results($statement, $output = null)
+    {
+        $this->last_query = is_array($statement)
+            ? (string) ($statement['query'] ?? '')
+            : (string) $statement;
+        $this->last_args = is_array($statement)
+            ? (array) ($statement['args'] ?? [])
+            : [];
 
         return $this->rows;
     }
@@ -439,6 +453,129 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves active corruption only af
             $context['new_archive'] ?? '',
             'Expected replacement generation evidence.'
         );
+    } finally {
+        $wpdb = $previous_wpdb;
+        kiwi_remove_directory($test_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service carries empty recovery context to the first ordinary replacement batch', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $old_archive = 'kiwi_retention_archive_2026.sqlite';
+    $test_root = kiwi_create_temp_directory('kiwi_retention_empty_recovery_carry');
+    $new_archive_path = $test_root
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_2026_part_2.sqlite';
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->rows[1] = [
+        'id' => 1,
+        'run_id' => 'retention_empty_recovery',
+        'source_key' => 'landing_page_sessions',
+        'status' => 'completed',
+        'triggered_by' => 'archive_recovery',
+        'eligible_rows' => 0,
+        'archive_db_path' => $new_archive_path,
+        'error_message' => json_encode([
+            'old_run_id' => 'retention_empty_recovery_original',
+            'old_archive' => $old_archive,
+            'new_archive' => basename($new_archive_path),
+            'remaining_rows' => 0,
+        ]),
+        'finished_at' => '2026-07-29 10:00:00',
+    ];
+    $runs->rows[2] = [
+        'id' => 2,
+        'run_id' => 'retention_ordinary_replacement_batch',
+        'source_key' => 'landing_page_sessions',
+        'source_table' => 'wp_kiwi_landing_page_sessions',
+        'status' => 'running',
+        'triggered_by' => 'cron',
+        'enabled' => 1,
+        'dry_run' => 0,
+        'retention_days_effective' => 14,
+        'cutoff_value' => '2026-07-01 00:00:00',
+        'eligible_rows' => 2,
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0,
+        'deleted_rows' => 0,
+        'delete_batches' => 0,
+        'gate_status' => 'passed',
+        'worker_phase' => 'receipt_verified',
+        'target_max_primary_key' => 2,
+        'archive_last_primary_key' => 2,
+        'delete_last_primary_key' => 0,
+        'worker_runs' => 0,
+        'archive_batch_id' => 'ordinary_replacement_batch',
+        'archive_db_path' => $new_archive_path,
+        'archive_integrity_check' => 'receipt_verified',
+        'error_code' => '',
+        'error_message' => '',
+        'finished_at' => null,
+    ];
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->verified_receipt_batches[] = [
+        'success' => true,
+        'primary_keys' => [1, 2],
+        'last_primary_key' => 2,
+        'has_more' => false,
+        'error_code' => '',
+        'error_message' => '',
+    ];
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $correlation_key = 'retention_archive_corruption_' . hash('sha256', $old_archive);
+    $event_service->record_failure([
+        'area' => 'retention',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'correlation_key' => $correlation_key,
+        'reference_type' => 'retention_archive',
+        'reference_id' => $old_archive,
+        'message' => 'Synthetic confirmed archive corruption.',
+        'idempotency_key' => 'retention_archive_empty_recovery_test',
+    ]);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        $event_service
+    );
+    $service->existing_primary_keys = [1, 2];
+    $service->delete_result = ['deleted_rows' => 2];
+
+    try {
+        $result = $service->run_worker('landing_page_sessions');
+        $corruption_events = array_values(array_filter(
+            $events->rows,
+            static function (array $event) use ($correlation_key): bool {
+                return (string) ($event['correlation_key'] ?? '') === $correlation_key;
+            }
+        ));
+        $resolved = $corruption_events[count($corruption_events) - 1] ?? [];
+        $context = json_decode((string) ($resolved['context_json'] ?? ''), true);
+
+        kiwi_assert_same('completed', $result['status'] ?? '', 'Expected the ordinary replacement run to complete.');
+        kiwi_assert_same('resolved', $resolved['lifecycle_action'] ?? '', 'Expected carried corruption incident resolution.');
+        kiwi_assert_same(
+            'retention_empty_recovery',
+            $context['successor_run_id'] ?? '',
+            'Expected the empty deterministic successor to remain recovery evidence.'
+        );
+        kiwi_assert_same(
+            'retention_ordinary_replacement_batch',
+            $context['qualifying_run_id'] ?? '',
+            'Expected the first non-empty ordinary replacement batch as qualifying evidence.'
+        );
+        kiwi_assert_same([], $events->get_open_incidents(), 'Expected no open corruption incident after the qualifying batch.');
     } finally {
         $wpdb = $previous_wpdb;
         kiwi_remove_directory($test_root);
@@ -774,6 +911,45 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Run_Repository distinguishes active archiv
             "'blocked'",
             $wpdb->last_query,
             'Expected receipt-blocked run to retain its frozen archive scope.'
+        );
+
+        $replacement_path = '/safe/kiwi_retention_archive_2026_part_2.sqlite';
+        $wpdb->rows = [[
+            'run_id' => 'retention_empty_recovery',
+            'archive_db_path' => $replacement_path,
+            'error_message' => '{"old_archive":"kiwi_retention_archive_2026.sqlite"}',
+        ]];
+        $contexts = $repository->find_completed_empty_recovery_contexts_for_archive(
+            $replacement_path
+        );
+        kiwi_assert_same(
+            'retention_empty_recovery',
+            $contexts[0]['run_id'] ?? '',
+            'Expected completed empty recovery evidence lookup.'
+        );
+        kiwi_assert_contains(
+            "eligible_rows = 0",
+            $wpdb->last_query,
+            'Expected only zero-row recovery runs to carry resolution evidence.'
+        );
+        kiwi_assert_contains(
+            "status IN ('completed', 'completed_noop')",
+            $wpdb->last_query,
+            'Expected only completed recovery runs to carry resolution evidence.'
+        );
+        kiwi_assert_same(
+            [$replacement_path],
+            $wpdb->last_args,
+            'Expected the replacement archive path to remain a bound SQL parameter.'
+        );
+
+        $wpdb->last_error = 'Synthetic recovery lookup failure.';
+        kiwi_assert_same(
+            null,
+            $repository->find_completed_empty_recovery_contexts_for_archive(
+                $replacement_path
+            ),
+            'Expected recovery-context query errors to fail closed.'
         );
     } finally {
         $wpdb = $previous_wpdb;
@@ -1995,10 +2171,31 @@ kiwi_run_test('Kiwi retention archive health child encodes URI-significant archi
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service preflight exposes safe environment result', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_preflight');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
-    [$service] = kiwi_test_health_service(
+    $archive_service = null;
+    [$service, $archive_service] = kiwi_test_health_service(
         $root,
         $now,
-        static function (): array {
+        static function (string $scratch_path) use (&$archive_service): array {
+            if (!$archive_service instanceof Kiwi_Retention_Sqlite_Archive_Service) {
+                throw new RuntimeException('Archive service was not available to the preflight runner.');
+            }
+            kiwi_assert_true(
+                dirname($scratch_path) !== $archive_service->get_archive_directory(),
+                'Expected preflight SQLite to stay outside the discoverable archive root.'
+            );
+            kiwi_assert_true(
+                strpos(
+                    basename(dirname($scratch_path)),
+                    '.kiwi_retention_health_preflight_'
+                ) === 0,
+                'Expected a hidden, unique preflight scratch directory.'
+            );
+            kiwi_assert_same(
+                ['kiwi_retention_archive_2026.sqlite'],
+                array_column($archive_service->list_archive_files(), 'name'),
+                'Expected concurrent archive discovery to exclude the preflight SQLite file.'
+            );
+
             return [
                 'result' => 'ok',
                 'reason_code' => 'sqlite_check_ok',
@@ -2006,6 +2203,10 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service preflight exposes safe envi
                 'child_running' => false,
             ];
         }
+    );
+    kiwi_test_create_retention_archive(
+        $archive_service,
+        'kiwi_retention_archive_2026.sqlite'
     );
 
     try {
@@ -2031,6 +2232,15 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service preflight exposes safe envi
                 true,
                 $result['checks']['lock_released_after_child_termination'] ?? false,
                 'Expected child termination to release the OS lock.'
+            );
+            kiwi_assert_same(
+                [],
+                glob(
+                    $archive_service->get_archive_directory()
+                    . DIRECTORY_SEPARATOR
+                    . '.kiwi_retention_health_preflight_*'
+                ) ?: [],
+                'Expected preflight scratch cleanup after the child exits.'
             );
         } else {
             kiwi_assert_same('error', $result['result'] ?? '', 'Expected missing PDO SQLite to fail preflight.');
