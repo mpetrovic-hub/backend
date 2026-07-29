@@ -38,7 +38,7 @@ The daily retention cron is only a scheduler. The active recurring hook is `kiwi
 
 The scheduler:
 
-1. Marks unfinished runs with an `updated_at` heartbeat older than 30 minutes as `failed` with `error_code=cron_timeout_suspected` before looking for an active run. An existing `worker_phase` is retained; an empty phase becomes `stale_unknown`. Each run newly transitioned by this call also writes an idempotent shared operational event; see `operational-events-runbook.md`.
+1. Marks non-resumable unfinished runs with an `updated_at` heartbeat older than 30 minutes as `failed` with `error_code=cron_timeout_suspected` before looking for an active run. Receipt-safe archive/delete phases remain open so a later worker can reconcile them from persisted SQLite evidence. An existing failed `worker_phase` is retained; an empty phase becomes `stale_unknown`. Each run newly transitioned by this call also writes an idempotent shared operational event; see `operational-events-runbook.md`.
 2. Runs the coverage gate.
 3. Captures the `before_cleanup` growth snapshot.
 4. Freezes `target_max_primary_key` for rows with `created_at < cutoff_value`.
@@ -61,7 +61,7 @@ Worker state is stored on `wp_kiwi_retention_cleanup_runs` with:
 
 Active runs use `pending`, `running`, `partial`, `completed`, or `failed` statuses. If a scheduler run sees an existing open worker run for `landing_page_sessions`, it does not create a second cleanup run; it reschedules the worker and records that the active run was rescheduled.
 
-The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases are `coverage_gate_running`, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases are `archive_running`, `delete_running`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
+The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases are `coverage_gate_running`, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases include `archive_running`, `receipt_repair_running`, `receipt_verified`, `delete_running`, `archive_partial`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
 
 ## Archive/delete safety contract
 
@@ -75,21 +75,81 @@ It reads only:
 
 Rows are ordered by primary key. Later old imports below the same cutoff but above the frozen target are left for a later gated run.
 
-The first worker chunk's `archive_db_path` remains the archive file of record for all resumed chunks in the same cleanup run. After each archive chunk, SQLite `quick_check` must return `ok` before any MySQL delete is attempted.
+The first worker chunk's `archive_db_path` remains the archive generation of record for all resumed chunks in the same cleanup run. The worker and the external health controller share a non-blocking OS `flock` file beside that generation. The worker holds it from the start of SQLite archive work through persisted receipt verification, the bounded MySQL delete, and the following audit update.
 
 Delete remains bound to archive evidence:
 
 - Each chunk writes archive rows and `archive_batch_rows` in one SQLite transaction.
 - Prior `archive_batch_rows` for the same `archive_batch_id` are not cleared.
-- Only primary keys returned for the archived chunk are deleted from MySQL.
-- Progress is persisted after every successful chunk.
+- After commit, the worker reopens the SQLite database and verifies the exact batch identity, receipt IDs, and matching archive rows.
+- The verified receipt and archive cursor are persisted before any MySQL delete.
+- Only still-present MySQL primary keys from that persisted receipt are deleted.
+- The logical delete cursor advances for the complete verified receipt. This safely reconciles a crash after a partial or complete MySQL delete but before its audit update.
+- A missing or mismatched receipt gets exactly one idempotent archive repair attempt. If the re-read still fails, deletion remains blocked and a central `retention_archive_receipt_invalid` Operational Incident is raised.
 - The next single event is scheduled after the configured delay when more rows remain.
 
-On archive, quick-check, delete, final `integrity_check`, or audit persistence failure, the run is marked `failed` and no automatic retry counter advances destructive work. A lock-active worker invocation is not a failure; it does no work and reschedules.
+The crash-safe sequence covers failures before/after SQLite commit, before/after receipt-audit persistence, during/after MySQL delete, and after delete-audit persistence. A later worker always starts from the two persisted cursors; it never treats an in-memory list as the delete gate.
 
-After the final chunk, the worker runs SQLite `integrity_check`, captures the `after_cleanup` snapshot, and marks the run `completed`.
+Global SQLite `quick_check` and `integrity_check` are not run inside WordPress WP-Cron or web requests. After the final receipt/delete/audit chunk, the worker captures the `after_cleanup` snapshot and marks the run `completed`; archive-wide health remains the external controller's responsibility.
+
+On archive or receipt failure, destructive progress stops. A lock-active worker invocation is not a failure; it does no work and reschedules. When an audit write after a delete cannot be confirmed, the worker leaves the receipt cursor resumable instead of terminally discarding the recovery state.
 
 A failed `before_cleanup` snapshot is fail-closed: no worker is scheduled and the cleanup run is marked failed with `snapshot_before_failed`. If the `after_cleanup` snapshot fails after archive/delete already completed successfully, the run stays `completed` and records `error_code=snapshot_after_failed` as an operational warning; completed destructive work is not misreported as failed.
+
+## External SQLite archive health controller
+
+The repository-owned runner is `tools/database/kiwi-retention-archive-health.php`. It is an external WP-CLI surface and must be invoked with `--require` before WordPress loads. Run these commands from the WordPress document root:
+
+```bash
+wp --require=wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health preflight
+wp --require=wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health scheduled
+wp --require=wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health status
+wp --require=wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health diagnose --archive=kiwi_retention_archive_2026.sqlite --check=quick
+wp --require=wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health diagnose --archive=kiwi_retention_archive_2026.sqlite --check=integrity
+```
+
+`status` reads state and archive discovery only. `diagnose` accepts an exact discovered archive basename and `--check=quick|integrity`; it does not accept arbitrary paths. `preflight` verifies PDO SQLite, process supervision, the shared non-blocking lock, atomic state exchange, a scratch SQLite check, and child cleanup.
+
+Every command prints exactly one compact JSON line. Important fields are `status`, `exit_code`, `check`, `scope`, `archive`, `result`, `reason_code`, timestamps, `duration_seconds`, and `incident_action`. Exit mapping:
+
+- `ok`, `corruption_detected`, or `no_work`: `0`
+- `deferred` or `inconclusive`: `1`
+- runner, state, input, or child errors: `2`
+
+Example success and retry results:
+
+```json
+{"schema_version":1,"status":"completed","exit_code":0,"check":"quick","scope":"daily","archive":"kiwi_retention_archive_2026.sqlite","result":"ok","reason_code":"sqlite_check_ok","started_at":"2026-07-29T03:30:00+02:00","finished_at":"2026-07-29T03:30:01+02:00","duration_seconds":0.751,"incident_action":"none","child_running":false}
+{"schema_version":1,"status":"incomplete","exit_code":1,"check":"integrity","scope":"daily","archive":"kiwi_retention_archive_2026.sqlite","result":"inconclusive","reason_code":"health_child_timeout","started_at":"2026-07-29T04:00:00+02:00","finished_at":"2026-07-29T04:10:00+02:00","duration_seconds":600.0,"incident_action":"none","child_running":false}
+```
+
+The parent process starts a dedicated read-only SQLite child, enforces `KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS` (default `600` seconds; accepted range `30..3600`), and kills and reaps only that child on timeout. Override that setting only after a measured Hostinger `preflight` plus `diagnose` run shows that the current archive cannot finish safely within the default. A timeout is `inconclusive`, never proof of corruption. `KIWI_RETENTION_ARCHIVE_ROOT` continues to define the archive root and must remain a writable, protected filesystem location outside public content.
+
+The external scheduler provides three UTC slots daily:
+
+```cron
+CRON_TZ=UTC
+30 1 * * * cd /ABSOLUTE/WORDPRESS_ROOT && /ABSOLUTE/WP_CLI --path=/ABSOLUTE/WORDPRESS_ROOT --require=/ABSOLUTE/WORDPRESS_ROOT/wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health scheduled
+0 2 * * * cd /ABSOLUTE/WORDPRESS_ROOT && /ABSOLUTE/WP_CLI --path=/ABSOLUTE/WORDPRESS_ROOT --require=/ABSOLUTE/WORDPRESS_ROOT/wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health scheduled
+30 2 * * * cd /ABSOLUTE/WORDPRESS_ROOT && /ABSOLUTE/WP_CLI --path=/ABSOLUTE/WORDPRESS_ROOT --require=/ABSOLUTE/WORDPRESS_ROOT/wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php kiwi retention archive-health scheduled
+```
+
+`/ABSOLUTE/WORDPRESS_ROOT` and `/ABSOLUTE/WP_CLI` are deliberate deployment placeholders because repository code cannot safely infer Hostinger account paths. Replace them with the absolute paths proven by Production `preflight`, then store the resulting full commands in the Issue evidence.
+
+The controller interprets calendar dates and weekdays in `Europe/Berlin`: Monday through Saturday use `quick_check`; Sunday uses `integrity_check`. The second and third slots retry incomplete/deferred work. After the third incomplete attempt, it raises `retention_archive_health_check_incomplete`. From January 2 onward, free slots after the daily check process one file from the annual integrity campaign snapshot.
+
+Production activation is a separate operational step, not part of the code PR: deploy the reviewed code, run `preflight`, run both explicit `diagnose` modes against the current archive, and only then install or enable all three external cron entries. Alert on non-zero command exits and retain the compact JSON line as evidence. Review `retention_archive_health_check_incomplete` within one working day and `retention_archive_corruption_detected` within three working days.
+
+Controller state is atomically replaced at `<KIWI_RETENTION_ARCHIVE_ROOT>/sqlite/kiwi_retention_archive_health_state.json`. Invalid or contradictory JSON fails closed. The controller and worker use the same per-generation `.lock` file; a held lock returns `deferred` without waiting.
+
+A completed corruption result first raises `retention_archive_corruption_detected`, then writes a `.quarantine.json` marker beside the affected generation. Incomplete or timed-out checks never quarantine. The worker never falls back to an older archive. If its persisted generation is quarantined, it atomically closes the old cleanup run and creates a deterministic `_part_N` successor for remaining MySQL rows, using the existing cleanup-run schema. The append-only transition event is mandatory and is retried idempotently before the successor may delete source rows. The first successful successor receipt/delete/audit batch resolves the corruption incident with `resolution_reason=quarantined_and_replaced`. Existing rows already deleted into the corrupt archive cannot be reconstructed automatically and remain an operator-review concern.
+
+Emergency stop and restart:
+
+1. Stop only the three external archive-health cron entries. Do not disable the retention worker, delete archive/state/quarantine files, or change database rows.
+2. Preserve the one-line JSON output, `status` result, related Operational Incident, and affected archive name for diagnosis.
+3. After reviewed code/config remediation, run `preflight`, `status`, and both explicit `diagnose` modes.
+4. Re-enable the three external cron entries only when those checks are green. Do not reset the controller state; it is the retry and annual-campaign audit trail.
 
 ## Landing-session raw-context compaction
 
@@ -160,6 +220,8 @@ When validating retention behavior:
 4. Confirm `wp_kiwi_retention_cleanup_runs` shows `pending` or `partial` worker state with frozen `target_max_primary_key`.
 5. Confirm cleanup uses the effective cutoff returned by the coverage gate.
 6. Confirm archive evidence exists before MySQL delete.
-7. Confirm failed archive, quick-check, delete, integrity-check, or audit persistence stops destructive progress.
-8. Confirm unfinished runs older than 30 minutes are marked `failed` with their last known phase before the next scheduler or worker proceeds.
-9. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.
+7. Confirm every MySQL delete is preceded by a persisted exact SQLite receipt and that receipt/delete cursors match after completion.
+8. Confirm receipt-safe archive/delete phases remain resumable while non-resumable stale runs are marked `failed`.
+9. Run archive-health `preflight`, then verify the three external UTC slots and one-line JSON/exit-code monitoring.
+10. Confirm incomplete checks raise an incident only after the third slot and only completed corruption writes quarantine state.
+11. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.

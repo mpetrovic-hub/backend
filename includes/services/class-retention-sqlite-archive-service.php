@@ -13,6 +13,142 @@ class Kiwi_Retention_Sqlite_Archive_Service
         $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
     }
 
+    public function get_archive_directory(): string
+    {
+        return rtrim($this->config->get_retention_archive_root(), '/\\')
+            . DIRECTORY_SEPARATOR
+            . 'sqlite';
+    }
+
+    public function resolve_archive_db_path(string $existing_archive_db_path = ''): string
+    {
+        $this->ensure_archive_directory($this->get_archive_directory());
+
+        if ($existing_archive_db_path !== '') {
+            if (!$this->is_safe_archive_path($existing_archive_db_path)) {
+                throw new RuntimeException('Persisted retention archive path is outside the configured archive directory.');
+            }
+
+            return $existing_archive_db_path;
+        }
+
+        $year = substr($this->current_time_mysql(), 0, 4);
+        $archives = $this->list_archive_files();
+        $highest_generation = 0;
+        $highest_path = '';
+
+        foreach ($archives as $archive) {
+            if ((string) ($archive['year'] ?? '') !== $year) {
+                continue;
+            }
+
+            $generation = (int) ($archive['generation'] ?? 0);
+            if ($generation > $highest_generation) {
+                $highest_generation = $generation;
+                $highest_path = (string) ($archive['path'] ?? '');
+            }
+        }
+
+        if ($highest_generation <= 0) {
+            return $this->build_generation_path($year, 1);
+        }
+
+        if ($highest_path !== '' && !$this->is_quarantined($highest_path)) {
+            return $highest_path;
+        }
+
+        return $this->build_generation_path($year, $highest_generation + 1);
+    }
+
+    public function list_archive_files(): array
+    {
+        $directory = $this->get_archive_directory();
+        if (!is_dir($directory)) {
+            return [];
+        }
+
+        $paths = glob($directory . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_*.sqlite');
+        $paths = is_array($paths) ? $paths : [];
+        $archives = [];
+
+        foreach ($paths as $path) {
+            if (!is_file($path) || is_link($path) || !$this->is_safe_archive_path($path)) {
+                continue;
+            }
+
+            $identity = $this->parse_generation_filename(basename($path));
+            if ($identity === null) {
+                continue;
+            }
+
+            $archives[] = array_merge($identity, [
+                'name' => basename($path),
+                'path' => $path,
+                'quarantined' => $this->is_quarantined($path),
+                'size_bytes' => (int) (@filesize($path) ?: 0),
+            ]);
+        }
+
+        usort($archives, static function (array $left, array $right): int {
+            $year_compare = strcmp((string) ($left['year'] ?? ''), (string) ($right['year'] ?? ''));
+            if ($year_compare !== 0) {
+                return $year_compare;
+            }
+
+            return (int) ($left['generation'] ?? 0) <=> (int) ($right['generation'] ?? 0);
+        });
+
+        return $archives;
+    }
+
+    public function is_quarantined(string $archive_db_path): bool
+    {
+        return $this->is_safe_archive_path($archive_db_path)
+            && is_file($this->get_quarantine_marker_path($archive_db_path));
+    }
+
+    public function get_quarantine_marker_path(string $archive_db_path): string
+    {
+        if (!$this->is_safe_archive_path($archive_db_path)) {
+            throw new RuntimeException('Retention archive quarantine path is invalid.');
+        }
+
+        return $archive_db_path . '.quarantine.json';
+    }
+
+    public function mark_quarantined(string $archive_db_path, array $details): bool
+    {
+        if (!is_file($archive_db_path) || !$this->is_safe_archive_path($archive_db_path)) {
+            return false;
+        }
+
+        $marker_path = $this->get_quarantine_marker_path($archive_db_path);
+        if (is_file($marker_path)) {
+            return true;
+        }
+
+        $payload = [
+            'schema_version' => 1,
+            'archive' => basename($archive_db_path),
+            'detected_at' => (string) ($details['detected_at'] ?? $this->current_time_mysql()),
+            'check' => (string) ($details['check'] ?? ''),
+            'reason_code' => (string) ($details['reason_code'] ?? 'sqlite_corruption_confirmed'),
+        ];
+        $json = function_exists('wp_json_encode')
+            ? wp_json_encode($payload)
+            : json_encode($payload);
+        if (!is_string($json)) {
+            return false;
+        }
+
+        return $this->write_atomic_file($marker_path, $json . "\n");
+    }
+
+    public function get_relative_archive_name(string $archive_db_path): string
+    {
+        return $this->is_safe_archive_path($archive_db_path) ? basename($archive_db_path) : '';
+    }
+
     public function archive_eligible_rows(
         array $source,
         string $cutoff_value,
@@ -101,14 +237,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $pdo->commit();
             $transaction_started = false;
 
-            $integrity_check = (string) $pdo->query('PRAGMA integrity_check')->fetchColumn();
-            $result['archive_integrity_check'] = $integrity_check;
-            $result['success'] = strtolower($integrity_check) === 'ok';
-
-            if (!$result['success']) {
-                $result['error_code'] = 'sqlite_integrity_check_failed';
-                $result['error_message'] = 'SQLite archive integrity check returned: ' . $integrity_check;
-            }
+            $result['archive_integrity_check'] = 'deferred_to_external_health_runner';
+            $result['success'] = true;
 
             $this->finish_archive_batch($pdo, $archive_batch_id, $result);
         } catch (Throwable $error) {
@@ -165,6 +295,197 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return $ids;
     }
 
+    public function verify_batch_receipt(
+        array $source,
+        string $archive_db_path,
+        string $archive_batch_id,
+        array $expected_primary_keys
+    ): array {
+        $expected_primary_keys = $this->normalize_primary_keys($expected_primary_keys);
+        $result = [
+            'success' => false,
+            'archive_batch_id' => $archive_batch_id,
+            'primary_keys' => [],
+            'expected_count' => count($expected_primary_keys),
+            'receipt_count' => 0,
+            'archive_row_count' => 0,
+            'last_primary_key' => empty($expected_primary_keys) ? 0 : max($expected_primary_keys),
+            'error_code' => '',
+            'error_message' => '',
+        ];
+
+        if (!class_exists('PDO')
+            || $archive_batch_id === ''
+            || empty($expected_primary_keys)
+            || !is_file($archive_db_path)
+            || !$this->is_safe_archive_path($archive_db_path)
+        ) {
+            $result['error_code'] = 'archive_receipt_input_invalid';
+            $result['error_message'] = 'Archive receipt verification input is invalid.';
+
+            return $result;
+        }
+
+        $source_table = (string) ($source['source_table'] ?? '');
+        if (!$this->is_identifier($source_table)) {
+            $result['error_code'] = 'archive_receipt_source_invalid';
+            $result['error_message'] = 'Archive receipt source definition is invalid.';
+
+            return $result;
+        }
+
+        try {
+            $pdo = new PDO('sqlite:' . $archive_db_path);
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $batch_statement = $pdo->prepare(
+                'SELECT source_key, source_table
+                 FROM archive_batches
+                 WHERE archive_batch_id = :archive_batch_id
+                 LIMIT 1'
+            );
+            $batch_statement->execute([':archive_batch_id' => $archive_batch_id]);
+            $batch = $batch_statement->fetch(PDO::FETCH_ASSOC);
+
+            if (!is_array($batch)
+                || (string) ($batch['source_key'] ?? '') !== (string) ($source['source_key'] ?? '')
+                || (string) ($batch['source_table'] ?? '') !== $source_table
+            ) {
+                $result['error_code'] = 'archive_receipt_batch_identity_mismatch';
+                $result['error_message'] = 'Archive receipt batch identity does not match the cleanup source.';
+
+                return $result;
+            }
+
+            $receipt_primary_keys = [];
+            $archive_primary_keys = [];
+            $archive_table = $this->quote_identifier($source_table);
+
+            foreach (array_chunk($expected_primary_keys, 500) as $chunk) {
+                $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
+                $receipt_statement = $pdo->prepare(
+                    'SELECT source_pk
+                     FROM archive_batch_rows
+                     WHERE archive_batch_id = ?
+                       AND source_pk IN (' . $placeholders . ')
+                     ORDER BY source_pk ASC'
+                );
+                $receipt_statement->execute(array_merge([$archive_batch_id], $chunk));
+                $receipt_primary_keys = array_merge(
+                    $receipt_primary_keys,
+                    array_map('intval', $receipt_statement->fetchAll(PDO::FETCH_COLUMN))
+                );
+
+                $archive_statement = $pdo->prepare(
+                    'SELECT _source_pk
+                     FROM ' . $archive_table . '
+                     WHERE _source_pk IN (' . $placeholders . ')
+                     ORDER BY _source_pk ASC'
+                );
+                $archive_statement->execute($chunk);
+                $archive_primary_keys = array_merge(
+                    $archive_primary_keys,
+                    array_map('intval', $archive_statement->fetchAll(PDO::FETCH_COLUMN))
+                );
+            }
+
+            $receipt_primary_keys = $this->normalize_primary_keys($receipt_primary_keys);
+            $archive_primary_keys = $this->normalize_primary_keys($archive_primary_keys);
+            $result['primary_keys'] = $receipt_primary_keys;
+            $result['receipt_count'] = count($receipt_primary_keys);
+            $result['archive_row_count'] = count($archive_primary_keys);
+
+            if ($receipt_primary_keys !== $expected_primary_keys
+                || $archive_primary_keys !== $expected_primary_keys
+            ) {
+                $result['error_code'] = 'archive_receipt_mismatch';
+                $result['error_message'] = 'Persisted archive receipt IDs or archive rows do not match the expected chunk.';
+
+                return $result;
+            }
+
+            $result['success'] = true;
+
+            return $result;
+        } catch (Throwable $error) {
+            $result['error_code'] = 'archive_receipt_read_failed';
+            $result['error_message'] = 'Persisted archive receipt could not be read safely.';
+
+            return $result;
+        }
+    }
+
+    public function fetch_verified_receipt_batch(
+        array $source,
+        string $archive_db_path,
+        string $archive_batch_id,
+        int $last_primary_key,
+        int $through_primary_key,
+        int $batch_limit
+    ): array {
+        $result = [
+            'success' => false,
+            'primary_keys' => [],
+            'last_primary_key' => max(0, $last_primary_key),
+            'has_more' => false,
+            'error_code' => '',
+            'error_message' => '',
+        ];
+
+        if ($through_primary_key <= $last_primary_key) {
+            $result['success'] = true;
+
+            return $result;
+        }
+
+        try {
+            $primary_keys = $this->fetch_archived_primary_key_batch(
+                $source,
+                $archive_db_path,
+                $archive_batch_id,
+                $last_primary_key,
+                $batch_limit
+            );
+            $primary_keys = array_values(array_filter(
+                $primary_keys,
+                static function (int $primary_key) use ($through_primary_key): bool {
+                    return $primary_key <= $through_primary_key;
+                }
+            ));
+
+            if (empty($primary_keys)) {
+                $result['error_code'] = 'archive_receipt_progress_missing';
+                $result['error_message'] = 'Persisted archive receipt does not cover audited archive progress.';
+
+                return $result;
+            }
+
+            $verified = $this->verify_batch_receipt(
+                $source,
+                $archive_db_path,
+                $archive_batch_id,
+                $primary_keys
+            );
+            if (empty($verified['success'])) {
+                return array_merge($result, [
+                    'error_code' => (string) ($verified['error_code'] ?? 'archive_receipt_mismatch'),
+                    'error_message' => (string) ($verified['error_message'] ?? 'Archive receipt verification failed.'),
+                ]);
+            }
+
+            $result['success'] = true;
+            $result['primary_keys'] = $primary_keys;
+            $result['last_primary_key'] = max($primary_keys);
+            $result['has_more'] = $result['last_primary_key'] < $through_primary_key;
+
+            return $result;
+        } catch (Throwable $error) {
+            $result['error_code'] = 'archive_receipt_read_failed';
+            $result['error_message'] = 'Persisted archive receipt could not be read safely.';
+
+            return $result;
+        }
+    }
+
     public function archive_primary_key_chunk(
         array $source,
         string $cutoff_value,
@@ -185,7 +506,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
             'archived_primary_keys' => [],
             'last_primary_key' => max(0, $last_primary_key),
             'has_more' => false,
-            'quick_check' => '',
+            'receipt_status' => '',
             'error_code' => '',
             'error_message' => '',
         ];
@@ -219,6 +540,9 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $archive_db_path = $archive_db_path !== '' ? $archive_db_path : $this->build_archive_db_path();
             $result['archive_db_path'] = $archive_db_path;
             $this->ensure_archive_directory(dirname($archive_db_path));
+            if (!$this->is_safe_archive_path($archive_db_path)) {
+                throw new RuntimeException('Retention archive path is outside the configured archive directory.');
+            }
 
             $pdo = new PDO('sqlite:' . $archive_db_path);
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -272,14 +596,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $pdo->commit();
             $transaction_started = false;
 
-            $quick_check = (string) $pdo->query('PRAGMA quick_check')->fetchColumn();
-            $result['quick_check'] = $quick_check;
-            $result['success'] = strtolower($quick_check) === 'ok';
-
-            if (!$result['success']) {
-                $result['error_code'] = 'sqlite_quick_check_failed';
-                $result['error_message'] = 'SQLite archive quick_check returned: ' . $quick_check;
-            }
+            $result['receipt_status'] = 'pending_verification';
+            $result['success'] = true;
 
             $result['has_more'] = $this->has_more_source_rows(
                 $source,
@@ -298,18 +616,6 @@ class Kiwi_Retention_Sqlite_Archive_Service
         }
 
         return $result;
-    }
-
-    public function run_integrity_check(string $archive_db_path): string
-    {
-        if (!class_exists('PDO') || $archive_db_path === '' || !is_file($archive_db_path)) {
-            return '';
-        }
-
-        $pdo = new PDO('sqlite:' . $archive_db_path);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
-        return (string) $pdo->query('PRAGMA integrity_check')->fetchColumn();
     }
 
     protected function fetch_source_rows(
@@ -410,11 +716,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
 
     protected function build_archive_db_path(): string
     {
-        $archive_root = $this->config->get_retention_archive_root();
-        $archive_root = rtrim($archive_root, '/\\');
-        $year = substr($this->current_time_mysql(), 0, 4);
-
-        return $archive_root . DIRECTORY_SEPARATOR . 'sqlite' . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_' . $year . '.sqlite';
+        return $this->resolve_archive_db_path();
     }
 
     private function ensure_archive_directory(string $directory): void
@@ -677,6 +979,106 @@ class Kiwi_Retention_Sqlite_Archive_Service
         $statement->bindValue(':archive_batch_id', $archive_batch_id, PDO::PARAM_STR);
         $statement->bindValue(':source_pk', $source_pk, PDO::PARAM_INT);
         $statement->execute();
+    }
+
+    private function build_generation_path(string $year, int $generation): string
+    {
+        if (preg_match('/^[0-9]{4}$/', $year) !== 1) {
+            throw new InvalidArgumentException('Retention archive year is invalid.');
+        }
+
+        $generation = max(1, $generation);
+        $suffix = $generation === 1 ? '' : '_part_' . $generation;
+
+        return $this->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_'
+            . $year
+            . $suffix
+            . '.sqlite';
+    }
+
+    private function parse_generation_filename(string $filename): ?array
+    {
+        if (preg_match(
+            '/^kiwi_retention_archive_([0-9]{4})(?:_part_([2-9][0-9]*))?\.sqlite$/',
+            $filename,
+            $matches
+        ) !== 1) {
+            return null;
+        }
+
+        return [
+            'year' => (string) $matches[1],
+            'generation' => isset($matches[2]) ? (int) $matches[2] : 1,
+        ];
+    }
+
+    private function is_safe_archive_path(string $archive_db_path): bool
+    {
+        $archive_db_path = trim($archive_db_path);
+        $identity = $this->parse_generation_filename(basename($archive_db_path));
+        if ($archive_db_path === '' || $identity === null) {
+            return false;
+        }
+
+        $archive_directory = $this->get_archive_directory();
+        $archive_directory_real = realpath($archive_directory);
+        $path_directory_real = realpath(dirname($archive_db_path));
+
+        if (!is_string($archive_directory_real)
+            || !is_string($path_directory_real)
+            || rtrim($archive_directory_real, '/\\') !== rtrim($path_directory_real, '/\\')
+        ) {
+            return false;
+        }
+
+        return !is_link($archive_db_path);
+    }
+
+    private function write_atomic_file(string $target_path, string $contents): bool
+    {
+        $directory = dirname($target_path);
+        if (!is_dir($directory) || !is_writable($directory)) {
+            return false;
+        }
+
+        try {
+            $suffix = function_exists('random_bytes')
+                ? bin2hex(random_bytes(8))
+                : substr(md5(uniqid('', true)), 0, 16);
+        } catch (Throwable $error) {
+            $suffix = substr(md5(uniqid('', true)), 0, 16);
+        }
+
+        $temporary_path = $target_path . '.tmp.' . $suffix;
+        $written = @file_put_contents($temporary_path, $contents, LOCK_EX);
+        if ($written === false || $written !== strlen($contents)) {
+            @unlink($temporary_path);
+
+            return false;
+        }
+
+        if (!@rename($temporary_path, $target_path)) {
+            @unlink($temporary_path);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private function normalize_primary_keys(array $primary_keys): array
+    {
+        $primary_keys = array_values(array_unique(array_filter(
+            array_map('intval', $primary_keys),
+            static function (int $primary_key): bool {
+                return $primary_key > 0;
+            }
+        )));
+        sort($primary_keys, SORT_NUMERIC);
+
+        return $primary_keys;
     }
 
     private function quote_identifier(string $identifier): string
