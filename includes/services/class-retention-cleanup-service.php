@@ -75,7 +75,16 @@ class Kiwi_Retention_Cleanup_Service
             ];
         }
 
-        $existing_run = $this->run_repository->find_open_run_for_source($source_key);
+        try {
+            $existing_run = $this->run_repository->find_open_run_for_source($source_key);
+        } catch (Throwable $error) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'open_run_lookup_failed',
+                'error_message' => 'Retention cleanup stopped because the open-run audit lookup failed.',
+            ];
+        }
 
         if (is_array($existing_run)) {
             if ((string) ($existing_run['status'] ?? '') === 'blocked') {
@@ -463,7 +472,16 @@ class Kiwi_Retention_Cleanup_Service
             ];
         }
 
-        $run = $this->run_repository->find_open_run_for_source($source_key);
+        try {
+            $run = $this->run_repository->find_open_run_for_source($source_key);
+        } catch (Throwable $error) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'open_run_lookup_failed',
+                'error_message' => 'Retention worker stopped because the open-run audit lookup failed.',
+            ];
+        }
 
         if (!is_array($run)) {
             return [
@@ -1113,30 +1131,11 @@ class Kiwi_Retention_Cleanup_Service
         array $receipt
     ): array {
         $reason_code = (string) ($receipt['error_code'] ?? 'archive_receipt_mismatch');
-        $incident_saved = $this->operational_event_service->record_failure([
-            'area' => 'retention',
-            'severity' => 'critical',
-            'event_type' => 'retention_archive_receipt_invalid',
-            'correlation_key' => 'retention_archive_receipt_' . hash(
-                'sha256',
-                (string) ($run['run_id'] ?? '') . ':' . basename($archive_db_path)
-            ),
-            'idempotency_key' => 'retention_archive_receipt_' . hash(
-                'sha256',
-                (string) ($run['run_id'] ?? '') . ':' . $reason_code
-            ),
-            'reference_type' => 'retention_cleanup_run',
-            'reference_id' => (string) ($run['run_id'] ?? ''),
-            'message' => 'Persisted SQLite receipt verification failed; MySQL deletion was blocked.',
-            'raw_error_text' => $reason_code,
-            'context' => [
-                'archive' => basename($archive_db_path),
-                'reason_code' => $reason_code,
-                'repair_attempted' => (string) ($run['archive_integrity_check'] ?? '')
-                    === 'receipt_repair_attempted',
-                'operator_review_within_workdays' => 1,
-            ],
-        ]);
+        $incident_saved = $this->record_invalid_receipt_incident(
+            $run,
+            $archive_db_path,
+            $reason_code
+        );
 
         $blocked = [
             'success' => false,
@@ -1160,6 +1159,37 @@ class Kiwi_Retention_Cleanup_Service
         }
 
         return $blocked;
+    }
+
+    private function record_invalid_receipt_incident(
+        array $run,
+        string $archive_db_path,
+        string $reason_code
+    ): bool {
+        return $this->operational_event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'critical',
+            'event_type' => 'retention_archive_receipt_invalid',
+            'correlation_key' => 'retention_archive_receipt_' . hash(
+                'sha256',
+                (string) ($run['run_id'] ?? '') . ':' . basename($archive_db_path)
+            ),
+            'idempotency_key' => 'retention_archive_receipt_' . hash(
+                'sha256',
+                (string) ($run['run_id'] ?? '') . ':' . $reason_code
+            ),
+            'reference_type' => 'retention_cleanup_run',
+            'reference_id' => (string) ($run['run_id'] ?? ''),
+            'message' => 'Persisted SQLite receipt verification failed; MySQL deletion was blocked.',
+            'raw_error_text' => $reason_code,
+            'context' => [
+                'archive' => basename($archive_db_path),
+                'reason_code' => $reason_code,
+                'repair_attempted' => (string) ($run['archive_integrity_check'] ?? '')
+                    === 'receipt_repair_attempted',
+                'operator_review_within_workdays' => 1,
+            ],
+        ]);
     }
 
     private function resolve_quarantine_recoveries_after_batch(array $run): bool
@@ -1265,6 +1295,18 @@ class Kiwi_Retention_Cleanup_Service
         $worker_phase = trim((string) ($run['worker_phase'] ?? ''));
         $error_code = trim((string) ($run['error_code'] ?? ''));
         $error_message = trim((string) ($run['error_message'] ?? ''));
+        if ($error_code === 'archive_receipt_incident_persist_failed'
+            && $this->record_invalid_receipt_incident(
+                $run,
+                (string) ($run['archive_db_path'] ?? ''),
+                'archive_receipt_verification_failed'
+            )
+            && $this->update_run_progress((int) ($run['id'] ?? 0), [
+                'error_code' => 'archive_receipt_verification_failed',
+            ])
+        ) {
+            $error_code = 'archive_receipt_verification_failed';
+        }
 
         return [
             'success' => false,

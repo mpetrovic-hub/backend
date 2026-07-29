@@ -149,6 +149,9 @@ class Kiwi_Retention_Cleanup_Run_Repository
             ),
             ARRAY_A
         );
+        if (trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('Retention cleanup open-run lookup failed.');
+        }
 
         return is_array($row) ? $row : null;
     }

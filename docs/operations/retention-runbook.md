@@ -59,7 +59,7 @@ Worker state is stored on `wp_kiwi_retention_cleanup_runs` with:
 - `worker_last_started_at`
 - `worker_last_finished_at`
 
-Runs use `pending`, `running`, `partial`, `blocked`, `completed`, or `failed` statuses. If a scheduler run sees an existing open worker run for `landing_page_sessions`, it does not create a second cleanup run; it reschedules the worker and records that the active run was rescheduled. A `blocked` receipt run remains unfinished and owns its frozen source scope, but normal scheduler and worker invocations do not retry it; only the bounded repository-owned recovery path may make it resumable again.
+Runs use `pending`, `running`, `partial`, `blocked`, `completed`, or `failed` statuses. If a scheduler run sees an existing open worker run for `landing_page_sessions`, it does not create a second cleanup run; it reschedules the worker and records that the active run was rescheduled. An open-run lookup error fails closed and never means that a new run may be created. A `blocked` receipt run remains unfinished and owns its frozen source scope. Normal scheduler and worker invocations may idempotently retry a missing central Receipt Incident, but they never repeat the receipt repair or resume archive/delete work; only the bounded repository-owned recovery path may make the run resumable again.
 
 The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases are `coverage_gate_running`, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases include `archive_running`, `archive_corruption_blocked`, `receipt_repair_running`, `receipt_blocked`, `receipt_verified`, `delete_running`, `archive_partial`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
 
@@ -85,7 +85,7 @@ Delete remains bound to archive evidence:
 - The verified receipt and archive cursor are persisted before any MySQL delete.
 - Only still-present MySQL primary keys from that persisted receipt are deleted.
 - The logical delete cursor advances for the complete verified receipt. This safely reconciles a crash after a partial or complete MySQL delete but before its audit update.
-- A missing or mismatched receipt gets exactly one idempotent archive repair attempt. If the re-read still fails, deletion remains blocked, the same unfinished run enters `status=blocked` / `worker_phase=receipt_blocked`, and a central `retention_archive_receipt_invalid` Operational Incident is raised. Normal cron calls neither create an overlapping run nor repeat the repair.
+- A missing or mismatched receipt gets exactly one idempotent archive repair attempt. If the re-read still fails, deletion remains blocked, the same unfinished run enters `status=blocked` / `worker_phase=receipt_blocked`, and a central `retention_archive_receipt_invalid` Operational Incident is raised. A transient Incident-write failure is retried idempotently while the run stays blocked. Normal cron calls neither create an overlapping run nor repeat the repair.
 - The next single event is scheduled after the configured delay when more rows remain.
 
 The crash-safe sequence covers failures before/after SQLite commit, before/after receipt-audit persistence, during/after MySQL delete, and after delete-audit persistence. A later worker always starts from the two persisted cursors; it never treats an in-memory list as the delete gate.

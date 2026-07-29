@@ -1448,6 +1448,22 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
     }
 }
 
+class Kiwi_Test_One_Failure_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
+{
+    public $fail_next_insert = false;
+
+    public function insert_event(array $event): int
+    {
+        if ($this->fail_next_insert) {
+            $this->fail_next_insert = false;
+
+            return 0;
+        }
+
+        return parent::insert_event($event);
+    }
+}
+
 class Kiwi_Test_Operational_Event_Cleanup_Config extends Kiwi_Config
 {
     public function get_operational_events_retention_days(): int
@@ -1488,6 +1504,7 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public $stale_detection_calls = [];
     public $quarantine_successor_result = null;
     public $quarantine_successor_calls = [];
+    public $open_run_lookup_failure = false;
     private $next_id = 1;
 
     public function create_table(): void
@@ -1521,6 +1538,10 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
     public function find_open_run_for_source(string $source_key): ?array
     {
+        if ($this->open_run_lookup_failure) {
+            throw new RuntimeException('Synthetic open-run lookup failure.');
+        }
+
         foreach ($this->rows as $row) {
             if (($row['source_key'] ?? '') !== $source_key) {
                 continue;
@@ -12773,6 +12794,26 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate requires current TK-zone PID-set cov
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when open-run lookup errors', function (): void {
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->open_run_lookup_failure = true;
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+
+    $scheduler = $service->run_source('landing_page_sessions', 'cron');
+    $worker = $service->run_worker('landing_page_sessions');
+
+    kiwi_assert_same('open_run_lookup_failed', $scheduler['error_code'] ?? '', 'Expected scheduler lookup failure to stop new work.');
+    kiwi_assert_same('open_run_lookup_failed', $worker['error_code'] ?? '', 'Expected worker lookup failure to stop archive work.');
+    kiwi_assert_same([], $runs->rows, 'Expected no overlapping cleanup run after an ambiguous lookup.');
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service records disabled landing-page-session runs without archive or delete', function (): void {
     global $wpdb;
 
@@ -13478,7 +13519,8 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks deletes after one failed re
             'error_message' => 'Receipt mismatch after repair.',
         ],
     ];
-    $events = new Kiwi_Test_Operational_Event_Repository();
+    $events = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $events->fail_next_insert = true;
     $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
     $service = new Kiwi_Test_Retention_Cleanup_Service(
         new Kiwi_Config(),
@@ -13496,7 +13538,8 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks deletes after one failed re
     $result = $service->run_worker('landing_page_sessions');
 
     kiwi_assert_same(false, $result['success'], 'Expected repeated receipt failure to fail the worker.');
-    kiwi_assert_same('archive_receipt_verification_failed', $result['error_code'], 'Expected an explicit receipt gate failure.');
+    kiwi_assert_same('archive_receipt_incident_persist_failed', $result['error_code'], 'Expected transient Incident failure to stay visible.');
+    kiwi_assert_same([], $events->rows, 'Expected the first central Incident write to fail.');
     kiwi_assert_same([], $service->deleted_primary_keys, 'Expected receipt failure to block every MySQL delete.');
     kiwi_assert_same(2, count($archive->chunk_calls), 'Expected exactly one safe archive receipt repair attempt.');
     kiwi_assert_same('blocked', $runs->rows[1]['status'] ?? '', 'Expected repeated receipt failure to persist a nonterminal blocked run.');
@@ -13505,6 +13548,11 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks deletes after one failed re
     $scheduler_retry = $service->run_source('landing_page_sessions', 'cron');
     $worker_retry = $service->run_worker('landing_page_sessions');
     kiwi_assert_same('blocked', $scheduler_retry['status'] ?? '', 'Expected scheduler to retain the same blocked run.');
+    kiwi_assert_same(
+        'archive_receipt_verification_failed',
+        $scheduler_retry['error_code'] ?? '',
+        'Expected blocked scheduler lookup to retry and persist the missing Incident.'
+    );
     kiwi_assert_true(empty($scheduler_retry['schedule_worker']), 'Expected normal scheduler not to start blocked-run recovery.');
     kiwi_assert_same('blocked', $worker_retry['status'] ?? '', 'Expected normal worker to leave controlled recovery blocked.');
     kiwi_assert_same(1, count($runs->rows), 'Expected no overlapping cleanup run for the blocked source scope.');

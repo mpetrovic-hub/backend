@@ -129,6 +129,13 @@ class Kiwi_Test_Wpdb_Open_Archive_Lookup
 
         return $this->rows;
     }
+
+    public function get_row($statement, $output = null)
+    {
+        $this->get_results($statement, $output);
+
+        return null;
+    }
 }
 
 class Kiwi_Test_Flaky_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
@@ -1046,6 +1053,15 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Run_Repository distinguishes active archiv
     $repository = new Kiwi_Retention_Cleanup_Run_Repository();
 
     try {
+        $wpdb->last_error = 'Synthetic open-run query failure.';
+        $open_run_failed = false;
+        try {
+            $repository->find_open_run_for_source('landing_page_sessions');
+        } catch (RuntimeException $error) {
+            $open_run_failed = true;
+        }
+        kiwi_assert_true($open_run_failed, 'Expected open-run query errors to remain distinguishable.');
+
         $wpdb->last_error = 'Synthetic query failure.';
         kiwi_assert_same(null, $repository->find_open_archive_state(), 'Expected wpdb last_error to fail the lookup.');
 
