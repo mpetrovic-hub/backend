@@ -595,6 +595,43 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service raises incomplete incident 
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service resets stale daily attempt state for no work', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_no_work_reset');
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (): array {
+            return [
+                'result' => 'deferred',
+                'reason_code' => 'archive_lock_active',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+
+    try {
+        $archive_path = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $first = $service->scheduled();
+        kiwi_assert_same('deferred', $first['result'] ?? '', 'Expected persisted incomplete daily attempt fixture.');
+        @unlink($archive_path);
+
+        $no_work = $service->scheduled();
+        $status = $service->status();
+
+        kiwi_assert_same('no_work', $no_work['result'] ?? '', 'Expected no work after the incomplete archive disappears.');
+        kiwi_assert_same('ok', $status['result'] ?? '', 'Expected controller to accept its persisted no-work state.');
+        kiwi_assert_same('', $status['state']['daily']['archive'] ?? 'unexpected', 'Expected no-work archive identity reset.');
+        kiwi_assert_same(0, $status['state']['daily']['attempts'] ?? -1, 'Expected no-work attempt counter reset.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service annual campaign processes one snapshot file per free slot', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_annual');
     $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));

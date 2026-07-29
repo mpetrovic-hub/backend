@@ -454,6 +454,8 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
         if (!is_array($archive)) {
+            $state['daily']['archive'] = '';
+            $state['daily']['attempts'] = 0;
             $state['daily']['status'] = 'completed';
             $state['daily']['result'] = 'no_work';
             $state['daily']['reason_code'] = 'active_archive_unavailable';
