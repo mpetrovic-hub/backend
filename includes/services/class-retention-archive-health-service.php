@@ -426,9 +426,24 @@ class Kiwi_Retention_Archive_Health_Service
                 return $quarantine_reconciliation;
             }
 
-            if ((string) ($state['daily']['date'] ?? '') !== $date) {
+            $stored_daily_date = (string) ($state['daily']['date'] ?? '');
+            $stored_daily_status = (string) ($state['daily']['status'] ?? '');
+            $stored_attempt_date = (string) (
+                $state['daily']['attempt_date'] ?? $stored_daily_date
+            );
+            $daily_overdue = $stored_daily_date !== ''
+                && $stored_daily_date !== $date
+                && $stored_daily_status === 'incomplete';
+            if ($daily_overdue) {
+                $daily_check = $this->normalize_check((string) ($state['daily']['check'] ?? ''));
+                if ($stored_attempt_date !== $date) {
+                    $state['daily']['attempt_date'] = $date;
+                    $state['daily']['attempts'] = 0;
+                }
+            } elseif ($stored_daily_date !== $date) {
                 $state['daily'] = [
                     'date' => $date,
+                    'attempt_date' => $date,
                     'archive' => '',
                     'check' => $daily_check,
                     'attempts' => 0,
@@ -440,7 +455,12 @@ class Kiwi_Retention_Archive_Health_Service
             }
 
             if ((string) ($state['daily']['status'] ?? '') !== 'completed') {
-                return $this->run_scheduled_daily($state, $daily_check, $started_at);
+                return $this->run_scheduled_daily(
+                    $state,
+                    $daily_check,
+                    $started_at,
+                    $daily_overdue
+                );
             }
 
             return $this->run_scheduled_annual($state, $started_at);
@@ -460,7 +480,12 @@ class Kiwi_Retention_Archive_Health_Service
         }
     }
 
-    private function run_scheduled_daily(array $state, string $check, string $started_at): array
+    private function run_scheduled_daily(
+        array $state,
+        string $check,
+        string $started_at,
+        bool $overdue = false
+    ): array
     {
         if ((int) ($state['daily']['attempts'] ?? 0) >= self::DAILY_ATTEMPT_LIMIT) {
             return $this->result(
@@ -475,10 +500,24 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
 
-        $active_lookup = $this->resolve_active_archive();
+        $persisted_archive_name = (string) ($state['daily']['status'] ?? '') === 'incomplete'
+            ? $this->normalize_archive_name((string) ($state['daily']['archive'] ?? ''))
+            : '';
+        if ($persisted_archive_name !== '') {
+            $persisted_archive = $this->find_archive($persisted_archive_name);
+            $active_lookup = is_array($persisted_archive)
+                ? ['success' => true, 'archive' => $persisted_archive, 'error_code' => '']
+                : ($overdue ? [
+                    'success' => false,
+                    'archive' => null,
+                    'error_code' => 'daily_archive_unavailable',
+                ] : ['success' => true, 'archive' => null, 'error_code' => '']);
+        } else {
+            $active_lookup = $this->resolve_active_archive();
+        }
         if (empty($active_lookup['success'])) {
             $reason_code = (string) ($active_lookup['error_code'] ?? 'active_archive_lookup_failed');
-            $state['daily']['archive'] = '';
+            $state['daily']['archive'] = $persisted_archive_name;
             $state['daily']['check'] = $check;
             $state['daily']['attempts'] = (int) ($state['daily']['attempts'] ?? 0) + 1;
             $state['daily']['status'] = 'incomplete';
@@ -487,14 +526,18 @@ class Kiwi_Retention_Archive_Health_Service
             $state['daily']['completed_at'] = '';
             $incident_action = 'none';
             if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
-                if (!$this->record_incomplete_incident('', $check, $reason_code)) {
+                if (!$this->record_incomplete_incident(
+                    $persisted_archive_name,
+                    $check,
+                    $reason_code
+                )) {
                     return $this->result(
                         'error',
                         'failed',
                         2,
                         '',
                         'daily',
-                        '',
+                        $persisted_archive_name,
                         'incomplete_incident_persist_failed',
                         $started_at
                     );
@@ -502,7 +545,12 @@ class Kiwi_Retention_Archive_Health_Service
                 $incident_action = 'raised';
             }
             if (!$this->write_state($state)) {
-                return $this->state_write_failure('', 'daily', '', $started_at);
+                return $this->state_write_failure(
+                    '',
+                    'daily',
+                    $persisted_archive_name,
+                    $started_at
+                );
             }
 
             return $this->result(
@@ -511,7 +559,7 @@ class Kiwi_Retention_Archive_Health_Service
                 2,
                 '',
                 'daily',
-                '',
+                $persisted_archive_name,
                 $reason_code,
                 $started_at,
                 ['incident_action' => $incident_action]
@@ -1273,13 +1321,20 @@ class Kiwi_Retention_Archive_Health_Service
             return false;
         }
         $daily_date = $daily['date'];
+        $daily_attempt_date = array_key_exists('attempt_date', $daily)
+            ? $daily['attempt_date']
+            : $daily_date;
         $daily_archive = $daily['archive'];
         $daily_check = $daily['check'];
         $daily_reason = $daily['reason_code'];
         $daily_completed_at = $daily['completed_at'];
         $daily_archive_valid = $daily_archive === '' || $this->normalize_archive_name($daily_archive) !== '';
         if (!$daily_archive_valid
+            || !is_string($daily_attempt_date)
             || ($daily_date !== '' && !$this->is_valid_calendar_date($daily_date))
+            || ($daily_attempt_date !== '' && !$this->is_valid_calendar_date($daily_attempt_date))
+            || (($daily_date === '') !== ($daily_attempt_date === ''))
+            || ($daily_date !== '' && $daily_attempt_date < $daily_date)
             || ($daily_check !== '' && !in_array($daily_check, ['quick', 'integrity'], true))
             || ($daily_completed_at !== '' && !$this->is_valid_timestamp($daily_completed_at))
         ) {
@@ -1440,6 +1495,7 @@ class Kiwi_Retention_Archive_Health_Service
             'schema_version' => self::STATE_SCHEMA_VERSION,
             'daily' => [
                 'date' => '',
+                'attempt_date' => '',
                 'archive' => '',
                 'check' => '',
                 'attempts' => 0,
@@ -1609,6 +1665,7 @@ class Kiwi_Retention_Archive_Health_Service
                 $completed_at = (string) ($marker['detected_at'] ?? '');
                 $state['daily'] = [
                     'date' => $date,
+                    'attempt_date' => $date,
                     'archive' => $archive_name,
                     'check' => $marker_check !== '' ? $marker_check : $daily_check,
                     'attempts' => 1,

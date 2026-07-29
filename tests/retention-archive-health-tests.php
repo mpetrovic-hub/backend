@@ -99,9 +99,12 @@ class Kiwi_Test_Wpdb_Open_Archive_Lookup
     public $prefix = 'wp_';
     public $last_error = '';
     public $rows = [];
+    public $last_query = '';
 
     public function get_results($query, $output = null)
     {
+        $this->last_query = (string) $query;
+
         return $this->rows;
     }
 }
@@ -749,6 +752,11 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Run_Repository distinguishes active archiv
         $state = $repository->find_open_archive_state();
         kiwi_assert_same(12, $state['archived_rows'] ?? -1, 'Expected normalized active archive progress.');
         kiwi_assert_same(10, $state['delete_last_primary_key'] ?? -1, 'Expected normalized active delete cursor.');
+        kiwi_assert_contains(
+            "'blocked'",
+            $wpdb->last_query,
+            'Expected receipt-blocked run to retain its frozen archive scope.'
+        );
     } finally {
         $wpdb = $previous_wpdb;
     }
@@ -911,6 +919,106 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service raises incomplete incident 
             'retention_archive_health_check_incomplete',
             array_values($events->rows)[0]['event_type'] ?? '',
             'Expected central incomplete health event type.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service prioritizes overdue daily target after date change', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_overdue');
+    $current_time = new DateTimeImmutable(
+        '2026-07-27 01:30:00',
+        new DateTimeZone('Europe/Berlin')
+    );
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $calls = [];
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service($events),
+        static function () use (&$current_time): DateTimeImmutable {
+            return $current_time;
+        },
+        static function (string $path, string $check) use (&$calls): array {
+            $calls[] = [basename($path), $check];
+
+            return count($calls) <= 3
+                ? [
+                    'result' => 'inconclusive',
+                    'reason_code' => 'health_child_timeout',
+                    'duration_seconds' => 600.0,
+                    'child_running' => false,
+                ]
+                : [
+                    'result' => 'ok',
+                    'reason_code' => 'sqlite_check_ok',
+                    'duration_seconds' => 0.01,
+                    'child_running' => false,
+                ];
+        },
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    try {
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $service->scheduled();
+        $service->scheduled();
+        $service->scheduled();
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026_part_2.sqlite'
+        );
+
+        $current_time = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+        $overdue = $service->scheduled();
+        $overdue_status = $service->status();
+        $current = $service->scheduled();
+
+        kiwi_assert_same(
+            'ok',
+            $overdue['result'] ?? '',
+            'Expected next-day slot to complete overdue work first: ' . json_encode($overdue)
+        );
+        kiwi_assert_same(
+            'kiwi_retention_archive_2026.sqlite',
+            $overdue['archive'] ?? '',
+            'Expected overdue check to retain its original archive generation.'
+        );
+        kiwi_assert_same(
+            ['kiwi_retention_archive_2026.sqlite', 'quick'],
+            $calls[3] ?? [],
+            'Expected original due-date check mode and target after the Berlin date change.'
+        );
+        kiwi_assert_same(
+            '2026-07-27',
+            $overdue_status['state']['daily']['date'] ?? '',
+            'Expected persisted due date to remain attached to the overdue result.'
+        );
+        kiwi_assert_same(
+            '2026-07-28',
+            $overdue_status['state']['daily']['attempt_date'] ?? '',
+            'Expected the retry budget to advance to the current Berlin date.'
+        );
+        kiwi_assert_same(
+            'kiwi_retention_archive_2026_part_2.sqlite',
+            $current['archive'] ?? '',
+            'Expected the next invocation to initialize the current-day active generation.'
+        );
+        kiwi_assert_same(
+            ['kiwi_retention_archive_2026_part_2.sqlite', 'quick'],
+            $calls[4] ?? [],
+            'Expected current-day work only after the overdue target completed.'
         );
     } finally {
         kiwi_remove_directory($root);

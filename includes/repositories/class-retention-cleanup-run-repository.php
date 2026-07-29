@@ -142,7 +142,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
                 "SELECT *
                  FROM {$this->get_table_name()}
                  WHERE source_key = %s
-                   AND status IN ('pending', 'running', 'partial')
+                   AND status IN ('pending', 'running', 'partial', 'blocked')
                  ORDER BY started_at ASC, id ASC
                  LIMIT 1",
                 $source_key
@@ -154,8 +154,8 @@ class Kiwi_Retention_Cleanup_Run_Repository
     }
 
     /**
-     * Returns null on lookup failure, an empty array when no run is actively
-     * writing, or the oldest open run's frozen archive state.
+     * Returns null on lookup failure, an empty array when no run is open or
+     * receipt-blocked, or the oldest such run's frozen archive state.
      */
     public function find_open_archive_state(): ?array
     {
@@ -168,7 +168,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
                     archive_last_primary_key,
                     delete_last_primary_key
              FROM {$this->get_table_name()}
-             WHERE status IN ('pending', 'running', 'partial')
+             WHERE status IN ('pending', 'running', 'partial', 'blocked')
                AND finished_at IS NULL
                AND archive_db_path IS NOT NULL
                AND archive_db_path <> ''

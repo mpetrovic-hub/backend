@@ -1526,7 +1526,11 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
                 continue;
             }
 
-            if (in_array((string) ($row['status'] ?? ''), ['pending', 'running', 'partial'], true)) {
+            if (in_array(
+                (string) ($row['status'] ?? ''),
+                ['pending', 'running', 'partial', 'blocked'],
+                true
+            )) {
                 return $row;
             }
         }
@@ -1537,7 +1541,11 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public function find_open_archive_state(): ?array
     {
         foreach ($this->rows as $row) {
-            if (in_array((string) ($row['status'] ?? ''), ['pending', 'running', 'partial'], true)
+            if (in_array(
+                (string) ($row['status'] ?? ''),
+                ['pending', 'running', 'partial', 'blocked'],
+                true
+            )
                 && ($row['finished_at'] ?? null) === null
                 && trim((string) ($row['archive_db_path'] ?? '')) !== ''
             ) {
@@ -13381,7 +13389,17 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks deletes after one failed re
     kiwi_assert_same('archive_receipt_verification_failed', $result['error_code'], 'Expected an explicit receipt gate failure.');
     kiwi_assert_same([], $service->deleted_primary_keys, 'Expected receipt failure to block every MySQL delete.');
     kiwi_assert_same(2, count($archive->chunk_calls), 'Expected exactly one safe archive receipt repair attempt.');
-    kiwi_assert_same('failed', $runs->rows[1]['status'] ?? '', 'Expected repeated receipt failure to persist a blocked run.');
+    kiwi_assert_same('blocked', $runs->rows[1]['status'] ?? '', 'Expected repeated receipt failure to persist a nonterminal blocked run.');
+    kiwi_assert_same('receipt_blocked', $runs->rows[1]['worker_phase'] ?? '', 'Expected an explicit controlled-recovery phase.');
+    kiwi_assert_same(null, $runs->rows[1]['finished_at'] ?? null, 'Expected blocked run to remain unfinished.');
+    $scheduler_retry = $service->run_source('landing_page_sessions', 'cron');
+    $worker_retry = $service->run_worker('landing_page_sessions');
+    kiwi_assert_same('blocked', $scheduler_retry['status'] ?? '', 'Expected scheduler to retain the same blocked run.');
+    kiwi_assert_true(empty($scheduler_retry['schedule_worker']), 'Expected normal scheduler not to start blocked-run recovery.');
+    kiwi_assert_same('blocked', $worker_retry['status'] ?? '', 'Expected normal worker to leave controlled recovery blocked.');
+    kiwi_assert_same(1, count($runs->rows), 'Expected no overlapping cleanup run for the blocked source scope.');
+    kiwi_assert_same(2, count($archive->chunk_calls), 'Expected no extra automatic repair after the one bounded attempt.');
+    kiwi_assert_same([], $service->deleted_primary_keys, 'Expected later scheduler and worker calls to keep every MySQL delete blocked.');
     kiwi_assert_same(
         'retention_archive_receipt_invalid',
         array_values($events->rows)[0]['event_type'] ?? '',

@@ -78,6 +78,10 @@ class Kiwi_Retention_Cleanup_Service
         $existing_run = $this->run_repository->find_open_run_for_source($source_key);
 
         if (is_array($existing_run)) {
+            if ((string) ($existing_run['status'] ?? '') === 'blocked') {
+                return $this->blocked_run_result($existing_run);
+            }
+
             $this->update_run_progress((int) ($existing_run['id'] ?? 0), [
                 'worker_phase' => 'active_run_rescheduled',
                 'worker_last_finished_at' => $this->current_time_mysql(),
@@ -473,6 +477,10 @@ class Kiwi_Retention_Cleanup_Service
 
         $run_db_id = (int) ($run['id'] ?? 0);
         $run_id = (string) ($run['run_id'] ?? '');
+
+        if ((string) ($run['status'] ?? '') === 'blocked') {
+            return $this->blocked_run_result($run);
+        }
 
         if ($this->has_worker_lock($source_key)) {
             $this->update_run_progress($run_db_id, [
@@ -1102,7 +1110,12 @@ class Kiwi_Retention_Cleanup_Service
             ],
         ]);
 
-        return $this->fail_worker_run($run_db_id, $run, [
+        $blocked = [
+            'success' => false,
+            'run_id' => (string) ($run['run_id'] ?? ''),
+            'status' => 'blocked',
+            'worker_phase' => 'receipt_blocked',
+            'worker_last_finished_at' => $this->current_time_mysql(),
             'archive_db_path' => $archive_db_path,
             'archive_integrity_check' => 'receipt_invalid',
             'error_code' => $incident_saved
@@ -1110,7 +1123,15 @@ class Kiwi_Retention_Cleanup_Service
                 : 'archive_receipt_incident_persist_failed',
             'error_message' => (string) ($receipt['error_message']
                 ?? 'Persisted archive receipt verification failed after the one safe repair attempt.'),
-        ]);
+        ];
+        if (!$this->update_run_progress($run_db_id, $blocked)) {
+            return $this->audit_retry_result(
+                $run,
+                'Retention worker blocked an invalid receipt but could not persist the recovery state.'
+            );
+        }
+
+        return $blocked;
     }
 
     private function resolve_quarantine_recovery(array $run): bool
@@ -1147,6 +1168,26 @@ class Kiwi_Retention_Cleanup_Service
             'reschedule_worker' => true,
             'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
         ], $extra);
+    }
+
+    private function blocked_run_result(array $run): array
+    {
+        $worker_phase = trim((string) ($run['worker_phase'] ?? ''));
+        $error_code = trim((string) ($run['error_code'] ?? ''));
+        $error_message = trim((string) ($run['error_message'] ?? ''));
+
+        return [
+            'success' => false,
+            'run_id' => (string) ($run['run_id'] ?? ''),
+            'status' => 'blocked',
+            'worker_phase' => $worker_phase !== '' ? $worker_phase : 'receipt_blocked',
+            'error_code' => $error_code !== ''
+                ? $error_code
+                : 'archive_receipt_verification_failed',
+            'error_message' => $error_message !== ''
+                ? $error_message
+                : 'Retention cleanup remains blocked pending controlled recovery.',
+        ];
     }
 
     private function audit_retry_result(array $run, string $message): array
