@@ -94,6 +94,18 @@ class Kiwi_Test_Wpdb_Retention_Quarantine_Transition
     }
 }
 
+class Kiwi_Test_Wpdb_Open_Archive_Lookup
+{
+    public $prefix = 'wp_';
+    public $last_error = '';
+    public $rows = [];
+
+    public function get_results($query, $output = null)
+    {
+        return $this->rows;
+    }
+}
+
 class Kiwi_Test_Flaky_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
 {
     public $fail_next_insert = false;
@@ -112,7 +124,7 @@ class Kiwi_Test_Flaky_Operational_Event_Repository extends Kiwi_Test_Operational
 
 class Kiwi_Test_Failing_Open_Archive_Run_Repository extends Kiwi_Test_Retention_Cleanup_Run_Repository
 {
-    public function find_open_archive_db_path(): ?string
+    public function find_open_archive_state(): ?array
     {
         return null;
     }
@@ -626,18 +638,61 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service follows an open run archive
     }
 });
 
-kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed on unsafe active archive resolution', function (): void {
+kiwi_run_test('Kiwi_Retention_Cleanup_Run_Repository distinguishes active archive lookup errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Open_Archive_Lookup();
+    $repository = new Kiwi_Retention_Cleanup_Run_Repository();
+
+    try {
+        $wpdb->last_error = 'Synthetic query failure.';
+        kiwi_assert_same(null, $repository->find_open_archive_state(), 'Expected wpdb last_error to fail the lookup.');
+
+        $wpdb->last_error = '';
+        kiwi_assert_same([], $repository->find_open_archive_state(), 'Expected a successful empty lookup to mean no active archive.');
+
+        $wpdb->rows = [[
+            'archive_db_path' => '/safe/kiwi_retention_archive_2026.sqlite',
+            'archived_rows' => '12',
+            'deleted_rows' => '8',
+            'archive_last_primary_key' => '15',
+            'delete_last_primary_key' => '10',
+        ]];
+        $state = $repository->find_open_archive_state();
+        kiwi_assert_same(12, $state['archived_rows'] ?? -1, 'Expected normalized active archive progress.');
+        kiwi_assert_same(10, $state['delete_last_primary_key'] ?? -1, 'Expected normalized active delete cursor.');
+    } finally {
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service distinguishes unsafe and pre-write active archives', function (): void {
     $now = new DateTimeImmutable('2027-01-01 01:30:00', new DateTimeZone('Europe/Berlin'));
     $cases = [
         [
             'name' => 'lookup_failure',
             'runs' => new Kiwi_Test_Failing_Open_Archive_Run_Repository(),
+            'result' => 'error',
             'reason_code' => 'active_archive_lookup_failed',
         ],
         [
             'name' => 'invalid_path',
             'runs' => new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+            'result' => 'error',
             'reason_code' => 'active_archive_path_invalid',
+        ],
+        [
+            'name' => 'missing_after_progress',
+            'runs' => new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+            'result' => 'error',
+            'reason_code' => 'active_archive_missing',
+        ],
+        [
+            'name' => 'missing_before_write',
+            'runs' => new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+            'result' => 'no_work',
+            'reason_code' => 'active_archive_unavailable',
         ],
     ];
 
@@ -667,20 +722,27 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed on unsafe acti
                 $archive_service,
                 'kiwi_retention_archive_2027.sqlite'
             );
-            if ($case['name'] === 'invalid_path') {
+            if (in_array($case['name'], ['invalid_path', 'missing_after_progress', 'missing_before_write'], true)) {
+                $missing_path = $archive_service->get_archive_directory()
+                    . DIRECTORY_SEPARATOR
+                    . 'kiwi_retention_archive_2026.sqlite';
                 $runs->rows[1] = [
                     'id' => 1,
                     'status' => 'running',
                     'finished_at' => null,
-                    'archive_db_path' => $root
-                        . DIRECTORY_SEPARATOR
-                        . 'kiwi_retention_archive_2026.sqlite',
+                    'archive_db_path' => $case['name'] === 'invalid_path'
+                        ? $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite'
+                        : $missing_path,
+                    'archived_rows' => $case['name'] === 'missing_after_progress' ? 2 : 0,
+                    'deleted_rows' => 0,
+                    'archive_last_primary_key' => $case['name'] === 'missing_after_progress' ? 2 : 0,
+                    'delete_last_primary_key' => 0,
                 ];
             }
 
             $result = $service->scheduled();
 
-            kiwi_assert_same('error', $result['result'] ?? '', 'Expected unsafe active archive resolution to fail.');
+            kiwi_assert_same($case['result'], $result['result'] ?? '', 'Expected explicit active archive resolution result.');
             kiwi_assert_same($case['reason_code'], $result['reason_code'] ?? '', 'Expected explicit active archive failure reason.');
             kiwi_assert_same(0, $check_calls, 'Expected no SQLite child against a guessed archive.');
         } finally {
@@ -1227,6 +1289,25 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service supervises read-only child 
             $quick = $service->diagnose(basename($path), 'quick');
             kiwi_assert_same('ok', $quick['result'] ?? '', 'Expected supervised read-only quick_check to pass.');
             kiwi_assert_same(false, $quick['child_running'] ?? true, 'Expected completed child to be reaped.');
+
+            $corrupt_path = $archive_service->get_archive_directory()
+                . DIRECTORY_SEPARATOR
+                . 'kiwi_retention_archive_2026_part_2.sqlite';
+            kiwi_assert_true(
+                file_put_contents($corrupt_path, 'definitively-not-sqlite') !== false,
+                'Expected malformed SQLite archive fixture.'
+            );
+            $corruption = $service->diagnose(basename($corrupt_path), 'quick');
+            kiwi_assert_same(
+                'corruption_detected',
+                $corruption['result'] ?? '',
+                'Expected definitive SQLite format exception to be treated as corruption.'
+            );
+            kiwi_assert_same(
+                'sqlite_check_reported_corruption',
+                $corruption['reason_code'] ?? '',
+                'Expected normalized definitive corruption reason.'
+            );
         }
 
         $timeout_service = new Kiwi_Retention_Archive_Health_Service(

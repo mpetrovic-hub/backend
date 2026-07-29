@@ -1534,18 +1534,24 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         return null;
     }
 
-    public function find_open_archive_db_path(): ?string
+    public function find_open_archive_state(): ?array
     {
         foreach ($this->rows as $row) {
             if (in_array((string) ($row['status'] ?? ''), ['pending', 'running', 'partial'], true)
                 && ($row['finished_at'] ?? null) === null
                 && trim((string) ($row['archive_db_path'] ?? '')) !== ''
             ) {
-                return trim((string) $row['archive_db_path']);
+                return [
+                    'archive_db_path' => trim((string) $row['archive_db_path']),
+                    'archived_rows' => max(0, (int) ($row['archived_rows'] ?? 0)),
+                    'deleted_rows' => max(0, (int) ($row['deleted_rows'] ?? 0)),
+                    'archive_last_primary_key' => max(0, (int) ($row['archive_last_primary_key'] ?? 0)),
+                    'delete_last_primary_key' => max(0, (int) ($row['delete_last_primary_key'] ?? 0)),
+                ];
             }
         }
 
-        return '';
+        return [];
     }
 
     public function mark_stale_unfinished_runs(string $source_key, int $stale_after_minutes = 30): ?array

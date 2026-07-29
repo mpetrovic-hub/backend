@@ -154,15 +154,19 @@ class Kiwi_Retention_Cleanup_Run_Repository
     }
 
     /**
-     * Returns null on lookup failure, an empty string when no run is actively
-     * writing, or the oldest open run's frozen archive path.
+     * Returns null on lookup failure, an empty array when no run is actively
+     * writing, or the oldest open run's frozen archive state.
      */
-    public function find_open_archive_db_path(): ?string
+    public function find_open_archive_state(): ?array
     {
         global $wpdb;
 
         $rows = $wpdb->get_results(
-            "SELECT archive_db_path
+            "SELECT archive_db_path,
+                    archived_rows,
+                    deleted_rows,
+                    archive_last_primary_key,
+                    delete_last_primary_key
              FROM {$this->get_table_name()}
              WHERE status IN ('pending', 'running', 'partial')
                AND finished_at IS NULL
@@ -172,14 +176,20 @@ class Kiwi_Retention_Cleanup_Run_Repository
              LIMIT 1",
             ARRAY_A
         );
-        if (!is_array($rows)) {
+        if (!is_array($rows) || trim((string) ($wpdb->last_error ?? '')) !== '') {
             return null;
         }
         if (empty($rows)) {
-            return '';
+            return [];
         }
 
-        return trim((string) ($rows[0]['archive_db_path'] ?? ''));
+        return [
+            'archive_db_path' => trim((string) ($rows[0]['archive_db_path'] ?? '')),
+            'archived_rows' => max(0, (int) ($rows[0]['archived_rows'] ?? 0)),
+            'deleted_rows' => max(0, (int) ($rows[0]['deleted_rows'] ?? 0)),
+            'archive_last_primary_key' => max(0, (int) ($rows[0]['archive_last_primary_key'] ?? 0)),
+            'delete_last_primary_key' => max(0, (int) ($rows[0]['delete_last_primary_key'] ?? 0)),
+        ];
     }
 
     /**

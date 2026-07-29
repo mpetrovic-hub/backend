@@ -1,5 +1,32 @@
 <?php
 
+function kiwi_retention_archive_health_is_definitive_corruption(Throwable $error): bool
+{
+    $error_info = $error instanceof PDOException && is_array($error->errorInfo ?? null)
+        ? $error->errorInfo
+        : [];
+    $sqlite_code = (int) ($error_info[1] ?? 0);
+    $sqlite_primary_code = $sqlite_code > 0 ? ($sqlite_code & 0xff) : 0;
+    if (in_array($sqlite_primary_code, [11, 24, 26], true)) {
+        return true;
+    }
+
+    $message = strtolower($error->getMessage());
+    foreach ([
+        'database disk image is malformed',
+        'file is not a database',
+        'database corruption',
+        'malformed database schema',
+        'unsupported file format',
+    ] as $corruption_message) {
+        if (strpos($message, $corruption_message) !== false) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 if (PHP_SAPI === 'cli'
     && isset($argv[1], $argv[2])
     && $argv[1] === '--kiwi-retention-health-child'
@@ -39,10 +66,15 @@ if (PHP_SAPI === 'cli'
                 ? ['result' => 'ok', 'reason_code' => 'sqlite_check_ok']
                 : ['result' => 'corruption_detected', 'reason_code' => 'sqlite_check_reported_corruption'];
         } catch (Throwable $error) {
-            $result = [
-                'result' => 'error',
-                'reason_code' => 'sqlite_readonly_check_failed',
-            ];
+            $result = kiwi_retention_archive_health_is_definitive_corruption($error)
+                ? [
+                    'result' => 'corruption_detected',
+                    'reason_code' => 'sqlite_check_reported_corruption',
+                ]
+                : [
+                    'result' => 'error',
+                    'reason_code' => 'sqlite_readonly_check_failed',
+                ];
         }
     }
 

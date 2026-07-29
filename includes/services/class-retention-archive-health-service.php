@@ -1341,11 +1341,11 @@ class Kiwi_Retention_Archive_Health_Service
     private function resolve_active_archive(): array
     {
         try {
-            $open_archive_path = $this->run_repository->find_open_archive_db_path();
+            $open_archive_state = $this->run_repository->find_open_archive_state();
         } catch (Throwable $error) {
-            $open_archive_path = null;
+            $open_archive_state = null;
         }
-        if ($open_archive_path === null) {
+        if ($open_archive_state === null) {
             return [
                 'success' => false,
                 'archive' => null,
@@ -1353,7 +1353,8 @@ class Kiwi_Retention_Archive_Health_Service
             ];
         }
 
-        if ($open_archive_path !== '') {
+        if (!empty($open_archive_state)) {
+            $open_archive_path = trim((string) ($open_archive_state['archive_db_path'] ?? ''));
             try {
                 $safe_path = $this->archive_service->resolve_archive_db_path($open_archive_path);
             } catch (Throwable $error) {
@@ -1364,9 +1365,18 @@ class Kiwi_Retention_Archive_Health_Service
                 ];
             }
 
+            $archive = $this->find_archive(basename($safe_path));
+            if (!is_array($archive) && $this->has_archive_progress($open_archive_state)) {
+                return [
+                    'success' => false,
+                    'archive' => null,
+                    'error_code' => 'active_archive_missing',
+                ];
+            }
+
             return [
                 'success' => true,
-                'archive' => $this->find_archive(basename($safe_path)),
+                'archive' => $archive,
                 'error_code' => '',
             ];
         }
@@ -1376,6 +1386,22 @@ class Kiwi_Retention_Archive_Health_Service
             'archive' => $this->find_latest_current_year_archive(),
             'error_code' => '',
         ];
+    }
+
+    private function has_archive_progress(array $open_archive_state): bool
+    {
+        foreach ([
+            'archived_rows',
+            'deleted_rows',
+            'archive_last_primary_key',
+            'delete_last_primary_key',
+        ] as $field) {
+            if ((int) ($open_archive_state[$field] ?? 0) > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function read_quarantine_marker_details(string $archive_path): array
