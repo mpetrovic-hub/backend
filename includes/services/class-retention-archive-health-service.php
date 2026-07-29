@@ -650,16 +650,10 @@ class Kiwi_Retention_Archive_Health_Service
 
         $archive = $this->find_archive((string) $pending[0]);
         if (!is_array($archive)) {
-            $state['annual']['completed'][] = (string) $pending[0];
-            $state['annual']['results'][(string) $pending[0]] = 'skipped';
-            if (!$this->write_state($state)) {
-                return $this->state_write_failure('integrity', 'annual', (string) $pending[0], $started_at);
-            }
-
             return $this->result(
-                'no_work',
-                'completed',
-                0,
+                'error',
+                'failed',
+                2,
                 'integrity',
                 'annual',
                 (string) $pending[0],

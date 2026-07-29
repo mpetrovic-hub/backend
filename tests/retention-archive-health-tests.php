@@ -980,6 +980,66 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service persists annual snapshot be
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps missing annual snapshot archives pending', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_annual_missing');
+    $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $calls = 0;
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function () use (&$calls): array {
+            $calls++;
+
+            return [
+                'result' => $calls === 2 ? 'deferred' : 'ok',
+                'reason_code' => $calls === 2 ? 'archive_lock_active' : 'sqlite_check_ok',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+
+    try {
+        $annual_archive = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2025.sqlite'
+        );
+        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2026.sqlite');
+        $service->scheduled();
+        $service->scheduled();
+        @unlink($annual_archive);
+
+        $missing = $service->scheduled();
+        $missing_status = $service->status();
+
+        kiwi_assert_same('error', $missing['result'] ?? '', 'Expected missing annual archive to fail closed.');
+        kiwi_assert_same('failed', $missing['status'] ?? '', 'Expected explicit failed controller status.');
+        kiwi_assert_same(2, $missing['exit_code'] ?? 0, 'Expected operator-visible failure exit code.');
+        kiwi_assert_same(
+            'annual_archive_unavailable',
+            $missing['reason_code'] ?? '',
+            'Expected explicit unavailable annual archive reason.'
+        );
+        kiwi_assert_same([], $missing_status['state']['annual']['completed'] ?? null, 'Expected archive to remain pending.');
+        kiwi_assert_same([], $missing_status['state']['annual']['results'] ?? null, 'Expected no durable skipped result.');
+        kiwi_assert_same('running', $missing_status['state']['annual']['status'] ?? '', 'Expected campaign to remain retryable.');
+        kiwi_assert_same(2, $calls, 'Expected no child check for an unavailable archive.');
+
+        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2025.sqlite');
+        $retried = $service->scheduled();
+        $retried_status = $service->status();
+
+        kiwi_assert_same('ok', $retried['result'] ?? '', 'Expected restored annual archive to be retried.');
+        kiwi_assert_same(
+            ['kiwi_retention_archive_2025.sqlite'],
+            $retried_status['state']['annual']['completed'] ?? [],
+            'Expected restored archive to complete only after a successful check.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined annual snapshot entry', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_annual_quarantine_reconcile');
     $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
