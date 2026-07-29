@@ -1750,6 +1750,8 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
             'expected_count' => count($expected_primary_keys),
             'receipt_count' => count($expected_primary_keys),
             'archive_row_count' => count($expected_primary_keys),
+            'archive_inserted_count' => count($expected_primary_keys),
+            'archive_duplicate_count' => 0,
             'last_primary_key' => empty($expected_primary_keys) ? 0 : max($expected_primary_keys),
             'error_code' => '',
             'error_message' => '',
@@ -12307,6 +12309,22 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service chunk resume preserves batc
         $first = $service->archive_primary_key_chunk($source, '2026-06-17 00:00:00', 'archive-chunk-batch', 0, 202, 1, 60);
         $second = $service->archive_primary_key_chunk($source, '2026-06-17 00:00:00', 'archive-chunk-batch', (int) ($first['last_primary_key'] ?? 0), 202, 1, 60);
         $archive_db_path = (string) ($second['archive_db_path'] ?? '');
+        $replayed = $service->archive_primary_key_chunk(
+            $source,
+            '2026-06-17 00:00:00',
+            'archive-chunk-batch',
+            0,
+            202,
+            2,
+            60,
+            $archive_db_path
+        );
+        $receipt = $service->verify_batch_receipt(
+            $source,
+            $archive_db_path,
+            'archive-chunk-batch',
+            [201, 202]
+        );
 
         kiwi_assert_true($first['success'] ?? false, 'Expected first archive chunk to succeed.');
         kiwi_assert_true($second['success'] ?? false, 'Expected second archive chunk to succeed.');
@@ -12314,6 +12332,11 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service chunk resume preserves batc
         kiwi_assert_same([202], $second['archived_primary_keys'] ?? [], 'Expected second chunk to resume after the first primary key.');
         kiwi_assert_same(true, $first['has_more'] ?? false, 'Expected first chunk to report remaining rows.');
         kiwi_assert_same(false, $second['has_more'] ?? true, 'Expected second chunk to finish the target range.');
+        kiwi_assert_same(0, $replayed['archive_inserted_rows'] ?? -1, 'Expected replayed rows to be invocation-level duplicates.');
+        kiwi_assert_same(2, $replayed['archive_duplicate_rows'] ?? -1, 'Expected replayed rows to be counted as invocation-level duplicates.');
+        kiwi_assert_true($receipt['success'] ?? false, 'Expected replayed chunk receipt to remain valid.');
+        kiwi_assert_same(2, $receipt['archive_inserted_count'] ?? -1, 'Expected receipt evidence to preserve original inserted-row attribution.');
+        kiwi_assert_same(0, $receipt['archive_duplicate_count'] ?? -1, 'Expected receipt evidence not to reclassify replayed rows as original duplicates.');
 
         $pdo = new PDO('sqlite:' . $archive_db_path);
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -12329,6 +12352,14 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service chunk resume preserves batc
             (int) $pdo->query("SELECT COUNT(*) FROM archive_batch_rows WHERE archive_batch_id = 'archive-chunk-batch'")->fetchColumn(),
             'Expected second chunk not to clear first chunk archive_batch_rows evidence.'
         );
+        $batch_counts = $pdo->query(
+            "SELECT archived_rows, archive_inserted_rows, archive_duplicate_rows
+             FROM archive_batches
+             WHERE archive_batch_id = 'archive-chunk-batch'"
+        )->fetch(PDO::FETCH_ASSOC);
+        kiwi_assert_same(2, (int) ($batch_counts['archived_rows'] ?? -1), 'Expected replay not to inflate persisted archived-row count.');
+        kiwi_assert_same(2, (int) ($batch_counts['archive_inserted_rows'] ?? -1), 'Expected replay to preserve persisted inserted-row count.');
+        kiwi_assert_same(0, (int) ($batch_counts['archive_duplicate_rows'] ?? -1), 'Expected replay not to inflate persisted duplicate-row count.');
     } finally {
         $pdo = null;
         $wpdb = $previous_wpdb;
@@ -13010,6 +13041,18 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker archives chunks before dele
         'has_more' => false,
         'quick_check' => 'ok',
     ];
+    $archive->receipt_results[] = [
+        'success' => true,
+        'primary_keys' => [101, 102, 103],
+        'expected_count' => 3,
+        'receipt_count' => 3,
+        'archive_row_count' => 3,
+        'archive_inserted_count' => 2,
+        'archive_duplicate_count' => 1,
+        'last_primary_key' => 103,
+        'error_code' => '',
+        'error_message' => '',
+    ];
     $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
     $service = new Kiwi_Test_Retention_Cleanup_Service(
         new Kiwi_Config(),
@@ -13034,6 +13077,8 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker archives chunks before dele
     kiwi_assert_same([], $archive->calls, 'Expected worker path not to use the old full archive method.');
     kiwi_assert_same([101, 102, 103], $service->deleted_primary_keys, 'Expected cleanup to delete only rows proven archived by primary key.');
     kiwi_assert_same(3, $run_row['archived_rows'] ?? 0, 'Expected archived row count to be persisted.');
+    kiwi_assert_same(2, $run_row['archive_inserted_rows'] ?? 0, 'Expected verified receipt inserted-row count to be persisted.');
+    kiwi_assert_same(1, $run_row['archive_duplicate_rows'] ?? 0, 'Expected verified receipt duplicate-row count to be persisted.');
     kiwi_assert_same(3, $run_row['deleted_rows'] ?? 0, 'Expected deleted row count to be persisted.');
     kiwi_assert_same(
         'receipt_verified_external_health_deferred',

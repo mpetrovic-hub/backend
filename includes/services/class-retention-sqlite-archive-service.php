@@ -240,7 +240,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $result['archive_integrity_check'] = 'deferred_to_external_health_runner';
             $result['success'] = true;
 
-            $this->finish_archive_batch($pdo, $archive_batch_id, $result);
+            $this->finish_archive_batch($pdo, $source, $archive_batch_id, $result);
         } catch (Throwable $error) {
             if ($transaction_started && $pdo instanceof PDO && $pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -309,6 +309,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
             'expected_count' => count($expected_primary_keys),
             'receipt_count' => 0,
             'archive_row_count' => 0,
+            'archive_inserted_count' => 0,
+            'archive_duplicate_count' => 0,
             'last_primary_key' => empty($expected_primary_keys) ? 0 : max($expected_primary_keys),
             'error_code' => '',
             'error_message' => '',
@@ -358,6 +360,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
 
             $receipt_primary_keys = [];
             $archive_primary_keys = [];
+            $archive_inserted_count = 0;
             $archive_table = $this->quote_identifier($source_table);
 
             foreach (array_chunk($expected_primary_keys, 500) as $chunk) {
@@ -376,16 +379,19 @@ class Kiwi_Retention_Sqlite_Archive_Service
                 );
 
                 $archive_statement = $pdo->prepare(
-                    'SELECT _source_pk
+                    'SELECT _source_pk, _archive_batch_id
                      FROM ' . $archive_table . '
                      WHERE _source_pk IN (' . $placeholders . ')
                      ORDER BY _source_pk ASC'
                 );
                 $archive_statement->execute($chunk);
-                $archive_primary_keys = array_merge(
-                    $archive_primary_keys,
-                    array_map('intval', $archive_statement->fetchAll(PDO::FETCH_COLUMN))
-                );
+                foreach ($archive_statement->fetchAll(PDO::FETCH_ASSOC) as $archive_row) {
+                    $archive_primary_keys[] = (int) ($archive_row['_source_pk'] ?? 0);
+
+                    if ((string) ($archive_row['_archive_batch_id'] ?? '') === $archive_batch_id) {
+                        $archive_inserted_count++;
+                    }
+                }
             }
 
             $receipt_primary_keys = $this->normalize_primary_keys($receipt_primary_keys);
@@ -393,6 +399,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $result['primary_keys'] = $receipt_primary_keys;
             $result['receipt_count'] = count($receipt_primary_keys);
             $result['archive_row_count'] = count($archive_primary_keys);
+            $result['archive_inserted_count'] = $archive_inserted_count;
+            $result['archive_duplicate_count'] = count($archive_primary_keys) - $archive_inserted_count;
 
             if ($receipt_primary_keys !== $expected_primary_keys
                 || $archive_primary_keys !== $expected_primary_keys
@@ -606,7 +614,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
                 $target_max_primary_key
             );
 
-            $this->finish_archive_batch($pdo, $archive_batch_id, $result);
+            $this->finish_archive_batch($pdo, $source, $archive_batch_id, $result);
         } catch (Throwable $error) {
             if ($transaction_started && $pdo instanceof PDO && $pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -874,27 +882,54 @@ class Kiwi_Retention_Sqlite_Archive_Service
         ]);
     }
 
-    private function finish_archive_batch(PDO $pdo, string $archive_batch_id, array $result): void
+    private function finish_archive_batch(PDO $pdo, array $source, string $archive_batch_id, array $result): void
     {
+        $evidence_counts = $this->read_batch_evidence_counts($pdo, $source, $archive_batch_id);
         $statement = $pdo->prepare(
             'UPDATE archive_batches
              SET finished_at = :finished_at,
-                 archived_rows = archived_rows + :archived_rows,
-                 archive_inserted_rows = archive_inserted_rows + :archive_inserted_rows,
-                 archive_duplicate_rows = archive_duplicate_rows + :archive_duplicate_rows,
+                 archived_rows = :archived_rows,
+                 archive_inserted_rows = :archive_inserted_rows,
+                 archive_duplicate_rows = :archive_duplicate_rows,
                  status = :status,
                  error_message = :error_message
              WHERE archive_batch_id = :archive_batch_id'
         );
         $statement->execute([
             ':finished_at' => $this->current_time_mysql(),
-            ':archived_rows' => (int) ($result['archived_rows'] ?? 0),
-            ':archive_inserted_rows' => (int) ($result['archive_inserted_rows'] ?? 0),
-            ':archive_duplicate_rows' => (int) ($result['archive_duplicate_rows'] ?? 0),
+            ':archived_rows' => $evidence_counts['archived_rows'],
+            ':archive_inserted_rows' => $evidence_counts['archive_inserted_rows'],
+            ':archive_duplicate_rows' => $evidence_counts['archive_duplicate_rows'],
             ':status' => !empty($result['success']) ? 'success' : 'failed',
             ':error_message' => (string) ($result['error_message'] ?? ''),
             ':archive_batch_id' => $archive_batch_id,
         ]);
+    }
+
+    private function read_batch_evidence_counts(PDO $pdo, array $source, string $archive_batch_id): array
+    {
+        $archive_table = $this->quote_identifier((string) ($source['source_table'] ?? ''));
+        $statement = $pdo->prepare(
+            'SELECT COUNT(*) AS archived_rows,
+                    SUM(CASE WHEN archive_row._archive_batch_id = :inserted_batch_id THEN 1 ELSE 0 END) AS archive_inserted_rows
+             FROM archive_batch_rows AS batch_row
+             INNER JOIN ' . $archive_table . ' AS archive_row
+                     ON archive_row._source_pk = batch_row.source_pk
+             WHERE batch_row.archive_batch_id = :receipt_batch_id'
+        );
+        $statement->execute([
+            ':inserted_batch_id' => $archive_batch_id,
+            ':receipt_batch_id' => $archive_batch_id,
+        ]);
+        $counts = $statement->fetch(PDO::FETCH_ASSOC);
+        $archived_rows = (int) ($counts['archived_rows'] ?? 0);
+        $archive_inserted_rows = (int) ($counts['archive_inserted_rows'] ?? 0);
+
+        return [
+            'archived_rows' => $archived_rows,
+            'archive_inserted_rows' => $archive_inserted_rows,
+            'archive_duplicate_rows' => max(0, $archived_rows - $archive_inserted_rows),
+        ];
     }
 
     protected function apply_archive_failure(array $result, Throwable $error): array

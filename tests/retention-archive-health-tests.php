@@ -998,6 +998,8 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service reconciles all six archive receipt
             $result = $service->run_worker('landing_page_sessions');
             kiwi_assert_same('completed', $result['status'] ?? '', 'Expected crash recovery completion for ' . $case['name']);
             kiwi_assert_same(2, $runs->rows[1]['archived_rows'] ?? 0, 'Expected no double archive audit count for ' . $case['name']);
+            kiwi_assert_same(2, $runs->rows[1]['archive_inserted_rows'] ?? 0, 'Expected original inserted-row attribution for ' . $case['name']);
+            kiwi_assert_same(0, $runs->rows[1]['archive_duplicate_rows'] ?? -1, 'Expected replay not to inflate duplicate audit count for ' . $case['name']);
             kiwi_assert_same(2, $runs->rows[1]['deleted_rows'] ?? 0, 'Expected logical receipt delete count for ' . $case['name']);
             kiwi_assert_same(2, $runs->rows[1]['delete_last_primary_key'] ?? 0, 'Expected reconciled delete cursor for ' . $case['name']);
             kiwi_assert_same(

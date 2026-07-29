@@ -784,6 +784,18 @@ class Kiwi_Retention_Cleanup_Service
                 return $this->block_invalid_receipt($run_db_id, $run, $archive_db_path, $receipt);
             }
 
+            $receipt_inserted_rows = (int) ($receipt['archive_inserted_count'] ?? -1);
+            $receipt_duplicate_rows = (int) ($receipt['archive_duplicate_count'] ?? -1);
+            if ($receipt_inserted_rows < 0
+                || $receipt_duplicate_rows < 0
+                || ($receipt_inserted_rows + $receipt_duplicate_rows) !== $archived_rows
+            ) {
+                return $this->block_invalid_receipt($run_db_id, $run, $archive_db_path, [
+                    'error_code' => 'archive_receipt_count_mismatch',
+                    'error_message' => 'Persisted archive receipt insert and duplicate counts do not match the verified chunk.',
+                ]);
+            }
+
             $receipt_progress = [
                 'status' => 'running',
                 'worker_phase' => 'receipt_verified',
@@ -791,9 +803,9 @@ class Kiwi_Retention_Cleanup_Service
                 'archive_integrity_check' => 'receipt_verified',
                 'archived_rows' => (int) ($run['archived_rows'] ?? 0) + $archived_rows,
                 'archive_inserted_rows' => (int) ($run['archive_inserted_rows'] ?? 0)
-                    + (int) ($chunk['archive_inserted_rows'] ?? 0),
+                    + $receipt_inserted_rows,
                 'archive_duplicate_rows' => (int) ($run['archive_duplicate_rows'] ?? 0)
-                    + (int) ($chunk['archive_duplicate_rows'] ?? 0),
+                    + $receipt_duplicate_rows,
                 'archive_last_primary_key' => max($archived_primary_keys),
             ];
             if (!$this->update_run_progress($run_db_id, $receipt_progress)) {
