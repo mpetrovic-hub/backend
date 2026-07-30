@@ -291,7 +291,11 @@ final class Kiwi_Retention_Archive_Health_Command
             $this->fail_before_service($mode, 'plugins_loaded_hook_failed');
         }
 
-        $runner->load_wordpress();
+        try {
+            $runner->load_wordpress();
+        } catch (Throwable $error) {
+            $this->fail_before_service($mode, 'wordpress_load_failed');
+        }
         if (!$executed) {
             $this->fail_before_service($mode, 'plugins_loaded_not_reached');
         }

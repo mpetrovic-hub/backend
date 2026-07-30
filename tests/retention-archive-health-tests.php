@@ -1180,9 +1180,9 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service audits scheduled bootstrap 
     );
 
     try {
-        $first = $service->record_scheduled_bootstrap_failure('required_class_missing');
-        $second = $service->record_scheduled_bootstrap_failure('required_class_missing');
-        $third = $service->record_scheduled_bootstrap_failure('required_class_missing');
+        $first = $service->record_scheduled_bootstrap_failure('wordpress_load_failed');
+        $second = $service->record_scheduled_bootstrap_failure('wordpress_load_failed');
+        $third = $service->record_scheduled_bootstrap_failure('wordpress_load_failed');
         $status = $service->status();
 
         kiwi_assert_same(2, $first['exit_code'] ?? 0, 'Expected first bootstrap failure to remain a runner error.');
@@ -1190,9 +1190,9 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service audits scheduled bootstrap 
         kiwi_assert_same('raised', $third['incident_action'] ?? '', 'Expected the third bootstrap failure to raise the daily Incident.');
         kiwi_assert_same(3, $status['state']['daily']['attempts'] ?? 0, 'Expected all scheduled bootstrap failures to persist.');
         kiwi_assert_same(
-            'required_class_missing',
+            'wordpress_load_failed',
             $status['state']['daily']['reason_code'] ?? '',
-            'Expected the final bootstrap failure reason in controller state.'
+            'Expected the WordPress loader failure reason in controller state.'
         );
         kiwi_assert_same(
             ['retention_archive_health_check_incomplete'],
@@ -1229,9 +1229,9 @@ kiwi_run_test('Kiwi bootstrap recorder audits without the health service graph',
     );
 
     try {
-        $first = $recorder->record('required_class_missing');
-        $second = $recorder->record('required_class_missing');
-        $third = $recorder->record('required_class_missing');
+        $first = $recorder->record('wordpress_load_failed');
+        $second = $recorder->record('wordpress_load_failed');
+        $third = $recorder->record('wordpress_load_failed');
         $status = $service->status();
 
         kiwi_assert_same(2, $first['exit_code'] ?? 0, 'Expected the independent recorder to preserve runner failure.');
@@ -1239,9 +1239,9 @@ kiwi_run_test('Kiwi bootstrap recorder audits without the health service graph',
         kiwi_assert_same('raised', $third['incident_action'] ?? '', 'Expected the third independent failure to raise an Incident.');
         kiwi_assert_same(3, $status['state']['daily']['attempts'] ?? 0, 'Expected the main service to accept independent state.');
         kiwi_assert_same(
-            'required_class_missing',
+            'wordpress_load_failed',
             $status['state']['daily']['reason_code'] ?? '',
-            'Expected the missing dependency reason in shared controller state.'
+            'Expected the loader failure reason in shared controller state.'
         );
         kiwi_assert_same(1, count($events), 'Expected exactly one threshold Incident attempt.');
         kiwi_assert_same(
@@ -2224,6 +2224,10 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined annu
             $status['state']['annual']['results']['kiwi_retention_archive_2025.sqlite'] ?? '',
             'Expected durable annual corruption result.'
         );
+        kiwi_assert_true(
+            $archive_service->is_quarantine_reconciled($annual_archive),
+            'Expected annual marker retry to acknowledge the marker after durable state.'
+        );
         kiwi_assert_same(
             'resolved',
             $latest['lifecycle_action'] ?? '',
@@ -3004,6 +3008,11 @@ kiwi_run_test('Kiwi retention archive health runner declares command surface and
         'record_scheduled_bootstrap_failure',
         $runner,
         'Expected the complete health graph to retain its shared durable daily attempt path.'
+    );
+    kiwi_assert_contains(
+        "'wordpress_load_failed'",
+        $runner,
+        'Expected WordPress loader exceptions to enter the scheduled bootstrap audit path.'
     );
 
     $health_service = file_get_contents(

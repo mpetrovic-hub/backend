@@ -10,6 +10,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
         'wp_cli_loader_unavailable',
         'plugins_loaded_hook_failed',
         'plugins_loaded_not_reached',
+        'wordpress_load_failed',
         'wordpress_lifecycle_invalid',
         'required_class_missing',
         'health_service_exception',

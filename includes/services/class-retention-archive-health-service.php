@@ -16,6 +16,7 @@ class Kiwi_Retention_Archive_Health_Service
         'wp_cli_loader_unavailable',
         'plugins_loaded_hook_failed',
         'plugins_loaded_not_reached',
+        'wordpress_load_failed',
         'wordpress_lifecycle_invalid',
         'required_class_missing',
         'health_service_exception',
@@ -1095,6 +1096,22 @@ class Kiwi_Retention_Archive_Health_Service
             $state['annual']['status'] = empty($remaining) ? 'completed' : 'running';
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('', 'annual', $archive_name, $started_at);
+            }
+            if (!$this->archive_service->mark_quarantine_reconciled(
+                (string) $archive['path'],
+                $this->now()
+            )) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'annual',
+                    $archive_name,
+                    'quarantine_marker_reconciliation_failed',
+                    $started_at,
+                    ['incident_action' => $incident_action]
+                );
             }
             $recovery_action = $this->record_incomplete_recovery(
                 $archive_name,
