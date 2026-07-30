@@ -591,11 +591,32 @@ class Kiwi_Retention_Cleanup_Service
 
             $archive_lock = $this->archive_lock->acquire_for_archive($archive_db_path);
             if (empty($archive_lock['success'])) {
-                return $this->fail_worker_run($run_db_id, $run, [
+                $lock_error = [
                     'archive_db_path' => $archive_db_path,
                     'error_code' => (string) ($archive_lock['error_code'] ?? 'archive_lock_failed'),
                     'error_message' => (string) ($archive_lock['error_message'] ?? 'Archive generation lock failed.'),
-                ]);
+                ];
+                if ((int) ($run['archive_last_primary_key'] ?? 0)
+                    > (int) ($run['delete_last_primary_key'] ?? 0)
+                ) {
+                    $progress = array_merge($lock_error, [
+                        'status' => 'partial',
+                        'worker_phase' => 'lock_skipped',
+                        'worker_last_finished_at' => $this->current_time_mysql(),
+                    ]);
+                    if (!$this->update_run_progress($run_db_id, $progress)) {
+                        return $this->audit_retry_result(
+                            $run,
+                            'Retention worker could not persist the archive-lock setup deferral.'
+                        );
+                    }
+
+                    return $this->reschedule_worker_result($run, $progress, [
+                        'success' => false,
+                    ]);
+                }
+
+                return $this->fail_worker_run($run_db_id, $run, $lock_error);
             }
             if (empty($archive_lock['acquired'])) {
                 $progress = [

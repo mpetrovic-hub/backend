@@ -1927,6 +1927,28 @@ class Kiwi_Test_Retention_Sqlite_Archive_Failure_Service extends Kiwi_Retention_
     }
 }
 
+class Kiwi_Test_Retention_Archive_Lock extends Kiwi_Retention_Archive_Lock
+{
+    public $archive_attempts = 0;
+    public $fail_on_archive_attempt = 0;
+
+    public function acquire_for_archive(string $archive_db_path): array
+    {
+        $this->archive_attempts++;
+        if ($this->archive_attempts === $this->fail_on_archive_attempt) {
+            return [
+                'success' => false,
+                'acquired' => false,
+                'handle' => null,
+                'error_code' => 'archive_lock_open_failed',
+                'error_message' => 'Synthetic archive lock open failure.',
+            ];
+        }
+
+        return parent::acquire_for_archive($archive_db_path);
+    }
+}
+
 class Kiwi_Test_Retention_Sqlite_Archive_Config extends Kiwi_Config
 {
     private $archive_root;
@@ -13791,7 +13813,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service preserves receipt audit for delete
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Retention_Cleanup_Service resumes a committed receipt after batch finalization failure', function (): void {
+kiwi_run_test('Kiwi_Retention_Cleanup_Service keeps a committed receipt resumable after lock acquisition failure', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
@@ -13839,13 +13861,17 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service resumes a committed receipt after 
         'error_code' => '',
         'error_message' => '',
     ];
+    $archive_lock = new Kiwi_Test_Retention_Archive_Lock();
+    $archive_lock->fail_on_archive_attempt = 2;
     $service = new Kiwi_Test_Retention_Cleanup_Service(
         new Kiwi_Config(),
         new Kiwi_Retention_Source_Registry(),
         $runs,
         $snapshots,
         $archive,
-        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        null,
+        $archive_lock
     );
     $service->eligible_rows = 3;
     $service->target_max_primary_key = 103;
@@ -13855,6 +13881,10 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service resumes a committed receipt after 
     $post_commit = $service->run_worker('landing_page_sessions');
     $preserved = $runs->rows[1] ?? [];
     $deleted_before_retry = $service->deleted_primary_keys;
+    $lock_failure = $service->run_worker('landing_page_sessions');
+    $after_lock_failure = $runs->rows[1] ?? [];
+    $rescheduled = $service->run_source('landing_page_sessions', 'cron');
+    $run_count_after_reschedule = count($runs->rows);
     $reconciled = $service->run_worker('landing_page_sessions');
     $completed = $runs->rows[1] ?? [];
 
@@ -13865,6 +13895,18 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service resumes a committed receipt after 
     kiwi_assert_same(103, $preserved['archive_last_primary_key'] ?? 0, 'Expected the committed receipt cursor to persist.');
     kiwi_assert_same(0, $preserved['archived_rows'] ?? 0, 'Expected archive counts to wait for receipt verification.');
     kiwi_assert_same([], $deleted_before_retry, 'Expected no delete before the retry verifies the receipt.');
+    kiwi_assert_same(false, $lock_failure['success'] ?? true, 'Expected the transient archive-lock failure to stay visible.');
+    kiwi_assert_same('partial', $lock_failure['status'] ?? '', 'Expected the lock failure to keep the committed receipt resumable.');
+    kiwi_assert_same('lock_skipped', $lock_failure['worker_phase'] ?? '', 'Expected the lock failure to use the resumable lock phase.');
+    kiwi_assert_same('archive_lock_open_failed', $lock_failure['error_code'] ?? '', 'Expected the concrete lock failure code.');
+    kiwi_assert_true(!empty($lock_failure['schedule_worker']), 'Expected the lock failure to request another worker invocation.');
+    kiwi_assert_same('partial', $after_lock_failure['status'] ?? '', 'Expected the original run to remain open after lock setup failure.');
+    kiwi_assert_same(103, $after_lock_failure['archive_last_primary_key'] ?? 0, 'Expected the receipt cursor to survive lock setup failure.');
+    kiwi_assert_same(0, $after_lock_failure['delete_last_primary_key'] ?? 0, 'Expected delete reconciliation to remain pending.');
+    kiwi_assert_same(null, $after_lock_failure['finished_at'] ?? null, 'Expected the resumable run to remain unfinished.');
+    kiwi_assert_same('cleanup_run_already_open', $rescheduled['error_code'] ?? '', 'Expected the scheduler to reuse the open run.');
+    kiwi_assert_same($scheduled['run_id'] ?? '', $rescheduled['run_id'] ?? '', 'Expected the scheduler to retain the original run ID.');
+    kiwi_assert_same(1, $run_count_after_reschedule, 'Expected no second cleanup run while receipt reconciliation is pending.');
     kiwi_assert_same('completed', $reconciled['status'] ?? '', 'Expected the retry to complete the same run.');
     kiwi_assert_same([101, 102, 103], $service->deleted_primary_keys, 'Expected retry deletion from verified receipt evidence only.');
     kiwi_assert_same(3, $completed['archived_rows'] ?? 0, 'Expected verified archive counts after reconciliation.');
