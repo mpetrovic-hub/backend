@@ -352,16 +352,22 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
 
         $annual = $state['annual'];
         $cycle_year = $annual['cycle_year'] ?? null;
+        $annual_started_at = $annual['started_at'] ?? null;
+        $annual_completed_at = $annual['completed_at'] ?? null;
         $annual_status = $annual['status'] ?? null;
         $snapshot = $annual['snapshot'] ?? null;
         $completed = $annual['completed'] ?? null;
         $results = $annual['results'] ?? null;
+        $files = $annual['files'] ?? null;
         if (!is_string($cycle_year)
+            || !is_string($annual_started_at)
+            || !is_string($annual_completed_at)
             || !is_string($annual_status)
             || !in_array($annual_status, ['pending', 'running', 'completed'], true)
             || !is_array($snapshot)
             || !is_array($completed)
             || !is_array($results)
+            || !is_array($files)
         ) {
             return false;
         }
@@ -379,18 +385,72 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
                 return false;
             }
         }
+        foreach ($files as $archive_name => $file_state) {
+            if (!is_string($archive_name)
+                || $this->normalize_archive_name($archive_name) === ''
+                || !is_array($file_state)
+                || !isset($file_state['status'], $file_state['check'], $file_state['result'])
+                || !is_string($file_state['status'])
+                || !is_string($file_state['check'])
+                || !is_string($file_state['result'])
+                || !in_array(
+                    $file_state['status'],
+                    ['pending', 'deferred', 'inconclusive', 'error', 'completed'],
+                    true
+                )
+                || $file_state['check'] !== 'integrity'
+                || !in_array(
+                    $file_state['result'],
+                    ['', 'ok', 'corruption_detected'],
+                    true
+                )
+                || ($file_state['status'] === 'pending' && $file_state['result'] !== '')
+                || ($file_state['status'] === 'deferred' && $file_state['result'] !== '')
+                || ($file_state['status'] === 'inconclusive' && $file_state['result'] !== '')
+                || ($file_state['status'] === 'error'
+                    && !in_array($file_state['result'], ['', 'ok', 'corruption_detected'], true))
+                || ($file_state['status'] === 'completed'
+                    && !in_array($file_state['result'], ['ok', 'corruption_detected'], true))
+            ) {
+                return false;
+            }
+            $file_completed = in_array($archive_name, $completed, true);
+            if (($file_state['status'] === 'completed') !== $file_completed
+                || ($file_completed
+                    && (string) ($results[$archive_name] ?? '') !== $file_state['result'])
+                || (!$file_completed && array_key_exists($archive_name, $results))
+            ) {
+                return false;
+            }
+        }
+        $sorted_snapshot = $snapshot;
+        sort($sorted_snapshot, SORT_STRING);
         if (count($snapshot) !== count(array_unique($snapshot))
+            || $snapshot !== $sorted_snapshot
             || count($completed) !== count(array_unique($completed))
             || array_diff($completed, $snapshot) !== []
             || array_diff(array_keys($results), $snapshot) !== []
+            || array_diff(array_keys($files), $snapshot) !== []
+            || array_diff($snapshot, array_keys($files)) !== []
             || array_diff($completed, array_keys($results)) !== []
             || array_diff(array_keys($results), $completed) !== []
             || ($cycle_year !== '' && preg_match('/^[0-9]{4}$/', $cycle_year) !== 1)
             || ($annual_status === 'pending'
-                && ($cycle_year !== '' || $snapshot !== [] || $completed !== [] || $results !== []))
-            || ($annual_status !== 'pending' && $cycle_year === '')
+                && ($cycle_year !== ''
+                    || $annual_started_at !== ''
+                    || $annual_completed_at !== ''
+                    || $snapshot !== []
+                    || $completed !== []
+                    || $results !== []
+                    || $files !== []))
+            || ($annual_status !== 'pending'
+                && ($cycle_year === ''
+                    || !$this->is_valid_timestamp($annual_started_at)))
             || ($annual_status === 'running' && count($completed) >= count($snapshot))
-            || ($annual_status === 'completed' && count($completed) !== count($snapshot))
+            || ($annual_status === 'running' && $annual_completed_at !== '')
+            || ($annual_status === 'completed'
+                && (count($completed) !== count($snapshot)
+                    || !$this->is_valid_timestamp($annual_completed_at)))
         ) {
             return false;
         }
@@ -873,9 +933,12 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
             ],
             'annual' => [
                 'cycle_year' => '',
+                'started_at' => '',
+                'completed_at' => '',
                 'snapshot' => [],
                 'completed' => [],
                 'results' => [],
+                'files' => [],
                 'status' => 'pending',
             ],
         ];

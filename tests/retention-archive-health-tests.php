@@ -2260,6 +2260,7 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service annual campaign processes o
         $daily = $service->scheduled();
         $first_annual = $service->scheduled();
         $second_annual = $service->scheduled();
+        $status = $service->status();
         kiwi_assert_same('daily', $daily['scope'] ?? '', 'Expected daily work to consume the first slot.');
         kiwi_assert_same('annual', $first_annual['scope'] ?? '', 'Expected first free slot to enter annual campaign.');
         kiwi_assert_same('annual', $second_annual['scope'] ?? '', 'Expected next free slot to continue annual campaign.');
@@ -2272,6 +2273,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service annual campaign processes o
             $calls,
             'Expected one deterministic annual snapshot file per invocation.'
         );
+        kiwi_assert_same('2026-01-02T01:30:00+01:00', $status['state']['annual']['started_at'] ?? '', 'Expected durable annual campaign start time.');
+        kiwi_assert_same('2026-01-02T01:30:00+01:00', $status['state']['annual']['completed_at'] ?? '', 'Expected durable annual campaign completion time.');
+        kiwi_assert_same('completed', $status['state']['annual']['files']['kiwi_retention_archive_2025.sqlite']['status'] ?? '', 'Expected first file completion audit.');
+        kiwi_assert_same('integrity', $status['state']['annual']['files']['kiwi_retention_archive_2025.sqlite']['check'] ?? '', 'Expected annual per-file integrity mode.');
+        kiwi_assert_same('ok', $status['state']['annual']['files']['kiwi_retention_archive_2026.sqlite']['result'] ?? '', 'Expected last definitive per-file result.');
     } finally {
         kiwi_remove_directory($root);
     }
@@ -2298,9 +2304,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service persists annual snapshot be
                 $annual_state_at_check = is_array($persisted) ? ($persisted['annual'] ?? null) : null;
             }
 
+            $deferred = $calls === 2;
+
             return [
-                'result' => $calls === 1 ? 'ok' : 'deferred',
-                'reason_code' => $calls === 1 ? 'sqlite_check_ok' : 'archive_lock_active',
+                'result' => $deferred ? 'deferred' : 'ok',
+                'reason_code' => $deferred ? 'archive_lock_active' : 'sqlite_check_ok',
                 'duration_seconds' => 0.01,
                 'child_running' => false,
             ];
@@ -2320,6 +2328,27 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service persists annual snapshot be
             'Expected frozen annual snapshot to be durable before invoking its first check.'
         );
         kiwi_assert_same('running', $annual_state_at_check['status'] ?? '', 'Expected persisted annual campaign to be running.');
+        kiwi_assert_same('2026-01-02T01:30:00+01:00', $annual_state_at_check['started_at'] ?? '', 'Expected campaign start before the first annual child.');
+        kiwi_assert_same('', $annual_state_at_check['completed_at'] ?? null, 'Expected no completion time while files remain.');
+        kiwi_assert_same(
+            [
+                'status' => 'pending',
+                'check' => 'integrity',
+                'result' => '',
+            ],
+            $annual_state_at_check['files']['kiwi_retention_archive_2025.sqlite'] ?? [],
+            'Expected durable pending state and check mode before the first annual child.'
+        );
+        $deferred_status = $service->status();
+        kiwi_assert_same(
+            [
+                'status' => 'deferred',
+                'check' => 'integrity',
+                'result' => '',
+            ],
+            $deferred_status['state']['annual']['files']['kiwi_retention_archive_2025.sqlite'] ?? [],
+            'Expected deferred status without a definitive file result.'
+        );
 
         kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2026_part_2.sqlite');
         $service->scheduled();
@@ -2328,6 +2357,24 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service persists annual snapshot be
             ['kiwi_retention_archive_2025.sqlite', 'kiwi_retention_archive_2026.sqlite'],
             $status['state']['annual']['snapshot'] ?? [],
             'Expected retry to keep the original annual scope after archive discovery changes.'
+        );
+        kiwi_assert_same(
+            [
+                'status' => 'completed',
+                'check' => 'integrity',
+                'result' => 'ok',
+            ],
+            $status['state']['annual']['files']['kiwi_retention_archive_2025.sqlite'] ?? [],
+            'Expected retry to persist the first file final result.'
+        );
+        kiwi_assert_same(
+            [
+                'status' => 'pending',
+                'check' => 'integrity',
+                'result' => '',
+            ],
+            $status['state']['annual']['files']['kiwi_retention_archive_2026.sqlite'] ?? [],
+            'Expected the next frozen file to remain visibly pending.'
         );
     } finally {
         kiwi_remove_directory($root);
@@ -2377,6 +2424,15 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps missing annual snapsh
         kiwi_assert_same([], $missing_status['state']['annual']['completed'] ?? null, 'Expected archive to remain pending.');
         kiwi_assert_same([], $missing_status['state']['annual']['results'] ?? null, 'Expected no durable skipped result.');
         kiwi_assert_same('running', $missing_status['state']['annual']['status'] ?? '', 'Expected campaign to remain retryable.');
+        kiwi_assert_same(
+            [
+                'status' => 'error',
+                'check' => 'integrity',
+                'result' => '',
+            ],
+            $missing_status['state']['annual']['files']['kiwi_retention_archive_2025.sqlite'] ?? [],
+            'Expected unavailable-file state to remain durably retryable.'
+        );
         kiwi_assert_same(2, $calls, 'Expected no child check for an unavailable archive.');
 
         kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2025.sqlite');
@@ -2389,6 +2445,7 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps missing annual snapsh
             $retried_status['state']['annual']['completed'] ?? [],
             'Expected restored archive to complete only after a successful check.'
         );
+        kiwi_assert_same('completed', $retried_status['state']['annual']['files']['kiwi_retention_archive_2025.sqlite']['status'] ?? '', 'Expected restored file completion audit.');
     } finally {
         kiwi_remove_directory($root);
     }
@@ -2430,9 +2487,18 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service carries unfinished annual c
             ],
             'annual' => [
                 'cycle_year' => '2026',
+                'started_at' => '2026-01-02T01:30:00+01:00',
+                'completed_at' => '',
                 'snapshot' => [$archive_name],
                 'completed' => [],
                 'results' => [],
+                'files' => [
+                    $archive_name => [
+                        'status' => 'pending',
+                        'check' => 'integrity',
+                        'result' => '',
+                    ],
+                ],
                 'status' => 'running',
             ],
         ]));
@@ -2648,8 +2714,8 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined annu
 
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service quarantines confirmed corruption without older fallback', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_quarantine');
-    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
-    $events = new Kiwi_Test_Operational_Event_Repository();
+    $now = new DateTimeImmutable('2026-01-01 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $events = new Kiwi_Test_Flaky_Operational_Event_Repository();
     [$service, $archive_service] = kiwi_test_health_service(
         $root,
         $now,
@@ -2673,20 +2739,66 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service quarantines confirmed corru
             $archive_service,
             'kiwi_retention_archive_2026_part_2.sqlite'
         );
+        $archive_name = basename($active);
+        $correlation_key = 'retention_archive_health_incomplete_' . hash('sha256', $archive_name);
+        $event_service = new Kiwi_Operational_Event_Service($events);
+        kiwi_assert_true($event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'error',
+            'event_type' => 'retention_archive_health_check_incomplete',
+            'correlation_key' => $correlation_key,
+            'idempotency_key' => 'retention_archive_daily_corruption_recovery_test',
+            'reference_type' => 'retention_archive',
+            'reference_id' => $archive_name,
+            'message' => 'Synthetic incomplete health cycle before direct corruption.',
+        ]), 'Expected incomplete Incident fixture before direct corruption.');
+        $events->fail_next_insert_event_type = 'retention_archive_health_check_incomplete';
+
+        $failed = $service->scheduled();
+        $failed_marker = json_decode(
+            (string) file_get_contents($archive_service->get_quarantine_marker_path($active)),
+            true
+        );
+        $failed_status = $service->status();
         $result = $service->scheduled();
-        kiwi_assert_same('corruption_detected', $result['result'] ?? '', 'Expected complete corruption result.');
-        kiwi_assert_same('raised', $result['incident_action'] ?? '', 'Expected corruption incident action.');
+        $latest = $events->find_latest_by_correlation_key($correlation_key);
+
+        kiwi_assert_same('error', $failed['result'] ?? '', 'Expected direct corruption recovery failure to remain retryable.');
+        kiwi_assert_same('incomplete_recovery_persist_failed', $failed['reason_code'] ?? '', 'Expected explicit direct recovery failure.');
+        kiwi_assert_same('raised', $failed['incident_action'] ?? '', 'Expected the corruption Incident action to remain visible.');
+        kiwi_assert_same(
+            $archive_name,
+            $failed_status['state']['daily']['archive'] ?? '',
+            'Expected direct corruption state to retain the quarantined archive identity.'
+        );
+        kiwi_assert_same(
+            'corruption_detected',
+            $failed_status['state']['daily']['result'] ?? '',
+            'Expected durable direct corruption state before recovery retry.'
+        );
+        kiwi_assert_true(
+            is_array($failed_marker)
+                && trim((string) ($failed_marker['controller_recorded_at'] ?? '')) === '',
+            'Expected direct corruption marker to remain unacknowledged before recovery persistence.'
+        );
+        kiwi_assert_same('no_work', $result['result'] ?? '', 'Expected retry to reconcile recovery before normal no-work scheduling.');
         kiwi_assert_true($archive_service->is_quarantined($active), 'Expected only confirmed active generation to be quarantined.');
         kiwi_assert_true(
             $archive_service->is_quarantine_reconciled($active),
-            'Expected the durable daily corruption state to acknowledge the quarantine marker immediately.'
+            'Expected marker acknowledgement only after direct daily recovery persisted.'
         );
         kiwi_assert_same(
             'kiwi_retention_archive_2026_part_3.sqlite',
             basename($archive_service->resolve_archive_db_path('')),
             'Expected deterministic successor generation instead of fallback to an older archive.'
         );
-        kiwi_assert_same(1, count($events->rows), 'Expected one corruption incident.');
+        kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected retry to close the prior incomplete Incident.');
+        kiwi_assert_same(1, count(array_filter(
+            $events->rows,
+            static function (array $event): bool {
+                return (string) ($event['event_type'] ?? '') === 'retention_archive_corruption_detected';
+            }
+        )), 'Expected exactly one corruption Incident.');
     } finally {
         kiwi_remove_directory($root);
     }

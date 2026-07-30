@@ -1361,6 +1361,23 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure($check, 'daily', $archive_name, $started_at);
             }
+            $lookup_recovery_action = $this->record_incomplete_recovery('', $result_name);
+            $archive_recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
+            if ($result_name === 'corruption_detected'
+                && ($lookup_recovery_action === '' || $archive_recovery_action === '')
+            ) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    $check,
+                    'daily',
+                    $archive_name,
+                    'incomplete_recovery_persist_failed',
+                    $started_at,
+                    ['incident_action' => $incident_action]
+                );
+            }
             if ($result_name === 'corruption_detected'
                 && !$this->archive_service->mark_quarantine_reconciled(
                     (string) $archive['path'],
@@ -1379,8 +1396,6 @@ class Kiwi_Retention_Archive_Health_Service
                     ['incident_action' => $incident_action]
                 );
             }
-            $lookup_recovery_action = $this->record_incomplete_recovery('', $result_name);
-            $archive_recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
             if ($incident_action === 'none'
                 && in_array('resolved', [$lookup_recovery_action, $archive_recovery_action], true)
             ) {
@@ -1465,14 +1480,33 @@ class Kiwi_Retention_Archive_Health_Service
             $snapshot = [];
             foreach ($this->archive_service->list_archive_files() as $archive) {
                 if (empty($archive['quarantined'])) {
-                    $snapshot[] = (string) ($archive['name'] ?? '');
+                    $archive_name = $this->normalize_archive_name(
+                        (string) ($archive['name'] ?? '')
+                    );
+                    if ($archive_name !== '') {
+                        $snapshot[] = $archive_name;
+                    }
                 }
             }
+            $snapshot = array_values(array_unique($snapshot));
+            sort($snapshot, SORT_STRING);
+            $file_states = [];
+            foreach ($snapshot as $archive_name) {
+                $file_states[$archive_name] = [
+                    'status' => 'pending',
+                    'check' => 'integrity',
+                    'result' => '',
+                ];
+            }
+            $campaign_started_at = $this->now();
             $state['annual'] = [
                 'cycle_year' => $year,
+                'started_at' => $campaign_started_at,
+                'completed_at' => empty($snapshot) ? $campaign_started_at : '',
                 'snapshot' => $snapshot,
                 'completed' => [],
                 'results' => [],
+                'files' => $file_states,
                 'status' => empty($snapshot) ? 'completed' : 'running',
             ];
             if (!$this->write_state($state)) {
@@ -1486,6 +1520,9 @@ class Kiwi_Retention_Archive_Health_Service
         ));
         if (empty($pending)) {
             $state['annual']['status'] = 'completed';
+            if (!$this->is_valid_timestamp((string) ($state['annual']['completed_at'] ?? ''))) {
+                $state['annual']['completed_at'] = $this->now();
+            }
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('', 'annual', '', $started_at);
             }
@@ -1504,13 +1541,19 @@ class Kiwi_Retention_Archive_Health_Service
 
         $archive = $this->find_archive((string) $pending[0]);
         if (!is_array($archive)) {
+            $archive_name = (string) $pending[0];
+            $this->set_annual_file_audit($state, $archive_name, 'error', '');
+            if (!$this->write_state($state)) {
+                return $this->state_write_failure('integrity', 'annual', $archive_name, $started_at);
+            }
+
             return $this->result(
                 'error',
                 'failed',
                 2,
                 '',
                 'annual',
-                (string) $pending[0],
+                $archive_name,
                 'annual_archive_unavailable',
                 $started_at
             );
@@ -1528,6 +1571,21 @@ class Kiwi_Retention_Archive_Health_Service
                     $reason_code !== '' ? $reason_code : 'sqlite_quarantine_marker_present'
                 );
                 if ($incident_action === '') {
+                    $this->set_annual_file_audit(
+                        $state,
+                        $archive_name,
+                        'error',
+                        'corruption_detected'
+                    );
+                    if (!$this->write_state($state)) {
+                        return $this->state_write_failure(
+                            'integrity',
+                            'annual',
+                            $archive_name,
+                            $started_at
+                        );
+                    }
+
                     return $this->result(
                         'error',
                         'failed',
@@ -1545,6 +1603,21 @@ class Kiwi_Retention_Archive_Health_Service
                 'corruption_detected'
             );
             if ($recovery_action === '') {
+                $this->set_annual_file_audit(
+                    $state,
+                    $archive_name,
+                    'error',
+                    'corruption_detected'
+                );
+                if (!$this->write_state($state)) {
+                    return $this->state_write_failure(
+                        'integrity',
+                        'annual',
+                        $archive_name,
+                        $started_at
+                    );
+                }
+
                 return $this->result(
                     'error',
                     'failed',
@@ -1560,8 +1633,15 @@ class Kiwi_Retention_Archive_Health_Service
             $state['annual']['completed'][] = $archive_name;
             $state['annual']['completed'] = array_values(array_unique($state['annual']['completed']));
             $state['annual']['results'][$archive_name] = 'corruption_detected';
+            $this->set_annual_file_audit(
+                $state,
+                $archive_name,
+                'completed',
+                'corruption_detected'
+            );
             $remaining = array_diff($state['annual']['snapshot'], $state['annual']['completed']);
             $state['annual']['status'] = empty($remaining) ? 'completed' : 'running';
+            $state['annual']['completed_at'] = empty($remaining) ? $this->now() : '';
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('', 'annual', $archive_name, $started_at);
             }
@@ -1601,6 +1681,11 @@ class Kiwi_Retention_Archive_Health_Service
         $archive_name = (string) $archive['name'];
         $active_lookup = $this->resolve_active_archive();
         if (empty($active_lookup['success'])) {
+            $this->set_annual_file_audit($state, $archive_name, 'error', '');
+            if (!$this->write_state($state)) {
+                return $this->state_write_failure('integrity', 'annual', $archive_name, $started_at);
+            }
+
             return $this->result(
                 'error',
                 'failed',
@@ -1672,6 +1757,21 @@ class Kiwi_Retention_Archive_Health_Service
             if ($result_name === 'corruption_detected'
                 && empty($outcome['quarantine_transition_success'])
             ) {
+                $this->set_annual_file_audit(
+                    $state,
+                    $archive_name,
+                    'error',
+                    'corruption_detected'
+                );
+                if (!$this->write_state($state)) {
+                    return $this->state_write_failure(
+                        'integrity',
+                        'annual',
+                        $archive_name,
+                        $started_at
+                    );
+                }
+
                 return $this->result(
                     'error',
                     'failed',
@@ -1687,6 +1787,16 @@ class Kiwi_Retention_Archive_Health_Service
 
             $recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
             if ($recovery_action === '') {
+                $this->set_annual_file_audit($state, $archive_name, 'error', $result_name);
+                if (!$this->write_state($state)) {
+                    return $this->state_write_failure(
+                        'integrity',
+                        'annual',
+                        $archive_name,
+                        $started_at
+                    );
+                }
+
                 return $this->result(
                     'error',
                     'failed',
@@ -1702,8 +1812,10 @@ class Kiwi_Retention_Archive_Health_Service
             $state['annual']['completed'][] = $archive_name;
             $state['annual']['completed'] = array_values(array_unique($state['annual']['completed']));
             $state['annual']['results'][$archive_name] = $result_name;
+            $this->set_annual_file_audit($state, $archive_name, 'completed', $result_name);
             $remaining = array_diff($state['annual']['snapshot'], $state['annual']['completed']);
             $state['annual']['status'] = empty($remaining) ? 'completed' : 'running';
+            $state['annual']['completed_at'] = empty($remaining) ? $this->now() : '';
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('integrity', 'annual', $archive_name, $started_at);
             }
@@ -1727,6 +1839,19 @@ class Kiwi_Retention_Archive_Health_Service
             }
             if ($incident_action === 'none' && $recovery_action === 'resolved') {
                 $incident_action = 'resolved';
+            }
+        } else {
+            $audit_status = in_array($result_name, ['deferred', 'inconclusive'], true)
+                ? $result_name
+                : 'error';
+            $this->set_annual_file_audit($state, $archive_name, $audit_status, '');
+            if (!$this->write_state($state)) {
+                return $this->state_write_failure(
+                    'integrity',
+                    'annual',
+                    $archive_name,
+                    $started_at
+                );
             }
         }
 
@@ -2229,21 +2354,32 @@ class Kiwi_Retention_Archive_Health_Service
             return false;
         }
 
-        if (!isset($annual['cycle_year'], $annual['status'])
+        if (!isset(
+            $annual['cycle_year'],
+            $annual['started_at'],
+            $annual['completed_at'],
+            $annual['status']
+        )
             || !is_string($annual['cycle_year'])
+            || !is_string($annual['started_at'])
+            || !is_string($annual['completed_at'])
             || !is_string($annual['status'])
         ) {
             return false;
         }
         $annual_cycle_year = $annual['cycle_year'];
+        $annual_started_at = $annual['started_at'];
+        $annual_completed_at = $annual['completed_at'];
         $annual_status = $annual['status'];
         $snapshot = $annual['snapshot'] ?? null;
         $completed = $annual['completed'] ?? null;
         $results = $annual['results'] ?? null;
+        $files = $annual['files'] ?? null;
         if (!in_array($annual_status, ['pending', 'running', 'completed'], true)
             || !is_array($snapshot)
             || !is_array($completed)
             || !is_array($results)
+            || !is_array($files)
         ) {
             return false;
         }
@@ -2261,11 +2397,54 @@ class Kiwi_Retention_Archive_Health_Service
                 return false;
             }
         }
+        foreach ($files as $archive_name => $file_state) {
+            if (!is_string($archive_name)
+                || $this->normalize_archive_name($archive_name) === ''
+                || !is_array($file_state)
+                || !isset($file_state['status'], $file_state['check'], $file_state['result'])
+                || !is_string($file_state['status'])
+                || !is_string($file_state['check'])
+                || !is_string($file_state['result'])
+                || !in_array(
+                    $file_state['status'],
+                    ['pending', 'deferred', 'inconclusive', 'error', 'completed'],
+                    true
+                )
+                || $file_state['check'] !== 'integrity'
+                || !in_array(
+                    $file_state['result'],
+                    ['', 'ok', 'corruption_detected'],
+                    true
+                )
+                || ($file_state['status'] === 'pending' && $file_state['result'] !== '')
+                || ($file_state['status'] === 'deferred' && $file_state['result'] !== '')
+                || ($file_state['status'] === 'inconclusive' && $file_state['result'] !== '')
+                || ($file_state['status'] === 'error'
+                    && !in_array($file_state['result'], ['', 'ok', 'corruption_detected'], true))
+                || ($file_state['status'] === 'completed'
+                    && !in_array($file_state['result'], ['ok', 'corruption_detected'], true))
+            ) {
+                return false;
+            }
+            $file_completed = in_array($archive_name, $completed, true);
+            if (($file_state['status'] === 'completed') !== $file_completed
+                || ($file_completed
+                    && (string) ($results[$archive_name] ?? '') !== $file_state['result'])
+                || (!$file_completed && array_key_exists($archive_name, $results))
+            ) {
+                return false;
+            }
+        }
+        $sorted_snapshot = $snapshot;
+        sort($sorted_snapshot, SORT_STRING);
         if (
             count($snapshot) !== count(array_unique($snapshot))
+            || $snapshot !== $sorted_snapshot
             || count($completed) !== count(array_unique($completed))
             || array_diff($completed, $snapshot) !== []
             || array_diff(array_keys($results), $snapshot) !== []
+            || array_diff(array_keys($files), $snapshot) !== []
+            || array_diff($snapshot, array_keys($files)) !== []
             || array_diff($completed, array_keys($results)) !== []
             || array_diff(array_keys($results), $completed) !== []
         ) {
@@ -2273,10 +2452,21 @@ class Kiwi_Retention_Archive_Health_Service
         }
         if (($annual_cycle_year !== '' && preg_match('/^[0-9]{4}$/', $annual_cycle_year) !== 1)
             || ($annual_status === 'pending'
-                && ($annual_cycle_year !== '' || $snapshot !== [] || $completed !== [] || $results !== []))
-            || ($annual_status !== 'pending' && $annual_cycle_year === '')
+                && ($annual_cycle_year !== ''
+                    || $annual_started_at !== ''
+                    || $annual_completed_at !== ''
+                    || $snapshot !== []
+                    || $completed !== []
+                    || $results !== []
+                    || $files !== []))
+            || ($annual_status !== 'pending'
+                && ($annual_cycle_year === ''
+                    || !$this->is_valid_timestamp($annual_started_at)))
             || ($annual_status === 'running' && count($completed) >= count($snapshot))
-            || ($annual_status === 'completed' && count($completed) !== count($snapshot))
+            || ($annual_status === 'running' && $annual_completed_at !== '')
+            || ($annual_status === 'completed'
+                && (count($completed) !== count($snapshot)
+                    || !$this->is_valid_timestamp($annual_completed_at)))
         ) {
             return false;
         }
@@ -2361,9 +2551,12 @@ class Kiwi_Retention_Archive_Health_Service
             ],
             'annual' => [
                 'cycle_year' => '',
+                'started_at' => '',
+                'completed_at' => '',
                 'snapshot' => [],
                 'completed' => [],
                 'results' => [],
+                'files' => [],
                 'status' => 'pending',
             ],
         ];
@@ -2563,7 +2756,33 @@ class Kiwi_Retention_Archive_Health_Service
                 }
             }
 
-            if ($this->record_incomplete_recovery($archive_name, 'corruption_detected') === '') {
+            $lookup_recovery_action = 'none';
+            $daily_marker = (string) ($state['daily']['archive'] ?? '') === $archive_name
+                && (string) ($state['daily']['result'] ?? '') === 'corruption_detected';
+            if ($daily_marker) {
+                $lookup_recovery_action = $this->record_incomplete_recovery(
+                    '',
+                    'corruption_detected'
+                );
+                if ($lookup_recovery_action === '') {
+                    return $this->result(
+                        'error',
+                        'failed',
+                        2,
+                        '',
+                        'daily',
+                        $archive_name,
+                        'incomplete_recovery_persist_failed',
+                        $started_at,
+                        ['incident_action' => $incident_action]
+                    );
+                }
+            }
+            $archive_recovery_action = $this->record_incomplete_recovery(
+                $archive_name,
+                'corruption_detected'
+            );
+            if ($archive_recovery_action === '') {
                 return $this->result(
                     'error',
                     'failed',
@@ -2575,6 +2794,11 @@ class Kiwi_Retention_Archive_Health_Service
                     $started_at,
                     ['incident_action' => $incident_action]
                 );
+            }
+            if ($incident_action === 'none'
+                && in_array('resolved', [$lookup_recovery_action, $archive_recovery_action], true)
+            ) {
+                $incident_action = 'resolved';
             }
 
             if (!$this->archive_service->mark_quarantine_reconciled($archive_path, $this->now())) {
@@ -2607,6 +2831,22 @@ class Kiwi_Retention_Archive_Health_Service
         }
 
         return null;
+    }
+
+    private function set_annual_file_audit(
+        array &$state,
+        string $archive_name,
+        string $status,
+        string $result
+    ): void {
+        if (!isset($state['annual']['files']) || !is_array($state['annual']['files'])) {
+            $state['annual']['files'] = [];
+        }
+        $state['annual']['files'][$archive_name] = [
+            'status' => $status,
+            'check' => 'integrity',
+            'result' => $result,
+        ];
     }
 
     private function find_archive(string $archive_name): ?array
