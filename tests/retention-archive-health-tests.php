@@ -2820,6 +2820,107 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service quarantines confirmed corru
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service preserves current daily check after prior-day marker recovery', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_prior_daily_marker');
+    $now = new DateTimeImmutable('2026-07-28 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $check_calls = 0;
+    [$service, $archive_service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
+            return [
+                'result' => 'ok',
+                'reason_code' => 'sqlite_check_ok',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        }
+    );
+
+    try {
+        $quarantined_name = 'kiwi_retention_archive_2026_part_2.sqlite';
+        $quarantined_path = kiwi_test_create_retention_archive(
+            $archive_service,
+            $quarantined_name
+        );
+        $active_name = 'kiwi_retention_archive_2026_part_3.sqlite';
+        kiwi_test_create_retention_archive($archive_service, $active_name);
+        kiwi_assert_true($archive_service->mark_quarantined($quarantined_path, [
+            'detected_at' => '2026-07-27T02:30:00+02:00',
+            'check' => 'quick',
+            'reason_code' => 'sqlite_check_reported_corruption',
+            'active_generation' => true,
+        ]), 'Expected a prior-day direct-daily marker fixture.');
+        $state_path = $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_health_state.json';
+        kiwi_write_file($state_path, json_encode([
+            'schema_version' => 1,
+            'daily' => [
+                'date' => '2026-07-27',
+                'attempt_date' => '2026-07-27',
+                'archive' => $quarantined_name,
+                'check' => 'quick',
+                'attempts' => 2,
+                'status' => 'incomplete',
+                'result' => 'inconclusive',
+                'reason_code' => 'archive_lock_active',
+                'completed_at' => '',
+                'controller_deferral_receipts' => [],
+            ],
+            'annual' => [
+                'cycle_year' => '',
+                'started_at' => '',
+                'completed_at' => '',
+                'snapshot' => [],
+                'completed' => [],
+                'results' => [],
+                'files' => [],
+                'status' => 'pending',
+            ],
+        ]) . "\n");
+
+        $reconciled = $service->scheduled();
+        $after_reconciliation = $service->status();
+        $check_calls_after_reconciliation = $check_calls;
+        $current_daily = $service->scheduled();
+        $status = $service->status();
+
+        kiwi_assert_same(
+            'corruption_detected',
+            $reconciled['result'] ?? '',
+            'Expected prior-day marker recovery without repeating its SQLite check.'
+        );
+        kiwi_assert_same(
+            '2026-07-27',
+            $after_reconciliation['state']['daily']['date'] ?? '',
+            'Expected the recovered result to retain its Berlin detection date.'
+        );
+        kiwi_assert_same(
+            '2026-07-28',
+            $after_reconciliation['state']['daily']['attempt_date'] ?? '',
+            'Expected the reconciliation attempt to remain audited on the current date.'
+        );
+        kiwi_assert_same(
+            0,
+            $check_calls_after_reconciliation,
+            'Expected marker recovery not to run a SQLite child.'
+        );
+        kiwi_assert_same('ok', $current_daily['result'] ?? '', 'Expected the next slot to run the current daily check.');
+        kiwi_assert_same($active_name, $current_daily['archive'] ?? '', 'Expected the current active generation to be checked.');
+        kiwi_assert_same(1, $check_calls, 'Expected exactly one current-day SQLite check after recovery.');
+        kiwi_assert_same(
+            '2026-07-28',
+            $status['state']['daily']['date'] ?? '',
+            'Expected the current daily result to replace the overdue recovered result.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service holds generation lock through quarantine transition', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_quarantine_lock');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));

@@ -2749,6 +2749,19 @@ class Kiwi_Retention_Archive_Health_Service
                 $marker_check = $this->normalize_check((string) ($marker['check'] ?? ''));
                 $reason_code = trim((string) ($marker['reason_code'] ?? ''));
                 $completed_at = (string) ($marker['detected_at'] ?? '');
+                $completed_date = $date;
+                if ($this->is_valid_timestamp($completed_at)) {
+                    try {
+                        $marker_date = (new DateTimeImmutable($completed_at))
+                            ->setTimezone(new DateTimeZone('Europe/Berlin'))
+                            ->format('Y-m-d');
+                        if ($marker_date <= $date) {
+                            $completed_date = $marker_date;
+                        }
+                    } catch (Throwable $error) {
+                        $completed_date = $date;
+                    }
+                }
                 $incident_action = $this->record_corruption_incident(
                     $archive_name,
                     !empty($marker['active_generation']),
@@ -2768,7 +2781,7 @@ class Kiwi_Retention_Archive_Health_Service
                     );
                 }
                 $state['daily'] = [
-                    'date' => $date,
+                    'date' => $completed_date,
                     'attempt_date' => $date,
                     'archive' => $archive_name,
                     'check' => $marker_check !== '' ? $marker_check : $daily_check,
