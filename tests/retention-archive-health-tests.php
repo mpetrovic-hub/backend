@@ -1604,13 +1604,28 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service resolves lookup incident on
         $raised = $service->scheduled();
         kiwi_assert_same('raised', $raised['incident_action'] ?? '', 'Expected lookup incident after three failures.');
 
+        $runs->fail_lookup = false;
+        $current_time = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+
+        $no_work = $service->scheduled();
+        kiwi_assert_same('no_work', $no_work['result'] ?? '', 'Expected successful lookup without an archive to remain no-work.');
+        kiwi_assert_same(null, $no_work['incident_action'] ?? null, 'Expected no-work not to report an Incident resolution.');
+        kiwi_assert_same(
+            ['raised'],
+            array_column(array_values($events->rows), 'lifecycle_action'),
+            'Expected no-work not to resolve a lookup Incident without a completed SQLite check.'
+        );
+        kiwi_assert_same(1, count($events->get_open_incidents()), 'Expected the lookup Incident to remain open after no-work.');
+
         kiwi_test_create_retention_archive(
             $archive_service,
             'kiwi_retention_archive_2026.sqlite'
         );
-        $runs->fail_lookup = false;
         $current_time = new DateTimeImmutable(
-            '2026-07-28 01:30:00',
+            '2026-07-29 01:30:00',
             new DateTimeZone('Europe/Berlin')
         );
 
@@ -2570,6 +2585,109 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined dail
             'sqlite_check_reported_corruption',
             $status['state']['daily']['reason_code'] ?? '',
             'Expected durable marker reason after reconciliation.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service reports actual action for acknowledged daily quarantine', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_acknowledged_quarantine_action');
+    $current_time = new DateTimeImmutable(
+        '2026-07-27 01:30:00',
+        new DateTimeZone('Europe/Berlin')
+    );
+    $check_calls = 0;
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        $event_service,
+        static function () use (&$current_time): DateTimeImmutable {
+            return $current_time;
+        },
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
+            return [
+                'result' => 'ok',
+                'reason_code' => 'unexpected_check',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        },
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    try {
+        $archive_name = 'kiwi_retention_archive_2026.sqlite';
+        $archive_path = kiwi_test_create_retention_archive(
+            $archive_service,
+            $archive_name
+        );
+        kiwi_assert_true($event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'critical',
+            'event_type' => 'retention_archive_corruption_detected',
+            'correlation_key' => 'retention_archive_corruption_' . hash('sha256', $archive_name),
+            'idempotency_key' => 'retention_archive_acknowledged_corruption_test',
+            'reference_type' => 'retention_archive',
+            'reference_id' => $archive_name,
+            'message' => 'Synthetic acknowledged corruption Incident.',
+        ]), 'Expected corruption Incident fixture.');
+        kiwi_assert_true($event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'error',
+            'event_type' => 'retention_archive_health_check_incomplete',
+            'correlation_key' => 'retention_archive_health_incomplete_' . hash('sha256', $archive_name),
+            'idempotency_key' => 'retention_archive_acknowledged_incomplete_test',
+            'reference_type' => 'retention_archive',
+            'reference_id' => $archive_name,
+            'message' => 'Synthetic incomplete Incident before acknowledged quarantine.',
+        ]), 'Expected incomplete Incident fixture.');
+        kiwi_assert_true($archive_service->mark_quarantined($archive_path, [
+            'detected_at' => '2026-07-27T01:25:00+02:00',
+            'check' => 'quick',
+            'reason_code' => 'sqlite_check_reported_corruption',
+            'active_generation' => true,
+        ]), 'Expected quarantine marker fixture.');
+        kiwi_assert_true(
+            $archive_service->mark_quarantine_reconciled(
+                $archive_path,
+                '2026-07-27T01:26:00+02:00'
+            ),
+            'Expected acknowledged quarantine marker fixture.'
+        );
+
+        $resolved = $service->scheduled();
+        kiwi_assert_same('corruption_detected', $resolved['result'] ?? '', 'Expected acknowledged quarantine result.');
+        kiwi_assert_same(
+            'resolved',
+            $resolved['incident_action'] ?? '',
+            'Expected command JSON to report the actual incomplete-Incident resolution.'
+        );
+
+        $current_time = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+        $unchanged = $service->scheduled();
+        kiwi_assert_same('corruption_detected', $unchanged['result'] ?? '', 'Expected acknowledged quarantine to remain visible.');
+        kiwi_assert_same(
+            null,
+            $unchanged['incident_action'] ?? null,
+            'Expected no fabricated Incident action when no lifecycle transition occurred.'
+        );
+        kiwi_assert_same(0, $check_calls, 'Expected no SQLite check against the quarantined generation.');
+        kiwi_assert_same(
+            ['raised', 'raised', 'resolved'],
+            array_column(array_values($events->rows), 'lifecycle_action'),
+            'Expected only the real incomplete-Incident resolution after the two fixtures.'
         );
     } finally {
         kiwi_remove_directory($root);

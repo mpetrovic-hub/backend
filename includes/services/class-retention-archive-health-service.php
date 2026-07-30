@@ -802,8 +802,19 @@ class Kiwi_Retention_Archive_Health_Service
                     $started_at
                 );
             }
-            $this->record_incomplete_recovery('', 'corruption_detected');
-            $this->record_incomplete_recovery($archive_name, 'corruption_detected');
+            $lookup_recovery_action = $this->record_incomplete_recovery(
+                '',
+                'corruption_detected'
+            );
+            $archive_recovery_action = $this->record_incomplete_recovery(
+                $archive_name,
+                'corruption_detected'
+            );
+            $incident_action = in_array(
+                'resolved',
+                [$lookup_recovery_action, $archive_recovery_action],
+                true
+            ) ? 'resolved' : 'none';
 
             return $this->result(
                 'corruption_detected',
@@ -814,7 +825,7 @@ class Kiwi_Retention_Archive_Health_Service
                 $archive_name,
                 (string) $state['daily']['reason_code'],
                 $started_at,
-                ['incident_action' => 'raised']
+                ['incident_action' => $incident_action]
             );
         }
         if (!is_array($archive)) {
@@ -827,8 +838,6 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('', 'daily', '', $started_at);
             }
-            $incident_action = $this->record_incomplete_recovery('', 'no_work');
-
             return $this->result(
                 'no_work',
                 'completed',
@@ -837,8 +846,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'daily',
                 '',
                 'active_archive_unavailable',
-                $started_at,
-                ['incident_action' => $incident_action]
+                $started_at
             );
         }
 
