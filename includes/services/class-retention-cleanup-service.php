@@ -1311,6 +1311,50 @@ class Kiwi_Retention_Cleanup_Service
                 'resolved_run_id' => (int) ($carried_recovery['id'] ?? 0),
             ];
         }
+        try {
+            $archive_files = $this->archive_service->list_archive_files();
+        } catch (Throwable $error) {
+            return false;
+        }
+        foreach ($archive_files as $archive_file) {
+            $quarantined_archive = basename((string) (
+                $archive_file['name']
+                    ?? $archive_file['path']
+                    ?? ''
+            ));
+            $quarantined_path = trim((string) ($archive_file['path'] ?? ''));
+            if (empty($archive_file['quarantined'])
+                || $quarantined_archive === ''
+                || $quarantined_archive === $current_archive
+                || $quarantined_path === ''
+            ) {
+                continue;
+            }
+            try {
+                $reconciled = $this->archive_service->is_quarantine_reconciled(
+                    $quarantined_path
+                );
+            } catch (Throwable $error) {
+                return false;
+            }
+            if (!$reconciled) {
+                continue;
+            }
+            $marker_context = json_encode([
+                'old_archive' => $quarantined_archive,
+                'new_archive' => $current_archive,
+            ]);
+            if (!is_string($marker_context)) {
+                return false;
+            }
+            $recovery_candidates[] = [
+                'run' => [
+                    'run_id' => (string) ($run['run_id'] ?? ''),
+                    'error_message' => $marker_context,
+                ],
+                'expected_new_archive' => $current_archive,
+            ];
+        }
 
         if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
             && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'

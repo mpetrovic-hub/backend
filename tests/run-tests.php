@@ -1719,6 +1719,7 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
     public $quarantine_reconciled = true;
     public $quarantine_results = [];
     public $quarantined_predecessor = null;
+    public $archive_files = [];
     public $new_archive_db_path = '';
     public $result = [
         'success' => true,
@@ -1769,6 +1770,11 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
         return is_array($this->quarantined_predecessor)
             ? $this->quarantined_predecessor
             : null;
+    }
+
+    public function list_archive_files(): array
+    {
+        return $this->archive_files;
     }
 
     public function archive_eligible_rows(

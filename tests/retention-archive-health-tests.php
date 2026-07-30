@@ -701,7 +701,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service carries empty recovery context to 
     }
 });
 
-kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves quarantined predecessor without a recovery run', function (): void {
+kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves prior-year quarantine without a recovery run', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
@@ -710,9 +710,10 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves quarantined predecessor w
     $GLOBALS['kiwi_test_deleted_transients'] = [];
     $old_archive = 'kiwi_retention_archive_2026.sqlite';
     $test_root = kiwi_create_temp_directory('kiwi_retention_predecessor_recovery');
+    $old_archive_path = $test_root . DIRECTORY_SEPARATOR . $old_archive;
     $new_archive_path = $test_root
         . DIRECTORY_SEPARATOR
-        . 'kiwi_retention_archive_2026_part_2.sqlite';
+        . 'kiwi_retention_archive_2027.sqlite';
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $runs->rows[1] = [
         'id' => 1,
@@ -745,7 +746,11 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves quarantined predecessor w
         'finished_at' => null,
     ];
     $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
-    $archive->quarantined_predecessor = ['name' => $old_archive];
+    $archive->archive_files = [[
+        'name' => $old_archive,
+        'path' => $old_archive_path,
+        'quarantined' => true,
+    ]];
     $archive->verified_receipt_batches[] = [
         'success' => true,
         'primary_keys' => [1, 2],
@@ -1064,7 +1069,7 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when archive d
         $archive_service,
         new Kiwi_Retention_Archive_Lock(),
         new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
-        static function () use ($now): DateTimeImmutable {
+        static function () use (&$now): DateTimeImmutable {
             return $now;
         },
         static function () use (&$check_calls): array {
@@ -1363,8 +1368,12 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service accounts controller deferra
         $second = $service->record_scheduled_bootstrap_failure('health_service_exception');
         $recorder = new Kiwi_Retention_Archive_Health_Bootstrap_Recorder(
             $archive_service->get_archive_directory(),
-            static function () use ($now): DateTimeImmutable {
+            static function () use (&$now): DateTimeImmutable {
                 return $now;
+            },
+            static function (array $event) use ($events): string {
+                return (new Kiwi_Operational_Event_Service($events))
+                    ->record_failure_action($event);
             }
         );
         $third = $recorder->record('health_service_exception');
@@ -1405,7 +1414,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service accounts controller deferra
 
         $locks->release($controller['handle'] ?? null);
         $controller = null;
-        $reconciled = $service->scheduled();
+        $now = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+        $reconciled = $recorder->record('health_service_exception');
         $status = $service->status();
         $remaining_receipts = glob(
             $archive_service->get_archive_directory()
@@ -1413,13 +1426,23 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service accounts controller deferra
             . 'kiwi_retention_archive_health_deferral_*.json'
         );
 
-        kiwi_assert_same('inconclusive', $reconciled['result'] ?? '', 'Expected bounded attempt-limit result after receipt reconciliation.');
-        kiwi_assert_same('raised', $reconciled['incident_action'] ?? '', 'Expected the final cron slot to raise the incomplete Incident.');
-        kiwi_assert_same(3, $status['state']['daily']['attempts'] ?? 0, 'Expected exactly three daily attempts.');
+        kiwi_assert_same('error', $reconciled['result'] ?? '', 'Expected the current bootstrap failure after prior-day receipt reconciliation.');
+        kiwi_assert_same('raised', $reconciled['incident_action'] ?? '', 'Expected the prior day final slot to raise the incomplete Incident.');
+        kiwi_assert_same(1, $status['state']['daily']['attempts'] ?? 0, 'Expected the new attempt window to start after prior-day reconciliation.');
         kiwi_assert_same(
-            'controller_lock_active',
+            '2026-07-27',
+            $status['state']['daily']['date'] ?? '',
+            'Expected the overdue daily target date to remain frozen.'
+        );
+        kiwi_assert_same(
+            '2026-07-28',
+            $status['state']['daily']['attempt_date'] ?? '',
+            'Expected the fallback failure in the new Berlin-day attempt window.'
+        );
+        kiwi_assert_same(
+            'health_service_exception',
             $status['state']['daily']['reason_code'] ?? '',
-            'Expected the final controlled overlap reason in state.'
+            'Expected the new bootstrap failure only after prior receipt accounting.'
         );
         kiwi_assert_same(
             [],

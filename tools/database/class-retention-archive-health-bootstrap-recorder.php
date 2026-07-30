@@ -11,6 +11,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
     private const DAILY_ATTEMPT_LIMIT = 3;
     private const ALLOWED_REASONS = [
         'controller_lock_active',
+        'controller_deferral_receipt_invalid',
         'wp_cli_loader_unavailable',
         'plugins_loaded_hook_failed',
         'plugins_loaded_not_reached',
@@ -87,12 +88,34 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
                 return $this->result('', 'bootstrap', '', 'health_state_invalid', $started_at);
             }
 
+            $reconciliation = $this->reconcile_controller_deferral_receipts($state);
+            if (empty($reconciliation['success'])) {
+                return $this->result(
+                    '',
+                    'bootstrap',
+                    '',
+                    (string) (
+                        $reconciliation['reason_code']
+                            ?? 'controller_deferral_receipt_invalid'
+                    ),
+                    $started_at
+                );
+            }
+            $state = (array) ($reconciliation['state'] ?? $state);
+            $incident_action = (string) ($reconciliation['incident_action'] ?? '');
             $now = $this->current_datetime();
             $date = $now->format('Y-m-d');
             $check = $now->format('N') === '7' ? 'integrity' : 'quick';
             [$state, $check] = $this->align_daily_state($state, $date, $check);
             if ((string) ($state['daily']['status'] ?? '') === 'completed') {
-                return $this->result('', 'bootstrap', '', $reason_code, $started_at);
+                return $this->result(
+                    '',
+                    'bootstrap',
+                    '',
+                    $reason_code,
+                    $started_at,
+                    $incident_action
+                );
             }
             if ((int) ($state['daily']['attempts'] ?? 0) >= self::DAILY_ATTEMPT_LIMIT) {
                 return $this->result(
@@ -100,7 +123,8 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
                     'daily',
                     (string) ($state['daily']['archive'] ?? ''),
                     $reason_code,
-                    $started_at
+                    $started_at,
+                    $incident_action
                 );
             }
 
@@ -112,15 +136,14 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
             $state['daily']['result'] = 'error';
             $state['daily']['reason_code'] = $reason_code;
             $state['daily']['completed_at'] = '';
-            $incident_action = '';
             if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
-                $incident_action = $this->record_incomplete_incident(
+                $current_incident_action = $this->record_incomplete_incident(
                     $archive,
                     $check,
                     $reason_code,
                     $date
                 );
-                if ($incident_action === '') {
+                if ($current_incident_action === '') {
                     return $this->result(
                         $check,
                         'daily',
@@ -129,6 +152,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
                         $started_at
                     );
                 }
+                $incident_action = $current_incident_action;
             }
             if (!$this->write_state($state)) {
                 return $this->result(
@@ -599,6 +623,236 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
         }
 
         return false;
+    }
+
+    private function reconcile_controller_deferral_receipts(array $state): array
+    {
+        $receipt_read = $this->read_controller_deferral_receipts();
+        if (empty($receipt_read['success'])) {
+            return [
+                'success' => false,
+                'reason_code' => (string) (
+                    $receipt_read['reason_code'] ?? 'controller_deferral_receipt_invalid'
+                ),
+                'state' => $state,
+                'incident_action' => '',
+            ];
+        }
+
+        $receipts = (array) ($receipt_read['receipts'] ?? []);
+        $stored_receipt_ids = (array) (
+            $state['daily']['controller_deferral_receipts'] ?? []
+        );
+        $available_receipt_ids = array_column($receipts, 'receipt_id');
+        $accounted_receipt_ids = array_values(array_intersect(
+            $stored_receipt_ids,
+            $available_receipt_ids
+        ));
+        $state_changed = $accounted_receipt_ids !== $stored_receipt_ids;
+        $incident_action = '';
+        $current_date = $this->current_datetime()->format('Y-m-d');
+
+        foreach ($receipts as $receipt) {
+            $receipt_id = (string) ($receipt['receipt_id'] ?? '');
+            if (in_array($receipt_id, $accounted_receipt_ids, true)) {
+                continue;
+            }
+            $receipt_date = (string) ($receipt['attempt_date'] ?? '');
+            $stored_attempt_date = (string) (
+                $state['daily']['attempt_date'] ?? $state['daily']['date'] ?? ''
+            );
+            if ($receipt_date <= $current_date
+                && ($stored_attempt_date === '' || $receipt_date >= $stored_attempt_date)
+            ) {
+                [$state, $receipt_check] = $this->align_daily_state(
+                    $state,
+                    $receipt_date,
+                    (string) ($receipt['check'] ?? '')
+                );
+                if ((string) ($state['daily']['status'] ?? '') !== 'completed'
+                    && (int) ($state['daily']['attempts'] ?? 0) < self::DAILY_ATTEMPT_LIMIT
+                ) {
+                    $state['daily']['check'] = $receipt_check;
+                    $state['daily']['attempts'] = (int) (
+                        $state['daily']['attempts'] ?? 0
+                    ) + 1;
+                    $state['daily']['status'] = 'incomplete';
+                    $state['daily']['result'] = 'deferred';
+                    $state['daily']['reason_code'] = 'controller_lock_active';
+                    $state['daily']['completed_at'] = '';
+                    if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
+                        $incident_action = $this->record_incomplete_incident(
+                            $this->normalize_archive_name(
+                                (string) ($state['daily']['archive'] ?? '')
+                            ),
+                            $receipt_check,
+                            'controller_lock_active',
+                            $receipt_date
+                        );
+                        if ($incident_action === '') {
+                            return [
+                                'success' => false,
+                                'reason_code' => 'incomplete_incident_persist_failed',
+                                'state' => $state,
+                                'incident_action' => '',
+                            ];
+                        }
+                    }
+                }
+            }
+            $accounted_receipt_ids[] = $receipt_id;
+            $accounted_receipt_ids = array_values(array_unique($accounted_receipt_ids));
+            $state['daily']['controller_deferral_receipts'] = $accounted_receipt_ids;
+            $state_changed = true;
+        }
+
+        if ($state_changed) {
+            $state['daily']['controller_deferral_receipts'] = $accounted_receipt_ids;
+            if (!$this->write_state($state)) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'health_state_write_failed',
+                    'state' => $state,
+                    'incident_action' => $incident_action,
+                ];
+            }
+        }
+
+        foreach ($receipts as $receipt) {
+            if (in_array(
+                (string) ($receipt['receipt_id'] ?? ''),
+                $accounted_receipt_ids,
+                true
+            )) {
+                @unlink((string) ($receipt['path'] ?? ''));
+            }
+        }
+        $remaining_receipt_ids = array_values(array_filter(
+            $accounted_receipt_ids,
+            function (string $receipt_id): bool {
+                return is_file(
+                    $this->archive_directory
+                    . DIRECTORY_SEPARATOR
+                    . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+                    . $receipt_id
+                    . '.json'
+                );
+            }
+        ));
+        if ($remaining_receipt_ids !== $accounted_receipt_ids) {
+            $state['daily']['controller_deferral_receipts'] = $remaining_receipt_ids;
+            if (!$this->write_state($state)) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'health_state_write_failed',
+                    'state' => $state,
+                    'incident_action' => $incident_action,
+                ];
+            }
+        }
+
+        return [
+            'success' => true,
+            'reason_code' => '',
+            'state' => $state,
+            'incident_action' => $incident_action,
+        ];
+    }
+
+    private function read_controller_deferral_receipts(): array
+    {
+        $paths = @glob(
+            $this->archive_directory
+            . DIRECTORY_SEPARATOR
+            . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+            . '*.json'
+        );
+        if ($paths === false || count($paths) > self::CONTROLLER_DEFERRAL_RECEIPT_LIMIT) {
+            return [
+                'success' => false,
+                'reason_code' => 'controller_deferral_receipt_invalid',
+                'receipts' => [],
+            ];
+        }
+
+        $receipts = [];
+        foreach ($paths as $path) {
+            $filename = basename($path);
+            if (preg_match(
+                '/^' . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+                . '([a-f0-9]{32})\.json$/',
+                $filename,
+                $matches
+            ) !== 1 || !is_file($path) || is_link($path)) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'controller_deferral_receipt_invalid',
+                    'receipts' => [],
+                ];
+            }
+            $raw = @file_get_contents($path);
+            $payload = is_string($raw) && strlen($raw) <= 2048
+                ? json_decode($raw, true)
+                : null;
+            $receipt_id = (string) ($matches[1] ?? '');
+            $occurred_at = is_array($payload)
+                ? (string) ($payload['occurred_at'] ?? '')
+                : '';
+            try {
+                $timestamp = new DateTimeImmutable($occurred_at);
+            } catch (Throwable $error) {
+                $timestamp = null;
+            }
+            $attempt_date = is_array($payload)
+                ? (string) ($payload['attempt_date'] ?? '')
+                : '';
+            $check = is_array($payload)
+                ? $this->normalize_check((string) ($payload['check'] ?? ''))
+                : '';
+            if (!is_array($payload)
+                || (int) ($payload['schema_version'] ?? 0)
+                    !== self::CONTROLLER_DEFERRAL_RECEIPT_SCHEMA_VERSION
+                || (string) ($payload['receipt_id'] ?? '') !== $receipt_id
+                || !$timestamp instanceof DateTimeImmutable
+                || $timestamp->format(DATE_ATOM) !== $occurred_at
+                || $timestamp->setTimezone(new DateTimeZone('Europe/Berlin'))->format('Y-m-d')
+                    !== $attempt_date
+                || $check === ''
+                || (string) ($payload['reason_code'] ?? '') !== 'controller_lock_active'
+            ) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'controller_deferral_receipt_invalid',
+                    'receipts' => [],
+                ];
+            }
+            $receipts[] = [
+                'receipt_id' => $receipt_id,
+                'attempt_date' => $attempt_date,
+                'check' => $check,
+                'occurred_at' => $occurred_at,
+                'path' => $path,
+            ];
+        }
+        usort($receipts, static function (array $left, array $right): int {
+            $time_compare = strcmp(
+                (string) ($left['occurred_at'] ?? ''),
+                (string) ($right['occurred_at'] ?? '')
+            );
+
+            return $time_compare !== 0
+                ? $time_compare
+                : strcmp(
+                    (string) ($left['receipt_id'] ?? ''),
+                    (string) ($right['receipt_id'] ?? '')
+                );
+        });
+
+        return [
+            'success' => true,
+            'reason_code' => '',
+            'receipts' => $receipts,
+        ];
     }
 
     private function default_state(): array
