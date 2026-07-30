@@ -1,5 +1,13 @@
 <?php
 
+require_once dirname(__DIR__)
+    . DIRECTORY_SEPARATOR
+    . 'tools'
+    . DIRECTORY_SEPARATOR
+    . 'database'
+    . DIRECTORY_SEPARATOR
+    . 'class-retention-archive-health-bootstrap-recorder.php';
+
 class Kiwi_Test_Retention_Archive_Health_Config extends Kiwi_Config
 {
     private $archive_root;
@@ -1196,6 +1204,56 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service audits scheduled bootstrap 
     }
 });
 
+kiwi_run_test('Kiwi bootstrap recorder audits without the health service graph', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_independent_bootstrap_failures');
+    $archive_directory = $root . DIRECTORY_SEPARATOR . 'sqlite';
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    $events = [];
+    $recorder = new Kiwi_Retention_Archive_Health_Bootstrap_Recorder(
+        $archive_directory,
+        static function () use ($now): DateTimeImmutable {
+            return $now;
+        },
+        static function (array $event) use (&$events): string {
+            $events[] = $event;
+
+            return 'raised';
+        }
+    );
+    [$service] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (): array {
+            throw new RuntimeException('Independent bootstrap audit must not start SQLite.');
+        }
+    );
+
+    try {
+        $first = $recorder->record('required_class_missing');
+        $second = $recorder->record('required_class_missing');
+        $third = $recorder->record('required_class_missing');
+        $status = $service->status();
+
+        kiwi_assert_same(2, $first['exit_code'] ?? 0, 'Expected the independent recorder to preserve runner failure.');
+        kiwi_assert_same(2, $second['exit_code'] ?? 0, 'Expected the second independent audit failure.');
+        kiwi_assert_same('raised', $third['incident_action'] ?? '', 'Expected the third independent failure to raise an Incident.');
+        kiwi_assert_same(3, $status['state']['daily']['attempts'] ?? 0, 'Expected the main service to accept independent state.');
+        kiwi_assert_same(
+            'required_class_missing',
+            $status['state']['daily']['reason_code'] ?? '',
+            'Expected the missing dependency reason in shared controller state.'
+        );
+        kiwi_assert_same(1, count($events), 'Expected exactly one threshold Incident attempt.');
+        kiwi_assert_same(
+            'active_archive_lookup',
+            $events[0]['reference_id'] ?? '',
+            'Expected the dependency-independent active lookup subject.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service schedules weekday quick and Sunday integrity checks', function (): void {
     foreach ([
         ['2026-07-27 01:30:00', 'quick', 'quick_check'],
@@ -2210,6 +2268,10 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service quarantines confirmed corru
         kiwi_assert_same('corruption_detected', $result['result'] ?? '', 'Expected complete corruption result.');
         kiwi_assert_same('raised', $result['incident_action'] ?? '', 'Expected corruption incident action.');
         kiwi_assert_true($archive_service->is_quarantined($active), 'Expected only confirmed active generation to be quarantined.');
+        kiwi_assert_true(
+            $archive_service->is_quarantine_reconciled($active),
+            'Expected the durable daily corruption state to acknowledge the quarantine marker immediately.'
+        );
         kiwi_assert_same(
             'kiwi_retention_archive_2026_part_3.sqlite',
             basename($archive_service->resolve_archive_db_path('')),
@@ -2927,9 +2989,14 @@ kiwi_run_test('Kiwi retention archive health runner declares command surface and
         'Expected exactly-one-JSON-line output guard.'
     );
     kiwi_assert_contains(
+        'Kiwi_Retention_Archive_Health_Bootstrap_Recorder',
+        $runner,
+        'Expected pre-service scheduled failures to have a dependency-independent fallback.'
+    );
+    kiwi_assert_contains(
         'record_scheduled_bootstrap_failure',
         $runner,
-        'Expected pre-service scheduled failures to use the durable daily attempt path.'
+        'Expected the complete health graph to retain its shared durable daily attempt path.'
     );
 
     $health_service = file_get_contents(

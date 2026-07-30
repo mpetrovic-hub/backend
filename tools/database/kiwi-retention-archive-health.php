@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
+
 function kiwi_retention_archive_health_is_definitive_corruption(Throwable $error): bool
 {
     $error_info = $error instanceof PDOException && is_array($error->errorInfo ?? null)
@@ -226,19 +228,24 @@ final class Kiwi_Retention_Archive_Health_Command
         $this->bootstrap_failure_recorder = $bootstrap_failure_recorder ?? static function (
             string $reason_code
         ): ?array {
-            if (!class_exists('Kiwi_Retention_Archive_Health_Service')
-                || !method_exists(
+            if (class_exists('Kiwi_Retention_Archive_Health_Service')
+                && method_exists(
                     'Kiwi_Retention_Archive_Health_Service',
                     'record_scheduled_bootstrap_failure'
                 )
             ) {
-                return null;
+                try {
+                    return (new Kiwi_Retention_Archive_Health_Service())
+                        ->record_scheduled_bootstrap_failure($reason_code);
+                } catch (Throwable $error) {
+                    // A missing constructor dependency is handled by the standalone recorder.
+                }
             }
 
             try {
-                $service = new Kiwi_Retention_Archive_Health_Service();
-
-                return $service->record_scheduled_bootstrap_failure($reason_code);
+                return (new Kiwi_Retention_Archive_Health_Bootstrap_Recorder())->record(
+                    $reason_code
+                );
             } catch (Throwable $error) {
                 return null;
             }

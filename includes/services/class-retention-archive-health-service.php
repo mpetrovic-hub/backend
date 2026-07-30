@@ -909,6 +909,24 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure($check, 'daily', $archive_name, $started_at);
             }
+            if ($result_name === 'corruption_detected'
+                && !$this->archive_service->mark_quarantine_reconciled(
+                    (string) $archive['path'],
+                    $this->now()
+                )
+            ) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    $check,
+                    'daily',
+                    $archive_name,
+                    'quarantine_marker_reconciliation_failed',
+                    $started_at,
+                    ['incident_action' => 'raised']
+                );
+            }
             $lookup_recovery_action = $this->record_incomplete_recovery('', $result_name);
             $archive_recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
             if ($incident_action === 'none'
