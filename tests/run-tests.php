@@ -13591,6 +13591,92 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks deletes after one failed re
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Cleanup_Service re-verifies a committed receipt repair after batch finalization failure', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive_path = $archive->resolve_archive_db_path('');
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => $archive_path,
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [11, 12],
+        'last_primary_key' => 12,
+        'has_more' => false,
+        'receipt_status' => 'pending_verification',
+    ];
+    $archive->chunks[] = [
+        'success' => false,
+        'archive_db_path' => $archive_path,
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 0,
+        'archive_duplicate_rows' => 2,
+        'archived_primary_keys' => [11, 12],
+        'last_primary_key' => 12,
+        'has_more' => false,
+        'receipt_status' => 'pending_verification',
+        'error_code' => 'archive_failed',
+        'error_message' => 'Synthetic repair finalization failure.',
+    ];
+    $archive->receipt_results = [
+        [
+            'success' => false,
+            'error_code' => 'archive_receipt_mismatch',
+            'error_message' => 'Receipt mismatch before repair.',
+        ],
+        [
+            'success' => true,
+            'primary_keys' => [11, 12],
+            'expected_count' => 2,
+            'receipt_count' => 2,
+            'archive_row_count' => 2,
+            'archive_inserted_count' => 0,
+            'archive_duplicate_count' => 2,
+            'last_primary_key' => 12,
+            'error_code' => '',
+            'error_message' => '',
+        ],
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+    $service->eligible_rows = 2;
+    $service->target_max_primary_key = 12;
+    $service->delete_result = ['deleted_rows' => 2, 'delete_batches' => 1];
+
+    $service->run_source('landing_page_sessions', 'cron');
+    $result = $service->run_worker('landing_page_sessions');
+
+    kiwi_assert_same('completed', $result['status'] ?? '', 'Expected durable repair receipt re-verification to complete the run.');
+    kiwi_assert_same([11, 12], $service->deleted_primary_keys, 'Expected delete only after the repaired receipt was re-read.');
+    kiwi_assert_same(2, count($archive->chunk_calls), 'Expected exactly one bounded receipt repair attempt.');
+    kiwi_assert_same([], $archive->receipt_results, 'Expected the post-commit repair receipt to be re-verified.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when worker cannot persist running state', function (): void {
     global $wpdb;
 

@@ -911,7 +911,13 @@ class Kiwi_Retention_Cleanup_Service
                 $repair_primary_keys = $this->normalize_primary_keys(
                     (array) ($repair['archived_primary_keys'] ?? [])
                 );
-                if (!empty($repair['success']) && $repair_primary_keys === $archived_primary_keys) {
+                $repair_committed = !empty($repair['success'])
+                    || (
+                        (string) ($repair['receipt_status'] ?? '') === 'pending_verification'
+                        && (string) ($repair['archive_db_path'] ?? '') === $archive_db_path
+                        && (int) ($repair['archived_rows'] ?? 0) === count($repair_primary_keys)
+                    );
+                if ($repair_committed && $repair_primary_keys === $archived_primary_keys) {
                     $receipt = $this->archive_service->verify_batch_receipt(
                         $source,
                         $archive_db_path,

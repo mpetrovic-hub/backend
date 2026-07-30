@@ -113,6 +113,10 @@ class Kiwi_Operational_Event_Repository
             ARRAY_A
         );
 
+        if (trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('Operational event correlation lookup failed.');
+        }
+
         return is_array($row) ? $row : null;
     }
 

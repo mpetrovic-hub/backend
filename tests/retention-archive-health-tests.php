@@ -164,16 +164,35 @@ class Kiwi_Test_Wpdb_Open_Archive_Lookup
 class Kiwi_Test_Flaky_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
 {
     public $fail_next_insert = false;
+    public $fail_next_insert_event_type = '';
+    public $fail_next_latest_lookup = false;
 
     public function insert_event(array $event): int
     {
-        if ($this->fail_next_insert) {
+        if ($this->fail_next_insert
+            || (
+                $this->fail_next_insert_event_type !== ''
+                && (string) ($event['event_type'] ?? '') === $this->fail_next_insert_event_type
+            )
+        ) {
             $this->fail_next_insert = false;
+            $this->fail_next_insert_event_type = '';
 
             return 0;
         }
 
         return parent::insert_event($event);
+    }
+
+    public function find_latest_by_correlation_key(string $correlation_key): ?array
+    {
+        if ($this->fail_next_latest_lookup) {
+            $this->fail_next_latest_lookup = false;
+
+            throw new RuntimeException('Synthetic operational event lookup failure.');
+        }
+
+        return parent::find_latest_by_correlation_key($correlation_key);
     }
 }
 
@@ -1646,6 +1665,19 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Run_Repository distinguishes active archiv
             ),
             'Expected recovery-context query errors to fail closed.'
         );
+
+        $event_lookup_failed = false;
+        try {
+            (new Kiwi_Operational_Event_Repository())->find_latest_by_correlation_key(
+                'retention_archive_health_lookup_failure'
+            );
+        } catch (RuntimeException $error) {
+            $event_lookup_failed = true;
+        }
+        kiwi_assert_true(
+            $event_lookup_failed,
+            'Expected Operational Event lookup errors to remain distinguishable from no open incident.'
+        );
     } finally {
         $wpdb = $previous_wpdb;
     }
@@ -2384,25 +2416,39 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service resolves incomplete inciden
         ]), 'Expected incomplete incident fixture.');
 
         $service->scheduled();
+        $events->fail_next_latest_lookup = true;
+        $failed_lookup = $service->scheduled();
+        $pending_after_lookup = $service->status();
         $events->fail_next_insert = true;
-        $failed_annual = $service->scheduled();
-        $pending = $service->status();
+        $failed_insert = $service->scheduled();
+        $pending_after_insert = $service->status();
         $annual = $service->scheduled();
         $latest = $events->find_latest_by_correlation_key($correlation_key);
 
-        kiwi_assert_same('error', $failed_annual['result'] ?? '', 'Expected failed annual recovery persistence to remain visible.');
+        kiwi_assert_same('error', $failed_lookup['result'] ?? '', 'Expected failed annual recovery lookup to remain visible.');
         kiwi_assert_same(
             'incomplete_recovery_persist_failed',
-            $failed_annual['reason_code'] ?? '',
-            'Expected explicit retryable annual recovery reason.'
+            $failed_lookup['reason_code'] ?? '',
+            'Expected ambiguous annual recovery lookup to fail closed.'
         );
         kiwi_assert_same(
             [],
-            $pending['state']['annual']['completed'] ?? [],
+            $pending_after_lookup['state']['annual']['completed'] ?? [],
+            'Expected the annual archive to remain retryable after lookup failure.'
+        );
+        kiwi_assert_same('error', $failed_insert['result'] ?? '', 'Expected failed annual recovery insert to remain visible.');
+        kiwi_assert_same(
+            'incomplete_recovery_persist_failed',
+            $failed_insert['reason_code'] ?? '',
+            'Expected explicit retryable annual recovery persistence reason.'
+        );
+        kiwi_assert_same(
+            [],
+            $pending_after_insert['state']['annual']['completed'] ?? [],
             'Expected the annual archive to remain retryable.'
         );
         kiwi_assert_same('ok', $annual['result'] ?? '', 'Expected complete annual integrity result.');
-        kiwi_assert_same(3, $check_calls, 'Expected one daily check and two bounded annual attempts.');
+        kiwi_assert_same(4, $check_calls, 'Expected one daily check and three bounded annual attempts.');
         kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected annual success to resolve incomplete incident.');
         kiwi_assert_same([], $events->get_open_incidents([
             'event_type' => 'retention_archive_health_check_incomplete',
@@ -2891,8 +2937,6 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined dail
             (string) file_get_contents($archive_service->get_quarantine_marker_path($archive_path)),
             true
         );
-        $result = $service->scheduled();
-        $status = $service->status();
 
         kiwi_assert_same('error', $failed['result'] ?? '', 'Expected failed corruption Incident retry to keep reconciliation incomplete.');
         kiwi_assert_same('corruption_incident_reconciliation_failed', $failed['reason_code'] ?? '', 'Expected explicit Incident retry failure.');
@@ -2901,7 +2945,30 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined dail
                 && trim((string) ($failed_marker['controller_recorded_at'] ?? '')) === '',
             'Expected marker to remain unacknowledged until the corruption Incident is persisted.'
         );
-        kiwi_assert_same('corruption_detected', $result['result'] ?? '', 'Expected quarantine marker reconciliation instead of no work.');
+        $events->fail_next_insert_event_type = 'retention_archive_health_check_incomplete';
+        $recovery_failed = $service->scheduled();
+        $recovery_failed_marker = json_decode(
+            (string) file_get_contents($archive_service->get_quarantine_marker_path($archive_path)),
+            true
+        );
+        $result = $service->scheduled();
+        $status = $service->status();
+        $latest = $events->find_latest_by_correlation_key(
+            'retention_archive_health_incomplete_' . hash('sha256', $archive_name)
+        );
+
+        kiwi_assert_same('error', $recovery_failed['result'] ?? '', 'Expected failed incomplete-Incident recovery to keep reconciliation incomplete.');
+        kiwi_assert_same(
+            'incomplete_recovery_persist_failed',
+            $recovery_failed['reason_code'] ?? '',
+            'Expected explicit retryable recovery persistence reason.'
+        );
+        kiwi_assert_true(
+            is_array($recovery_failed_marker)
+                && trim((string) ($recovery_failed_marker['controller_recorded_at'] ?? '')) === '',
+            'Expected marker to remain unacknowledged until incomplete-Incident recovery persists.'
+        );
+        kiwi_assert_same('no_work', $result['result'] ?? '', 'Expected the retry to finish marker recovery before normal no-work scheduling.');
         kiwi_assert_same(0, $check_calls, 'Expected reconciliation not to rerun a check against the quarantined generation.');
         kiwi_assert_same(
             $archive_name,
@@ -2914,6 +2981,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined dail
             $status['state']['daily']['reason_code'] ?? '',
             'Expected durable marker reason after reconciliation.'
         );
+        kiwi_assert_true(
+            $archive_service->is_quarantine_reconciled($archive_path),
+            'Expected marker acknowledgement only after incomplete-Incident recovery persisted.'
+        );
+        kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected retry to resolve the incomplete Incident.');
     } finally {
         kiwi_remove_directory($root);
     }

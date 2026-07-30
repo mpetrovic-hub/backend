@@ -2528,7 +2528,20 @@ class Kiwi_Retention_Archive_Health_Service
                         $started_at
                     );
                 }
-                $this->record_incomplete_recovery($archive_name, 'corruption_detected');
+            }
+
+            if ($this->record_incomplete_recovery($archive_name, 'corruption_detected') === '') {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'daily',
+                    $archive_name,
+                    'incomplete_recovery_persist_failed',
+                    $started_at,
+                    ['incident_action' => $incident_action]
+                );
             }
 
             if (!$this->archive_service->mark_quarantine_reconciled($archive_path, $this->now())) {
