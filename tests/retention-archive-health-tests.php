@@ -1479,6 +1479,84 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service accounts controller deferra
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles prior-day deferral before full-service bootstrap alignment', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_full_bootstrap_deferral');
+    $now = new DateTimeImmutable(
+        '2026-07-27 01:30:00',
+        new DateTimeZone('Europe/Berlin')
+    );
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $locks = new Kiwi_Retention_Archive_Lock();
+    $check_calls = 0;
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        $locks,
+        new Kiwi_Operational_Event_Service($events),
+        static function () use (&$now): DateTimeImmutable {
+            return $now;
+        },
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
+            return [
+                'result' => 'inconclusive',
+                'reason_code' => 'health_child_timeout',
+                'duration_seconds' => 600.0,
+                'child_running' => false,
+            ];
+        },
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+    $controller = null;
+
+    try {
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $service->scheduled();
+        $second = $service->scheduled();
+        kiwi_assert_same('inconclusive', $second['result'] ?? '', 'Expected two persisted prior-day attempts.');
+
+        $controller = $locks->acquire_controller($archive_service->get_archive_directory());
+        kiwi_assert_true(!empty($controller['acquired']), 'Expected external controller-lock fixture.');
+        $deferred = $service->record_scheduled_bootstrap_failure('health_service_exception');
+        kiwi_assert_same('archive_lock_active', $deferred['reason_code'] ?? '', 'Expected durable third-slot deferral receipt.');
+        $locks->release($controller['handle'] ?? null);
+        $controller = null;
+
+        $now = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+        $reconciled = $service->record_scheduled_bootstrap_failure('health_service_exception');
+        $status = $service->status();
+        $remaining_receipts = glob(
+            $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_health_deferral_*.json'
+        );
+
+        kiwi_assert_same('raised', $reconciled['incident_action'] ?? '', 'Expected the prior-day third slot to raise before current-day alignment.');
+        kiwi_assert_same(1, $status['state']['daily']['attempts'] ?? 0, 'Expected the new attempt window only after prior-day reconciliation.');
+        kiwi_assert_same('2026-07-27', $status['state']['daily']['date'] ?? '', 'Expected the overdue target date to remain frozen.');
+        kiwi_assert_same('2026-07-28', $status['state']['daily']['attempt_date'] ?? '', 'Expected current-day bootstrap accounting after reconciliation.');
+        kiwi_assert_same('health_service_exception', $status['state']['daily']['reason_code'] ?? '', 'Expected the current bootstrap failure after receipt accounting.');
+        kiwi_assert_same([], is_array($remaining_receipts) ? $remaining_receipts : [], 'Expected the reconciled receipt file to be removed.');
+        kiwi_assert_same(2, $check_calls, 'Expected bootstrap reconciliation not to rerun SQLite.');
+        kiwi_assert_same(1, count($events->get_open_incidents()), 'Expected the prior-day incomplete Incident to remain open.');
+    } finally {
+        if (is_array($controller)) {
+            $locks->release($controller['handle'] ?? null);
+        }
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service schedules weekday quick and Sunday integrity checks', function (): void {
     foreach ([
         ['2026-07-27 01:30:00', 'quick', 'quick_check'],

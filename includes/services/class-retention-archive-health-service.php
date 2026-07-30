@@ -959,6 +959,36 @@ class Kiwi_Retention_Archive_Health_Service
         }
 
         try {
+            $reconciliation = $this->reconcile_controller_deferral_receipts(
+                $archive_directory
+            );
+            if (empty($reconciliation['success'])) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'bootstrap',
+                    '',
+                    (string) (
+                        $reconciliation['reason_code']
+                        ?? 'controller_deferral_reconciliation_failed'
+                    ),
+                    $started_at,
+                    [
+                        'incident_action' => (string) (
+                            $reconciliation['incident_action'] ?? 'none'
+                        ),
+                    ]
+                );
+            }
+            $reconciled_incident_action = (string) (
+                $reconciliation['incident_action'] ?? 'none'
+            );
+            if (!in_array($reconciled_incident_action, ['raised', 'repeated', 'resolved'], true)) {
+                $reconciled_incident_action = 'none';
+            }
+
             $state_read = $this->read_state();
             if (empty($state_read['valid'])) {
                 return $this->result(
@@ -969,7 +999,8 @@ class Kiwi_Retention_Archive_Health_Service
                     'bootstrap',
                     '',
                     (string) ($state_read['error_code'] ?? 'health_state_invalid'),
-                    $started_at
+                    $started_at,
+                    ['incident_action' => $reconciled_incident_action]
                 );
             }
 
@@ -987,7 +1018,8 @@ class Kiwi_Retention_Archive_Health_Service
                     'bootstrap',
                     '',
                     $reason_code,
-                    $started_at
+                    $started_at,
+                    ['incident_action' => $reconciled_incident_action]
                 );
             }
             if ((int) ($state['daily']['attempts'] ?? 0) >= self::DAILY_ATTEMPT_LIMIT) {
@@ -999,7 +1031,8 @@ class Kiwi_Retention_Archive_Health_Service
                     'daily',
                     (string) ($state['daily']['archive'] ?? ''),
                     $reason_code,
-                    $started_at
+                    $started_at,
+                    ['incident_action' => $reconciled_incident_action]
                 );
             }
 
@@ -1011,7 +1044,7 @@ class Kiwi_Retention_Archive_Health_Service
             $state['daily']['result'] = 'error';
             $state['daily']['reason_code'] = $reason_code;
             $state['daily']['completed_at'] = '';
-            $incident_action = 'none';
+            $incident_action = $reconciled_incident_action;
             if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
                 $incident_action = $this->record_incomplete_incident(
                     $archive_name,
