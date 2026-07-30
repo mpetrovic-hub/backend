@@ -70,6 +70,31 @@ class Kiwi_Test_One_Failure_Quarantine_Retention_Sqlite_Archive_Service extends 
     }
 }
 
+class Kiwi_Test_Observed_Archive_Chunk_Service extends Kiwi_Retention_Sqlite_Archive_Service
+{
+    public $archive_chunk_calls = 0;
+
+    public function archive_primary_key_chunk(
+        array $source,
+        string $cutoff_value,
+        string $archive_batch_id,
+        int $last_primary_key,
+        int $target_max_primary_key,
+        int $batch_limit,
+        int $time_limit_seconds,
+        string $archive_db_path = ''
+    ): array {
+        $this->archive_chunk_calls++;
+
+        return [
+            'success' => false,
+            'archive_db_path' => $archive_db_path,
+            'error_code' => 'unexpected_archive_chunk',
+            'error_message' => 'Archive work must not start before quarantine acknowledgement.',
+        ];
+    }
+}
+
 class Kiwi_Test_Wpdb_Retention_Quarantine_Transition
 {
     public $prefix = 'wp_';
@@ -1136,6 +1161,77 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when archive d
         kiwi_assert_same(0, $check_calls, 'Expected no child check after discovery failure.');
     } finally {
         kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service waits for quarantine acknowledgement before selecting successor', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+    $root = kiwi_create_temp_directory('kiwi_retention_unacknowledged_predecessor');
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Test_Observed_Archive_Chunk_Service($config);
+
+    try {
+        $quarantined_path = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        kiwi_assert_true($archive_service->mark_quarantined($quarantined_path, [
+            'detected_at' => '2026-07-27T01:35:00+02:00',
+            'check' => 'quick',
+            'reason_code' => 'sqlite_check_reported_corruption',
+            'active_generation' => true,
+        ]), 'Expected an unacknowledged quarantine marker fixture.');
+
+        $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+        $service = new Kiwi_Test_Retention_Cleanup_Service(
+            $config,
+            new Kiwi_Retention_Source_Registry(),
+            $runs,
+            new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+            $archive_service,
+            new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+        );
+        $service->eligible_rows = 2;
+        $service->target_max_primary_key = 2;
+
+        $scheduled = $service->run_source('landing_page_sessions', 'cron');
+        $blocked = $service->run_worker('landing_page_sessions');
+
+        kiwi_assert_same('pending', $scheduled['status'] ?? '', 'Expected a new cleanup run for the pending scope.');
+        kiwi_assert_same(false, $blocked['success'] ?? true, 'Expected the unacknowledged predecessor to block the worker.');
+        kiwi_assert_same(
+            'archive_corruption_incident_pending',
+            $blocked['error_code'] ?? '',
+            'Expected an explicit wait for the controller acknowledgement.'
+        );
+        kiwi_assert_same(
+            $quarantined_path,
+            $runs->rows[1]['archive_db_path'] ?? '',
+            'Expected the run to remain frozen on the quarantined predecessor.'
+        );
+        kiwi_assert_same(
+            0,
+            $archive_service->archive_chunk_calls,
+            'Expected no successor archive work before marker acknowledgement.'
+        );
+        kiwi_assert_same([], $service->deleted_primary_keys, 'Expected no MySQL delete before marker acknowledgement.');
+    } finally {
+        kiwi_remove_directory($root);
+        $wpdb = $previous_wpdb;
     }
 });
 

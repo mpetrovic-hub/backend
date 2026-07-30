@@ -57,8 +57,13 @@ class Kiwi_Retention_Sqlite_Archive_Service
             return $this->build_generation_path($year, 1);
         }
 
-        if ($highest_path !== '' && !$this->is_quarantined($highest_path)) {
-            return $highest_path;
+        if ($highest_path !== '') {
+            if (!$this->is_quarantined($highest_path)) {
+                return $highest_path;
+            }
+            if (!$this->is_quarantine_reconciled($highest_path)) {
+                return $highest_path;
+            }
         }
 
         return $this->build_generation_path($year, $highest_generation + 1);
