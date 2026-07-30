@@ -13,6 +13,7 @@ class Kiwi_Retention_Archive_Health_Service
     private const CONTROLLER_DEFERRAL_RECEIPT_LIMIT = 64;
     private const DAILY_ATTEMPT_LIMIT = 3;
     private const ACTIVE_ARCHIVE_RESOLUTION_FAILURES = [
+        'archive_discovery_failed',
         'active_archive_lookup_failed',
         'active_archive_path_invalid',
         'active_archive_missing',
@@ -484,6 +485,7 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
 
+        $before_reconciliation = [];
         try {
             $before_reconciliation = $this->reconcile_controller_deferral_receipts(
                 $archive_directory
@@ -597,15 +599,26 @@ class Kiwi_Retention_Archive_Health_Service
 
             return $result;
         } catch (Kiwi_Retention_Archive_Discovery_Exception $error) {
-            return $this->result(
-                'error',
-                'failed',
-                2,
-                '',
-                'scheduled',
-                '',
+            $state_read = $this->read_state();
+            if (empty($state_read['valid'])) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'scheduled',
+                    '',
+                    (string) ($state_read['error_code'] ?? 'health_state_invalid'),
+                    $started_at
+                );
+            }
+
+            return $this->record_daily_attempt_failure(
+                $state_read['state'],
                 'archive_discovery_failed',
-                $started_at
+                $started_at,
+                'scheduled',
+                (string) ($before_reconciliation['incident_action'] ?? 'none')
             );
         } finally {
             $this->lock_service->release($controller['handle'] ?? null);
@@ -1004,89 +1017,112 @@ class Kiwi_Retention_Archive_Health_Service
                 );
             }
 
-            $state = $state_read['state'];
-            $now = $this->current_datetime();
-            $date = $now->format('Y-m-d');
-            $daily_check = $now->format('N') === '7' ? 'integrity' : 'quick';
-            [$state, $daily_check] = $this->align_daily_state($state, $date, $daily_check);
-            if ((string) ($state['daily']['status'] ?? '') === 'completed') {
-                return $this->result(
-                    'error',
-                    'failed',
-                    2,
-                    '',
-                    'bootstrap',
-                    '',
-                    $reason_code,
-                    $started_at,
-                    ['incident_action' => $reconciled_incident_action]
-                );
-            }
-            if ((int) ($state['daily']['attempts'] ?? 0) >= self::DAILY_ATTEMPT_LIMIT) {
-                return $this->result(
-                    'error',
-                    'failed',
-                    2,
-                    $daily_check,
-                    'daily',
-                    (string) ($state['daily']['archive'] ?? ''),
-                    $reason_code,
-                    $started_at,
-                    ['incident_action' => $reconciled_incident_action]
-                );
-            }
+            return $this->record_daily_attempt_failure(
+                $state_read['state'],
+                $reason_code,
+                $started_at,
+                'bootstrap',
+                $reconciled_incident_action
+            );
+        } finally {
+            $this->lock_service->release($controller['handle'] ?? null);
+        }
+    }
 
-            $archive_name = $this->normalize_archive_name((string) ($state['daily']['archive'] ?? ''));
-            $state['daily']['archive'] = $archive_name;
-            $state['daily']['check'] = $daily_check;
-            $state['daily']['attempts'] = (int) ($state['daily']['attempts'] ?? 0) + 1;
-            $state['daily']['status'] = 'incomplete';
-            $state['daily']['result'] = 'error';
-            $state['daily']['reason_code'] = $reason_code;
-            $state['daily']['completed_at'] = '';
-            $incident_action = $reconciled_incident_action;
-            if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
-                $incident_action = $this->record_incomplete_incident(
-                    $archive_name,
-                    $daily_check,
-                    $reason_code
-                );
-                if ($incident_action === '') {
-                    return $this->result(
-                        'error',
-                        'failed',
-                        2,
-                        $daily_check,
-                        'daily',
-                        $archive_name,
-                        'incomplete_incident_persist_failed',
-                        $started_at
-                    );
-                }
-            }
-            if (!$this->write_state($state)) {
-                return $this->state_write_failure(
-                    $daily_check,
-                    'daily',
-                    $archive_name,
-                    $started_at
-                );
-            }
+    private function record_daily_attempt_failure(
+        array $state,
+        string $reason_code,
+        string $started_at,
+        string $fallback_scope,
+        string $reconciled_incident_action = 'none'
+    ): array {
+        $reason_code = $this->normalize_reason_code($reason_code, 'health_bootstrap_failed');
+        if (!in_array($reason_code, self::ACTIVE_ARCHIVE_RESOLUTION_FAILURES, true)) {
+            $reason_code = 'health_bootstrap_failed';
+        }
+        if (!in_array($reconciled_incident_action, ['raised', 'repeated', 'resolved'], true)) {
+            $reconciled_incident_action = 'none';
+        }
 
+        $now = $this->current_datetime();
+        $date = $now->format('Y-m-d');
+        $daily_check = $now->format('N') === '7' ? 'integrity' : 'quick';
+        [$state, $daily_check] = $this->align_daily_state($state, $date, $daily_check);
+        if ((string) ($state['daily']['status'] ?? '') === 'completed') {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                '',
+                $fallback_scope,
+                '',
+                $reason_code,
+                $started_at,
+                ['incident_action' => $reconciled_incident_action]
+            );
+        }
+        if ((int) ($state['daily']['attempts'] ?? 0) >= self::DAILY_ATTEMPT_LIMIT) {
             return $this->result(
                 'error',
                 'failed',
                 2,
                 $daily_check,
                 'daily',
-                $archive_name,
+                (string) ($state['daily']['archive'] ?? ''),
                 $reason_code,
                 $started_at,
-                ['incident_action' => $incident_action]
+                ['incident_action' => $reconciled_incident_action]
             );
-        } finally {
-            $this->lock_service->release($controller['handle'] ?? null);
         }
+
+        $archive_name = $this->normalize_archive_name((string) ($state['daily']['archive'] ?? ''));
+        $state['daily']['archive'] = $archive_name;
+        $state['daily']['check'] = $daily_check;
+        $state['daily']['attempts'] = (int) ($state['daily']['attempts'] ?? 0) + 1;
+        $state['daily']['status'] = 'incomplete';
+        $state['daily']['result'] = 'error';
+        $state['daily']['reason_code'] = $reason_code;
+        $state['daily']['completed_at'] = '';
+        $incident_action = $reconciled_incident_action;
+        if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
+            $incident_action = $this->record_incomplete_incident(
+                $archive_name,
+                $daily_check,
+                $reason_code
+            );
+            if ($incident_action === '') {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    $daily_check,
+                    'daily',
+                    $archive_name,
+                    'incomplete_incident_persist_failed',
+                    $started_at
+                );
+            }
+        }
+        if (!$this->write_state($state)) {
+            return $this->state_write_failure(
+                $daily_check,
+                'daily',
+                $archive_name,
+                $started_at
+            );
+        }
+
+        return $this->result(
+            'error',
+            'failed',
+            2,
+            $daily_check,
+            'daily',
+            $archive_name,
+            $reason_code,
+            $started_at,
+            ['incident_action' => $incident_action]
+        );
     }
 
     private function align_daily_state(array $state, string $date, string $daily_check): array

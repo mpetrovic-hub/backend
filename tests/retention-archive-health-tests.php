@@ -1082,12 +1082,13 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when archive d
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
     $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
     $archive_service = new Kiwi_Test_Failing_Archive_Discovery_Service($config);
+    $events = new Kiwi_Test_Operational_Event_Repository();
     $check_calls = 0;
     $service = new Kiwi_Retention_Archive_Health_Service(
         $config,
         $archive_service,
         new Kiwi_Retention_Archive_Lock(),
-        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Operational_Event_Service($events),
         static function () use (&$now): DateTimeImmutable {
             return $now;
         },
@@ -1104,11 +1105,14 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when archive d
     );
 
     try {
-        foreach ([
-            $service->status(),
+        $status_result = $service->status();
+        $diagnose_result = $service->diagnose('kiwi_retention_archive_2026.sqlite', 'quick');
+        $scheduled_results = [
             $service->scheduled(),
-            $service->diagnose('kiwi_retention_archive_2026.sqlite', 'quick'),
-        ] as $result) {
+            $service->scheduled(),
+            $service->scheduled(),
+        ];
+        foreach (array_merge([$status_result, $diagnose_result], $scheduled_results) as $result) {
             kiwi_assert_same('error', $result['result'] ?? '', 'Expected discovery failure to return an error.');
             kiwi_assert_same(2, $result['exit_code'] ?? 0, 'Expected nonzero discovery failure exit.');
             kiwi_assert_same(
@@ -1117,6 +1121,18 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when archive d
                 'Expected explicit archive discovery reason.'
             );
         }
+        kiwi_assert_same(
+            'raised',
+            $scheduled_results[2]['incident_action'] ?? '',
+            'Expected the third scheduled discovery failure to raise the daily incomplete Incident.'
+        );
+        $state_path = $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_health_state.json';
+        $persisted_state = json_decode((string) file_get_contents($state_path), true);
+        kiwi_assert_same(3, $persisted_state['daily']['attempts'] ?? 0, 'Expected all three discovery failures to consume daily attempts.');
+        kiwi_assert_same('archive_discovery_failed', $persisted_state['daily']['reason_code'] ?? '', 'Expected durable discovery failure reason.');
+        kiwi_assert_same(1, count($events->rows), 'Expected exactly one threshold Incident after three discovery failures.');
         kiwi_assert_same(0, $check_calls, 'Expected no child check after discovery failure.');
     } finally {
         kiwi_remove_directory($root);
