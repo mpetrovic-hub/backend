@@ -531,6 +531,8 @@ class Kiwi_Retention_Sqlite_Archive_Service
             'primary_keys' => [],
             'last_primary_key' => max(0, $last_primary_key),
             'has_more' => false,
+            'archive_inserted_count' => -1,
+            'archive_duplicate_count' => -1,
             'error_code' => '',
             'error_message' => '',
         ];
@@ -580,6 +582,12 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $result['primary_keys'] = $primary_keys;
             $result['last_primary_key'] = max($primary_keys);
             $result['has_more'] = $result['last_primary_key'] < $through_primary_key;
+            $result['archive_inserted_count'] = (int) (
+                $verified['archive_inserted_count'] ?? -1
+            );
+            $result['archive_duplicate_count'] = (int) (
+                $verified['archive_duplicate_count'] ?? -1
+            );
 
             return $result;
         } catch (Throwable $error) {

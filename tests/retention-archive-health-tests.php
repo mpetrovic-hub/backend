@@ -2462,7 +2462,10 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service marks current annual corrup
 
     try {
         kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2025.sqlite');
-        kiwi_test_create_retention_archive($archive_service, 'kiwi_retention_archive_2026.sqlite');
+        $active_archive = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
         $service->scheduled();
         $service->scheduled();
         $result = $service->scheduled();
@@ -2476,6 +2479,10 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service marks current annual corrup
         $context = json_decode((string) ($event['context_json'] ?? ''), true);
 
         kiwi_assert_same('corruption_detected', $result['result'] ?? '', 'Expected current annual archive corruption result.');
+        kiwi_assert_true(
+            $archive_service->is_quarantine_reconciled($active_archive),
+            'Expected the durable annual corruption state to acknowledge the quarantine marker immediately.'
+        );
         kiwi_assert_same(
             true,
             $context['active_generation'] ?? false,

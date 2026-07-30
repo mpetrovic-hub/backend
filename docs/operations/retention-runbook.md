@@ -82,6 +82,7 @@ Delete remains bound to archive evidence:
 - Each chunk writes archive rows and `archive_batch_rows` in one SQLite transaction.
 - Prior `archive_batch_rows` for the same `archive_batch_id` are not cleared.
 - After commit, the worker reopens the SQLite database and verifies the exact batch identity, receipt IDs, and matching archive rows.
+- If receipt rows commit but later batch finalization fails, the same run remains open with `pending_verification`; the next worker invocation re-verifies that durable evidence before recording archive counts or deleting source rows.
 - The verified receipt and archive cursor are persisted before any MySQL delete.
 - Only still-present MySQL primary keys from that persisted receipt are deleted.
 - The logical delete cursor advances for the complete verified receipt. This safely reconciles a crash after a partial or complete MySQL delete but before its audit update.

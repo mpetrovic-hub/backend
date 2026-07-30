@@ -685,6 +685,31 @@ class Kiwi_Retention_Cleanup_Service
                         'error_message' => 'Persisted archive receipt did not contain the audited delete backlog.',
                     ]);
                 }
+                $receipt_pending_verification = (string) (
+                    $run['archive_integrity_check'] ?? ''
+                ) === 'pending_verification';
+                $receipt_inserted_rows = (int) (
+                    $receipt['archive_inserted_count'] ?? -1
+                );
+                $receipt_duplicate_rows = (int) (
+                    $receipt['archive_duplicate_count'] ?? -1
+                );
+                if ($receipt_pending_verification
+                    && ($receipt_inserted_rows < 0
+                        || $receipt_duplicate_rows < 0
+                        || ($receipt_inserted_rows + $receipt_duplicate_rows)
+                            !== count($receipt_primary_keys))
+                ) {
+                    return $this->block_invalid_receipt(
+                        $run_db_id,
+                        $run,
+                        $archive_db_path,
+                        [
+                            'error_code' => 'archive_receipt_count_mismatch',
+                            'error_message' => 'Persisted post-commit receipt counts do not match its verified primary-key evidence.',
+                        ]
+                    );
+                }
 
                 if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'delete_running'])) {
                     return $this->audit_retry_result(
@@ -708,12 +733,27 @@ class Kiwi_Retention_Cleanup_Service
                     'status' => 'partial',
                     'worker_phase' => 'archive_partial',
                     'archive_db_path' => $archive_db_path,
-                    'archive_integrity_check' => 'receipt_verified',
+                    'archive_integrity_check' => $receipt_pending_verification
+                        && !empty($receipt['has_more'])
+                            ? 'pending_verification'
+                            : 'receipt_verified',
                     'deleted_rows' => (int) ($run['deleted_rows'] ?? 0) + count($receipt_primary_keys),
                     'delete_batches' => (int) ($run['delete_batches'] ?? 0) + 1,
                     'delete_last_primary_key' => max($receipt_primary_keys),
                     'worker_last_finished_at' => $this->current_time_mysql(),
                 ];
+                if ($receipt_pending_verification) {
+                    $reconciled['archived_rows'] = (int) ($run['archived_rows'] ?? 0)
+                        + count($receipt_primary_keys);
+                    $reconciled['archive_inserted_rows'] = (int) (
+                        $run['archive_inserted_rows'] ?? 0
+                    ) + $receipt_inserted_rows;
+                    $reconciled['archive_duplicate_rows'] = (int) (
+                        $run['archive_duplicate_rows'] ?? 0
+                    ) + $receipt_duplicate_rows;
+                    $reconciled['error_code'] = '';
+                    $reconciled['error_message'] = '';
+                }
                 if (!$this->update_run_progress($run_db_id, $reconciled)) {
                     return $this->audit_retry_result(
                         $run,
@@ -765,17 +805,56 @@ class Kiwi_Retention_Cleanup_Service
                 $archive_db_path
             );
 
+            $archived_primary_keys = $this->normalize_primary_keys(
+                (array) ($chunk['archived_primary_keys'] ?? [])
+            );
+            $archived_rows = (int) ($chunk['archived_rows'] ?? count($archived_primary_keys));
             if (empty($chunk['success'])) {
+                $committed_archive_path = (string) (
+                    $chunk['archive_db_path'] ?? $archive_db_path
+                );
+                if ((string) ($chunk['receipt_status'] ?? '') === 'pending_verification'
+                    && $committed_archive_path === $archive_db_path
+                    && !empty($archived_primary_keys)
+                    && $archived_rows === count($archived_primary_keys)
+                    && min($archived_primary_keys) > $archive_cursor_before
+                    && max($archived_primary_keys) <= $target_max_primary_key
+                ) {
+                    $committed_progress = [
+                        'status' => 'partial',
+                        'worker_phase' => 'archive_partial',
+                        'archive_db_path' => $committed_archive_path,
+                        'archive_integrity_check' => 'pending_verification',
+                        'archive_last_primary_key' => max($archived_primary_keys),
+                        'worker_last_finished_at' => $this->current_time_mysql(),
+                        'error_code' => 'archive_post_commit_receipt_pending',
+                        'error_message' => 'SQLite archive rows and receipt committed, but batch finalization failed; the receipt will be verified before deletion.',
+                    ];
+                    if (!$this->update_run_progress($run_db_id, $committed_progress)) {
+                        return $this->audit_retry_result(
+                            $run,
+                            'Retention worker preserved a committed SQLite receipt, but could not persist its resumable cursor.'
+                        );
+                    }
+
+                    return $this->reschedule_worker_result(
+                        $run,
+                        $committed_progress,
+                        [
+                            'success' => false,
+                            'error_code' => 'archive_post_commit_receipt_pending',
+                            'error_message' => $this->archive_failure_message($chunk),
+                        ]
+                    );
+                }
+
                 return $this->fail_worker_run($run_db_id, $run, [
-                    'archive_db_path' => (string) ($chunk['archive_db_path'] ?? $archive_db_path),
+                    'archive_db_path' => $committed_archive_path,
                     'archive_integrity_check' => (string) ($chunk['receipt_status'] ?? ''),
                     'error_code' => $this->archive_failure_code($chunk),
                     'error_message' => $this->archive_failure_message($chunk),
                 ]);
             }
-
-            $archived_primary_keys = $this->normalize_primary_keys((array) ($chunk['archived_primary_keys'] ?? []));
-            $archived_rows = (int) ($chunk['archived_rows'] ?? count($archived_primary_keys));
 
             if ($archived_rows !== count($archived_primary_keys)) {
                 return $this->fail_worker_run($run_db_id, $run, [
