@@ -13,6 +13,14 @@ class Kiwi_Retention_Archive_Health_Service
         'active_archive_lookup_failed',
         'active_archive_path_invalid',
         'active_archive_missing',
+        'wp_cli_loader_unavailable',
+        'plugins_loaded_hook_failed',
+        'plugins_loaded_not_reached',
+        'wordpress_lifecycle_invalid',
+        'required_class_missing',
+        'health_service_exception',
+        'health_service_unavailable',
+        'health_bootstrap_failed',
     ];
 
     private $config;
@@ -487,33 +495,7 @@ class Kiwi_Retention_Archive_Health_Service
                 return $quarantine_reconciliation;
             }
 
-            $stored_daily_date = (string) ($state['daily']['date'] ?? '');
-            $stored_daily_status = (string) ($state['daily']['status'] ?? '');
-            $stored_attempt_date = (string) (
-                $state['daily']['attempt_date'] ?? $stored_daily_date
-            );
-            $daily_overdue = $stored_daily_date !== ''
-                && $stored_daily_date !== $date
-                && $stored_daily_status === 'incomplete';
-            if ($daily_overdue) {
-                $daily_check = $this->normalize_check((string) ($state['daily']['check'] ?? ''));
-                if ($stored_attempt_date !== $date) {
-                    $state['daily']['attempt_date'] = $date;
-                    $state['daily']['attempts'] = 0;
-                }
-            } elseif ($stored_daily_date !== $date) {
-                $state['daily'] = [
-                    'date' => $date,
-                    'attempt_date' => $date,
-                    'archive' => '',
-                    'check' => $daily_check,
-                    'attempts' => 0,
-                    'status' => 'pending',
-                    'result' => '',
-                    'reason_code' => '',
-                    'completed_at' => '',
-                ];
-            }
+            [$state, $daily_check] = $this->align_daily_state($state, $date, $daily_check);
 
             if ((string) ($state['daily']['status'] ?? '') !== 'completed') {
                 return $this->run_scheduled_daily(
@@ -538,6 +520,175 @@ class Kiwi_Retention_Archive_Health_Service
         } finally {
             $this->lock_service->release($controller['handle'] ?? null);
         }
+    }
+
+    public function record_scheduled_bootstrap_failure(string $reason_code): array
+    {
+        $started_at = $this->start_operation();
+        $reason_code = $this->normalize_reason_code($reason_code, 'health_bootstrap_failed');
+        if (!in_array($reason_code, self::ACTIVE_ARCHIVE_RESOLUTION_FAILURES, true)) {
+            $reason_code = 'health_bootstrap_failed';
+        }
+        $archive_directory = $this->archive_service->get_archive_directory();
+        if (!is_dir($archive_directory)
+            && !@mkdir($archive_directory, 0770, true)
+            && !is_dir($archive_directory)
+        ) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                '',
+                'bootstrap',
+                '',
+                'archive_directory_unavailable',
+                $started_at
+            );
+        }
+
+        $controller = $this->lock_service->acquire_controller($archive_directory);
+        if (empty($controller['success']) || empty($controller['acquired'])) {
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                '',
+                'bootstrap',
+                '',
+                (string) ($controller['error_code'] ?? 'controller_lock_failed'),
+                $started_at
+            );
+        }
+
+        try {
+            $state_read = $this->read_state();
+            if (empty($state_read['valid'])) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'bootstrap',
+                    '',
+                    (string) ($state_read['error_code'] ?? 'health_state_invalid'),
+                    $started_at
+                );
+            }
+
+            $state = $state_read['state'];
+            $now = $this->current_datetime();
+            $date = $now->format('Y-m-d');
+            $daily_check = $now->format('N') === '7' ? 'integrity' : 'quick';
+            [$state, $daily_check] = $this->align_daily_state($state, $date, $daily_check);
+            if ((string) ($state['daily']['status'] ?? '') === 'completed') {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'bootstrap',
+                    '',
+                    $reason_code,
+                    $started_at
+                );
+            }
+            if ((int) ($state['daily']['attempts'] ?? 0) >= self::DAILY_ATTEMPT_LIMIT) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    $daily_check,
+                    'daily',
+                    (string) ($state['daily']['archive'] ?? ''),
+                    $reason_code,
+                    $started_at
+                );
+            }
+
+            $archive_name = $this->normalize_archive_name((string) ($state['daily']['archive'] ?? ''));
+            $state['daily']['archive'] = $archive_name;
+            $state['daily']['check'] = $daily_check;
+            $state['daily']['attempts'] = (int) ($state['daily']['attempts'] ?? 0) + 1;
+            $state['daily']['status'] = 'incomplete';
+            $state['daily']['result'] = 'error';
+            $state['daily']['reason_code'] = $reason_code;
+            $state['daily']['completed_at'] = '';
+            $incident_action = 'none';
+            if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
+                $incident_action = $this->record_incomplete_incident(
+                    $archive_name,
+                    $daily_check,
+                    $reason_code
+                );
+                if ($incident_action === '') {
+                    return $this->result(
+                        'error',
+                        'failed',
+                        2,
+                        $daily_check,
+                        'daily',
+                        $archive_name,
+                        'incomplete_incident_persist_failed',
+                        $started_at
+                    );
+                }
+            }
+            if (!$this->write_state($state)) {
+                return $this->state_write_failure(
+                    $daily_check,
+                    'daily',
+                    $archive_name,
+                    $started_at
+                );
+            }
+
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                $daily_check,
+                'daily',
+                $archive_name,
+                $reason_code,
+                $started_at,
+                ['incident_action' => $incident_action]
+            );
+        } finally {
+            $this->lock_service->release($controller['handle'] ?? null);
+        }
+    }
+
+    private function align_daily_state(array $state, string $date, string $daily_check): array
+    {
+        $stored_daily_date = (string) ($state['daily']['date'] ?? '');
+        $stored_daily_status = (string) ($state['daily']['status'] ?? '');
+        $stored_attempt_date = (string) (
+            $state['daily']['attempt_date'] ?? $stored_daily_date
+        );
+        $daily_overdue = $stored_daily_date !== ''
+            && $stored_daily_date !== $date
+            && $stored_daily_status === 'incomplete';
+        if ($daily_overdue) {
+            $daily_check = $this->normalize_check((string) ($state['daily']['check'] ?? ''));
+            if ($stored_attempt_date !== $date) {
+                $state['daily']['attempt_date'] = $date;
+                $state['daily']['attempts'] = 0;
+            }
+        } elseif ($stored_daily_date !== $date) {
+            $state['daily'] = [
+                'date' => $date,
+                'attempt_date' => $date,
+                'archive' => '',
+                'check' => $daily_check,
+                'attempts' => 0,
+                'status' => 'pending',
+                'result' => '',
+                'reason_code' => '',
+                'completed_at' => '',
+            ];
+        }
+
+        return [$state, $daily_check];
     }
 
     private function run_scheduled_daily(
@@ -675,7 +826,7 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('', 'daily', '', $started_at);
             }
-            $this->record_incomplete_recovery('', 'no_work');
+            $incident_action = $this->record_incomplete_recovery('', 'no_work');
 
             return $this->result(
                 'no_work',
@@ -685,7 +836,8 @@ class Kiwi_Retention_Archive_Health_Service
                 'daily',
                 '',
                 'active_archive_unavailable',
-                $started_at
+                $started_at,
+                ['incident_action' => $incident_action]
             );
         }
 
@@ -757,8 +909,13 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure($check, 'daily', $archive_name, $started_at);
             }
-            $this->record_incomplete_recovery('', $result_name);
-            $this->record_incomplete_recovery($archive_name, $result_name);
+            $lookup_recovery_action = $this->record_incomplete_recovery('', $result_name);
+            $archive_recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
+            if ($incident_action === 'none'
+                && in_array('resolved', [$lookup_recovery_action, $archive_recovery_action], true)
+            ) {
+                $incident_action = 'resolved';
+            }
 
             return $this->result_from_check(
                 $outcome,
@@ -921,7 +1078,13 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('', 'annual', $archive_name, $started_at);
             }
-            $this->record_incomplete_recovery($archive_name, 'corruption_detected');
+            $recovery_action = $this->record_incomplete_recovery(
+                $archive_name,
+                'corruption_detected'
+            );
+            if ($incident_action === 'none' && $recovery_action === 'resolved') {
+                $incident_action = 'resolved';
+            }
 
             return $this->result(
                 'corruption_detected',
@@ -992,6 +1155,7 @@ class Kiwi_Retention_Archive_Health_Service
         $result_name = (string) ($outcome['result'] ?? 'error');
         $reason_code = (string) ($outcome['reason_code'] ?? 'health_check_failed');
 
+        $incident_action = $result_name === 'corruption_detected' ? 'raised' : 'none';
         if (in_array($result_name, ['ok', 'corruption_detected'], true)) {
             if ($result_name === 'corruption_detected'
                 && empty($outcome['quarantine_transition_success'])
@@ -1017,7 +1181,10 @@ class Kiwi_Retention_Archive_Health_Service
             if (!$this->write_state($state)) {
                 return $this->state_write_failure('integrity', 'annual', $archive_name, $started_at);
             }
-            $this->record_incomplete_recovery($archive_name, $result_name);
+            $recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
+            if ($incident_action === 'none' && $recovery_action === 'resolved') {
+                $incident_action = 'resolved';
+            }
         }
 
         return $this->result_from_check(
@@ -1026,7 +1193,7 @@ class Kiwi_Retention_Archive_Health_Service
             'annual',
             $archive_name,
             $started_at,
-            $result_name === 'corruption_detected' ? 'raised' : 'none'
+            $incident_action
         );
     }
 
@@ -1914,11 +2081,11 @@ class Kiwi_Retention_Archive_Health_Service
         ]);
     }
 
-    private function record_incomplete_recovery(string $archive, string $result): bool
+    private function record_incomplete_recovery(string $archive, string $result): string
     {
         $subject = $archive !== '' ? $archive : 'active_archive_lookup';
 
-        return $this->operational_event_service->record_recovery([
+        return $this->operational_event_service->record_recovery_action([
             'area' => 'retention',
             'severity' => 'info',
             'event_type' => 'retention_archive_health_check_incomplete',

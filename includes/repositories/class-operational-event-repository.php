@@ -182,7 +182,12 @@ class Kiwi_Operational_Event_Repository
                 ORDER BY latest.occurred_at DESC, latest.id DESC
                 LIMIT %d";
 
-        return (array) $wpdb->get_results($wpdb->prepare($sql, ...$args), ARRAY_A);
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$args), ARRAY_A);
+        if (!is_array($rows) || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('Operational incident lookup failed.');
+        }
+
+        return $rows;
     }
 
     public function delete_created_before(string $cutoff, int $limit): int

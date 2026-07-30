@@ -1090,6 +1090,28 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service status is read-only and rej
     }
 });
 
+kiwi_run_test('Kiwi_Operational_Event_Repository propagates open incident query failures', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Open_Archive_Lookup();
+    $wpdb->last_error = 'Synthetic operational incident query failure.';
+    $failed = false;
+
+    try {
+        (new Kiwi_Operational_Event_Repository())->get_open_incidents(
+            ['event_type' => 'retention_archive_corruption_detected'],
+            100
+        );
+    } catch (RuntimeException $error) {
+        $failed = true;
+    } finally {
+        $wpdb = $previous_wpdb;
+    }
+
+    kiwi_assert_true($failed, 'Expected open Incident query errors to remain distinguishable.');
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service filters relevant incidents before status limits', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_status_incidents');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
@@ -1132,6 +1154,42 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service filters relevant incidents 
             ['retention_archive_corruption_detected'],
             array_column($status['open_incidents'] ?? [], 'event_type'),
             'Expected the older relevant incident to survive newer unrelated incident volume.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service audits scheduled bootstrap failures', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_bootstrap_failures');
+    $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
+    [$service, $archive_service, $events] = kiwi_test_health_service(
+        $root,
+        $now,
+        static function (): array {
+            throw new RuntimeException('Bootstrap audit must not start SQLite.');
+        }
+    );
+
+    try {
+        $first = $service->record_scheduled_bootstrap_failure('required_class_missing');
+        $second = $service->record_scheduled_bootstrap_failure('required_class_missing');
+        $third = $service->record_scheduled_bootstrap_failure('required_class_missing');
+        $status = $service->status();
+
+        kiwi_assert_same(2, $first['exit_code'] ?? 0, 'Expected first bootstrap failure to remain a runner error.');
+        kiwi_assert_same(2, $second['exit_code'] ?? 0, 'Expected second bootstrap failure to remain a runner error.');
+        kiwi_assert_same('raised', $third['incident_action'] ?? '', 'Expected the third bootstrap failure to raise the daily Incident.');
+        kiwi_assert_same(3, $status['state']['daily']['attempts'] ?? 0, 'Expected all scheduled bootstrap failures to persist.');
+        kiwi_assert_same(
+            'required_class_missing',
+            $status['state']['daily']['reason_code'] ?? '',
+            'Expected the final bootstrap failure reason in controller state.'
+        );
+        kiwi_assert_same(
+            ['retention_archive_health_check_incomplete'],
+            array_column($status['open_incidents'] ?? [], 'event_type'),
+            'Expected the bootstrap failure Incident in read-only status.'
         );
     } finally {
         kiwi_remove_directory($root);
@@ -1509,6 +1567,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service resolves lookup incident on
 
         $completed = $service->scheduled();
         kiwi_assert_same('ok', $completed['result'] ?? '', 'Expected the next SQLite check to complete.');
+        kiwi_assert_same(
+            'resolved',
+            $completed['incident_action'] ?? '',
+            'Expected command JSON to report the persisted Incident resolution.'
+        );
         kiwi_assert_same(
             ['raised', 'resolved'],
             array_column(array_values($events->rows), 'lifecycle_action'),
@@ -2862,6 +2925,11 @@ kiwi_run_test('Kiwi retention archive health runner declares command surface and
         "strpos(\$json, \"\\n\")",
         $runner,
         'Expected exactly-one-JSON-line output guard.'
+    );
+    kiwi_assert_contains(
+        'record_scheduled_bootstrap_failure',
+        $runner,
+        'Expected pre-service scheduled failures to use the durable daily attempt path.'
     );
 
     $health_service = file_get_contents(

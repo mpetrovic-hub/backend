@@ -145,10 +145,13 @@ function kiwi_retention_archive_health_cli_has_required_api(string $class_name):
     return true;
 }
 
-function kiwi_retention_archive_health_bootstrap_failure(string $reason_code): void
+function kiwi_retention_archive_health_bootstrap_failure(
+    string $reason_code,
+    ?array $durable_result = null
+): void
 {
     $now = (new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin')))->format(DATE_ATOM);
-    $result = [
+    $result = is_array($durable_result) ? $durable_result : [
         'schema_version' => 1,
         'status' => 'failed',
         'exit_code' => 2,
@@ -194,11 +197,13 @@ final class Kiwi_Retention_Archive_Health_Command
     private $required_classes;
     private $service_factory;
     private $json_encoder;
+    private $bootstrap_failure_recorder;
 
     public function __construct(
         ?array $required_classes = null,
         ?callable $service_factory = null,
-        ?callable $json_encoder = null
+        ?callable $json_encoder = null,
+        ?callable $bootstrap_failure_recorder = null
     ) {
         $this->required_classes = is_array($required_classes)
             ? $required_classes
@@ -217,6 +222,26 @@ final class Kiwi_Retention_Archive_Health_Command
             return function_exists('wp_json_encode')
                 ? wp_json_encode($result, JSON_UNESCAPED_SLASHES)
                 : json_encode($result, JSON_UNESCAPED_SLASHES);
+        };
+        $this->bootstrap_failure_recorder = $bootstrap_failure_recorder ?? static function (
+            string $reason_code
+        ): ?array {
+            if (!class_exists('Kiwi_Retention_Archive_Health_Service')
+                || !method_exists(
+                    'Kiwi_Retention_Archive_Health_Service',
+                    'record_scheduled_bootstrap_failure'
+                )
+            ) {
+                return null;
+            }
+
+            try {
+                $service = new Kiwi_Retention_Archive_Health_Service();
+
+                return $service->record_scheduled_bootstrap_failure($reason_code);
+            } catch (Throwable $error) {
+                return null;
+            }
         };
     }
 
@@ -244,7 +269,7 @@ final class Kiwi_Retention_Archive_Health_Command
     {
         $runner = WP_CLI::get_runner();
         if (!is_object($runner) || !method_exists($runner, 'load_wordpress')) {
-            kiwi_retention_archive_health_bootstrap_failure('wp_cli_loader_unavailable');
+            $this->fail_before_service($mode, 'wp_cli_loader_unavailable');
         }
 
         $executed = false;
@@ -256,12 +281,12 @@ final class Kiwi_Retention_Archive_Health_Command
             }
         );
         if (!$hook_added) {
-            kiwi_retention_archive_health_bootstrap_failure('plugins_loaded_hook_failed');
+            $this->fail_before_service($mode, 'plugins_loaded_hook_failed');
         }
 
         $runner->load_wordpress();
         if (!$executed) {
-            kiwi_retention_archive_health_bootstrap_failure('plugins_loaded_not_reached');
+            $this->fail_before_service($mode, 'plugins_loaded_not_reached');
         }
 
         kiwi_retention_archive_health_bootstrap_failure('runner_returned_before_halt');
@@ -273,21 +298,25 @@ final class Kiwi_Retention_Archive_Health_Command
             || did_action('plugins_loaded') < 1
             || did_action('init') > 0
         ) {
-            kiwi_retention_archive_health_bootstrap_failure('wordpress_lifecycle_invalid');
+            $this->fail_before_service($mode, 'wordpress_lifecycle_invalid');
         }
 
         foreach ($this->required_classes as $required_class) {
             if (!is_string($required_class) || !class_exists($required_class)) {
-                kiwi_retention_archive_health_bootstrap_failure('required_class_missing');
+                $this->fail_before_service($mode, 'required_class_missing');
             }
         }
 
         try {
             $service = call_user_func($this->service_factory);
-            if (!$service instanceof Kiwi_Retention_Archive_Health_Service) {
-                kiwi_retention_archive_health_bootstrap_failure('health_service_unavailable');
-            }
+        } catch (Throwable $error) {
+            $this->fail_before_service($mode, 'health_service_exception');
+        }
+        if (!$service instanceof Kiwi_Retention_Archive_Health_Service) {
+            $this->fail_before_service($mode, 'health_service_unavailable');
+        }
 
+        try {
             if ($mode === 'diagnose') {
                 $result = $service->diagnose(
                     (string) ($assoc_args['archive'] ?? ''),
@@ -313,6 +342,21 @@ final class Kiwi_Retention_Archive_Health_Command
 
         WP_CLI::line($json);
         WP_CLI::halt((int) ($result['exit_code'] ?? 2));
+    }
+
+    private function fail_before_service(string $mode, string $reason_code): void
+    {
+        $durable_result = null;
+        if ($mode === 'scheduled') {
+            try {
+                $candidate = call_user_func($this->bootstrap_failure_recorder, $reason_code);
+                $durable_result = is_array($candidate) ? $candidate : null;
+            } catch (Throwable $error) {
+                $durable_result = null;
+            }
+        }
+
+        kiwi_retention_archive_health_bootstrap_failure($reason_code, $durable_result);
     }
 }
 

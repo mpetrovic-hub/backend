@@ -74,9 +74,14 @@ class Kiwi_Operational_Event_Service
 
     public function record_recovery(array $event): bool
     {
+        return $this->record_recovery_action($event) !== '';
+    }
+
+    public function record_recovery_action(array $event): string
+    {
         $correlation_key = $this->normalize_key((string) ($event['correlation_key'] ?? ''), 191);
         if ($correlation_key === '') {
-            return false;
+            return '';
         }
 
         try {
@@ -84,7 +89,7 @@ class Kiwi_Operational_Event_Service
             if (!is_array($latest)
                 || !in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
             ) {
-                return true;
+                return 'none';
             }
 
             $event['lifecycle_action'] = 'resolved';
@@ -93,9 +98,9 @@ class Kiwi_Operational_Event_Service
                 $correlation_key . ':' . (string) ($latest['id'] ?? '')
             );
 
-            return $this->persist($event, $correlation_key);
+            return $this->persist($event, $correlation_key) ? 'resolved' : '';
         } catch (Throwable $error) {
-            return false;
+            return '';
         }
     }
 
