@@ -8,11 +8,15 @@ class Kiwi_Retention_Archive_Health_Service
 {
     private const STATE_SCHEMA_VERSION = 1;
     private const STATE_FILENAME = 'kiwi_retention_archive_health_state.json';
+    private const CONTROLLER_DEFERRAL_RECEIPT_PREFIX = 'kiwi_retention_archive_health_deferral_';
+    private const CONTROLLER_DEFERRAL_RECEIPT_SCHEMA_VERSION = 1;
+    private const CONTROLLER_DEFERRAL_RECEIPT_LIMIT = 64;
     private const DAILY_ATTEMPT_LIMIT = 3;
     private const ACTIVE_ARCHIVE_RESOLUTION_FAILURES = [
         'active_archive_lookup_failed',
         'active_archive_path_invalid',
         'active_archive_missing',
+        'controller_lock_active',
         'wp_cli_loader_unavailable',
         'plugins_loaded_hook_failed',
         'plugins_loaded_not_reached',
@@ -455,6 +459,19 @@ class Kiwi_Retention_Archive_Health_Service
             );
         }
         if (empty($controller['acquired'])) {
+            if (!$this->persist_controller_deferral_receipt($archive_directory)) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'scheduled',
+                    '',
+                    'controller_deferral_persist_failed',
+                    $started_at
+                );
+            }
+
             return $this->result(
                 'deferred',
                 'incomplete',
@@ -468,8 +485,10 @@ class Kiwi_Retention_Archive_Health_Service
         }
 
         try {
-            $state_read = $this->read_state();
-            if (empty($state_read['valid'])) {
+            $before_reconciliation = $this->reconcile_controller_deferral_receipts(
+                $archive_directory
+            );
+            if (empty($before_reconciliation['success'])) {
                 return $this->result(
                     'error',
                     'failed',
@@ -477,36 +496,106 @@ class Kiwi_Retention_Archive_Health_Service
                     '',
                     'scheduled',
                     '',
-                    (string) ($state_read['error_code'] ?? 'health_state_invalid'),
-                    $started_at
+                    (string) (
+                        $before_reconciliation['reason_code']
+                        ?? 'controller_deferral_reconciliation_failed'
+                    ),
+                    $started_at,
+                    [
+                        'incident_action' => (string) (
+                            $before_reconciliation['incident_action'] ?? 'none'
+                        ),
+                    ]
                 );
             }
 
-            $state = $state_read['state'];
-            $now = $this->current_datetime();
-            $date = $now->format('Y-m-d');
-            $daily_check = $now->format('N') === '7' ? 'integrity' : 'quick';
-            $quarantine_reconciliation = $this->reconcile_unrecorded_quarantine_markers(
-                $state,
-                $date,
-                $daily_check,
-                $started_at
-            );
-            if (is_array($quarantine_reconciliation)) {
-                return $quarantine_reconciliation;
-            }
+            $result = (function () use ($started_at): array {
+                $state_read = $this->read_state();
+                if (empty($state_read['valid'])) {
+                    return $this->result(
+                        'error',
+                        'failed',
+                        2,
+                        '',
+                        'scheduled',
+                        '',
+                        (string) ($state_read['error_code'] ?? 'health_state_invalid'),
+                        $started_at
+                    );
+                }
 
-            [$state, $daily_check] = $this->align_daily_state($state, $date, $daily_check);
-
-            if ((string) ($state['daily']['status'] ?? '') !== 'completed') {
-                return $this->run_scheduled_daily(
+                $state = $state_read['state'];
+                $now = $this->current_datetime();
+                $date = $now->format('Y-m-d');
+                $daily_check = $now->format('N') === '7' ? 'integrity' : 'quick';
+                $quarantine_reconciliation = $this->reconcile_unrecorded_quarantine_markers(
                     $state,
+                    $date,
                     $daily_check,
                     $started_at
                 );
+                if (is_array($quarantine_reconciliation)) {
+                    return $quarantine_reconciliation;
+                }
+
+                [$state, $daily_check] = $this->align_daily_state(
+                    $state,
+                    $date,
+                    $daily_check
+                );
+
+                if ((string) ($state['daily']['status'] ?? '') !== 'completed') {
+                    return $this->run_scheduled_daily(
+                        $state,
+                        $daily_check,
+                        $started_at
+                    );
+                }
+
+                return $this->run_scheduled_annual($state, $started_at);
+            })();
+
+            $after_reconciliation = $this->reconcile_controller_deferral_receipts(
+                $archive_directory
+            );
+            if (empty($after_reconciliation['success'])) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'scheduled',
+                    '',
+                    (string) (
+                        $after_reconciliation['reason_code']
+                        ?? 'controller_deferral_reconciliation_failed'
+                    ),
+                    $started_at,
+                    [
+                        'incident_action' => (string) (
+                            $after_reconciliation['incident_action'] ?? 'none'
+                        ),
+                    ]
+                );
+            }
+            $after_action = (string) (
+                $after_reconciliation['incident_action'] ?? ''
+            );
+            $before_action = (string) (
+                $before_reconciliation['incident_action'] ?? ''
+            );
+            $receipt_action = in_array(
+                $after_action,
+                ['raised', 'repeated', 'resolved'],
+                true
+            ) ? $after_action : $before_action;
+            if (($result['incident_action'] ?? null) === null
+                && in_array($receipt_action, ['raised', 'repeated', 'resolved'], true)
+            ) {
+                $result['incident_action'] = $receipt_action;
             }
 
-            return $this->run_scheduled_annual($state, $started_at);
+            return $result;
         } catch (Kiwi_Retention_Archive_Discovery_Exception $error) {
             return $this->result(
                 'error',
@@ -521,6 +610,289 @@ class Kiwi_Retention_Archive_Health_Service
         } finally {
             $this->lock_service->release($controller['handle'] ?? null);
         }
+    }
+
+    private function persist_controller_deferral_receipt(string $archive_directory): bool
+    {
+        $occurred_at = $this->current_datetime();
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            try {
+                $receipt_id = bin2hex(random_bytes(16));
+            } catch (Throwable $error) {
+                $receipt_id = md5(uniqid('', true) . ':' . microtime(true));
+            }
+            $path = $archive_directory
+                . DIRECTORY_SEPARATOR
+                . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+                . $receipt_id
+                . '.json';
+            if (is_file($path)) {
+                continue;
+            }
+            $payload = [
+                'schema_version' => self::CONTROLLER_DEFERRAL_RECEIPT_SCHEMA_VERSION,
+                'receipt_id' => $receipt_id,
+                'occurred_at' => $occurred_at->format(DATE_ATOM),
+                'attempt_date' => $occurred_at->format('Y-m-d'),
+                'check' => $occurred_at->format('N') === '7' ? 'integrity' : 'quick',
+                'reason_code' => 'controller_lock_active',
+            ];
+            $json = function_exists('wp_json_encode')
+                ? wp_json_encode($payload)
+                : json_encode($payload);
+            if (!is_string($json)) {
+                return false;
+            }
+            $temporary_path = $path . '.tmp';
+            $written = @file_put_contents($temporary_path, $json . "\n", LOCK_EX);
+            if ($written === false || $written !== strlen($json) + 1) {
+                @unlink($temporary_path);
+
+                return false;
+            }
+            if (@rename($temporary_path, $path)) {
+                return true;
+            }
+            @unlink($temporary_path);
+            if (!is_file($path)) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private function reconcile_controller_deferral_receipts(string $archive_directory): array
+    {
+        $receipt_read = $this->read_controller_deferral_receipts($archive_directory);
+        if (empty($receipt_read['success'])) {
+            return [
+                'success' => false,
+                'reason_code' => (string) (
+                    $receipt_read['reason_code'] ?? 'controller_deferral_receipt_invalid'
+                ),
+                'incident_action' => 'none',
+            ];
+        }
+
+        $receipts = (array) ($receipt_read['receipts'] ?? []);
+        $state_read = $this->read_state();
+        if (empty($state_read['valid'])) {
+            return [
+                'success' => false,
+                'reason_code' => (string) ($state_read['error_code'] ?? 'health_state_invalid'),
+                'incident_action' => 'none',
+            ];
+        }
+        $state = $state_read['state'];
+        $stored_receipt_ids = (array) (
+            $state['daily']['controller_deferral_receipts'] ?? []
+        );
+        $available_receipt_ids = array_column($receipts, 'receipt_id');
+        $accounted_receipt_ids = array_values(array_intersect(
+            $stored_receipt_ids,
+            $available_receipt_ids
+        ));
+        $state_changed = $accounted_receipt_ids !== $stored_receipt_ids;
+        $incident_action = 'none';
+        $current_date = $this->current_datetime()->format('Y-m-d');
+
+        foreach ($receipts as $receipt) {
+            $receipt_id = (string) ($receipt['receipt_id'] ?? '');
+            if (in_array($receipt_id, $accounted_receipt_ids, true)) {
+                continue;
+            }
+            $receipt_date = (string) ($receipt['attempt_date'] ?? '');
+            $stored_attempt_date = (string) (
+                $state['daily']['attempt_date'] ?? $state['daily']['date'] ?? ''
+            );
+            if ($receipt_date <= $current_date
+                && ($stored_attempt_date === '' || $receipt_date >= $stored_attempt_date)
+            ) {
+                [$state, $receipt_check] = $this->align_daily_state(
+                    $state,
+                    $receipt_date,
+                    (string) ($receipt['check'] ?? '')
+                );
+                if ((string) ($state['daily']['status'] ?? '') !== 'completed'
+                    && (int) ($state['daily']['attempts'] ?? 0) < self::DAILY_ATTEMPT_LIMIT
+                ) {
+                    $state['daily']['check'] = $receipt_check;
+                    $state['daily']['attempts'] = (int) (
+                        $state['daily']['attempts'] ?? 0
+                    ) + 1;
+                    $state['daily']['status'] = 'incomplete';
+                    $state['daily']['result'] = 'deferred';
+                    $state['daily']['reason_code'] = 'controller_lock_active';
+                    $state['daily']['completed_at'] = '';
+                    if ((int) $state['daily']['attempts'] >= self::DAILY_ATTEMPT_LIMIT) {
+                        $incident_action = $this->record_incomplete_incident(
+                            $this->normalize_archive_name(
+                                (string) ($state['daily']['archive'] ?? '')
+                            ),
+                            $receipt_check,
+                            'controller_lock_active'
+                        );
+                        if ($incident_action === '') {
+                            return [
+                                'success' => false,
+                                'reason_code' => 'incomplete_incident_persist_failed',
+                                'incident_action' => 'none',
+                            ];
+                        }
+                    }
+                }
+            }
+            $accounted_receipt_ids[] = $receipt_id;
+            $accounted_receipt_ids = array_values(array_unique($accounted_receipt_ids));
+            $state['daily']['controller_deferral_receipts'] = $accounted_receipt_ids;
+            $state_changed = true;
+        }
+
+        if ($state_changed) {
+            $state['daily']['controller_deferral_receipts'] = $accounted_receipt_ids;
+            if (!$this->write_state($state)) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'health_state_write_failed',
+                    'incident_action' => $incident_action,
+                ];
+            }
+        }
+
+        foreach ($receipts as $receipt) {
+            if (in_array(
+                (string) ($receipt['receipt_id'] ?? ''),
+                $accounted_receipt_ids,
+                true
+            )) {
+                @unlink((string) ($receipt['path'] ?? ''));
+            }
+        }
+        $remaining_receipt_ids = array_values(array_filter(
+            $accounted_receipt_ids,
+            static function (string $receipt_id) use ($archive_directory): bool {
+                return is_file(
+                    $archive_directory
+                    . DIRECTORY_SEPARATOR
+                    . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+                    . $receipt_id
+                    . '.json'
+                );
+            }
+        ));
+        if ($remaining_receipt_ids !== $accounted_receipt_ids) {
+            $state['daily']['controller_deferral_receipts'] = $remaining_receipt_ids;
+            if (!$this->write_state($state)) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'health_state_write_failed',
+                    'incident_action' => $incident_action,
+                ];
+            }
+        }
+
+        return [
+            'success' => true,
+            'reason_code' => '',
+            'incident_action' => $incident_action,
+        ];
+    }
+
+    private function read_controller_deferral_receipts(string $archive_directory): array
+    {
+        $paths = @glob(
+            $archive_directory
+            . DIRECTORY_SEPARATOR
+            . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+            . '*.json'
+        );
+        if ($paths === false || count($paths) > self::CONTROLLER_DEFERRAL_RECEIPT_LIMIT) {
+            return [
+                'success' => false,
+                'reason_code' => 'controller_deferral_receipt_invalid',
+                'receipts' => [],
+            ];
+        }
+
+        $receipts = [];
+        foreach ($paths as $path) {
+            $filename = basename($path);
+            if (preg_match(
+                '/^' . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+                . '([a-f0-9]{32})\.json$/',
+                $filename,
+                $matches
+            ) !== 1 || !is_file($path) || is_link($path)) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'controller_deferral_receipt_invalid',
+                    'receipts' => [],
+                ];
+            }
+            $raw = @file_get_contents($path);
+            $payload = is_string($raw) && strlen($raw) <= 2048
+                ? json_decode($raw, true)
+                : null;
+            $receipt_id = (string) ($matches[1] ?? '');
+            $occurred_at = is_array($payload)
+                ? (string) ($payload['occurred_at'] ?? '')
+                : '';
+            try {
+                $timestamp = new DateTimeImmutable($occurred_at);
+            } catch (Throwable $error) {
+                $timestamp = null;
+            }
+            $attempt_date = is_array($payload)
+                ? (string) ($payload['attempt_date'] ?? '')
+                : '';
+            $check = is_array($payload)
+                ? $this->normalize_check((string) ($payload['check'] ?? ''))
+                : '';
+            if (!is_array($payload)
+                || (int) ($payload['schema_version'] ?? 0)
+                    !== self::CONTROLLER_DEFERRAL_RECEIPT_SCHEMA_VERSION
+                || (string) ($payload['receipt_id'] ?? '') !== $receipt_id
+                || !$timestamp instanceof DateTimeImmutable
+                || $timestamp->format(DATE_ATOM) !== $occurred_at
+                || $timestamp->setTimezone(new DateTimeZone('Europe/Berlin'))->format('Y-m-d')
+                    !== $attempt_date
+                || $check === ''
+                || (string) ($payload['reason_code'] ?? '') !== 'controller_lock_active'
+            ) {
+                return [
+                    'success' => false,
+                    'reason_code' => 'controller_deferral_receipt_invalid',
+                    'receipts' => [],
+                ];
+            }
+            $receipts[] = [
+                'receipt_id' => $receipt_id,
+                'attempt_date' => $attempt_date,
+                'check' => $check,
+                'occurred_at' => $occurred_at,
+                'path' => $path,
+            ];
+        }
+        usort($receipts, static function (array $left, array $right): int {
+            $time_compare = strcmp(
+                (string) ($left['occurred_at'] ?? ''),
+                (string) ($right['occurred_at'] ?? '')
+            );
+
+            return $time_compare !== 0
+                ? $time_compare
+                : strcmp(
+                    (string) ($left['receipt_id'] ?? ''),
+                    (string) ($right['receipt_id'] ?? '')
+                );
+        });
+
+        return [
+            'success' => true,
+            'reason_code' => '',
+            'receipts' => $receipts,
+        ];
     }
 
     public function record_scheduled_bootstrap_failure(string $reason_code): array
@@ -674,6 +1046,7 @@ class Kiwi_Retention_Archive_Health_Service
             if ($stored_attempt_date !== $date) {
                 $state['daily']['attempt_date'] = $date;
                 $state['daily']['attempts'] = 0;
+                $state['daily']['controller_deferral_receipts'] = [];
             }
         } elseif ($stored_daily_date !== $date) {
             $state['daily'] = [
@@ -686,6 +1059,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'result' => '',
                 'reason_code' => '',
                 'completed_at' => '',
+                'controller_deferral_receipts' => [],
             ];
         }
 
@@ -854,10 +1228,16 @@ class Kiwi_Retention_Archive_Health_Service
         $state['daily']['archive'] = $archive_name;
         $state['daily']['check'] = $check;
         $state['daily']['attempts'] = (int) ($state['daily']['attempts'] ?? 0) + 1;
+        $corruption_incident_action = 'none';
         $outcome = $this->run_locked_check(
             (string) $archive['path'],
             $check,
-            function (array $corruption_outcome) use ($archive, $archive_name, $check): bool {
+            function (array $corruption_outcome) use (
+                $archive,
+                $archive_name,
+                $check,
+                &$corruption_incident_action
+            ): bool {
                 $corruption_reason = (string) (
                     $corruption_outcome['reason_code'] ?? 'sqlite_check_reported_corruption'
                 );
@@ -876,13 +1256,18 @@ class Kiwi_Retention_Archive_Health_Service
                     $marker_persisted = false;
                 }
                 try {
-                    $incident_persisted = $this->record_corruption_incident(
+                    $recorded_action = $this->record_corruption_incident(
                         $archive_name,
                         true,
                         $check,
                         $corruption_reason
-                    ) !== '';
+                    );
+                    $corruption_incident_action = $recorded_action !== ''
+                        ? $recorded_action
+                        : 'none';
+                    $incident_persisted = $recorded_action !== '';
                 } catch (Throwable $error) {
+                    $corruption_incident_action = 'none';
                     $incident_persisted = false;
                 }
 
@@ -895,6 +1280,7 @@ class Kiwi_Retention_Archive_Health_Service
         if (in_array($result_name, ['ok', 'corruption_detected'], true)) {
             $incident_action = 'none';
             if ($result_name === 'corruption_detected') {
+                $incident_action = $corruption_incident_action;
                 if (empty($outcome['quarantine_transition_success'])) {
                     return $this->result(
                         'error',
@@ -905,10 +1291,9 @@ class Kiwi_Retention_Archive_Health_Service
                         $archive_name,
                         'corruption_state_persist_failed',
                         $started_at,
-                        ['incident_action' => 'raised']
+                        ['incident_action' => $incident_action]
                     );
                 }
-                $incident_action = 'raised';
             }
 
             $state['daily']['status'] = 'completed';
@@ -933,7 +1318,7 @@ class Kiwi_Retention_Archive_Health_Service
                     $archive_name,
                     'quarantine_marker_reconciliation_failed',
                     $started_at,
-                    ['incident_action' => 'raised']
+                    ['incident_action' => $incident_action]
                 );
             }
             $lookup_recovery_action = $this->record_incomplete_recovery('', $result_name);
@@ -1160,10 +1545,16 @@ class Kiwi_Retention_Archive_Health_Service
         $active_archive_name = is_array($active_archive)
             ? (string) ($active_archive['name'] ?? '')
             : '';
+        $corruption_incident_action = 'none';
         $outcome = $this->run_locked_check(
             (string) $archive['path'],
             'integrity',
-            function (array $corruption_outcome) use ($archive, $archive_name, $active_archive_name): bool {
+            function (array $corruption_outcome) use (
+                $archive,
+                $archive_name,
+                $active_archive_name,
+                &$corruption_incident_action
+            ): bool {
                 $corruption_reason = (string) (
                     $corruption_outcome['reason_code'] ?? 'sqlite_check_reported_corruption'
                 );
@@ -1182,13 +1573,18 @@ class Kiwi_Retention_Archive_Health_Service
                     $marker_persisted = false;
                 }
                 try {
-                    $incident_persisted = $this->record_corruption_incident(
+                    $recorded_action = $this->record_corruption_incident(
                         $archive_name,
                         $archive_name === $active_archive_name,
                         'integrity',
                         $corruption_reason
-                    ) !== '';
+                    );
+                    $corruption_incident_action = $recorded_action !== ''
+                        ? $recorded_action
+                        : 'none';
+                    $incident_persisted = $recorded_action !== '';
                 } catch (Throwable $error) {
+                    $corruption_incident_action = 'none';
                     $incident_persisted = false;
                 }
 
@@ -1198,7 +1594,9 @@ class Kiwi_Retention_Archive_Health_Service
         $result_name = (string) ($outcome['result'] ?? 'error');
         $reason_code = (string) ($outcome['reason_code'] ?? 'health_check_failed');
 
-        $incident_action = $result_name === 'corruption_detected' ? 'raised' : 'none';
+        $incident_action = $result_name === 'corruption_detected'
+            ? $corruption_incident_action
+            : 'none';
         if (in_array($result_name, ['ok', 'corruption_detected'], true)) {
             if ($result_name === 'corruption_detected'
                 && empty($outcome['quarantine_transition_success'])
@@ -1212,7 +1610,7 @@ class Kiwi_Retention_Archive_Health_Service
                     $archive_name,
                     'corruption_state_persist_failed',
                     $started_at,
-                    ['incident_action' => 'raised']
+                    ['incident_action' => $incident_action]
                 );
             }
 
@@ -1239,7 +1637,7 @@ class Kiwi_Retention_Archive_Health_Service
                     $archive_name,
                     'quarantine_marker_reconciliation_failed',
                     $started_at,
-                    ['incident_action' => 'raised']
+                    ['incident_action' => $incident_action]
                 );
             }
             $recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
@@ -1687,6 +2085,7 @@ class Kiwi_Retention_Archive_Health_Service
         $daily_check = $daily['check'];
         $daily_reason = $daily['reason_code'];
         $daily_completed_at = $daily['completed_at'];
+        $controller_deferral_receipts = $daily['controller_deferral_receipts'] ?? [];
         $daily_archive_valid = $daily_archive === '' || $this->normalize_archive_name($daily_archive) !== '';
         if (!$daily_archive_valid
             || !is_string($daily_attempt_date)
@@ -1696,8 +2095,20 @@ class Kiwi_Retention_Archive_Health_Service
             || ($daily_date !== '' && $daily_attempt_date < $daily_date)
             || ($daily_check !== '' && !in_array($daily_check, ['quick', 'integrity'], true))
             || ($daily_completed_at !== '' && !$this->is_valid_timestamp($daily_completed_at))
+            || !is_array($controller_deferral_receipts)
+            || count($controller_deferral_receipts) > self::CONTROLLER_DEFERRAL_RECEIPT_LIMIT
+            || array_values($controller_deferral_receipts) !== $controller_deferral_receipts
+            || count($controller_deferral_receipts)
+                !== count(array_unique($controller_deferral_receipts))
         ) {
             return false;
+        }
+        foreach ($controller_deferral_receipts as $receipt_id) {
+            if (!is_string($receipt_id)
+                || preg_match('/^[a-f0-9]{32}$/', $receipt_id) !== 1
+            ) {
+                return false;
+            }
         }
         if ($daily_status === 'pending'
             && ($daily_result !== ''
@@ -1862,6 +2273,7 @@ class Kiwi_Retention_Archive_Health_Service
                 'result' => '',
                 'reason_code' => '',
                 'completed_at' => '',
+                'controller_deferral_receipts' => [],
             ],
             'annual' => [
                 'cycle_year' => '',

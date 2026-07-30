@@ -55,6 +55,21 @@ class Kiwi_Test_Failing_Quarantine_Retention_Sqlite_Archive_Service extends Kiwi
     }
 }
 
+class Kiwi_Test_One_Failure_Quarantine_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_Archive_Service
+{
+    public $quarantine_attempts = 0;
+
+    public function mark_quarantined(string $archive_db_path, array $details): bool
+    {
+        $this->quarantine_attempts++;
+        if ($this->quarantine_attempts === 1) {
+            return false;
+        }
+
+        return parent::mark_quarantined($archive_db_path, $details);
+    }
+}
+
 class Kiwi_Test_Wpdb_Retention_Quarantine_Transition
 {
     public $prefix = 'wp_';
@@ -1250,6 +1265,121 @@ kiwi_run_test('Kiwi bootstrap recorder audits without the health service graph',
             'Expected the dependency-independent active lookup subject.'
         );
     } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service accounts controller deferrals exactly once', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_controller_deferrals');
+    $now = new DateTimeImmutable(
+        '2026-07-27 01:30:00',
+        new DateTimeZone('Europe/Berlin')
+    );
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $locks = new Kiwi_Retention_Archive_Lock();
+    $check_calls = 0;
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        $locks,
+        new Kiwi_Operational_Event_Service($events),
+        static function () use ($now): DateTimeImmutable {
+            return $now;
+        },
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
+            return [
+                'result' => 'inconclusive',
+                'reason_code' => 'health_child_timeout',
+                'duration_seconds' => 600.0,
+                'child_running' => false,
+            ];
+        },
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+    $controller = null;
+
+    try {
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $first = $service->scheduled();
+        kiwi_assert_same('inconclusive', $first['result'] ?? '', 'Expected the first real check to stay incomplete.');
+
+        $controller = $locks->acquire_controller($archive_service->get_archive_directory());
+        kiwi_assert_true(!empty($controller['acquired']), 'Expected external controller-lock fixture.');
+        $second = $service->scheduled();
+        $third = $service->scheduled();
+        kiwi_assert_same('controller_lock_active', $second['reason_code'] ?? '', 'Expected first controlled overlap.');
+        kiwi_assert_same('controller_lock_active', $third['reason_code'] ?? '', 'Expected second controlled overlap.');
+
+        $receipt_paths = glob(
+            $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_health_deferral_*.json'
+        );
+        $receipt_paths = is_array($receipt_paths) ? array_values($receipt_paths) : [];
+        sort($receipt_paths);
+        kiwi_assert_same(2, count($receipt_paths), 'Expected one durable receipt per overlapping invocation.');
+        preg_match(
+            '/_([a-f0-9]{32})\.json$/',
+            basename((string) ($receipt_paths[0] ?? '')),
+            $receipt_match
+        );
+        $first_receipt_id = (string) ($receipt_match[1] ?? '');
+        kiwi_assert_true($first_receipt_id !== '', 'Expected a valid first receipt ID.');
+
+        $state_path = $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_health_state.json';
+        $state = json_decode((string) file_get_contents($state_path), true);
+        kiwi_assert_true(is_array($state), 'Expected durable controller state fixture.');
+        $state['daily']['attempts'] = 2;
+        $state['daily']['status'] = 'incomplete';
+        $state['daily']['result'] = 'deferred';
+        $state['daily']['reason_code'] = 'controller_lock_active';
+        $state['daily']['completed_at'] = '';
+        $state['daily']['controller_deferral_receipts'] = [$first_receipt_id];
+        kiwi_write_file(
+            $state_path,
+            (string) json_encode($state) . "\n"
+        );
+
+        $locks->release($controller['handle'] ?? null);
+        $controller = null;
+        $reconciled = $service->scheduled();
+        $status = $service->status();
+        $remaining_receipts = glob(
+            $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_health_deferral_*.json'
+        );
+
+        kiwi_assert_same('inconclusive', $reconciled['result'] ?? '', 'Expected bounded attempt-limit result after receipt reconciliation.');
+        kiwi_assert_same('raised', $reconciled['incident_action'] ?? '', 'Expected the final cron slot to raise the incomplete Incident.');
+        kiwi_assert_same(3, $status['state']['daily']['attempts'] ?? 0, 'Expected exactly three daily attempts.');
+        kiwi_assert_same(
+            'controller_lock_active',
+            $status['state']['daily']['reason_code'] ?? '',
+            'Expected the final controlled overlap reason in state.'
+        );
+        kiwi_assert_same(
+            [],
+            $status['state']['daily']['controller_deferral_receipts'] ?? [],
+            'Expected accounted receipt IDs to prune after file cleanup.'
+        );
+        kiwi_assert_same([], is_array($remaining_receipts) ? $remaining_receipts : [], 'Expected all durable receipt files to be removed.');
+        kiwi_assert_same(1, $check_calls, 'Expected overlap reconciliation not to rerun SQLite.');
+        kiwi_assert_same(1, count($events->get_open_incidents()), 'Expected one open incomplete Incident.');
+    } finally {
+        if (is_array($controller)) {
+            $locks->release($controller['handle'] ?? null);
+        }
         kiwi_remove_directory($root);
     }
 });
@@ -2458,6 +2588,68 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service keeps corruption write-bloc
     }
 });
 
+kiwi_run_test('Kiwi_Retention_Archive_Health_Service reports repeated direct corruption action', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_health_repeated_corruption');
+    $current_time = new DateTimeImmutable(
+        '2026-07-27 01:30:00',
+        new DateTimeZone('Europe/Berlin')
+    );
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Test_One_Failure_Quarantine_Retention_Sqlite_Archive_Service(
+        $config
+    );
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service($events),
+        static function () use (&$current_time): DateTimeImmutable {
+            return $current_time;
+        },
+        static function (): array {
+            return [
+                'result' => 'corruption_detected',
+                'reason_code' => 'sqlite_check_reported_corruption',
+                'duration_seconds' => 0.01,
+                'child_running' => false,
+            ];
+        },
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    try {
+        kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2026.sqlite'
+        );
+        $first = $service->scheduled();
+        kiwi_assert_same('error', $first['result'] ?? '', 'Expected the first failed marker write to fail closed.');
+        kiwi_assert_same('raised', $first['incident_action'] ?? '', 'Expected the first persisted corruption action.');
+
+        $current_time = new DateTimeImmutable(
+            '2026-07-28 01:30:00',
+            new DateTimeZone('Europe/Berlin')
+        );
+        $repeated = $service->scheduled();
+
+        kiwi_assert_same('corruption_detected', $repeated['result'] ?? '', 'Expected the later marker retry to complete.');
+        kiwi_assert_same(
+            'repeated',
+            $repeated['incident_action'] ?? '',
+            'Expected command JSON to preserve the actual repeated corruption action.'
+        );
+        kiwi_assert_same(
+            ['raised', 'repeated'],
+            array_column(array_values($events->rows), 'lifecycle_action'),
+            'Expected append-only corruption lifecycle across Berlin dates.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service marks current annual corruption as active generation', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_annual_active_generation');
     $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
@@ -3131,6 +3323,11 @@ kiwi_run_test('Kiwi retention archive health runner declares command surface and
         "'wordpress_load_failed'",
         $runner,
         'Expected WordPress loader exceptions to enter the scheduled bootstrap audit path.'
+    );
+    kiwi_assert_contains(
+        "\$this->fail_before_service(\$mode, 'health_service_exception')",
+        $runner,
+        'Expected scheduled service exceptions to enter the durable bootstrap audit path.'
     );
 
     $health_service = file_get_contents(

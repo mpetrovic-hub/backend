@@ -339,7 +339,7 @@ final class Kiwi_Retention_Archive_Health_Command
                 kiwi_retention_archive_health_bootstrap_failure('command_mode_invalid');
             }
         } catch (Throwable $error) {
-            kiwi_retention_archive_health_bootstrap_failure('health_service_exception');
+            $this->fail_before_service($mode, 'health_service_exception');
         }
 
         if (!is_array($result)) {

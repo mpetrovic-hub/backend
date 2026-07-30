@@ -5,8 +5,10 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
     private const STATE_SCHEMA_VERSION = 1;
     private const STATE_FILENAME = 'kiwi_retention_archive_health_state.json';
     private const CONTROLLER_LOCK_FILENAME = 'kiwi_retention_archive_health_controller.lock';
+    private const CONTROLLER_DEFERRAL_RECEIPT_LIMIT = 64;
     private const DAILY_ATTEMPT_LIMIT = 3;
     private const ALLOWED_REASONS = [
+        'controller_lock_active',
         'wp_cli_loader_unavailable',
         'plugins_loaded_hook_failed',
         'plugins_loaded_not_reached',
@@ -154,6 +156,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
             if ($attempt_date !== $date) {
                 $state['daily']['attempt_date'] = $date;
                 $state['daily']['attempts'] = 0;
+                $state['daily']['controller_deferral_receipts'] = [];
             }
         } elseif ($stored_date !== $date) {
             $state['daily'] = [
@@ -166,6 +169,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
                 'result' => '',
                 'reason_code' => '',
                 'completed_at' => '',
+                'controller_deferral_receipts' => [],
             ];
         }
 
@@ -241,6 +245,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
         $result = $daily['result'];
         $reason = $daily['reason_code'];
         $completed_at = $daily['completed_at'];
+        $controller_deferral_receipts = $daily['controller_deferral_receipts'] ?? [];
         if (!is_string($attempt_date)
             || !is_int($attempts)
             || $attempts < 0
@@ -254,8 +259,20 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
             || ($daily_date !== '' && $attempt_date < $daily_date)
             || ($check !== '' && $this->normalize_check($check) === '')
             || ($completed_at !== '' && !$this->is_valid_timestamp($completed_at))
+            || !is_array($controller_deferral_receipts)
+            || count($controller_deferral_receipts) > self::CONTROLLER_DEFERRAL_RECEIPT_LIMIT
+            || array_values($controller_deferral_receipts) !== $controller_deferral_receipts
+            || count($controller_deferral_receipts)
+                !== count(array_unique($controller_deferral_receipts))
         ) {
             return false;
+        }
+        foreach ($controller_deferral_receipts as $receipt_id) {
+            if (!is_string($receipt_id)
+                || preg_match('/^[a-f0-9]{32}$/', $receipt_id) !== 1
+            ) {
+                return false;
+            }
         }
         if ($status === 'pending'
             && ($result !== ''
@@ -539,6 +556,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
                 'result' => '',
                 'reason_code' => '',
                 'completed_at' => '',
+                'controller_deferral_receipts' => [],
             ],
             'annual' => [
                 'cycle_year' => '',
