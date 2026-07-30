@@ -1122,7 +1122,9 @@ class Kiwi_Retention_Cleanup_Service
         string $quarantined_archive_path
     ): array {
         try {
-            $new_archive_path = $this->archive_service->resolve_archive_db_path('');
+            $new_archive_path = $this->archive_service->resolve_quarantine_successor_path(
+                $quarantined_archive_path
+            );
             $remaining_rows = $this->count_remaining_source_rows(
                 $source,
                 $cutoff_value,

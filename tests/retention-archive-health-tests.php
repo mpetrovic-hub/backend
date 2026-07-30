@@ -409,6 +409,24 @@ kiwi_run_test('Retention archive validators accept every successor generation of
             $predecessor['name'] ?? '',
             'Expected exact prior quarantined generation for a replacement archive.'
         );
+        $prior_year_archive = kiwi_test_create_retention_archive(
+            $archive_service,
+            'kiwi_retention_archive_2025.sqlite'
+        );
+        kiwi_assert_true(
+            $archive_service->mark_quarantined($prior_year_archive, [
+                'detected_at' => '2026-01-01T00:05:00+01:00',
+                'check' => 'integrity',
+                'reason_code' => 'sqlite_check_reported_corruption',
+                'active_generation' => true,
+            ]),
+            'Expected prior-year quarantine fixture.'
+        );
+        kiwi_assert_same(
+            'kiwi_retention_archive_2025_part_2.sqlite',
+            basename($archive_service->resolve_quarantine_successor_path($prior_year_archive)),
+            'Expected quarantine recovery to stay in the quarantined archive year.'
+        );
     } finally {
         kiwi_remove_directory($root);
     }
@@ -1071,13 +1089,24 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service fails closed when archive d
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service status is read-only and rejects invalid state', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_status');
     $now = new DateTimeImmutable('2026-07-27 01:30:00', new DateTimeZone('Europe/Berlin'));
-    [$service, $archive_service] = kiwi_test_health_service(
+    [$service, $archive_service, , $runs] = kiwi_test_health_service(
         $root,
         $now,
         static function (): array {
             throw new RuntimeException('Status must not run a check.');
         }
     );
+    $runs->rows[1] = [
+        'status' => 'running',
+        'finished_at' => null,
+        'archive_db_path' => $archive_service->get_archive_directory()
+            . DIRECTORY_SEPARATOR
+            . 'kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 0,
+        'deleted_rows' => 0,
+        'archive_last_primary_key' => 0,
+        'delete_last_primary_key' => 0,
+    ];
     $state_path = $archive_service->get_archive_directory()
         . DIRECTORY_SEPARATOR
         . 'kiwi_retention_archive_health_state.json';
@@ -1092,6 +1121,11 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service status is read-only and rej
         kiwi_assert_same(null, $status['archive'], 'Expected no archive value for repository status.');
         kiwi_assert_true(array_key_exists('incident_action', $status), 'Expected required incident action field.');
         kiwi_assert_same(null, $status['incident_action'], 'Expected no incident action for repository status.');
+        kiwi_assert_same(
+            'active_archive_path_invalid',
+            $status['active_archive_error'] ?? '',
+            'Expected the absent frozen archive root to fail without mutation.'
+        );
         kiwi_assert_true(!is_dir($archive_service->get_archive_directory()), 'Expected status not to create the archive directory.');
 
         mkdir($archive_service->get_archive_directory(), 0770, true);
@@ -1313,10 +1347,16 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service accounts controller deferra
 
         $controller = $locks->acquire_controller($archive_service->get_archive_directory());
         kiwi_assert_true(!empty($controller['acquired']), 'Expected external controller-lock fixture.');
-        $second = $service->scheduled();
-        $third = $service->scheduled();
-        kiwi_assert_same('controller_lock_active', $second['reason_code'] ?? '', 'Expected first controlled overlap.');
-        kiwi_assert_same('controller_lock_active', $third['reason_code'] ?? '', 'Expected second controlled overlap.');
+        $second = $service->record_scheduled_bootstrap_failure('health_service_exception');
+        $recorder = new Kiwi_Retention_Archive_Health_Bootstrap_Recorder(
+            $archive_service->get_archive_directory(),
+            static function () use ($now): DateTimeImmutable {
+                return $now;
+            }
+        );
+        $third = $recorder->record('health_service_exception');
+        kiwi_assert_same('archive_lock_active', $second['reason_code'] ?? '', 'Expected main bootstrap overlap receipt.');
+        kiwi_assert_same('archive_lock_active', $third['reason_code'] ?? '', 'Expected standalone bootstrap overlap receipt.');
 
         $receipt_paths = glob(
             $archive_service->get_archive_directory()

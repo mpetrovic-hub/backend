@@ -64,6 +64,33 @@ class Kiwi_Retention_Sqlite_Archive_Service
         return $this->build_generation_path($year, $highest_generation + 1);
     }
 
+    public function resolve_existing_archive_db_path_read_only(string $archive_db_path): string
+    {
+        if (!$this->is_safe_archive_path($archive_db_path)) {
+            throw new RuntimeException('Persisted retention archive path is outside the configured archive directory.');
+        }
+
+        return $archive_db_path;
+    }
+
+    public function resolve_quarantine_successor_path(string $quarantined_archive_db_path): string
+    {
+        $this->ensure_archive_directory($this->get_archive_directory());
+        if (!$this->is_quarantined($quarantined_archive_db_path)) {
+            throw new RuntimeException('Retention archive quarantine successor requires a quarantined archive.');
+        }
+
+        $identity = $this->parse_generation_filename(basename($quarantined_archive_db_path));
+        if ($identity === null) {
+            throw new RuntimeException('Retention archive quarantine generation is invalid.');
+        }
+
+        return $this->build_generation_path(
+            (string) $identity['year'],
+            (int) $identity['generation'] + 1
+        );
+    }
+
     public function list_archive_files(): array
     {
         $directory = $this->get_archive_directory();

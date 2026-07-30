@@ -121,7 +121,7 @@ class Kiwi_Retention_Archive_Health_Service
             'retention_archive_corruption_detected',
             'retention_archive_receipt_invalid',
         ];
-        $active_lookup = $this->resolve_active_archive();
+        $active_lookup = $this->resolve_active_archive(true);
         $active_archive = $active_lookup['archive'] ?? null;
         $open_incidents = [];
         foreach ($relevant_types as $event_type) {
@@ -920,7 +920,7 @@ class Kiwi_Retention_Archive_Health_Service
         }
 
         $controller = $this->lock_service->acquire_controller($archive_directory);
-        if (empty($controller['success']) || empty($controller['acquired'])) {
+        if (empty($controller['success'])) {
             return $this->result(
                 'error',
                 'failed',
@@ -929,6 +929,31 @@ class Kiwi_Retention_Archive_Health_Service
                 'bootstrap',
                 '',
                 (string) ($controller['error_code'] ?? 'controller_lock_failed'),
+                $started_at
+            );
+        }
+        if (empty($controller['acquired'])) {
+            if (!$this->persist_controller_deferral_receipt($archive_directory)) {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'bootstrap',
+                    '',
+                    'controller_deferral_persist_failed',
+                    $started_at
+                );
+            }
+
+            return $this->result(
+                'error',
+                'failed',
+                2,
+                '',
+                'bootstrap',
+                '',
+                (string) ($controller['error_code'] ?? 'controller_lock_active'),
                 $started_at
             );
         }
@@ -2308,7 +2333,7 @@ class Kiwi_Retention_Archive_Health_Service
         return $matches[count($matches) - 1];
     }
 
-    private function resolve_active_archive(): array
+    private function resolve_active_archive(bool $read_only = false): array
     {
         try {
             $open_archive_state = $this->run_repository->find_open_archive_state();
@@ -2326,7 +2351,11 @@ class Kiwi_Retention_Archive_Health_Service
         if (!empty($open_archive_state)) {
             $open_archive_path = trim((string) ($open_archive_state['archive_db_path'] ?? ''));
             try {
-                $safe_path = $this->archive_service->resolve_archive_db_path($open_archive_path);
+                $safe_path = $read_only
+                    ? $this->archive_service->resolve_existing_archive_db_path_read_only(
+                        $open_archive_path
+                    )
+                    : $this->archive_service->resolve_archive_db_path($open_archive_path);
             } catch (Throwable $error) {
                 return [
                     'success' => false,

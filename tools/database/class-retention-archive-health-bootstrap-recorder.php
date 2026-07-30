@@ -5,6 +5,8 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
     private const STATE_SCHEMA_VERSION = 1;
     private const STATE_FILENAME = 'kiwi_retention_archive_health_state.json';
     private const CONTROLLER_LOCK_FILENAME = 'kiwi_retention_archive_health_controller.lock';
+    private const CONTROLLER_DEFERRAL_RECEIPT_PREFIX = 'kiwi_retention_archive_health_deferral_';
+    private const CONTROLLER_DEFERRAL_RECEIPT_SCHEMA_VERSION = 1;
     private const CONTROLLER_DEFERRAL_RECEIPT_LIMIT = 64;
     private const DAILY_ATTEMPT_LIMIT = 3;
     private const ALLOWED_REASONS = [
@@ -66,6 +68,15 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
         }
         if (!@flock($lock, LOCK_EX | LOCK_NB)) {
             @fclose($lock);
+            if (!$this->persist_controller_deferral_receipt()) {
+                return $this->result(
+                    '',
+                    'bootstrap',
+                    '',
+                    'controller_deferral_persist_failed',
+                    $started_at
+                );
+            }
 
             return $this->result('', 'bootstrap', '', 'archive_lock_active', $started_at);
         }
@@ -540,6 +551,54 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
     private function state_path(): string
     {
         return $this->archive_directory . DIRECTORY_SEPARATOR . self::STATE_FILENAME;
+    }
+
+    private function persist_controller_deferral_receipt(): bool
+    {
+        $occurred_at = $this->current_datetime();
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            try {
+                $receipt_id = bin2hex(random_bytes(16));
+            } catch (Throwable $error) {
+                $receipt_id = md5(uniqid('', true) . ':' . microtime(true));
+            }
+            $path = $this->archive_directory
+                . DIRECTORY_SEPARATOR
+                . self::CONTROLLER_DEFERRAL_RECEIPT_PREFIX
+                . $receipt_id
+                . '.json';
+            if (is_file($path)) {
+                continue;
+            }
+            $payload = [
+                'schema_version' => self::CONTROLLER_DEFERRAL_RECEIPT_SCHEMA_VERSION,
+                'receipt_id' => $receipt_id,
+                'occurred_at' => $occurred_at->format(DATE_ATOM),
+                'attempt_date' => $occurred_at->format('Y-m-d'),
+                'check' => $occurred_at->format('N') === '7' ? 'integrity' : 'quick',
+                'reason_code' => 'controller_lock_active',
+            ];
+            $json = json_encode($payload);
+            if (!is_string($json)) {
+                return false;
+            }
+            $temporary_path = $path . '.tmp';
+            $written = @file_put_contents($temporary_path, $json . "\n", LOCK_EX);
+            if ($written === false || $written !== strlen($json) + 1) {
+                @unlink($temporary_path);
+
+                return false;
+            }
+            if (@rename($temporary_path, $path)) {
+                return true;
+            }
+            @unlink($temporary_path);
+            if (!is_file($path)) {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private function default_state(): array

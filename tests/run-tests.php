@@ -1740,6 +1740,13 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
                 : sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite');
     }
 
+    public function resolve_quarantine_successor_path(string $quarantined_archive_db_path): string
+    {
+        return $this->new_archive_db_path !== ''
+            ? $this->new_archive_db_path
+            : $this->resolve_archive_db_path('');
+    }
+
     public function is_quarantined(string $archive_db_path): bool
     {
         if (!empty($this->quarantine_results)) {
