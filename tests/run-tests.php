@@ -1559,12 +1559,12 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         return null;
     }
 
-    public function find_completed_empty_recovery_contexts_for_archive(
-        string $archive_db_path
+    public function find_unresolved_completed_empty_recovery_contexts(
+        string $source_key
     ): ?array {
         $matches = [];
         foreach ($this->rows as $row) {
-            if ((string) ($row['archive_db_path'] ?? '') !== $archive_db_path
+            if ((string) ($row['source_key'] ?? '') !== $source_key
                 || (string) ($row['triggered_by'] ?? '') !== 'archive_recovery'
                 || !in_array(
                     (string) ($row['status'] ?? ''),
@@ -1574,12 +1574,15 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
                 || (int) ($row['eligible_rows'] ?? -1) !== 0
                 || ($row['finished_at'] ?? null) === null
                 || trim((string) ($row['error_message'] ?? '')) === ''
+                || (string) ($row['error_code'] ?? '') === 'archive_recovery_resolved'
             ) {
                 continue;
             }
 
             $matches[] = [
+                'id' => (int) ($row['id'] ?? 0),
                 'run_id' => (string) ($row['run_id'] ?? ''),
+                'source_key' => (string) ($row['source_key'] ?? ''),
                 'archive_db_path' => (string) ($row['archive_db_path'] ?? ''),
                 'error_message' => (string) ($row['error_message'] ?? ''),
             ];

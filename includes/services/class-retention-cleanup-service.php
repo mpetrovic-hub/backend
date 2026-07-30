@@ -1293,6 +1293,25 @@ class Kiwi_Retention_Cleanup_Service
         }
 
         $recovery_candidates = [];
+        $carried_recoveries = $this->run_repository
+            ->find_unresolved_completed_empty_recovery_contexts(
+                (string) ($run['source_key'] ?? '')
+            );
+        if ($carried_recoveries === null) {
+            return false;
+        }
+        foreach ($carried_recoveries as $carried_recovery) {
+            $carried_archive = basename((string) ($carried_recovery['archive_db_path'] ?? ''));
+            if ($carried_archive === '') {
+                return false;
+            }
+            $recovery_candidates[] = [
+                'run' => $carried_recovery,
+                'expected_new_archive' => $carried_archive,
+                'resolved_run_id' => (int) ($carried_recovery['id'] ?? 0),
+            ];
+        }
+
         if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
             && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
         ) {
@@ -1310,18 +1329,6 @@ class Kiwi_Retention_Cleanup_Service
                 break;
             }
             $visited_archives[$cursor_archive] = true;
-
-            $carried_recoveries = $this->run_repository
-                ->find_completed_empty_recovery_contexts_for_archive($cursor_path);
-            if ($carried_recoveries === null) {
-                return false;
-            }
-            foreach ($carried_recoveries as $carried_recovery) {
-                $recovery_candidates[] = [
-                    'run' => $carried_recovery,
-                    'expected_new_archive' => $cursor_archive,
-                ];
-            }
 
             try {
                 $quarantined_predecessor = $this->archive_service
@@ -1380,7 +1387,12 @@ class Kiwi_Retention_Cleanup_Service
                 $recoveries_by_old_archive[$old_archive] = [
                     'old_archive' => $old_archive,
                     'successor_run_id' => (string) ($recovery_run['run_id'] ?? ''),
+                    'resolved_run_ids' => [],
                 ];
+            }
+            $resolved_run_id = (int) ($candidate['resolved_run_id'] ?? 0);
+            if ($resolved_run_id > 0) {
+                $recoveries_by_old_archive[$old_archive]['resolved_run_ids'][] = $resolved_run_id;
             }
         }
 
@@ -1403,6 +1415,13 @@ class Kiwi_Retention_Cleanup_Service
                 ],
             ])) {
                 return false;
+            }
+            foreach (array_values(array_unique($recovery['resolved_run_ids'])) as $resolved_run_id) {
+                if (!$this->run_repository->update_run((int) $resolved_run_id, [
+                    'error_code' => 'archive_recovery_resolved',
+                ])) {
+                    return false;
+                }
             }
         }
 

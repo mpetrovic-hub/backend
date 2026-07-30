@@ -577,6 +577,9 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service carries empty recovery context to 
     $new_archive_path = $test_root
         . DIRECTORY_SEPARATOR
         . 'kiwi_retention_archive_2026_part_2.sqlite';
+    $current_archive_path = $test_root
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_2027.sqlite';
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $runs->rows[1] = [
         'id' => 1,
@@ -618,7 +621,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service carries empty recovery context to 
         'delete_last_primary_key' => 0,
         'worker_runs' => 0,
         'archive_batch_id' => 'ordinary_replacement_batch',
-        'archive_db_path' => $new_archive_path,
+        'archive_db_path' => $current_archive_path,
         'archive_integrity_check' => 'receipt_verified',
         'error_code' => '',
         'error_message' => '',
@@ -680,6 +683,16 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service carries empty recovery context to 
             'retention_ordinary_replacement_batch',
             $context['qualifying_run_id'] ?? '',
             'Expected the first non-empty ordinary replacement batch as qualifying evidence.'
+        );
+        kiwi_assert_same(
+            basename($current_archive_path),
+            $context['new_archive'] ?? '',
+            'Expected the qualifying new-year archive in recovery evidence.'
+        );
+        kiwi_assert_same(
+            'archive_recovery_resolved',
+            $runs->rows[1]['error_code'] ?? '',
+            'Expected durable resolution of the carried prior-year context.'
         );
         kiwi_assert_same([], $events->get_open_incidents(), 'Expected no open corruption incident after the qualifying batch.');
     } finally {
@@ -1567,12 +1580,14 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Run_Repository distinguishes active archiv
 
         $replacement_path = '/safe/kiwi_retention_archive_2026_part_2.sqlite';
         $wpdb->rows = [[
+            'id' => '17',
             'run_id' => 'retention_empty_recovery',
+            'source_key' => 'landing_page_sessions',
             'archive_db_path' => $replacement_path,
             'error_message' => '{"old_archive":"kiwi_retention_archive_2026.sqlite"}',
         ]];
-        $contexts = $repository->find_completed_empty_recovery_contexts_for_archive(
-            $replacement_path
+        $contexts = $repository->find_unresolved_completed_empty_recovery_contexts(
+            'landing_page_sessions'
         );
         kiwi_assert_same(
             'retention_empty_recovery',
@@ -1589,17 +1604,22 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Run_Repository distinguishes active archiv
             $wpdb->last_query,
             'Expected only completed recovery runs to carry resolution evidence.'
         );
+        kiwi_assert_contains(
+            "error_code <> 'archive_recovery_resolved'",
+            $wpdb->last_query,
+            'Expected resolved recovery contexts to be excluded.'
+        );
         kiwi_assert_same(
-            [$replacement_path],
+            ['landing_page_sessions'],
             $wpdb->last_args,
-            'Expected the replacement archive path to remain a bound SQL parameter.'
+            'Expected the source key to remain a bound SQL parameter across archive years.'
         );
 
         $wpdb->last_error = 'Synthetic recovery lookup failure.';
         kiwi_assert_same(
             null,
-            $repository->find_completed_empty_recovery_contexts_for_archive(
-                $replacement_path
+            $repository->find_unresolved_completed_empty_recovery_contexts(
+                'landing_page_sessions'
             ),
             'Expected recovery-context query errors to fail closed.'
         );
@@ -2305,11 +2325,14 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service carries unfinished annual c
 kiwi_run_test('Kiwi_Retention_Archive_Health_Service resolves incomplete incident after annual success', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_health_annual_recovery');
     $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
-    $events = new Kiwi_Test_Operational_Event_Repository();
+    $events = new Kiwi_Test_Flaky_Operational_Event_Repository();
+    $check_calls = 0;
     [$service, $archive_service] = kiwi_test_health_service(
         $root,
         $now,
-        static function (): array {
+        static function () use (&$check_calls): array {
+            $check_calls++;
+
             return [
                 'result' => 'ok',
                 'reason_code' => 'sqlite_check_ok',
@@ -2338,10 +2361,25 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service resolves incomplete inciden
         ]), 'Expected incomplete incident fixture.');
 
         $service->scheduled();
+        $events->fail_next_insert = true;
+        $failed_annual = $service->scheduled();
+        $pending = $service->status();
         $annual = $service->scheduled();
         $latest = $events->find_latest_by_correlation_key($correlation_key);
 
+        kiwi_assert_same('error', $failed_annual['result'] ?? '', 'Expected failed annual recovery persistence to remain visible.');
+        kiwi_assert_same(
+            'incomplete_recovery_persist_failed',
+            $failed_annual['reason_code'] ?? '',
+            'Expected explicit retryable annual recovery reason.'
+        );
+        kiwi_assert_same(
+            [],
+            $pending['state']['annual']['completed'] ?? [],
+            'Expected the annual archive to remain retryable.'
+        );
         kiwi_assert_same('ok', $annual['result'] ?? '', 'Expected complete annual integrity result.');
+        kiwi_assert_same(3, $check_calls, 'Expected one daily check and two bounded annual attempts.');
         kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected annual success to resolve incomplete incident.');
         kiwi_assert_same([], $events->get_open_incidents([
             'event_type' => 'retention_archive_health_check_incomplete',

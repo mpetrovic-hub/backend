@@ -1507,6 +1507,23 @@ class Kiwi_Retention_Archive_Health_Service
                     );
                 }
             }
+            $recovery_action = $this->record_incomplete_recovery(
+                $archive_name,
+                'corruption_detected'
+            );
+            if ($recovery_action === '') {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    '',
+                    'annual',
+                    $archive_name,
+                    'incomplete_recovery_persist_failed',
+                    $started_at,
+                    ['incident_action' => $incident_action]
+                );
+            }
             $state['annual']['completed'][] = $archive_name;
             $state['annual']['completed'] = array_values(array_unique($state['annual']['completed']));
             $state['annual']['results'][$archive_name] = 'corruption_detected';
@@ -1531,10 +1548,6 @@ class Kiwi_Retention_Archive_Health_Service
                     ['incident_action' => $incident_action]
                 );
             }
-            $recovery_action = $this->record_incomplete_recovery(
-                $archive_name,
-                'corruption_detected'
-            );
             if ($incident_action === 'none' && $recovery_action === 'resolved') {
                 $incident_action = 'resolved';
             }
@@ -1639,6 +1652,20 @@ class Kiwi_Retention_Archive_Health_Service
                 );
             }
 
+            $recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
+            if ($recovery_action === '') {
+                return $this->result(
+                    'error',
+                    'failed',
+                    2,
+                    'integrity',
+                    'annual',
+                    $archive_name,
+                    'incomplete_recovery_persist_failed',
+                    $started_at,
+                    ['incident_action' => $incident_action]
+                );
+            }
             $state['annual']['completed'][] = $archive_name;
             $state['annual']['completed'] = array_values(array_unique($state['annual']['completed']));
             $state['annual']['results'][$archive_name] = $result_name;
@@ -1665,7 +1692,6 @@ class Kiwi_Retention_Archive_Health_Service
                     ['incident_action' => $incident_action]
                 );
             }
-            $recovery_action = $this->record_incomplete_recovery($archive_name, $result_name);
             if ($incident_action === 'none' && $recovery_action === 'resolved') {
                 $incident_action = 'resolved';
             }
