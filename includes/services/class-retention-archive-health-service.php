@@ -2448,10 +2448,7 @@ class Kiwi_Retention_Archive_Health_Service
                 (array) ($state['annual']['completed'] ?? []),
                 true
             );
-            if ($annual_pending
-                && (string) ($state['daily']['date'] ?? '') === $date
-                && (string) ($state['daily']['status'] ?? '') === 'completed'
-            ) {
+            if ($annual_pending) {
                 continue;
             }
 

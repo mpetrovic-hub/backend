@@ -2355,19 +2355,29 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined annu
     $root = kiwi_create_temp_directory('kiwi_retention_health_annual_quarantine_reconcile');
     $now = new DateTimeImmutable('2026-01-02 01:30:00', new DateTimeZone('Europe/Berlin'));
     $calls = 0;
-    [$service, $archive_service, $events] = kiwi_test_health_service(
-        $root,
-        $now,
+    $config = new Kiwi_Test_Retention_Archive_Health_Config($root);
+    $archive_service = new Kiwi_Retention_Sqlite_Archive_Service($config);
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $service = new Kiwi_Retention_Archive_Health_Service(
+        $config,
+        $archive_service,
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service($events),
+        static function () use (&$now): DateTimeImmutable {
+            return $now;
+        },
         static function () use (&$calls): array {
             $calls++;
 
             return [
-                'result' => $calls === 1 ? 'ok' : 'deferred',
-                'reason_code' => $calls === 1 ? 'sqlite_check_ok' : 'archive_lock_active',
+                'result' => $calls === 2 ? 'deferred' : 'ok',
+                'reason_code' => $calls === 2 ? 'archive_lock_active' : 'sqlite_check_ok',
                 'duration_seconds' => 0.01,
                 'child_running' => false,
             ];
-        }
+        },
+        '',
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
     );
 
     try {
@@ -2398,12 +2408,37 @@ kiwi_run_test('Kiwi_Retention_Archive_Health_Service reconciles quarantined annu
             'message' => 'Synthetic incomplete daily cycle before annual quarantine retry.',
         ]), 'Expected incomplete incident fixture before annual reconciliation.');
 
+        $now = new DateTimeImmutable('2026-01-03 01:30:00', new DateTimeZone('Europe/Berlin'));
+        $new_daily = $service->scheduled();
+        $before_annual = $service->status();
+        kiwi_assert_same('ok', $new_daily['result'] ?? '', 'Expected the new Berlin-day active archive check first.');
+        kiwi_assert_same(
+            'kiwi_retention_archive_2026.sqlite',
+            $new_daily['archive'] ?? '',
+            'Expected the current active generation before annual marker recovery.'
+        );
+        kiwi_assert_same(
+            '2026-01-03',
+            $before_annual['state']['daily']['date'] ?? '',
+            'Expected the new daily cycle to remain recorded.'
+        );
+        kiwi_assert_same(
+            false,
+            $archive_service->is_quarantine_reconciled($annual_archive),
+            'Expected annual marker reconciliation to wait until after the daily check.'
+        );
+
         $reconciled = $service->scheduled();
         $status = $service->status();
         $latest = $events->find_latest_by_correlation_key($correlation_key);
 
         kiwi_assert_same('corruption_detected', $reconciled['result'] ?? '', 'Expected annual marker reconciliation instead of skipped result.');
-        kiwi_assert_same(2, $calls, 'Expected annual reconciliation not to rerun the quarantined archive check.');
+        kiwi_assert_same(3, $calls, 'Expected annual reconciliation not to rerun the quarantined archive check.');
+        kiwi_assert_same(
+            '2026-01-03',
+            $status['state']['daily']['date'] ?? '',
+            'Expected annual recovery not to replace the new daily state.'
+        );
         kiwi_assert_same(
             'corruption_detected',
             $status['state']['annual']['results']['kiwi_retention_archive_2025.sqlite'] ?? '',
