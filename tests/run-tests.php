@@ -426,11 +426,16 @@ require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-tkzone-
 require_once __DIR__ . '/../includes/services/class-landing-session-raw-context-compaction-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-source-registry.php';
 require_once __DIR__ . '/../includes/services/class-retention-coverage-gate.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-name.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-write-block.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-lock.php';
 require_once __DIR__ . '/../includes/services/class-retention-sqlite-archive-service.php';
-require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-operational-event-service.php';
 require_once __DIR__ . '/../includes/services/class-operational-event-cleanup-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-check-supervisor.php';
+require_once __DIR__ . '/../includes/services/class-retention-corruption-safety-gate-coordinator.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-health-controller.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
@@ -1502,8 +1507,6 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public $stale_run_ids = [];
     public $stale_detection_result = [];
     public $stale_detection_calls = [];
-    public $quarantine_successor_result = null;
-    public $quarantine_successor_calls = [];
     public $open_run_lookup_failure = false;
     private $next_id = 1;
 
@@ -1557,38 +1560,6 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         }
 
         return null;
-    }
-
-    public function find_unresolved_completed_empty_recovery_contexts(
-        string $source_key
-    ): ?array {
-        $matches = [];
-        foreach ($this->rows as $row) {
-            if ((string) ($row['source_key'] ?? '') !== $source_key
-                || (string) ($row['triggered_by'] ?? '') !== 'archive_recovery'
-                || !in_array(
-                    (string) ($row['status'] ?? ''),
-                    ['completed', 'completed_noop'],
-                    true
-                )
-                || (int) ($row['eligible_rows'] ?? -1) !== 0
-                || ($row['finished_at'] ?? null) === null
-                || trim((string) ($row['error_message'] ?? '')) === ''
-                || (string) ($row['error_code'] ?? '') === 'archive_recovery_resolved'
-            ) {
-                continue;
-            }
-
-            $matches[] = [
-                'id' => (int) ($row['id'] ?? 0),
-                'run_id' => (string) ($row['run_id'] ?? ''),
-                'source_key' => (string) ($row['source_key'] ?? ''),
-                'archive_db_path' => (string) ($row['archive_db_path'] ?? ''),
-                'error_message' => (string) ($row['error_message'] ?? ''),
-            ];
-        }
-
-        return $matches;
     }
 
     public function find_open_archive_state(): ?array
@@ -1651,23 +1622,6 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         return $marked;
     }
 
-    public function create_quarantine_successor(
-        int $run_db_id,
-        string $new_archive_db_path,
-        int $remaining_rows,
-        array $transition_context
-    ): ?array {
-        $this->quarantine_successor_calls[] = [
-            'run_db_id' => $run_db_id,
-            'new_archive_db_path' => $new_archive_db_path,
-            'remaining_rows' => $remaining_rows,
-            'transition_context' => $transition_context,
-        ];
-
-        return is_array($this->quarantine_successor_result)
-            ? $this->quarantine_successor_result
-            : null;
-    }
 }
 
 class Kiwi_Test_Retention_Table_Growth_Snapshot_Repository extends Kiwi_Retention_Table_Growth_Snapshot_Repository
@@ -1715,10 +1669,6 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
     public $integrity_check = 'ok';
     public $receipt_results = [];
     public $verified_receipt_batches = [];
-    public $quarantined = false;
-    public $quarantine_reconciled = true;
-    public $quarantine_results = [];
-    public $quarantined_predecessor = null;
     public $archive_files = [];
     public $new_archive_db_path = '';
     public $result = [
@@ -1742,34 +1692,6 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
             : ($this->new_archive_db_path !== ''
                 ? $this->new_archive_db_path
                 : sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite');
-    }
-
-    public function resolve_quarantine_successor_path(string $quarantined_archive_db_path): string
-    {
-        return $this->new_archive_db_path !== ''
-            ? $this->new_archive_db_path
-            : $this->resolve_archive_db_path('');
-    }
-
-    public function is_quarantined(string $archive_db_path): bool
-    {
-        if (!empty($this->quarantine_results)) {
-            return (bool) array_shift($this->quarantine_results);
-        }
-
-        return $this->quarantined;
-    }
-
-    public function is_quarantine_reconciled(string $archive_db_path): bool
-    {
-        return $this->quarantine_reconciled;
-    }
-
-    public function find_quarantined_predecessor(string $successor_archive_db_path): ?array
-    {
-        return is_array($this->quarantined_predecessor)
-            ? $this->quarantined_predecessor
-            : null;
     }
 
     public function list_archive_files(): array
@@ -2053,6 +1975,30 @@ class Kiwi_Test_Retention_Coverage_Gate extends Kiwi_Retention_Coverage_Gate
     }
 }
 
+class Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator
+    extends Kiwi_Retention_Corruption_Safety_Gate_Coordinator
+{
+    public function __construct()
+    {
+    }
+
+    public function inspect(string $archive_path, bool $reconcile = false): array
+    {
+        $blocked = (new Kiwi_Retention_Archive_Lock())
+            ->is_write_blocked_for_archive($archive_path);
+
+        return [
+            'allowed' => $blocked === false,
+            'reason_code' => $blocked
+                ? 'archive_corruption_write_blocked'
+                : ($blocked === null ? 'archive_gate_path_invalid' : 'corruption_gate_clear'),
+            'write_blocked' => $blocked === true,
+            'incident_open' => false,
+            'incident_action' => 'none',
+        ];
+    }
+}
+
 class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
 {
     public $eligible_rows = 0;
@@ -2065,6 +2011,32 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
     public $existing_primary_keys = null;
     public $events = [];
     public $remaining_row_count_failures = 0;
+
+    public function __construct(
+        ?Kiwi_Config $config = null,
+        ?Kiwi_Retention_Source_Registry $source_registry = null,
+        ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
+        ?Kiwi_Retention_Table_Growth_Snapshot_Repository $snapshot_repository = null,
+        ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
+        ?Kiwi_Retention_Coverage_Gate $coverage_gate = null,
+        ?Kiwi_Operational_Event_Service $operational_event_service = null,
+        ?Kiwi_Retention_Archive_Lock $archive_lock = null,
+        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null
+    ) {
+        parent::__construct(
+            $config,
+            $source_registry,
+            $run_repository,
+            $snapshot_repository,
+            $archive_service,
+            $coverage_gate,
+            $operational_event_service,
+            $archive_lock,
+            $corruption_safety_gate instanceof Kiwi_Retention_Corruption_Safety_Gate_Coordinator
+                ? $corruption_safety_gate
+                : new Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator()
+        );
+    }
 
     protected function count_eligible_rows(array $source, string $cutoff_value): int
     {
@@ -13462,7 +13434,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks archive and delete work aft
     $locks = new Kiwi_Retention_Archive_Lock();
 
     try {
-        $health_lock = $locks->acquire_shared_for_archive($archive_path);
+        $health_lock = $locks->acquire_for_archive($archive_path);
         kiwi_assert_true(
             !empty($health_lock['success'])
                 && !empty($health_lock['acquired'])

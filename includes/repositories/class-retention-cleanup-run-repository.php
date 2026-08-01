@@ -157,44 +157,6 @@ class Kiwi_Retention_Cleanup_Run_Repository
     }
 
     /**
-     * Returns null on lookup failure, or unresolved completed zero-row recovery
-     * contexts for the source across archive generations and calendar years.
-     */
-    public function find_unresolved_completed_empty_recovery_contexts(
-        string $source_key
-    ): ?array {
-        global $wpdb;
-
-        $source_key = trim($source_key);
-        if ($source_key === '') {
-            return null;
-        }
-
-        $rows = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT id, run_id, source_key, archive_db_path, error_message
-                 FROM {$this->get_table_name()}
-                 WHERE source_key = %s
-                   AND triggered_by = 'archive_recovery'
-                   AND status IN ('completed', 'completed_noop')
-                   AND eligible_rows = 0
-                   AND finished_at IS NOT NULL
-                   AND error_message IS NOT NULL
-                   AND error_message <> ''
-                   AND error_code <> 'archive_recovery_resolved'
-                 ORDER BY id ASC",
-                $source_key
-            ),
-            ARRAY_A
-        );
-        if (!is_array($rows) || trim((string) ($wpdb->last_error ?? '')) !== '') {
-            return null;
-        }
-
-        return array_values(array_filter($rows, 'is_array'));
-    }
-
-    /**
      * Returns null on lookup failure, an empty array when no run is open or
      * receipt-blocked, or the oldest such run's frozen archive state.
      */
@@ -337,184 +299,84 @@ class Kiwi_Retention_Cleanup_Run_Repository
         return $marked;
     }
 
-    /**
-     * Atomically closes a run whose archive generation was quarantined and
-     * creates (or returns) its deterministic successor for the remaining
-     * source rows. No new persistence schema is needed for the transition.
-     */
-    public function create_quarantine_successor(
-        int $run_db_id,
-        string $new_archive_db_path,
-        int $remaining_rows,
-        array $transition_context
-    ): ?array {
-        if ($run_db_id <= 0 || $new_archive_db_path === '') {
-            return null;
+    public function terminalize_open_run_for_manual_replacement(
+        string $old_archive_db_path,
+        string $replacement_archive_db_path
+    ): bool {
+        $old_archive = Kiwi_Retention_Archive_Name::normalize(basename($old_archive_db_path));
+        $replacement_archive = Kiwi_Retention_Archive_Name::normalize(
+            basename($replacement_archive_db_path)
+        );
+        if ($old_archive === ''
+            || $replacement_archive === ''
+            || $old_archive === $replacement_archive
+        ) {
+            return false;
         }
 
         global $wpdb;
 
         $table_name = $this->get_table_name();
         $now = $this->current_time_mysql();
-        $transaction_started = $wpdb->query('START TRANSACTION');
-        if ($transaction_started === false) {
-            return null;
+        if ($wpdb->query('START TRANSACTION') === false) {
+            return false;
         }
 
         try {
-            $current = $wpdb->get_row(
+            $rows = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT *
+                    "SELECT id
                      FROM {$table_name}
-                     WHERE id = %d
+                     WHERE archive_db_path = %s
+                       AND status IN ('pending', 'running', 'partial', 'blocked')
+                       AND finished_at IS NULL
+                     ORDER BY id ASC
                      FOR UPDATE",
-                    $run_db_id
+                    $old_archive_db_path
                 ),
                 ARRAY_A
             );
-            if (!is_array($current)) {
-                throw new RuntimeException('Quarantined retention run could not be locked.');
+            if (!is_array($rows) || trim((string) ($wpdb->last_error ?? '')) !== '') {
+                throw new RuntimeException('Manual replacement run lookup failed.');
             }
 
-            $old_run_id = (string) ($current['run_id'] ?? '');
-            $old_archive = basename((string) ($current['archive_db_path'] ?? ''));
-            $new_archive = basename($new_archive_db_path);
-            if ($old_run_id === ''
-                || $old_archive === ''
-                || $new_archive === ''
-                || $old_archive === $new_archive
-                || (string) ($transition_context['old_run_id'] ?? '') !== $old_run_id
-                || (string) ($transition_context['old_archive'] ?? '') !== $old_archive
-                || (string) ($transition_context['new_archive'] ?? '') !== $new_archive
-                || (int) ($transition_context['remaining_rows'] ?? -1) !== max(0, $remaining_rows)
-                || ((string) ($current['status'] ?? '') === 'failed'
-                    && (string) ($current['worker_phase'] ?? '') !== 'archive_quarantined')
-            ) {
-                throw new RuntimeException('Quarantined retention run transition no longer matches its frozen scope.');
-            }
-            $successor_run_id = 'retention_recovery_' . substr(
-                hash('sha256', $old_run_id . ':' . $new_archive),
-                0,
-                40
-            );
-            $successor_batch_id = 'archive_recovery_' . substr(
-                hash('sha256', (string) ($current['archive_batch_id'] ?? '') . ':' . $new_archive),
-                0,
-                40
-            );
-            $successor = $wpdb->get_row(
-                $wpdb->prepare(
-                    "SELECT *
-                     FROM {$table_name}
-                     WHERE run_id = %s
-                     LIMIT 1",
-                    $successor_run_id
-                ),
-                ARRAY_A
-            );
-
-            if (!is_array($successor)) {
-                $context_json = function_exists('wp_json_encode')
-                    ? wp_json_encode($transition_context)
-                    : json_encode($transition_context);
-                $row = $this->normalize_row([
-                    'run_id' => $successor_run_id,
-                    'source_key' => (string) ($current['source_key'] ?? ''),
-                    'source_table' => (string) ($current['source_table'] ?? ''),
-                    'status' => 'pending',
-                    'triggered_by' => 'archive_recovery',
-                    'enabled' => !empty($current['enabled']),
-                    'dry_run' => !empty($current['dry_run']),
-                    'started_at' => $now,
-                    'finished_at' => null,
-                    'retention_days_effective' => (int) ($current['retention_days_effective'] ?? 0),
-                    'cutoff_column' => (string) ($current['cutoff_column'] ?? ''),
-                    'cutoff_value' => (string) ($current['cutoff_value'] ?? ''),
-                    'eligible_rows' => max(0, $remaining_rows),
-                    'archived_rows' => 0,
-                    'archive_inserted_rows' => 0,
-                    'archive_duplicate_rows' => 0,
-                    'deleted_rows' => 0,
-                    'delete_batches' => 0,
-                    'gate_status' => (string) ($current['gate_status'] ?? 'passed'),
-                    'gate_results_json' => (string) ($current['gate_results_json'] ?? ''),
-                    'worker_phase' => 'archive_pending',
-                    'target_max_primary_key' => (int) ($current['target_max_primary_key'] ?? 0),
-                    'archive_last_primary_key' => 0,
-                    'delete_last_primary_key' => 0,
-                    'worker_runs' => 0,
-                    'archive_batch_id' => $successor_batch_id,
-                    'archive_db_path' => $new_archive_db_path,
-                    'archive_integrity_check' => 'quarantine_successor_pending',
-                    'error_code' => 'archive_recovery_pending',
-                    'error_message' => is_string($context_json) ? $context_json : '',
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ]);
-                $inserted = $wpdb->insert(
-                    $table_name,
-                    $row,
-                    $this->formats_for(array_keys($row))
-                );
-                if ($inserted === false || (int) ($wpdb->insert_id ?? 0) <= 0) {
-                    throw new RuntimeException('Retention quarantine successor could not be created.');
+            foreach ($rows as $row) {
+                $id = (int) ($row['id'] ?? 0);
+                if ($id <= 0) {
+                    throw new RuntimeException('Manual replacement run identity is invalid.');
                 }
-                $successor_id = (int) $wpdb->insert_id;
-                $successor = $wpdb->get_row(
-                    $wpdb->prepare("SELECT * FROM {$table_name} WHERE id = %d", $successor_id),
-                    ARRAY_A
+                $updated = $wpdb->update(
+                    $table_name,
+                    $this->normalize_row([
+                        'status' => 'failed',
+                        'worker_phase' => 'manual_replacement_verified',
+                        'archive_integrity_check' => 'replacement_integrity_verified',
+                        'error_code' => 'archive_manually_replaced',
+                        'error_message' => 'Archive ' . $old_archive
+                            . ' was replaced manually by fully verified archive '
+                            . $replacement_archive . '.',
+                        'finished_at' => $now,
+                        'worker_last_finished_at' => $now,
+                        'updated_at' => $now,
+                    ]),
+                    ['id' => $id],
+                    null,
+                    ['%d']
                 );
-            }
-            $successor_context = is_array($successor)
-                ? json_decode((string) ($successor['error_message'] ?? ''), true)
-                : null;
-            if (!is_array($successor)
-                || (string) ($successor['run_id'] ?? '') !== $successor_run_id
-                || (string) ($successor['source_key'] ?? '') !== (string) ($current['source_key'] ?? '')
-                || (string) ($successor['source_table'] ?? '') !== (string) ($current['source_table'] ?? '')
-                || (string) ($successor['cutoff_value'] ?? '') !== (string) ($current['cutoff_value'] ?? '')
-                || (int) ($successor['target_max_primary_key'] ?? 0) !== (int) ($current['target_max_primary_key'] ?? 0)
-                || (int) ($successor['eligible_rows'] ?? -1) !== max(0, $remaining_rows)
-                || (string) ($successor['archive_batch_id'] ?? '') !== $successor_batch_id
-                || (string) ($successor['archive_db_path'] ?? '') !== $new_archive_db_path
-                || (string) ($successor['triggered_by'] ?? '') !== 'archive_recovery'
-                || !is_array($successor_context)
-                || (string) ($successor_context['old_run_id'] ?? '') !== $old_run_id
-                || (string) ($successor_context['old_archive'] ?? '') !== $old_archive
-                || (string) ($successor_context['new_archive'] ?? '') !== $new_archive
-            ) {
-                throw new RuntimeException('Existing retention quarantine successor does not match the frozen source scope.');
-            }
-
-            $closed = $wpdb->update(
-                $table_name,
-                $this->normalize_row([
-                    'status' => 'failed',
-                    'worker_phase' => 'archive_quarantined',
-                    'archive_integrity_check' => 'corruption_confirmed',
-                    'error_code' => 'archive_quarantined_successor_created',
-                    'error_message' => 'Retention cleanup stopped using the quarantined archive generation and created a deterministic successor.',
-                    'finished_at' => $now,
-                    'worker_last_finished_at' => $now,
-                    'updated_at' => $now,
-                ]),
-                ['id' => $run_db_id],
-                null,
-                ['%d']
-            );
-            if ($closed === false) {
-                throw new RuntimeException('Quarantined retention run could not be closed.');
+                if ($updated === false) {
+                    throw new RuntimeException('Manual replacement run update failed.');
+                }
             }
 
             if ($wpdb->query('COMMIT') === false) {
-                throw new RuntimeException('Retention quarantine transition could not be committed.');
+                throw new RuntimeException('Manual replacement run transition could not be committed.');
             }
 
-            return is_array($successor) ? $successor : null;
+            return true;
         } catch (Throwable $error) {
             $wpdb->query('ROLLBACK');
 
-            return null;
+            return false;
         }
     }
 

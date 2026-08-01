@@ -89,6 +89,14 @@ Postback placeholder behavior:
 
 ## Retention worker
 
+- `KIWI_RETENTION_ARCHIVE_ROOT`
+  - protected filesystem root for SQLite retention archives, per-generation locks, and corruption write-block sentinels
+  - keep outside public content and writable only by the deployment account
+- `KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS`
+  - hard supervision limit for the external read-only SQLite child
+  - default: `600`
+  - accepted range: `30` to `3600`
+  - a timeout is inconclusive and never evidence of corruption
 - `KIWI_RETENTION_WORKER_ROW_LIMIT`
   - maximum landing-page-session archive rows per worker invocation
   - default: `50000`
