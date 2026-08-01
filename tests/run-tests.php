@@ -426,7 +426,9 @@ require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-tkzone-
 require_once __DIR__ . '/../includes/services/class-landing-session-raw-context-compaction-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-source-registry.php';
 require_once __DIR__ . '/../includes/services/class-retention-coverage-gate.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-lock.php';
 require_once __DIR__ . '/../includes/services/class-retention-sqlite-archive-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-operational-event-service.php';
 require_once __DIR__ . '/../includes/services/class-operational-event-cleanup-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
@@ -1446,6 +1448,22 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
     }
 }
 
+class Kiwi_Test_One_Failure_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
+{
+    public $fail_next_insert = false;
+
+    public function insert_event(array $event): int
+    {
+        if ($this->fail_next_insert) {
+            $this->fail_next_insert = false;
+
+            return 0;
+        }
+
+        return parent::insert_event($event);
+    }
+}
+
 class Kiwi_Test_Operational_Event_Cleanup_Config extends Kiwi_Config
 {
     public function get_operational_events_retention_days(): int
@@ -1484,6 +1502,9 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public $stale_run_ids = [];
     public $stale_detection_result = [];
     public $stale_detection_calls = [];
+    public $quarantine_successor_result = null;
+    public $quarantine_successor_calls = [];
+    public $open_run_lookup_failure = false;
     private $next_id = 1;
 
     public function create_table(): void
@@ -1517,17 +1538,81 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
     public function find_open_run_for_source(string $source_key): ?array
     {
+        if ($this->open_run_lookup_failure) {
+            throw new RuntimeException('Synthetic open-run lookup failure.');
+        }
+
         foreach ($this->rows as $row) {
             if (($row['source_key'] ?? '') !== $source_key) {
                 continue;
             }
 
-            if (in_array((string) ($row['status'] ?? ''), ['pending', 'running', 'partial'], true)) {
+            if (in_array(
+                (string) ($row['status'] ?? ''),
+                ['pending', 'running', 'partial', 'blocked'],
+                true
+            )) {
                 return $row;
             }
         }
 
         return null;
+    }
+
+    public function find_unresolved_completed_empty_recovery_contexts(
+        string $source_key
+    ): ?array {
+        $matches = [];
+        foreach ($this->rows as $row) {
+            if ((string) ($row['source_key'] ?? '') !== $source_key
+                || (string) ($row['triggered_by'] ?? '') !== 'archive_recovery'
+                || !in_array(
+                    (string) ($row['status'] ?? ''),
+                    ['completed', 'completed_noop'],
+                    true
+                )
+                || (int) ($row['eligible_rows'] ?? -1) !== 0
+                || ($row['finished_at'] ?? null) === null
+                || trim((string) ($row['error_message'] ?? '')) === ''
+                || (string) ($row['error_code'] ?? '') === 'archive_recovery_resolved'
+            ) {
+                continue;
+            }
+
+            $matches[] = [
+                'id' => (int) ($row['id'] ?? 0),
+                'run_id' => (string) ($row['run_id'] ?? ''),
+                'source_key' => (string) ($row['source_key'] ?? ''),
+                'archive_db_path' => (string) ($row['archive_db_path'] ?? ''),
+                'error_message' => (string) ($row['error_message'] ?? ''),
+            ];
+        }
+
+        return $matches;
+    }
+
+    public function find_open_archive_state(): ?array
+    {
+        foreach ($this->rows as $row) {
+            if (in_array(
+                (string) ($row['status'] ?? ''),
+                ['pending', 'running', 'partial', 'blocked'],
+                true
+            )
+                && ($row['finished_at'] ?? null) === null
+                && trim((string) ($row['archive_db_path'] ?? '')) !== ''
+            ) {
+                return [
+                    'archive_db_path' => trim((string) $row['archive_db_path']),
+                    'archived_rows' => max(0, (int) ($row['archived_rows'] ?? 0)),
+                    'deleted_rows' => max(0, (int) ($row['deleted_rows'] ?? 0)),
+                    'archive_last_primary_key' => max(0, (int) ($row['archive_last_primary_key'] ?? 0)),
+                    'delete_last_primary_key' => max(0, (int) ($row['delete_last_primary_key'] ?? 0)),
+                ];
+            }
+        }
+
+        return [];
     }
 
     public function mark_stale_unfinished_runs(string $source_key, int $stale_after_minutes = 30): ?array
@@ -1564,6 +1649,24 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         }
 
         return $marked;
+    }
+
+    public function create_quarantine_successor(
+        int $run_db_id,
+        string $new_archive_db_path,
+        int $remaining_rows,
+        array $transition_context
+    ): ?array {
+        $this->quarantine_successor_calls[] = [
+            'run_db_id' => $run_db_id,
+            'new_archive_db_path' => $new_archive_db_path,
+            'remaining_rows' => $remaining_rows,
+            'transition_context' => $transition_context,
+        ];
+
+        return is_array($this->quarantine_successor_result)
+            ? $this->quarantine_successor_result
+            : null;
     }
 }
 
@@ -1610,6 +1713,14 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
     public $chunks = [];
     public $events = null;
     public $integrity_check = 'ok';
+    public $receipt_results = [];
+    public $verified_receipt_batches = [];
+    public $quarantined = false;
+    public $quarantine_reconciled = true;
+    public $quarantine_results = [];
+    public $quarantined_predecessor = null;
+    public $archive_files = [];
+    public $new_archive_db_path = '';
     public $result = [
         'success' => true,
         'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
@@ -1622,6 +1733,48 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
 
     public function __construct()
     {
+    }
+
+    public function resolve_archive_db_path(string $existing_archive_db_path = ''): string
+    {
+        return $existing_archive_db_path !== ''
+            ? $existing_archive_db_path
+            : ($this->new_archive_db_path !== ''
+                ? $this->new_archive_db_path
+                : sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite');
+    }
+
+    public function resolve_quarantine_successor_path(string $quarantined_archive_db_path): string
+    {
+        return $this->new_archive_db_path !== ''
+            ? $this->new_archive_db_path
+            : $this->resolve_archive_db_path('');
+    }
+
+    public function is_quarantined(string $archive_db_path): bool
+    {
+        if (!empty($this->quarantine_results)) {
+            return (bool) array_shift($this->quarantine_results);
+        }
+
+        return $this->quarantined;
+    }
+
+    public function is_quarantine_reconciled(string $archive_db_path): bool
+    {
+        return $this->quarantine_reconciled;
+    }
+
+    public function find_quarantined_predecessor(string $successor_archive_db_path): ?array
+    {
+        return is_array($this->quarantined_predecessor)
+            ? $this->quarantined_predecessor
+            : null;
+    }
+
+    public function list_archive_files(): array
+    {
+        return $this->archive_files;
     }
 
     public function archive_eligible_rows(
@@ -1685,7 +1838,62 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
             'archived_primary_keys' => $this->archived_primary_keys,
             'last_primary_key' => empty($this->archived_primary_keys) ? $last_primary_key : max($this->archived_primary_keys),
             'has_more' => false,
-            'quick_check' => 'ok',
+            'receipt_status' => 'pending_verification',
+        ];
+    }
+
+    public function verify_batch_receipt(
+        array $source,
+        string $archive_db_path,
+        string $archive_batch_id,
+        array $expected_primary_keys
+    ): array {
+        if (!empty($this->receipt_results)) {
+            return array_shift($this->receipt_results);
+        }
+
+        return [
+            'success' => true,
+            'primary_keys' => array_values($expected_primary_keys),
+            'expected_count' => count($expected_primary_keys),
+            'receipt_count' => count($expected_primary_keys),
+            'archive_row_count' => count($expected_primary_keys),
+            'archive_inserted_count' => count($expected_primary_keys),
+            'archive_duplicate_count' => 0,
+            'last_primary_key' => empty($expected_primary_keys) ? 0 : max($expected_primary_keys),
+            'error_code' => '',
+            'error_message' => '',
+        ];
+    }
+
+    public function fetch_verified_receipt_batch(
+        array $source,
+        string $archive_db_path,
+        string $archive_batch_id,
+        int $last_primary_key,
+        int $through_primary_key,
+        int $batch_limit
+    ): array {
+        if (!empty($this->verified_receipt_batches)) {
+            return array_shift($this->verified_receipt_batches);
+        }
+
+        $primary_keys = array_slice(array_values(array_filter(
+            $this->archived_primary_keys,
+            static function (int $id) use ($last_primary_key, $through_primary_key): bool {
+                return $id > $last_primary_key && $id <= $through_primary_key;
+            }
+        )), 0, max(1, $batch_limit));
+
+        return [
+            'success' => !empty($primary_keys),
+            'primary_keys' => $primary_keys,
+            'last_primary_key' => empty($primary_keys) ? $last_primary_key : max($primary_keys),
+            'has_more' => !empty($primary_keys) && max($primary_keys) < $through_primary_key,
+            'archive_inserted_count' => count($primary_keys),
+            'archive_duplicate_count' => 0,
+            'error_code' => empty($primary_keys) ? 'archive_receipt_progress_missing' : '',
+            'error_message' => empty($primary_keys) ? 'No verified receipt progress.' : '',
         ];
     }
 
@@ -1716,6 +1924,28 @@ class Kiwi_Test_Retention_Sqlite_Archive_Failure_Service extends Kiwi_Retention_
     public function apply_archive_failure_for_test(array $result, Throwable $error): array
     {
         return $this->apply_archive_failure($result, $error);
+    }
+}
+
+class Kiwi_Test_Retention_Archive_Lock extends Kiwi_Retention_Archive_Lock
+{
+    public $archive_attempts = 0;
+    public $fail_on_archive_attempt = 0;
+
+    public function acquire_for_archive(string $archive_db_path): array
+    {
+        $this->archive_attempts++;
+        if ($this->archive_attempts === $this->fail_on_archive_attempt) {
+            return [
+                'success' => false,
+                'acquired' => false,
+                'handle' => null,
+                'error_code' => 'archive_lock_open_failed',
+                'error_message' => 'Synthetic archive lock open failure.',
+            ];
+        }
+
+        return parent::acquire_for_archive($archive_db_path);
     }
 }
 
@@ -1832,7 +2062,9 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
     public $delete_result = ['deleted_rows' => 0, 'delete_batches' => 0];
     public $deleted_primary_keys = [];
     public $deleted_primary_key_batches = [];
+    public $existing_primary_keys = null;
     public $events = [];
+    public $remaining_row_count_failures = 0;
 
     protected function count_eligible_rows(array $source, string $cutoff_value): int
     {
@@ -1860,6 +2092,28 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
         $this->deleted_primary_keys = array_merge($this->deleted_primary_keys, $primary_keys);
 
         return (int) ($this->delete_result['deleted_rows'] ?? count($primary_keys));
+    }
+
+    protected function select_existing_source_primary_keys(array $source, array $primary_keys): array
+    {
+        if (is_array($this->existing_primary_keys)) {
+            return array_values(array_intersect($primary_keys, $this->existing_primary_keys));
+        }
+
+        return array_values($primary_keys);
+    }
+
+    protected function count_remaining_source_rows(
+        array $source,
+        string $cutoff_value,
+        int $target_max_primary_key
+    ): int {
+        if ($this->remaining_row_count_failures > 0) {
+            $this->remaining_row_count_failures--;
+            throw new RuntimeException('Synthetic remaining-row count failure.');
+        }
+
+        return $this->eligible_rows;
     }
 }
 
@@ -12128,7 +12382,11 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service writes archived rows and ba
         kiwi_assert_same(2, $result['archived_rows'] ?? 0, 'Expected only rows older than the cutoff to be archived.');
         kiwi_assert_same(2, $result['archive_inserted_rows'] ?? 0, 'Expected both eligible rows to be inserted into the archive.');
         kiwi_assert_same(0, $result['archive_duplicate_rows'] ?? -1, 'Expected no duplicates in a fresh archive.');
-        kiwi_assert_same('ok', $result['archive_integrity_check'] ?? '', 'Expected SQLite integrity check to pass.');
+        kiwi_assert_same(
+            'deferred_to_external_health_runner',
+            $result['archive_integrity_check'] ?? '',
+            'Expected archive-wide integrity work to remain outside the archive write path.'
+        );
         kiwi_assert_true(is_file($archive_db_path), 'Expected archive database file to be created.');
 
         $pdo = new PDO('sqlite:' . $archive_db_path);
@@ -12149,6 +12407,7 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service writes archived rows and ba
         $ids = $service->fetch_archived_primary_key_batch($source, $archive_db_path, 'archive-test-batch', 0, 10);
         kiwi_assert_same([101, 103], $ids, 'Expected archived primary keys to be readable in source order.');
     } finally {
+        $pdo = null;
         $wpdb = $previous_wpdb;
         kiwi_remove_directory($archive_root);
     }
@@ -12188,6 +12447,22 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service chunk resume preserves batc
         $first = $service->archive_primary_key_chunk($source, '2026-06-17 00:00:00', 'archive-chunk-batch', 0, 202, 1, 60);
         $second = $service->archive_primary_key_chunk($source, '2026-06-17 00:00:00', 'archive-chunk-batch', (int) ($first['last_primary_key'] ?? 0), 202, 1, 60);
         $archive_db_path = (string) ($second['archive_db_path'] ?? '');
+        $replayed = $service->archive_primary_key_chunk(
+            $source,
+            '2026-06-17 00:00:00',
+            'archive-chunk-batch',
+            0,
+            202,
+            2,
+            60,
+            $archive_db_path
+        );
+        $receipt = $service->verify_batch_receipt(
+            $source,
+            $archive_db_path,
+            'archive-chunk-batch',
+            [201, 202]
+        );
 
         kiwi_assert_true($first['success'] ?? false, 'Expected first archive chunk to succeed.');
         kiwi_assert_true($second['success'] ?? false, 'Expected second archive chunk to succeed.');
@@ -12195,6 +12470,11 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service chunk resume preserves batc
         kiwi_assert_same([202], $second['archived_primary_keys'] ?? [], 'Expected second chunk to resume after the first primary key.');
         kiwi_assert_same(true, $first['has_more'] ?? false, 'Expected first chunk to report remaining rows.');
         kiwi_assert_same(false, $second['has_more'] ?? true, 'Expected second chunk to finish the target range.');
+        kiwi_assert_same(0, $replayed['archive_inserted_rows'] ?? -1, 'Expected replayed rows to be invocation-level duplicates.');
+        kiwi_assert_same(2, $replayed['archive_duplicate_rows'] ?? -1, 'Expected replayed rows to be counted as invocation-level duplicates.');
+        kiwi_assert_true($receipt['success'] ?? false, 'Expected replayed chunk receipt to remain valid.');
+        kiwi_assert_same(2, $receipt['archive_inserted_count'] ?? -1, 'Expected receipt evidence to preserve original inserted-row attribution.');
+        kiwi_assert_same(0, $receipt['archive_duplicate_count'] ?? -1, 'Expected receipt evidence not to reclassify replayed rows as original duplicates.');
 
         $pdo = new PDO('sqlite:' . $archive_db_path);
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -12210,7 +12490,16 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service chunk resume preserves batc
             (int) $pdo->query("SELECT COUNT(*) FROM archive_batch_rows WHERE archive_batch_id = 'archive-chunk-batch'")->fetchColumn(),
             'Expected second chunk not to clear first chunk archive_batch_rows evidence.'
         );
+        $batch_counts = $pdo->query(
+            "SELECT archived_rows, archive_inserted_rows, archive_duplicate_rows
+             FROM archive_batches
+             WHERE archive_batch_id = 'archive-chunk-batch'"
+        )->fetch(PDO::FETCH_ASSOC);
+        kiwi_assert_same(2, (int) ($batch_counts['archived_rows'] ?? -1), 'Expected replay not to inflate persisted archived-row count.');
+        kiwi_assert_same(2, (int) ($batch_counts['archive_inserted_rows'] ?? -1), 'Expected replay to preserve persisted inserted-row count.');
+        kiwi_assert_same(0, (int) ($batch_counts['archive_duplicate_rows'] ?? -1), 'Expected replay not to inflate persisted duplicate-row count.');
     } finally {
+        $pdo = null;
         $wpdb = $previous_wpdb;
         kiwi_remove_directory($archive_root);
     }
@@ -12549,6 +12838,26 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate requires current TK-zone PID-set cov
     kiwi_assert_true(in_array(hash('sha256', '106'), $args, true), 'Expected TK-zone gate to bind current PID-set hash.');
 
     $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when open-run lookup errors', function (): void {
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $runs->open_run_lookup_failure = true;
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+
+    $scheduler = $service->run_source('landing_page_sessions', 'cron');
+    $worker = $service->run_worker('landing_page_sessions');
+
+    kiwi_assert_same('open_run_lookup_failed', $scheduler['error_code'] ?? '', 'Expected scheduler lookup failure to stop new work.');
+    kiwi_assert_same('open_run_lookup_failed', $worker['error_code'] ?? '', 'Expected worker lookup failure to stop archive work.');
+    kiwi_assert_same([], $runs->rows, 'Expected no overlapping cleanup run after an ambiguous lookup.');
 });
 
 kiwi_run_test('Kiwi_Retention_Cleanup_Service records disabled landing-page-session runs without archive or delete', function (): void {
@@ -12890,6 +13199,18 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker archives chunks before dele
         'has_more' => false,
         'quick_check' => 'ok',
     ];
+    $archive->receipt_results[] = [
+        'success' => true,
+        'primary_keys' => [101, 102, 103],
+        'expected_count' => 3,
+        'receipt_count' => 3,
+        'archive_row_count' => 3,
+        'archive_inserted_count' => 2,
+        'archive_duplicate_count' => 1,
+        'last_primary_key' => 103,
+        'error_code' => '',
+        'error_message' => '',
+    ];
     $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
     $service = new Kiwi_Test_Retention_Cleanup_Service(
         new Kiwi_Config(),
@@ -12914,8 +13235,14 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker archives chunks before dele
     kiwi_assert_same([], $archive->calls, 'Expected worker path not to use the old full archive method.');
     kiwi_assert_same([101, 102, 103], $service->deleted_primary_keys, 'Expected cleanup to delete only rows proven archived by primary key.');
     kiwi_assert_same(3, $run_row['archived_rows'] ?? 0, 'Expected archived row count to be persisted.');
+    kiwi_assert_same(2, $run_row['archive_inserted_rows'] ?? 0, 'Expected verified receipt inserted-row count to be persisted.');
+    kiwi_assert_same(1, $run_row['archive_duplicate_rows'] ?? 0, 'Expected verified receipt duplicate-row count to be persisted.');
     kiwi_assert_same(3, $run_row['deleted_rows'] ?? 0, 'Expected deleted row count to be persisted.');
-    kiwi_assert_same('ok', $run_row['archive_integrity_check'] ?? '', 'Expected archive integrity result to be persisted.');
+    kiwi_assert_same(
+        'receipt_verified_external_health_deferred',
+        $run_row['archive_integrity_check'] ?? '',
+        'Expected receipt verification to be persisted while global health checks remain external.'
+    );
     kiwi_assert_same(103, $run_row['archive_last_primary_key'] ?? 0, 'Expected worker to persist archive resume cursor.');
     kiwi_assert_same(103, $run_row['delete_last_primary_key'] ?? 0, 'Expected worker to persist delete resume cursor.');
     kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected active cleanup to capture before/after snapshots.');
@@ -12990,9 +13317,17 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker resumes after partial archi
     kiwi_assert_true(!empty($first_worker['schedule_worker']), 'Expected partial worker progress to request rescheduling.');
     kiwi_assert_same('completed', $second_worker['status'], 'Expected second worker chunk to complete the run.');
     kiwi_assert_same(2, $archive->chunk_calls[1]['last_primary_key'] ?? 0, 'Expected second worker chunk to resume after the first archive cursor.');
-    kiwi_assert_same('/tmp/kiwi_retention_archive_2026.sqlite', $archive->chunk_calls[1]['archive_db_path'] ?? '', 'Expected resumed chunks to reuse the first archive database path.');
+    kiwi_assert_same(
+        sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite',
+        $archive->chunk_calls[1]['archive_db_path'] ?? '',
+        'Expected resumed chunks to reuse the selected archive database path.'
+    );
     kiwi_assert_same([1, 2, 3, 4], $service->deleted_primary_keys, 'Expected worker to delete only archived chunk primary keys across resumes.');
-    kiwi_assert_same('/tmp/kiwi_retention_archive_2026.sqlite', $runs->rows[1]['archive_db_path'] ?? '', 'Expected audit state to keep the first archive database path.');
+    kiwi_assert_same(
+        sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite',
+        $runs->rows[1]['archive_db_path'] ?? '',
+        'Expected audit state to keep the selected archive database path.'
+    );
     kiwi_assert_same(4, $runs->rows[1]['archive_last_primary_key'] ?? 0, 'Expected completed run to persist the final archive cursor.');
     kiwi_assert_same(4, $runs->rows[1]['delete_last_primary_key'] ?? 0, 'Expected completed run to persist the final delete cursor.');
     kiwi_assert_same(2, $runs->rows[1]['worker_runs'] ?? 0, 'Expected both worker invocations to be counted.');
@@ -13103,7 +13438,80 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker lock skip reschedules witho
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Retention_Cleanup_Service worker fails quick_check before deleting chunk rows', function (): void {
+kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks archive and delete work after confirmed corruption', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+    $archive_path = sys_get_temp_dir()
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_2026_part_'
+        . random_int(1000000, 9999999)
+        . '.sqlite';
+    $locks = new Kiwi_Retention_Archive_Lock();
+
+    try {
+        $health_lock = $locks->acquire_shared_for_archive($archive_path);
+        kiwi_assert_true(
+            !empty($health_lock['success'])
+                && !empty($health_lock['acquired'])
+                && ($health_lock['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
+                && $health_lock['handle']->persist_write_blocked(),
+            'Expected confirmed corruption fixture to persist its write block.'
+        );
+        $locks->release($health_lock['handle'] ?? null);
+
+        $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+        $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+        $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+        $archive->new_archive_db_path = $archive_path;
+        $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
+        $service = new Kiwi_Test_Retention_Cleanup_Service(
+            new Kiwi_Config(),
+            new Kiwi_Retention_Source_Registry(),
+            $runs,
+            $snapshots,
+            $archive,
+            $gate
+        );
+        $service->eligible_rows = 2;
+        $service->target_max_primary_key = 2;
+
+        $service->run_source('landing_page_sessions', 'cron');
+        $result = $service->run_worker('landing_page_sessions');
+
+        kiwi_assert_same(false, $result['success'], 'Expected a corruption write block to fail closed.');
+        kiwi_assert_same('archive_corruption_write_blocked', $result['error_code'] ?? '', 'Expected explicit corruption write-block result.');
+        kiwi_assert_true(!empty($result['schedule_worker']), 'Expected controlled recovery to retain the same unfinished run.');
+        kiwi_assert_same([], $archive->chunk_calls, 'Expected no SQLite archive work after confirmed corruption.');
+        kiwi_assert_same([], $service->deleted_primary_keys, 'Expected no MySQL delete after confirmed corruption.');
+        kiwi_assert_same('partial', $runs->rows[1]['status'] ?? '', 'Expected the cleanup run to remain resumable.');
+        kiwi_assert_same('archive_corruption_blocked', $runs->rows[1]['worker_phase'] ?? '', 'Expected an explicit corruption-blocked audit phase.');
+    } finally {
+        $lock_path = $archive_path . '.lock';
+        $write_block_path = $lock_path . '.write-blocked';
+        if (is_file($write_block_path)) {
+            unlink($write_block_path);
+        }
+        if (is_file($lock_path)) {
+            unlink($lock_path);
+        }
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks deletes after one failed receipt repair', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
@@ -13124,7 +13532,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker fails quick_check before de
     $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
     $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
     $archive->chunks[] = [
-        'success' => false,
+        'success' => true,
         'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
         'archived_rows' => 2,
         'archive_inserted_rows' => 2,
@@ -13132,10 +13540,33 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker fails quick_check before de
         'archived_primary_keys' => [11, 12],
         'last_primary_key' => 12,
         'has_more' => false,
-        'quick_check' => 'malformed',
-        'error_code' => 'sqlite_quick_check_failed',
-        'error_message' => 'SQLite archive quick_check returned: malformed',
+        'receipt_status' => 'pending_verification',
     ];
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 0,
+        'archive_duplicate_rows' => 2,
+        'archived_primary_keys' => [11, 12],
+        'last_primary_key' => 12,
+        'has_more' => false,
+        'receipt_status' => 'pending_verification',
+    ];
+    $archive->receipt_results = [
+        [
+            'success' => false,
+            'error_code' => 'archive_receipt_mismatch',
+            'error_message' => 'Receipt mismatch.',
+        ],
+        [
+            'success' => false,
+            'error_code' => 'archive_receipt_mismatch',
+            'error_message' => 'Receipt mismatch after repair.',
+        ],
+    ];
+    $events = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $events->fail_next_insert = true;
     $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']);
     $service = new Kiwi_Test_Retention_Cleanup_Service(
         new Kiwi_Config(),
@@ -13143,7 +13574,8 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker fails quick_check before de
         $runs,
         $snapshots,
         $archive,
-        $gate
+        $gate,
+        new Kiwi_Operational_Event_Service($events)
     );
     $service->eligible_rows = 2;
     $service->target_max_primary_key = 12;
@@ -13151,10 +13583,118 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker fails quick_check before de
     $service->run_source('landing_page_sessions', 'cron');
     $result = $service->run_worker('landing_page_sessions');
 
-    kiwi_assert_same(false, $result['success'], 'Expected quick_check failure to fail the worker.');
-    kiwi_assert_same('sqlite_quick_check_failed', $result['error_code'], 'Expected quick_check failure code to be preserved.');
-    kiwi_assert_same([], $service->deleted_primary_keys, 'Expected quick_check failure to block delete.');
-    kiwi_assert_same('failed', $runs->rows[1]['status'] ?? '', 'Expected quick_check failure to persist failed run status.');
+    kiwi_assert_same(false, $result['success'], 'Expected repeated receipt failure to fail the worker.');
+    kiwi_assert_same('archive_receipt_incident_persist_failed', $result['error_code'], 'Expected transient Incident failure to stay visible.');
+    kiwi_assert_same([], $events->rows, 'Expected the first central Incident write to fail.');
+    kiwi_assert_same([], $service->deleted_primary_keys, 'Expected receipt failure to block every MySQL delete.');
+    kiwi_assert_same(2, count($archive->chunk_calls), 'Expected exactly one safe archive receipt repair attempt.');
+    kiwi_assert_same('blocked', $runs->rows[1]['status'] ?? '', 'Expected repeated receipt failure to persist a nonterminal blocked run.');
+    kiwi_assert_same('receipt_blocked', $runs->rows[1]['worker_phase'] ?? '', 'Expected an explicit controlled-recovery phase.');
+    kiwi_assert_same(null, $runs->rows[1]['finished_at'] ?? null, 'Expected blocked run to remain unfinished.');
+    $scheduler_retry = $service->run_source('landing_page_sessions', 'cron');
+    $worker_retry = $service->run_worker('landing_page_sessions');
+    kiwi_assert_same('blocked', $scheduler_retry['status'] ?? '', 'Expected scheduler to retain the same blocked run.');
+    kiwi_assert_same(
+        'archive_receipt_verification_failed',
+        $scheduler_retry['error_code'] ?? '',
+        'Expected blocked scheduler lookup to retry and persist the missing Incident.'
+    );
+    kiwi_assert_true(empty($scheduler_retry['schedule_worker']), 'Expected normal scheduler not to start blocked-run recovery.');
+    kiwi_assert_same('blocked', $worker_retry['status'] ?? '', 'Expected normal worker to leave controlled recovery blocked.');
+    kiwi_assert_same(1, count($runs->rows), 'Expected no overlapping cleanup run for the blocked source scope.');
+    kiwi_assert_same(2, count($archive->chunk_calls), 'Expected no extra automatic repair after the one bounded attempt.');
+    kiwi_assert_same([], $service->deleted_primary_keys, 'Expected later scheduler and worker calls to keep every MySQL delete blocked.');
+    kiwi_assert_same(
+        'retention_archive_receipt_invalid',
+        array_values($events->rows)[0]['event_type'] ?? '',
+        'Expected a central Operational Incident for the invalid persisted receipt.'
+    );
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service re-verifies a committed receipt repair after batch finalization failure', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive_path = $archive->resolve_archive_db_path('');
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => $archive_path,
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [11, 12],
+        'last_primary_key' => 12,
+        'has_more' => false,
+        'receipt_status' => 'pending_verification',
+    ];
+    $archive->chunks[] = [
+        'success' => false,
+        'archive_db_path' => $archive_path,
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 0,
+        'archive_duplicate_rows' => 2,
+        'archived_primary_keys' => [11, 12],
+        'last_primary_key' => 12,
+        'has_more' => false,
+        'receipt_status' => 'pending_verification',
+        'error_code' => 'archive_failed',
+        'error_message' => 'Synthetic repair finalization failure.',
+    ];
+    $archive->receipt_results = [
+        [
+            'success' => false,
+            'error_code' => 'archive_receipt_mismatch',
+            'error_message' => 'Receipt mismatch before repair.',
+        ],
+        [
+            'success' => true,
+            'primary_keys' => [11, 12],
+            'expected_count' => 2,
+            'receipt_count' => 2,
+            'archive_row_count' => 2,
+            'archive_inserted_count' => 0,
+            'archive_duplicate_count' => 2,
+            'last_primary_key' => 12,
+            'error_code' => '',
+            'error_message' => '',
+        ],
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed'])
+    );
+    $service->eligible_rows = 2;
+    $service->target_max_primary_key = 12;
+    $service->delete_result = ['deleted_rows' => 2, 'delete_batches' => 1];
+
+    $service->run_source('landing_page_sessions', 'cron');
+    $result = $service->run_worker('landing_page_sessions');
+
+    kiwi_assert_same('completed', $result['status'] ?? '', 'Expected durable repair receipt re-verification to complete the run.');
+    kiwi_assert_same([11, 12], $service->deleted_primary_keys, 'Expected delete only after the repaired receipt was re-read.');
+    kiwi_assert_same(2, count($archive->chunk_calls), 'Expected exactly one bounded receipt repair attempt.');
+    kiwi_assert_same([], $archive->receipt_results, 'Expected the post-commit repair receipt to be re-verified.');
 
     $wpdb = $previous_wpdb;
 });
@@ -13213,7 +13753,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when worker cannot pe
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Retention_Cleanup_Service fails when archived primary-key deletes do not match', function (): void {
+kiwi_run_test('Kiwi_Retention_Cleanup_Service preserves receipt audit for delete retry on count mismatch', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
@@ -13262,12 +13802,119 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service fails when archived primary-key de
     $result = $service->run_worker('landing_page_sessions');
 
     kiwi_assert_same('pending', $scheduled['status'], 'Expected scheduler to create a pending worker run.');
-    kiwi_assert_same(false, $result['success'], 'Expected cleanup to fail when not every archived primary key is deleted.');
-    kiwi_assert_same('failed', $result['status'], 'Expected partial archived-ID delete to mark the run failed.');
-    kiwi_assert_same('delete_count_mismatch', $result['error_code'], 'Expected partial archived-ID delete to expose a count mismatch.');
+    kiwi_assert_same(false, $result['success'], 'Expected cleanup not to claim success when not every present receipt row is deleted.');
+    kiwi_assert_same('running', $result['status'], 'Expected a safe resumable state instead of terminally losing the receipt cursor.');
+    kiwi_assert_same('run_audit_update_failed', $result['error_code'], 'Expected a retryable delete/audit boundary failure.');
+    kiwi_assert_true(!empty($result['schedule_worker']), 'Expected count mismatch recovery to request another worker invocation.');
     kiwi_assert_same([201, 202], $service->deleted_primary_keys, 'Expected cleanup to attempt deletion by archived primary keys only.');
-    kiwi_assert_same(1, $runs->rows[1]['deleted_rows'] ?? 0, 'Expected partial delete count to be audited.');
+    kiwi_assert_same(0, $runs->rows[1]['deleted_rows'] ?? 0, 'Expected logical delete progress not to advance before reconciliation.');
+    kiwi_assert_same(202, $runs->rows[1]['archive_last_primary_key'] ?? 0, 'Expected the verified receipt cursor to remain persisted for reconciliation.');
 
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service keeps a committed receipt resumable after lock acquisition failure', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive_path = sys_get_temp_dir()
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_2026_part_99.sqlite';
+    $archive->new_archive_db_path = $archive_path;
+    $archive->chunks[] = [
+        'success' => false,
+        'archive_batch_id' => 'landing_page_sessions_test',
+        'archive_db_path' => $archive_path,
+        'archived_rows' => 3,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 1,
+        'archived_primary_keys' => [101, 102, 103],
+        'last_primary_key' => 103,
+        'has_more' => false,
+        'receipt_status' => 'pending_verification',
+        'error_code' => 'archive_failed',
+        'error_message' => 'Synthetic finish_archive_batch failure.',
+    ];
+    $archive->verified_receipt_batches[] = [
+        'success' => true,
+        'primary_keys' => [101, 102, 103],
+        'last_primary_key' => 103,
+        'has_more' => false,
+        'archive_inserted_count' => 2,
+        'archive_duplicate_count' => 1,
+        'error_code' => '',
+        'error_message' => '',
+    ];
+    $archive_lock = new Kiwi_Test_Retention_Archive_Lock();
+    $archive_lock->fail_on_archive_attempt = 2;
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        null,
+        $archive_lock
+    );
+    $service->eligible_rows = 3;
+    $service->target_max_primary_key = 103;
+    $service->delete_result = ['deleted_rows' => 3, 'delete_batches' => 1];
+
+    $scheduled = $service->run_source('landing_page_sessions', 'wp_cli');
+    $post_commit = $service->run_worker('landing_page_sessions');
+    $preserved = $runs->rows[1] ?? [];
+    $deleted_before_retry = $service->deleted_primary_keys;
+    $lock_failure = $service->run_worker('landing_page_sessions');
+    $after_lock_failure = $runs->rows[1] ?? [];
+    $rescheduled = $service->run_source('landing_page_sessions', 'cron');
+    $run_count_after_reschedule = count($runs->rows);
+    $reconciled = $service->run_worker('landing_page_sessions');
+    $completed = $runs->rows[1] ?? [];
+
+    kiwi_assert_same('pending', $scheduled['status'] ?? '', 'Expected a pending run before the post-commit failure.');
+    kiwi_assert_same(false, $post_commit['success'] ?? true, 'Expected finalization failure to stay visible.');
+    kiwi_assert_same('partial', $preserved['status'] ?? '', 'Expected committed evidence to keep the original run open.');
+    kiwi_assert_same('pending_verification', $preserved['archive_integrity_check'] ?? '', 'Expected deferred receipt verification.');
+    kiwi_assert_same(103, $preserved['archive_last_primary_key'] ?? 0, 'Expected the committed receipt cursor to persist.');
+    kiwi_assert_same(0, $preserved['archived_rows'] ?? 0, 'Expected archive counts to wait for receipt verification.');
+    kiwi_assert_same([], $deleted_before_retry, 'Expected no delete before the retry verifies the receipt.');
+    kiwi_assert_same(false, $lock_failure['success'] ?? true, 'Expected the transient archive-lock failure to stay visible.');
+    kiwi_assert_same('partial', $lock_failure['status'] ?? '', 'Expected the lock failure to keep the committed receipt resumable.');
+    kiwi_assert_same('lock_skipped', $lock_failure['worker_phase'] ?? '', 'Expected the lock failure to use the resumable lock phase.');
+    kiwi_assert_same('archive_lock_open_failed', $lock_failure['error_code'] ?? '', 'Expected the concrete lock failure code.');
+    kiwi_assert_true(!empty($lock_failure['schedule_worker']), 'Expected the lock failure to request another worker invocation.');
+    kiwi_assert_same('partial', $after_lock_failure['status'] ?? '', 'Expected the original run to remain open after lock setup failure.');
+    kiwi_assert_same(103, $after_lock_failure['archive_last_primary_key'] ?? 0, 'Expected the receipt cursor to survive lock setup failure.');
+    kiwi_assert_same(0, $after_lock_failure['delete_last_primary_key'] ?? 0, 'Expected delete reconciliation to remain pending.');
+    kiwi_assert_same(null, $after_lock_failure['finished_at'] ?? null, 'Expected the resumable run to remain unfinished.');
+    kiwi_assert_same('cleanup_run_already_open', $rescheduled['error_code'] ?? '', 'Expected the scheduler to reuse the open run.');
+    kiwi_assert_same($scheduled['run_id'] ?? '', $rescheduled['run_id'] ?? '', 'Expected the scheduler to retain the original run ID.');
+    kiwi_assert_same(1, $run_count_after_reschedule, 'Expected no second cleanup run while receipt reconciliation is pending.');
+    kiwi_assert_same('completed', $reconciled['status'] ?? '', 'Expected the retry to complete the same run.');
+    kiwi_assert_same([101, 102, 103], $service->deleted_primary_keys, 'Expected retry deletion from verified receipt evidence only.');
+    kiwi_assert_same(3, $completed['archived_rows'] ?? 0, 'Expected verified archive counts after reconciliation.');
+    kiwi_assert_same(2, $completed['archive_inserted_rows'] ?? 0, 'Expected verified inserted count after reconciliation.');
+    kiwi_assert_same(1, $completed['archive_duplicate_rows'] ?? 0, 'Expected verified duplicate count after reconciliation.');
+    kiwi_assert_same(3, $completed['deleted_rows'] ?? 0, 'Expected logical delete count after reconciliation.');
+
+    @unlink($archive_path . '.lock');
     $wpdb = $previous_wpdb;
 });
 
@@ -13478,7 +14125,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service persists scheduler and worker phas
         return (string) ($update['data']['worker_phase'] ?? '');
     }, $runs->updates)));
 
-    foreach (['coverage_gate_running', 'snapshot_before_running', 'target_key_freezing', 'archive_pending', 'archive_running', 'delete_running', 'snapshot_after_running', 'finalizing'] as $phase) {
+    foreach (['coverage_gate_running', 'snapshot_before_running', 'target_key_freezing', 'archive_pending', 'archive_running', 'receipt_verified', 'delete_running', 'snapshot_after_running', 'finalizing'] as $phase) {
         kiwi_assert_true(in_array($phase, $phases, true), 'Expected phase heartbeat: ' . $phase);
     }
     kiwi_assert_same('completed', $result['status'], 'Expected successful worker completion after boundary heartbeats.');
@@ -16212,8 +16859,8 @@ kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, li
         ],
     ];
 
-    kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-1'])), 'Expected first failure event to persist.');
-    kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected repeated failure event to persist.');
+    kiwi_assert_same('raised', $service->record_failure_action(array_merge($base, ['idempotency_key' => 'failure-1'])), 'Expected first failure action to match its persisted lifecycle.');
+    kiwi_assert_same('repeated', $service->record_failure_action(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected repeated failure action to match its persisted lifecycle.');
     kiwi_assert_true($service->record_failure(array_merge($base, ['idempotency_key' => 'failure-2'])), 'Expected duplicate idempotency key to be a successful no-op.');
     kiwi_assert_true($service->record_recovery(array_merge($base, [
         'severity' => 'info',
@@ -16400,3 +17047,4 @@ kiwi_run_test('Kiwi_Config exposes bounded operational-event cleanup defaults', 
 });
 
 require_once __DIR__ . '/database-deployment-tests.php';
+require_once __DIR__ . '/retention-archive-health-tests.php';

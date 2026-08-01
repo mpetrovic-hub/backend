@@ -15,6 +15,7 @@ class Kiwi_Retention_Cleanup_Service
     private $run_repository;
     private $snapshot_repository;
     private $archive_service;
+    private $archive_lock;
     private $coverage_gate;
     private $operational_event_service;
 
@@ -25,7 +26,8 @@ class Kiwi_Retention_Cleanup_Service
         ?Kiwi_Retention_Table_Growth_Snapshot_Repository $snapshot_repository = null,
         ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
         ?Kiwi_Retention_Coverage_Gate $coverage_gate = null,
-        ?Kiwi_Operational_Event_Service $operational_event_service = null
+        ?Kiwi_Operational_Event_Service $operational_event_service = null,
+        ?Kiwi_Retention_Archive_Lock $archive_lock = null
     ) {
         $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
         $this->source_registry = $source_registry instanceof Kiwi_Retention_Source_Registry
@@ -40,6 +42,9 @@ class Kiwi_Retention_Cleanup_Service
         $this->archive_service = $archive_service instanceof Kiwi_Retention_Sqlite_Archive_Service
             ? $archive_service
             : new Kiwi_Retention_Sqlite_Archive_Service($this->config);
+        $this->archive_lock = $archive_lock instanceof Kiwi_Retention_Archive_Lock
+            ? $archive_lock
+            : new Kiwi_Retention_Archive_Lock();
         $this->coverage_gate = $coverage_gate instanceof Kiwi_Retention_Coverage_Gate
             ? $coverage_gate
             : new Kiwi_Retention_Coverage_Gate($this->config);
@@ -70,9 +75,22 @@ class Kiwi_Retention_Cleanup_Service
             ];
         }
 
-        $existing_run = $this->run_repository->find_open_run_for_source($source_key);
+        try {
+            $existing_run = $this->run_repository->find_open_run_for_source($source_key);
+        } catch (Throwable $error) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'open_run_lookup_failed',
+                'error_message' => 'Retention cleanup stopped because the open-run audit lookup failed.',
+            ];
+        }
 
         if (is_array($existing_run)) {
+            if ((string) ($existing_run['status'] ?? '') === 'blocked') {
+                return $this->blocked_run_result($existing_run);
+            }
+
             $this->update_run_progress((int) ($existing_run['id'] ?? 0), [
                 'worker_phase' => 'active_run_rescheduled',
                 'worker_last_finished_at' => $this->current_time_mysql(),
@@ -454,7 +472,16 @@ class Kiwi_Retention_Cleanup_Service
             ];
         }
 
-        $run = $this->run_repository->find_open_run_for_source($source_key);
+        try {
+            $run = $this->run_repository->find_open_run_for_source($source_key);
+        } catch (Throwable $error) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'open_run_lookup_failed',
+                'error_message' => 'Retention worker stopped because the open-run audit lookup failed.',
+            ];
+        }
 
         if (!is_array($run)) {
             return [
@@ -468,6 +495,10 @@ class Kiwi_Retention_Cleanup_Service
 
         $run_db_id = (int) ($run['id'] ?? 0);
         $run_id = (string) ($run['run_id'] ?? '');
+
+        if ((string) ($run['status'] ?? '') === 'blocked') {
+            return $this->blocked_run_result($run);
+        }
 
         if ($this->has_worker_lock($source_key)) {
             $this->update_run_progress($run_db_id, [
@@ -489,8 +520,33 @@ class Kiwi_Retention_Cleanup_Service
         }
 
         $this->set_worker_lock($source_key);
+        $archive_lock_handle = null;
 
         try {
+            if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
+                && (string) ($run['error_code'] ?? '') === 'archive_recovery_pending'
+            ) {
+                if (!$this->record_quarantine_transition_event($run)) {
+                    return $this->reschedule_worker_result($run, [
+                        'status' => 'partial',
+                        'worker_phase' => 'archive_pending',
+                    ], [
+                        'success' => false,
+                        'error_code' => 'archive_recovery_transition_event_pending',
+                        'error_message' => 'Retention successor is safe, but its mandatory transition event could not yet be persisted.',
+                    ]);
+                }
+                if (!$this->update_run_progress($run_db_id, [
+                    'error_code' => 'archive_recovery_transition_recorded',
+                ])) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention successor recorded its transition event, but could not persist that audit phase.'
+                    );
+                }
+                $run['error_code'] = 'archive_recovery_transition_recorded';
+            }
+
             $worker_runs = (int) ($run['worker_runs'] ?? 0) + 1;
             if (!$this->update_run_progress($run_db_id, [
                 'status' => 'running',
@@ -519,235 +575,983 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
+            $archive_db_path = $this->archive_service->resolve_archive_db_path($existing_archive_db_path);
+            if ($existing_archive_db_path === ''
+                && !$this->update_run_progress($run_db_id, [
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => 'external_health_pending',
+                ])
+            ) {
+                return $this->fail_worker_run($run_db_id, $run, [
+                    'error_code' => 'run_audit_update_failed',
+                    'error_message' => 'Retention worker could not persist the selected archive generation.',
+                ]);
+            }
+            $run['archive_db_path'] = $archive_db_path;
+
+            $archive_lock = $this->archive_lock->acquire_for_archive($archive_db_path);
+            if (empty($archive_lock['success'])) {
+                $lock_error = [
+                    'archive_db_path' => $archive_db_path,
+                    'error_code' => (string) ($archive_lock['error_code'] ?? 'archive_lock_failed'),
+                    'error_message' => (string) ($archive_lock['error_message'] ?? 'Archive generation lock failed.'),
+                ];
+                if ((int) ($run['archive_last_primary_key'] ?? 0)
+                    > (int) ($run['delete_last_primary_key'] ?? 0)
+                ) {
+                    $progress = array_merge($lock_error, [
+                        'status' => 'partial',
+                        'worker_phase' => 'lock_skipped',
+                        'worker_last_finished_at' => $this->current_time_mysql(),
+                    ]);
+                    if (!$this->update_run_progress($run_db_id, $progress)) {
+                        return $this->audit_retry_result(
+                            $run,
+                            'Retention worker could not persist the archive-lock setup deferral.'
+                        );
+                    }
+
+                    return $this->reschedule_worker_result($run, $progress, [
+                        'success' => false,
+                    ]);
+                }
+
+                return $this->fail_worker_run($run_db_id, $run, $lock_error);
+            }
+            if (empty($archive_lock['acquired'])) {
+                $progress = [
+                    'status' => 'partial',
+                    'worker_phase' => 'lock_skipped',
+                    'archive_db_path' => $archive_db_path,
+                    'worker_last_finished_at' => $this->current_time_mysql(),
+                ];
+                if (!$this->update_run_progress($run_db_id, $progress)) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention worker could not persist the active archive-lock deferral.'
+                    );
+                }
+
+                return $this->reschedule_worker_result($run, $progress, [
+                    'error_code' => 'archive_lock_active',
+                    'error_message' => 'Retention worker deferred because the archive generation lock is active.',
+                ]);
+            }
+            $archive_lock_handle = $archive_lock['handle'];
+            if ($this->archive_service->is_quarantined($archive_db_path)) {
+                if (!$this->archive_service->is_quarantine_reconciled($archive_db_path)) {
+                    return $this->reschedule_worker_result($run, [
+                        'status' => 'running',
+                        'worker_phase' => 'archive_corruption_blocked',
+                        'archive_db_path' => $archive_db_path,
+                        'archive_integrity_check' => 'corruption_incident_pending',
+                    ], [
+                        'success' => false,
+                        'error_code' => 'archive_corruption_incident_pending',
+                        'error_message' => 'Retention archive recovery waits for the confirmed corruption Incident.',
+                    ]);
+                }
+                return $this->transition_quarantined_run(
+                    $run_db_id,
+                    $run,
+                    $source,
+                    $cutoff_value,
+                    $target_max_primary_key,
+                    $archive_db_path
+                );
+            }
+            if (!$archive_lock_handle instanceof Kiwi_Retention_Archive_Lock_Handle
+                || $archive_lock_handle->is_write_blocked()
+            ) {
+                $progress = [
+                    'status' => 'partial',
+                    'worker_phase' => 'archive_corruption_blocked',
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => 'corruption_write_blocked',
+                    'worker_last_finished_at' => $this->current_time_mysql(),
+                ];
+                if (!$this->update_run_progress($run_db_id, $progress)) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention worker observed a corruption write block but could not persist that audit phase.'
+                    );
+                }
+
+                return $this->reschedule_worker_result($run, $progress, [
+                    'success' => false,
+                    'error_code' => 'archive_corruption_write_blocked',
+                    'error_message' => 'Retention archive writes remain blocked after confirmed corruption.',
+                ]);
+            }
+
+            $archive_last_primary_key = (int) ($run['archive_last_primary_key'] ?? 0);
+            $delete_last_primary_key = (int) ($run['delete_last_primary_key'] ?? 0);
+            if ($archive_last_primary_key > $delete_last_primary_key) {
+                $receipt = $this->archive_service->fetch_verified_receipt_batch(
+                    $source,
+                    $archive_db_path,
+                    $archive_batch_id,
+                    $delete_last_primary_key,
+                    $archive_last_primary_key,
+                    $this->config->get_retention_worker_row_limit()
+                );
+                if (empty($receipt['success'])) {
+                    return $this->block_invalid_receipt($run_db_id, $run, $archive_db_path, $receipt);
+                }
+
+                $receipt_primary_keys = $this->normalize_primary_keys((array) ($receipt['primary_keys'] ?? []));
+                if (empty($receipt_primary_keys)) {
+                    return $this->block_invalid_receipt($run_db_id, $run, $archive_db_path, [
+                        'error_code' => 'archive_receipt_progress_missing',
+                        'error_message' => 'Persisted archive receipt did not contain the audited delete backlog.',
+                    ]);
+                }
+                $receipt_pending_verification = (string) (
+                    $run['archive_integrity_check'] ?? ''
+                ) === 'pending_verification';
+                $receipt_inserted_rows = (int) (
+                    $receipt['archive_inserted_count'] ?? -1
+                );
+                $receipt_duplicate_rows = (int) (
+                    $receipt['archive_duplicate_count'] ?? -1
+                );
+                if ($receipt_pending_verification
+                    && ($receipt_inserted_rows < 0
+                        || $receipt_duplicate_rows < 0
+                        || ($receipt_inserted_rows + $receipt_duplicate_rows)
+                            !== count($receipt_primary_keys))
+                ) {
+                    return $this->block_invalid_receipt(
+                        $run_db_id,
+                        $run,
+                        $archive_db_path,
+                        [
+                            'error_code' => 'archive_receipt_count_mismatch',
+                            'error_message' => 'Persisted post-commit receipt counts do not match its verified primary-key evidence.',
+                        ]
+                    );
+                }
+
+                if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'delete_running'])) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention worker could not persist the resumed delete heartbeat.'
+                    );
+                }
+
+                $existing_primary_keys = $this->select_existing_source_primary_keys($source, $receipt_primary_keys);
+                $deleted_now = empty($existing_primary_keys)
+                    ? 0
+                    : $this->delete_source_primary_keys($source, $existing_primary_keys);
+                if ($deleted_now !== count($existing_primary_keys)) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention worker could not reconcile all still-present rows from the persisted receipt.'
+                    );
+                }
+
+                $reconciled = [
+                    'status' => 'partial',
+                    'worker_phase' => 'archive_partial',
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => $receipt_pending_verification
+                        && !empty($receipt['has_more'])
+                            ? 'pending_verification'
+                            : 'receipt_verified',
+                    'deleted_rows' => (int) ($run['deleted_rows'] ?? 0) + count($receipt_primary_keys),
+                    'delete_batches' => (int) ($run['delete_batches'] ?? 0) + 1,
+                    'delete_last_primary_key' => max($receipt_primary_keys),
+                    'worker_last_finished_at' => $this->current_time_mysql(),
+                ];
+                if ($receipt_pending_verification) {
+                    $reconciled['archived_rows'] = (int) ($run['archived_rows'] ?? 0)
+                        + count($receipt_primary_keys);
+                    $reconciled['archive_inserted_rows'] = (int) (
+                        $run['archive_inserted_rows'] ?? 0
+                    ) + $receipt_inserted_rows;
+                    $reconciled['archive_duplicate_rows'] = (int) (
+                        $run['archive_duplicate_rows'] ?? 0
+                    ) + $receipt_duplicate_rows;
+                    $reconciled['error_code'] = '';
+                    $reconciled['error_message'] = '';
+                }
+                if (!$this->update_run_progress($run_db_id, $reconciled)) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention worker reconciled the source delete, but could not persist its audit cursor.'
+                    );
+                }
+
+                $run = array_merge($run, $reconciled);
+                if (!empty($receipt['has_more'])) {
+                    return $this->reschedule_worker_result($run, $reconciled);
+                }
+            }
+
+            if ((int) ($run['delete_last_primary_key'] ?? 0) > 0) {
+                if (!$this->resolve_quarantine_recoveries_after_batch($run)) {
+                    return $this->reschedule_worker_result($run, [
+                        'status' => 'partial',
+                        'worker_phase' => 'archive_partial',
+                    ], [
+                        'success' => false,
+                        'error_code' => 'archive_recovery_resolution_failed',
+                        'error_message' => 'Replacement archive progress is safe, but a corruption incident could not yet be resolved.',
+                    ]);
+                }
+                if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
+                    && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
+                ) {
+                    if (!$this->update_run_progress($run_db_id, [
+                        'error_code' => 'archive_recovery_resolved',
+                    ])) {
+                        return $this->audit_retry_result(
+                            $run,
+                            'Retention successor could not persist the resolved recovery transition.'
+                        );
+                    }
+                    $run['error_code'] = 'archive_recovery_resolved';
+                }
+            }
+
+            $archive_cursor_before = (int) ($run['archive_last_primary_key'] ?? 0);
             $chunk = $this->archive_service->archive_primary_key_chunk(
                 $source,
                 $cutoff_value,
                 $archive_batch_id,
-                (int) ($run['archive_last_primary_key'] ?? 0),
+                $archive_cursor_before,
                 $target_max_primary_key,
                 $this->config->get_retention_worker_row_limit(),
                 $this->config->get_retention_worker_time_limit_seconds(),
-                $existing_archive_db_path
+                $archive_db_path
             );
 
+            $archived_primary_keys = $this->normalize_primary_keys(
+                (array) ($chunk['archived_primary_keys'] ?? [])
+            );
+            $archived_rows = (int) ($chunk['archived_rows'] ?? count($archived_primary_keys));
             if (empty($chunk['success'])) {
+                $committed_archive_path = (string) (
+                    $chunk['archive_db_path'] ?? $archive_db_path
+                );
+                if ((string) ($chunk['receipt_status'] ?? '') === 'pending_verification'
+                    && $committed_archive_path === $archive_db_path
+                    && !empty($archived_primary_keys)
+                    && $archived_rows === count($archived_primary_keys)
+                    && min($archived_primary_keys) > $archive_cursor_before
+                    && max($archived_primary_keys) <= $target_max_primary_key
+                ) {
+                    $committed_progress = [
+                        'status' => 'partial',
+                        'worker_phase' => 'archive_partial',
+                        'archive_db_path' => $committed_archive_path,
+                        'archive_integrity_check' => 'pending_verification',
+                        'archive_last_primary_key' => max($archived_primary_keys),
+                        'worker_last_finished_at' => $this->current_time_mysql(),
+                        'error_code' => 'archive_post_commit_receipt_pending',
+                        'error_message' => 'SQLite archive rows and receipt committed, but batch finalization failed; the receipt will be verified before deletion.',
+                    ];
+                    if (!$this->update_run_progress($run_db_id, $committed_progress)) {
+                        return $this->audit_retry_result(
+                            $run,
+                            'Retention worker preserved a committed SQLite receipt, but could not persist its resumable cursor.'
+                        );
+                    }
+
+                    return $this->reschedule_worker_result(
+                        $run,
+                        $committed_progress,
+                        [
+                            'success' => false,
+                            'error_code' => 'archive_post_commit_receipt_pending',
+                            'error_message' => $this->archive_failure_message($chunk),
+                        ]
+                    );
+                }
+
                 return $this->fail_worker_run($run_db_id, $run, [
-                    'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
-                    'archive_integrity_check' => (string) ($chunk['quick_check'] ?? ''),
+                    'archive_db_path' => $committed_archive_path,
+                    'archive_integrity_check' => (string) ($chunk['receipt_status'] ?? ''),
                     'error_code' => $this->archive_failure_code($chunk),
                     'error_message' => $this->archive_failure_message($chunk),
                 ]);
             }
 
-            $quick_check = (string) ($chunk['quick_check'] ?? '');
-
-            if (strtolower($quick_check) !== 'ok') {
-                return $this->fail_worker_run($run_db_id, $run, [
-                    'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
-                    'archive_integrity_check' => $quick_check,
-                    'error_code' => 'sqlite_quick_check_failed',
-                    'error_message' => 'SQLite archive quick_check returned: ' . $quick_check,
-                ]);
-            }
-
-            $archived_primary_keys = $this->normalize_primary_keys((array) ($chunk['archived_primary_keys'] ?? []));
-            $archived_rows = (int) ($chunk['archived_rows'] ?? count($archived_primary_keys));
-
             if ($archived_rows !== count($archived_primary_keys)) {
                 return $this->fail_worker_run($run_db_id, $run, [
-                    'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
-                    'archive_integrity_check' => $quick_check,
+                    'archive_db_path' => $archive_db_path,
+                    'archive_integrity_check' => 'receipt_count_mismatch',
                     'error_code' => 'archive_primary_key_count_mismatch',
                     'error_message' => 'Archived row count did not match archived primary-key evidence count.',
                 ]);
             }
 
-            $deleted_rows = 0;
-            $delete_batches = 0;
-
-            if (!empty($archived_primary_keys)) {
-                if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'delete_running'])) {
-                    return $this->fail_worker_run($run_db_id, $run, [
-                        'error_code' => 'run_audit_update_failed',
-                        'error_message' => 'Retention worker could not persist the delete heartbeat.',
-                    ]);
-                }
-
-                $deleted_rows = $this->delete_source_primary_keys($source, $archived_primary_keys);
-                $delete_batches = 1;
-
-                if ($deleted_rows !== count($archived_primary_keys)) {
-                    return $this->fail_worker_run($run_db_id, $run, [
-                        'archive_db_path' => (string) ($chunk['archive_db_path'] ?? ($run['archive_db_path'] ?? '')),
-                        'archive_integrity_check' => $quick_check,
-                        'archived_rows' => (int) ($run['archived_rows'] ?? 0) + $archived_rows,
-                        'archive_inserted_rows' => (int) ($run['archive_inserted_rows'] ?? 0) + (int) ($chunk['archive_inserted_rows'] ?? 0),
-                        'archive_duplicate_rows' => (int) ($run['archive_duplicate_rows'] ?? 0) + (int) ($chunk['archive_duplicate_rows'] ?? 0),
-                        'deleted_rows' => (int) ($run['deleted_rows'] ?? 0) + $deleted_rows,
-                        'delete_batches' => (int) ($run['delete_batches'] ?? 0) + $delete_batches,
-                        'archive_last_primary_key' => max((int) ($run['archive_last_primary_key'] ?? 0), (int) ($chunk['last_primary_key'] ?? 0)),
-                        'delete_last_primary_key' => max((int) ($run['delete_last_primary_key'] ?? 0), max($archived_primary_keys)),
-                        'error_code' => 'delete_count_mismatch',
-                        'error_message' => 'Deleted row count did not match archived primary-key evidence count.',
-                    ]);
-                }
-            }
-
-            $new_archived_rows = (int) ($run['archived_rows'] ?? 0) + $archived_rows;
-            $new_archive_inserted_rows = (int) ($run['archive_inserted_rows'] ?? 0) + (int) ($chunk['archive_inserted_rows'] ?? 0);
-            $new_archive_duplicate_rows = (int) ($run['archive_duplicate_rows'] ?? 0) + (int) ($chunk['archive_duplicate_rows'] ?? 0);
-            $new_deleted_rows = (int) ($run['deleted_rows'] ?? 0) + $deleted_rows;
-            $new_delete_batches = (int) ($run['delete_batches'] ?? 0) + $delete_batches;
-            $last_primary_key = max((int) ($run['archive_last_primary_key'] ?? 0), (int) ($chunk['last_primary_key'] ?? 0));
-            $delete_last_primary_key = empty($archived_primary_keys)
-                ? (int) ($run['delete_last_primary_key'] ?? 0)
-                : max((int) ($run['delete_last_primary_key'] ?? 0), max($archived_primary_keys));
-            $archive_db_path = $existing_archive_db_path !== ''
-                ? $existing_archive_db_path
-                : (string) ($chunk['archive_db_path'] ?? '');
             $has_more = !empty($chunk['has_more']);
-
-            if ($has_more && empty($archived_primary_keys)) {
-                return $this->fail_worker_run($run_db_id, $run, [
-                    'archive_db_path' => $archive_db_path,
-                    'archive_integrity_check' => $quick_check,
-                    'error_code' => 'worker_no_progress',
-                    'error_message' => 'Retention worker detected remaining rows but archived no primary-key evidence.',
-                ]);
-            }
-
-            if ($has_more) {
-                $progress = [
-                    'status' => 'partial',
-                    'worker_phase' => 'archive_partial',
-                    'archive_db_path' => $archive_db_path,
-                    'archive_integrity_check' => $quick_check,
-                    'archived_rows' => $new_archived_rows,
-                    'archive_inserted_rows' => $new_archive_inserted_rows,
-                    'archive_duplicate_rows' => $new_archive_duplicate_rows,
-                    'deleted_rows' => $new_deleted_rows,
-                    'delete_batches' => $new_delete_batches,
-                    'archive_last_primary_key' => $last_primary_key,
-                    'delete_last_primary_key' => $delete_last_primary_key,
-                    'worker_last_finished_at' => $this->current_time_mysql(),
-                ];
-
-                if (!$this->update_run_progress($run_db_id, $progress)) {
+            if (empty($archived_primary_keys)) {
+                if ($has_more) {
                     return $this->fail_worker_run($run_db_id, $run, [
-                        'error_code' => 'run_audit_update_failed',
-                        'error_message' => 'Retention worker chunk finished but progress could not be persisted.',
+                        'archive_db_path' => $archive_db_path,
+                        'archive_integrity_check' => 'receipt_missing',
+                        'error_code' => 'worker_no_progress',
+                        'error_message' => 'Retention worker detected remaining rows but archived no primary-key evidence.',
                     ]);
                 }
 
-                return array_merge($progress, [
-                    'success' => true,
-                    'run_id' => $run_id,
-                    'schedule_worker' => true,
-                    'reschedule_worker' => true,
-                    'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
-                ]);
+                return $this->finalize_worker_run($run_db_id, $run, $source, $archive_db_path);
             }
 
-            $expected_rows = (int) ($run['eligible_rows'] ?? 0);
-
-            if ($expected_rows > 0
-                && ($new_archived_rows !== $expected_rows || $new_deleted_rows !== $expected_rows)
-            ) {
-                return $this->fail_worker_run($run_db_id, $run, [
-                    'archive_db_path' => $archive_db_path,
-                    'archive_integrity_check' => $quick_check,
-                    'archived_rows' => $new_archived_rows,
-                    'archive_inserted_rows' => $new_archive_inserted_rows,
-                    'archive_duplicate_rows' => $new_archive_duplicate_rows,
-                    'deleted_rows' => $new_deleted_rows,
-                    'delete_batches' => $new_delete_batches,
-                    'archive_last_primary_key' => $last_primary_key,
-                    'delete_last_primary_key' => $delete_last_primary_key,
-                    'error_code' => 'worker_incomplete_counts',
-                    'error_message' => 'Retention worker finished before archived/deleted counts matched the frozen eligible row count.',
-                ]);
-            }
-
-            $integrity_check = $this->archive_service->run_integrity_check($archive_db_path);
-
-            if (strtolower($integrity_check) !== 'ok') {
-                return $this->fail_worker_run($run_db_id, $run, [
-                    'archive_db_path' => $archive_db_path,
-                    'archive_integrity_check' => $integrity_check,
-                    'error_code' => 'sqlite_integrity_check_failed',
-                    'error_message' => 'SQLite archive integrity_check returned: ' . $integrity_check,
-                ]);
-            }
-
-            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_after_running'])) {
-                return $this->fail_worker_run($run_db_id, $run, [
-                    'error_code' => 'run_audit_update_failed',
-                    'error_message' => 'Retention worker could not persist the after-snapshot heartbeat.',
-                ]);
-            }
-
-            if (!$this->capture_snapshot(
+            $receipt = $this->archive_service->verify_batch_receipt(
                 $source,
-                'after_cleanup',
-                (int) ($run['retention_days_effective'] ?? 0),
-                $cutoff_value,
-                (int) ($run['eligible_rows'] ?? 0),
-                $run_id,
+                $archive_db_path,
                 $archive_batch_id,
-                $new_archived_rows,
-                $new_deleted_rows
-            )) {
-                return $this->finish_successful_run($run_db_id, [
-                    'success' => true,
-                    'run_id' => $run_id,
-                    'status' => 'completed',
-                    'worker_phase' => 'completed',
-                    'archive_db_path' => $archive_db_path,
-                    'archive_integrity_check' => $integrity_check,
-                    'archived_rows' => $new_archived_rows,
-                    'archive_inserted_rows' => $new_archive_inserted_rows,
-                    'archive_duplicate_rows' => $new_archive_duplicate_rows,
-                    'deleted_rows' => $new_deleted_rows,
-                    'delete_batches' => $new_delete_batches,
-                    'archive_last_primary_key' => $last_primary_key,
-                    'delete_last_primary_key' => $delete_last_primary_key,
-                    'worker_last_finished_at' => $this->current_time_mysql(),
-                    'error_code' => 'snapshot_after_failed',
-                    'error_message' => 'Retention cleanup completed, but the after-cleanup growth snapshot could not be persisted.',
-                ], $source_key, !empty($run['dry_run']));
+                $archived_primary_keys
+            );
+            if (empty($receipt['success'])
+                && (string) ($run['archive_integrity_check'] ?? '') !== 'receipt_repair_attempted'
+            ) {
+                if (!$this->update_run_progress($run_db_id, [
+                    'worker_phase' => 'receipt_repair_running',
+                    'archive_integrity_check' => 'receipt_repair_attempted',
+                ])) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention worker could not persist the one-time receipt repair attempt.'
+                    );
+                }
+                $run['archive_integrity_check'] = 'receipt_repair_attempted';
+                $repair = $this->archive_service->archive_primary_key_chunk(
+                    $source,
+                    $cutoff_value,
+                    $archive_batch_id,
+                    $archive_cursor_before,
+                    $target_max_primary_key,
+                    $this->config->get_retention_worker_row_limit(),
+                    $this->config->get_retention_worker_time_limit_seconds(),
+                    $archive_db_path
+                );
+                $repair_primary_keys = $this->normalize_primary_keys(
+                    (array) ($repair['archived_primary_keys'] ?? [])
+                );
+                $repair_committed = !empty($repair['success'])
+                    || (
+                        (string) ($repair['receipt_status'] ?? '') === 'pending_verification'
+                        && (string) ($repair['archive_db_path'] ?? '') === $archive_db_path
+                        && (int) ($repair['archived_rows'] ?? 0) === count($repair_primary_keys)
+                    );
+                if ($repair_committed && $repair_primary_keys === $archived_primary_keys) {
+                    $receipt = $this->archive_service->verify_batch_receipt(
+                        $source,
+                        $archive_db_path,
+                        $archive_batch_id,
+                        $archived_primary_keys
+                    );
+                }
             }
 
-            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'finalizing'])) {
-                return $this->fail_worker_run($run_db_id, $run, [
-                    'error_code' => 'run_audit_update_failed',
-                    'error_message' => 'Retention worker could not persist the finalization heartbeat.',
+            if (empty($receipt['success'])) {
+                return $this->block_invalid_receipt($run_db_id, $run, $archive_db_path, $receipt);
+            }
+
+            $receipt_inserted_rows = (int) ($receipt['archive_inserted_count'] ?? -1);
+            $receipt_duplicate_rows = (int) ($receipt['archive_duplicate_count'] ?? -1);
+            if ($receipt_inserted_rows < 0
+                || $receipt_duplicate_rows < 0
+                || ($receipt_inserted_rows + $receipt_duplicate_rows) !== $archived_rows
+            ) {
+                return $this->block_invalid_receipt($run_db_id, $run, $archive_db_path, [
+                    'error_code' => 'archive_receipt_count_mismatch',
+                    'error_message' => 'Persisted archive receipt insert and duplicate counts do not match the verified chunk.',
                 ]);
             }
 
-            return $this->finish_successful_run($run_db_id, [
-                'success' => true,
-                'run_id' => $run_id,
-                'status' => 'completed',
-                'worker_phase' => 'completed',
+            $receipt_progress = [
+                'status' => 'running',
+                'worker_phase' => 'receipt_verified',
                 'archive_db_path' => $archive_db_path,
-                'archive_integrity_check' => $integrity_check,
-                'archived_rows' => $new_archived_rows,
-                'archive_inserted_rows' => $new_archive_inserted_rows,
-                'archive_duplicate_rows' => $new_archive_duplicate_rows,
-                'deleted_rows' => $new_deleted_rows,
-                'delete_batches' => $new_delete_batches,
-                'archive_last_primary_key' => $last_primary_key,
-                'delete_last_primary_key' => $delete_last_primary_key,
+                'archive_integrity_check' => 'receipt_verified',
+                'archived_rows' => (int) ($run['archived_rows'] ?? 0) + $archived_rows,
+                'archive_inserted_rows' => (int) ($run['archive_inserted_rows'] ?? 0)
+                    + $receipt_inserted_rows,
+                'archive_duplicate_rows' => (int) ($run['archive_duplicate_rows'] ?? 0)
+                    + $receipt_duplicate_rows,
+                'archive_last_primary_key' => max($archived_primary_keys),
+            ];
+            if (!$this->update_run_progress($run_db_id, $receipt_progress)) {
+                return $this->audit_retry_result(
+                    $run,
+                    'Retention worker verified the persisted receipt, but could not persist its audit cursor.'
+                );
+            }
+            $run = array_merge($run, $receipt_progress);
+
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'delete_running'])) {
+                return $this->audit_retry_result(
+                    $run,
+                    'Retention worker could not persist the delete heartbeat after receipt verification.'
+                );
+            }
+
+            $existing_primary_keys = $this->select_existing_source_primary_keys($source, $archived_primary_keys);
+            $deleted_now = empty($existing_primary_keys)
+                ? 0
+                : $this->delete_source_primary_keys($source, $existing_primary_keys);
+            if ($deleted_now !== count($existing_primary_keys)) {
+                return $this->audit_retry_result(
+                    $run,
+                    'Retention worker could not delete all still-present rows covered by the verified receipt.'
+                );
+            }
+
+            $progress = [
+                'status' => 'partial',
+                'worker_phase' => 'archive_partial',
+                'archive_db_path' => $archive_db_path,
+                'archive_integrity_check' => 'receipt_verified',
+                'deleted_rows' => (int) ($run['deleted_rows'] ?? 0) + count($archived_primary_keys),
+                'delete_batches' => (int) ($run['delete_batches'] ?? 0) + 1,
+                'delete_last_primary_key' => max($archived_primary_keys),
                 'worker_last_finished_at' => $this->current_time_mysql(),
-            ], $source_key, !empty($run['dry_run']));
+            ];
+            if (!$this->update_run_progress($run_db_id, $progress)) {
+                return $this->audit_retry_result(
+                    $run,
+                    'Retention worker deleted the verified receipt rows, but could not persist its audit cursor.'
+                );
+            }
+            $run = array_merge($run, $progress);
+
+            if (!$this->resolve_quarantine_recoveries_after_batch($run)) {
+                return $this->reschedule_worker_result($run, $progress, [
+                    'success' => false,
+                    'error_code' => 'archive_recovery_resolution_failed',
+                    'error_message' => 'Replacement archive progress is safe, but a corruption incident could not yet be resolved.',
+                ]);
+            }
+            if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
+                && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
+            ) {
+                if (!$this->update_run_progress($run_db_id, [
+                    'error_code' => 'archive_recovery_resolved',
+                ])) {
+                    return $this->audit_retry_result(
+                        $run,
+                        'Retention successor could not persist the resolved recovery transition.'
+                    );
+                }
+                $run['error_code'] = 'archive_recovery_resolved';
+            }
+
+            return $has_more
+                ? $this->reschedule_worker_result($run, $progress)
+                : $this->finalize_worker_run($run_db_id, $run, $source, $archive_db_path);
         } catch (Throwable $error) {
+            if ((int) ($run['archive_last_primary_key'] ?? 0)
+                > (int) ($run['delete_last_primary_key'] ?? 0)
+            ) {
+                return $this->audit_retry_result(
+                    $run,
+                    'Retention worker paused at a persisted receipt/delete boundary and will reconcile it on retry.'
+                );
+            }
+
             return $this->fail_worker_run($run_db_id, $run, [
                 'error_code' => 'worker_exception',
                 'error_message' => $error->getMessage(),
             ]);
         } finally {
+            $this->archive_lock->release($archive_lock_handle);
             $this->clear_worker_lock($source_key);
         }
+    }
+
+    private function finalize_worker_run(
+        int $run_db_id,
+        array $run,
+        array $source,
+        string $archive_db_path
+    ): array {
+        $expected_rows = (int) ($run['eligible_rows'] ?? 0);
+        $archived_rows = (int) ($run['archived_rows'] ?? 0);
+        $deleted_rows = (int) ($run['deleted_rows'] ?? 0);
+        if ($expected_rows > 0
+            && ($archived_rows !== $expected_rows || $deleted_rows !== $expected_rows)
+        ) {
+            return $this->fail_worker_run($run_db_id, $run, [
+                'archive_db_path' => $archive_db_path,
+                'archive_integrity_check' => 'receipt_verified',
+                'error_code' => 'worker_incomplete_counts',
+                'error_message' => 'Retention worker finished before verified archive/delete counts matched the frozen eligible row count.',
+            ]);
+        }
+
+        if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_after_running'])) {
+            return $this->fail_worker_run($run_db_id, $run, [
+                'error_code' => 'run_audit_update_failed',
+                'error_message' => 'Retention worker could not persist the after-snapshot heartbeat.',
+            ]);
+        }
+
+        $result = [
+            'success' => true,
+            'run_id' => (string) ($run['run_id'] ?? ''),
+            'status' => 'completed',
+            'worker_phase' => 'completed',
+            'archive_db_path' => $archive_db_path,
+            'archive_integrity_check' => 'receipt_verified_external_health_deferred',
+            'archived_rows' => $archived_rows,
+            'archive_inserted_rows' => (int) ($run['archive_inserted_rows'] ?? 0),
+            'archive_duplicate_rows' => (int) ($run['archive_duplicate_rows'] ?? 0),
+            'deleted_rows' => $deleted_rows,
+            'delete_batches' => (int) ($run['delete_batches'] ?? 0),
+            'archive_last_primary_key' => (int) ($run['archive_last_primary_key'] ?? 0),
+            'delete_last_primary_key' => (int) ($run['delete_last_primary_key'] ?? 0),
+            'worker_last_finished_at' => $this->current_time_mysql(),
+            'error_code' => '',
+            'error_message' => (string) ($run['triggered_by'] ?? '') === 'archive_recovery'
+                ? (string) ($run['error_message'] ?? '')
+                : '',
+        ];
+        $snapshot_saved = $this->capture_snapshot(
+            $source,
+            'after_cleanup',
+            (int) ($run['retention_days_effective'] ?? 0),
+            (string) ($run['cutoff_value'] ?? ''),
+            $expected_rows,
+            (string) ($run['run_id'] ?? ''),
+            (string) ($run['archive_batch_id'] ?? ''),
+            $archived_rows,
+            $deleted_rows
+        );
+        if (!$snapshot_saved) {
+            $result['error_code'] = 'snapshot_after_failed';
+            $result['error_message'] = 'Retention cleanup completed, but the after-cleanup growth snapshot could not be persisted.';
+        } elseif (!$this->update_run_progress($run_db_id, ['worker_phase' => 'finalizing'])) {
+            return $this->fail_worker_run($run_db_id, $run, [
+                'error_code' => 'run_audit_update_failed',
+                'error_message' => 'Retention worker could not persist the finalization heartbeat.',
+            ]);
+        }
+
+        return $this->finish_successful_run(
+            $run_db_id,
+            $result,
+            (string) ($run['source_key'] ?? ''),
+            !empty($run['dry_run'])
+        );
+    }
+
+    private function transition_quarantined_run(
+        int $run_db_id,
+        array $run,
+        array $source,
+        string $cutoff_value,
+        int $target_max_primary_key,
+        string $quarantined_archive_path
+    ): array {
+        try {
+            $new_archive_path = $this->archive_service->resolve_quarantine_successor_path(
+                $quarantined_archive_path
+            );
+            $remaining_rows = $this->count_remaining_source_rows(
+                $source,
+                $cutoff_value,
+                $target_max_primary_key
+            );
+        } catch (Throwable $error) {
+            return $this->reschedule_worker_result($run, [
+                'status' => 'running',
+                'worker_phase' => 'archive_pending',
+                'archive_db_path' => $quarantined_archive_path,
+                'archive_integrity_check' => 'corruption_confirmed',
+            ], [
+                'success' => false,
+                'error_code' => 'archive_quarantine_transition_retry',
+                'error_message' => 'Retention worker could not prepare the quarantine successor and will retry.',
+            ]);
+        }
+        $context = [
+            'old_run_id' => (string) ($run['run_id'] ?? ''),
+            'old_archive' => basename($quarantined_archive_path),
+            'new_archive' => basename($new_archive_path),
+            'remaining_rows' => $remaining_rows,
+        ];
+        $successor = $this->run_repository->create_quarantine_successor(
+            $run_db_id,
+            $new_archive_path,
+            $remaining_rows,
+            $context
+        );
+        if (!is_array($successor)) {
+            return $this->reschedule_worker_result($run, [
+                'status' => 'running',
+                'worker_phase' => 'archive_pending',
+                'archive_db_path' => $quarantined_archive_path,
+                'archive_integrity_check' => 'corruption_confirmed',
+            ], [
+                'success' => false,
+                'error_code' => 'archive_quarantine_transition_retry',
+                'error_message' => 'Retention worker could not persist the quarantine successor and will retry.',
+            ]);
+        }
+
+        $transition_event_saved = $this->record_quarantine_transition_event($successor);
+
+        return [
+            'success' => $transition_event_saved,
+            'run_id' => (string) ($successor['run_id'] ?? ''),
+            'status' => 'pending',
+            'worker_phase' => 'archive_pending',
+            'schedule_worker' => true,
+            'reschedule_worker' => true,
+            'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
+            'error_code' => $transition_event_saved
+                ? 'archive_quarantine_successor_created'
+                : 'archive_recovery_transition_event_pending',
+            'error_message' => $transition_event_saved
+                ? 'Quarantined archive generation was closed and a successor run was scheduled.'
+                : 'The successor run was created safely, but its mandatory transition event still needs a retry.',
+        ];
+    }
+
+    private function record_quarantine_transition_event(array $successor): bool
+    {
+        $context = json_decode((string) ($successor['error_message'] ?? ''), true);
+        $old_run_id = is_array($context) ? (string) ($context['old_run_id'] ?? '') : '';
+        $old_archive = is_array($context) ? basename((string) ($context['old_archive'] ?? '')) : '';
+        $new_archive = basename((string) ($successor['archive_db_path'] ?? ''));
+        if ($old_run_id === ''
+            || $old_archive === ''
+            || $new_archive === ''
+            || (string) ($context['new_archive'] ?? '') !== $new_archive
+        ) {
+            return false;
+        }
+
+        return $this->operational_event_service->record([
+            'area' => 'retention',
+            'severity' => 'warning',
+            'event_type' => 'retention_archive_recovery_transition',
+            'lifecycle_action' => 'resolved',
+            'correlation_key' => 'retention_archive_recovery_' . hash('sha256', $old_archive),
+            'idempotency_key' => 'retention_archive_recovery_transition_' . hash(
+                'sha256',
+                $old_run_id . ':' . $new_archive
+            ),
+            'reference_type' => 'retention_archive',
+            'reference_id' => $old_archive,
+            'message' => 'Retention cleanup moved remaining source rows to a deterministic successor archive generation.',
+            'context' => $context,
+        ]);
+    }
+
+    private function block_invalid_receipt(
+        int $run_db_id,
+        array $run,
+        string $archive_db_path,
+        array $receipt
+    ): array {
+        $reason_code = (string) ($receipt['error_code'] ?? 'archive_receipt_mismatch');
+        $incident_saved = $this->record_invalid_receipt_incident(
+            $run,
+            $archive_db_path,
+            $reason_code
+        );
+
+        $blocked = [
+            'success' => false,
+            'run_id' => (string) ($run['run_id'] ?? ''),
+            'status' => 'blocked',
+            'worker_phase' => 'receipt_blocked',
+            'worker_last_finished_at' => $this->current_time_mysql(),
+            'archive_db_path' => $archive_db_path,
+            'archive_integrity_check' => 'receipt_invalid',
+            'error_code' => $incident_saved
+                ? 'archive_receipt_verification_failed'
+                : 'archive_receipt_incident_persist_failed',
+            'error_message' => (string) ($receipt['error_message']
+                ?? 'Persisted archive receipt verification failed after the one safe repair attempt.'),
+        ];
+        if (!$this->update_run_progress($run_db_id, $blocked)) {
+            return $this->audit_retry_result(
+                $run,
+                'Retention worker blocked an invalid receipt but could not persist the recovery state.'
+            );
+        }
+
+        return $blocked;
+    }
+
+    private function record_invalid_receipt_incident(
+        array $run,
+        string $archive_db_path,
+        string $reason_code
+    ): bool {
+        return $this->operational_event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'critical',
+            'event_type' => 'retention_archive_receipt_invalid',
+            'correlation_key' => 'retention_archive_receipt_' . hash(
+                'sha256',
+                (string) ($run['run_id'] ?? '') . ':' . basename($archive_db_path)
+            ),
+            'idempotency_key' => 'retention_archive_receipt_' . hash(
+                'sha256',
+                (string) ($run['run_id'] ?? '') . ':' . $reason_code
+            ),
+            'reference_type' => 'retention_cleanup_run',
+            'reference_id' => (string) ($run['run_id'] ?? ''),
+            'message' => 'Persisted SQLite receipt verification failed; MySQL deletion was blocked.',
+            'raw_error_text' => $reason_code,
+            'context' => [
+                'archive' => basename($archive_db_path),
+                'reason_code' => $reason_code,
+                'repair_attempted' => (string) ($run['archive_integrity_check'] ?? '')
+                    === 'receipt_repair_attempted',
+                'operator_review_within_workdays' => 1,
+            ],
+        ]);
+    }
+
+    private function resolve_quarantine_recoveries_after_batch(array $run): bool
+    {
+        $current_archive = basename((string) ($run['archive_db_path'] ?? ''));
+        if ($current_archive === '') {
+            return false;
+        }
+
+        $recovery_candidates = [];
+        $carried_recoveries = $this->run_repository
+            ->find_unresolved_completed_empty_recovery_contexts(
+                (string) ($run['source_key'] ?? '')
+            );
+        if ($carried_recoveries === null) {
+            return false;
+        }
+        foreach ($carried_recoveries as $carried_recovery) {
+            $carried_archive = basename((string) ($carried_recovery['archive_db_path'] ?? ''));
+            if ($carried_archive === '') {
+                return false;
+            }
+            $recovery_candidates[] = [
+                'run' => $carried_recovery,
+                'expected_new_archive' => $carried_archive,
+                'resolved_run_id' => (int) ($carried_recovery['id'] ?? 0),
+            ];
+        }
+        try {
+            $archive_files = $this->archive_service->list_archive_files();
+        } catch (Throwable $error) {
+            return false;
+        }
+        foreach ($archive_files as $archive_file) {
+            $quarantined_archive = basename((string) (
+                $archive_file['name']
+                    ?? $archive_file['path']
+                    ?? ''
+            ));
+            $quarantined_path = trim((string) ($archive_file['path'] ?? ''));
+            if (empty($archive_file['quarantined'])
+                || $quarantined_archive === ''
+                || $quarantined_archive === $current_archive
+                || $quarantined_path === ''
+            ) {
+                continue;
+            }
+            try {
+                $reconciled = $this->archive_service->is_quarantine_reconciled(
+                    $quarantined_path
+                );
+            } catch (Throwable $error) {
+                return false;
+            }
+            if (!$reconciled) {
+                continue;
+            }
+            $marker_context = json_encode([
+                'old_archive' => $quarantined_archive,
+                'new_archive' => $current_archive,
+            ]);
+            if (!is_string($marker_context)) {
+                return false;
+            }
+            $recovery_candidates[] = [
+                'run' => [
+                    'run_id' => (string) ($run['run_id'] ?? ''),
+                    'error_message' => $marker_context,
+                ],
+                'expected_new_archive' => $current_archive,
+            ];
+        }
+
+        if ((string) ($run['triggered_by'] ?? '') === 'archive_recovery'
+            && (string) ($run['error_code'] ?? '') !== 'archive_recovery_resolved'
+        ) {
+            $recovery_candidates[] = [
+                'run' => $run,
+                'expected_new_archive' => $current_archive,
+            ];
+        }
+
+        $cursor_path = (string) ($run['archive_db_path'] ?? '');
+        $visited_archives = [];
+        while ($cursor_path !== '') {
+            $cursor_archive = basename($cursor_path);
+            if ($cursor_archive === '' || isset($visited_archives[$cursor_archive])) {
+                break;
+            }
+            $visited_archives[$cursor_archive] = true;
+
+            try {
+                $quarantined_predecessor = $this->archive_service
+                    ->find_quarantined_predecessor($cursor_path);
+            } catch (Throwable $error) {
+                return false;
+            }
+            if (!is_array($quarantined_predecessor)) {
+                break;
+            }
+
+            $predecessor_name = basename((string) (
+                $quarantined_predecessor['name']
+                    ?? $quarantined_predecessor['path']
+                    ?? ''
+            ));
+            if ($predecessor_name === '' || isset($visited_archives[$predecessor_name])) {
+                break;
+            }
+            $predecessor_context = json_encode([
+                'old_archive' => $predecessor_name,
+                'new_archive' => $current_archive,
+            ]);
+            if (!is_string($predecessor_context)) {
+                return false;
+            }
+            $recovery_candidates[] = [
+                'run' => [
+                    'run_id' => (string) ($run['run_id'] ?? ''),
+                    'error_message' => $predecessor_context,
+                ],
+                'expected_new_archive' => $current_archive,
+            ];
+            $predecessor_path = trim((string) ($quarantined_predecessor['path'] ?? ''));
+            $cursor_path = $predecessor_path !== ''
+                ? $predecessor_path
+                : dirname($cursor_path) . DIRECTORY_SEPARATOR . $predecessor_name;
+        }
+
+        $recoveries_by_old_archive = [];
+        foreach ($recovery_candidates as $candidate) {
+            $recovery_run = (array) ($candidate['run'] ?? []);
+            $context = json_decode((string) ($recovery_run['error_message'] ?? ''), true);
+            $old_archive = is_array($context)
+                ? basename((string) ($context['old_archive'] ?? ''))
+                : '';
+            $new_archive = is_array($context)
+                ? basename((string) ($context['new_archive'] ?? ''))
+                : '';
+            if ($old_archive === ''
+                || $new_archive !== (string) ($candidate['expected_new_archive'] ?? '')
+            ) {
+                return false;
+            }
+            if (!isset($recoveries_by_old_archive[$old_archive])) {
+                $recoveries_by_old_archive[$old_archive] = [
+                    'old_archive' => $old_archive,
+                    'successor_run_id' => (string) ($recovery_run['run_id'] ?? ''),
+                    'resolved_run_ids' => [],
+                ];
+            }
+            $resolved_run_id = (int) ($candidate['resolved_run_id'] ?? 0);
+            if ($resolved_run_id > 0) {
+                $recoveries_by_old_archive[$old_archive]['resolved_run_ids'][] = $resolved_run_id;
+            }
+        }
+
+        foreach ($recoveries_by_old_archive as $recovery) {
+            $old_archive = (string) $recovery['old_archive'];
+            if (!$this->operational_event_service->record_recovery([
+                'area' => 'retention',
+                'severity' => 'info',
+                'event_type' => 'retention_archive_corruption_detected',
+                'correlation_key' => 'retention_archive_corruption_' . hash('sha256', $old_archive),
+                'reference_type' => 'retention_archive',
+                'reference_id' => $old_archive,
+                'message' => 'The replacement archive completed its first verified receipt/delete/audit batch.',
+                'context' => [
+                    'resolution_reason' => 'quarantined_and_replaced',
+                    'old_archive' => $old_archive,
+                    'new_archive' => $current_archive,
+                    'successor_run_id' => (string) $recovery['successor_run_id'],
+                    'qualifying_run_id' => (string) ($run['run_id'] ?? ''),
+                ],
+            ])) {
+                return false;
+            }
+            foreach (array_values(array_unique($recovery['resolved_run_ids'])) as $resolved_run_id) {
+                if (!$this->run_repository->update_run((int) $resolved_run_id, [
+                    'error_code' => 'archive_recovery_resolved',
+                ])) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private function reschedule_worker_result(array $run, array $progress, array $extra = []): array
+    {
+        return array_merge($progress, [
+            'success' => true,
+            'run_id' => (string) ($run['run_id'] ?? ''),
+            'schedule_worker' => true,
+            'reschedule_worker' => true,
+            'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
+        ], $extra);
+    }
+
+    private function blocked_run_result(array $run): array
+    {
+        $worker_phase = trim((string) ($run['worker_phase'] ?? ''));
+        $error_code = trim((string) ($run['error_code'] ?? ''));
+        $error_message = trim((string) ($run['error_message'] ?? ''));
+        if ($error_code === 'archive_receipt_incident_persist_failed'
+            && $this->record_invalid_receipt_incident(
+                $run,
+                (string) ($run['archive_db_path'] ?? ''),
+                'archive_receipt_verification_failed'
+            )
+            && $this->update_run_progress((int) ($run['id'] ?? 0), [
+                'error_code' => 'archive_receipt_verification_failed',
+            ])
+        ) {
+            $error_code = 'archive_receipt_verification_failed';
+        }
+
+        return [
+            'success' => false,
+            'run_id' => (string) ($run['run_id'] ?? ''),
+            'status' => 'blocked',
+            'worker_phase' => $worker_phase !== '' ? $worker_phase : 'receipt_blocked',
+            'error_code' => $error_code !== ''
+                ? $error_code
+                : 'archive_receipt_verification_failed',
+            'error_message' => $error_message !== ''
+                ? $error_message
+                : 'Retention cleanup remains blocked pending controlled recovery.',
+        ];
+    }
+
+    private function audit_retry_result(array $run, string $message): array
+    {
+        return $this->reschedule_worker_result($run, [
+            'status' => 'running',
+            'worker_phase' => 'delete_running',
+        ], [
+            'success' => false,
+            'error_code' => 'run_audit_update_failed',
+            'error_message' => $message,
+        ]);
     }
 
     private function gate_status_allows_cleanup(string $gate_status): bool
@@ -1026,6 +1830,73 @@ class Kiwi_Retention_Cleanup_Service
         }
 
         return (int) $deleted;
+    }
+
+    protected function select_existing_source_primary_keys(array $source, array $primary_keys): array
+    {
+        global $wpdb;
+
+        $source_table = (string) ($source['source_table'] ?? '');
+        $primary_key = (string) ($source['primary_key'] ?? '');
+        $primary_keys = $this->normalize_primary_keys($primary_keys);
+        if (!$this->is_identifier($source_table)
+            || !$this->is_identifier($primary_key)
+            || empty($primary_keys)
+        ) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($primary_keys), '%d'));
+        $rows = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT {$primary_key}
+                 FROM {$source_table}
+                 WHERE {$primary_key} IN ({$placeholders})
+                 ORDER BY {$primary_key} ASC",
+                ...$primary_keys
+            )
+        );
+        if (!is_array($rows) || (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('Retention source receipt reconciliation query failed.');
+        }
+
+        return $this->normalize_primary_keys($rows);
+    }
+
+    protected function count_remaining_source_rows(
+        array $source,
+        string $cutoff_value,
+        int $target_max_primary_key
+    ): int {
+        global $wpdb;
+
+        $source_table = (string) ($source['source_table'] ?? '');
+        $primary_key = (string) ($source['primary_key'] ?? '');
+        $cutoff_column = (string) ($source['cutoff_column'] ?? '');
+        if (!$this->is_identifier($source_table)
+            || !$this->is_identifier($primary_key)
+            || !$this->is_identifier($cutoff_column)
+            || !$this->is_valid_cutoff_value($cutoff_value)
+            || $target_max_primary_key <= 0
+        ) {
+            throw new RuntimeException('Retention recovery source boundary is invalid.');
+        }
+
+        $remaining_rows = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*)
+                 FROM {$source_table}
+                 WHERE {$cutoff_column} < %s
+                   AND {$primary_key} <= %d",
+                $cutoff_value,
+                $target_max_primary_key
+            )
+        );
+        if ($remaining_rows === null && (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('Retention recovery remaining-row count failed.');
+        }
+
+        return max(0, (int) $remaining_rows);
     }
 
     private function normalize_primary_keys(array $primary_keys): array

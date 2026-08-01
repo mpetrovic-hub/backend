@@ -700,6 +700,15 @@ class Kiwi_Config
             : '/home/u367252972/kiwi-backend-archives/db-retention';
     }
 
+    public function get_retention_archive_health_timeout_seconds(): int
+    {
+        $value = defined('KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS')
+            ? (int) KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS
+            : 600;
+
+        return min(3600, max(30, $value));
+    }
+
     public function get_retention_default_batch_limit(): int
     {
         return defined('KIWI_RETENTION_DEFAULT_BATCH_LIMIT')
