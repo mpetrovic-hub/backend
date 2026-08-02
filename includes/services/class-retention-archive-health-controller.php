@@ -337,15 +337,25 @@ final class Kiwi_Retention_Archive_Health_Controller
         if ((string) ($verification['result'] ?? '') !== 'ok'
             || empty($verification['check_completed'])
         ) {
+            $verification_result = (string) ($verification['result'] ?? 'error');
+            $verification_reason = (string) ($verification['reason_code'] ?? '');
+            $is_expected_block = in_array($verification_result, [
+                'corruption_detected',
+                'deferred',
+                'inconclusive',
+            ], true);
+
             return $this->result(
                 'unblock',
-                'blocked',
-                'unblock_integrity_verification_failed',
+                $is_expected_block ? 'blocked' : 'error',
+                $verification_reason !== ''
+                    ? $verification_reason
+                    : 'unblock_integrity_verification_failed',
                 (string) $archive['name'],
                 'integrity',
                 $started_at,
                 $started,
-                1,
+                $is_expected_block ? 1 : 2,
                 $verification
             );
         }

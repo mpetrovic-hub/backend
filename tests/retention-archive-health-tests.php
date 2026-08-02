@@ -1087,6 +1087,8 @@ kiwi_run_test('Unblock corruption verification persists a gate on the checked ge
     $result = $controller->unblock('kiwi_retention_archive_2026.sqlite', '', true);
 
     kiwi_assert_same('blocked', $result['result'], 'Expected corruption to reject unblock.');
+    kiwi_assert_same('sqlite_check_reported_corruption', $result['reason_code'], 'Expected the definitive corruption reason to remain visible.');
+    kiwi_assert_same(1, $result['_exit_code'], 'Expected definitive corruption to remain an operational block.');
     kiwi_assert_same([true], $persist_flags, 'Expected unblock verification to request fail-closed gate persistence.');
     kiwi_assert_same(1, count($gate->locked_incident_calls), 'Expected durable fallback Incident for the checked generation.');
     kiwi_assert_same(1, count($gate->block_calls), 'Expected parent reconciliation to complete the corruption gate transition.');
@@ -1129,6 +1131,43 @@ kiwi_run_test('Unblock maps persistence failures to exit 2 and deferrals to exit
     kiwi_assert_same(2, $persistence_failure['_exit_code'], 'Expected persistence failure exit 2.');
     kiwi_assert_same('blocked', $deferral['result'], 'Expected lock deferral classification.');
     kiwi_assert_same(1, $deferral['_exit_code'], 'Expected lock deferral exit 1.');
+});
+
+kiwi_run_test('Unblock preserves verification errors and expected retry reasons', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+    ]];
+    $outcomes = [
+        ['result' => 'error', 'reason_code' => 'health_child_start_failed', 'check_completed' => false],
+        ['result' => 'inconclusive', 'reason_code' => 'health_child_timeout', 'check_completed' => false],
+    ];
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function () use (&$outcomes): array {
+            return array_shift($outcomes);
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $technical_error = $controller->unblock('kiwi_retention_archive_2026.sqlite', '', true);
+    $timeout = $controller->unblock('kiwi_retention_archive_2026.sqlite', '', true);
+
+    kiwi_assert_same('error', $technical_error['result'], 'Expected a child start failure to remain an error.');
+    kiwi_assert_same('health_child_start_failed', $technical_error['reason_code'], 'Expected the technical reason to remain visible.');
+    kiwi_assert_same(2, $technical_error['_exit_code'], 'Expected a technical verification failure to exit 2.');
+    kiwi_assert_same('blocked', $timeout['result'], 'Expected an inconclusive timeout to remain retryable.');
+    kiwi_assert_same('health_child_timeout', $timeout['reason_code'], 'Expected the timeout reason to remain visible.');
+    kiwi_assert_same(1, $timeout['_exit_code'], 'Expected an inconclusive timeout to exit 1.');
+    kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery mutation after failed verification.');
 });
 
 kiwi_run_test('Manual replacement permits the active generation after year rollover', function (): void {

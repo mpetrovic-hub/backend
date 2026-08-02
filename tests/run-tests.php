@@ -1372,6 +1372,7 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
     public $rows = [];
     public $throw_on_delete = false;
     public $delete_result = 0;
+    public $delete_calls = [];
     private $next_id = 1;
 
     public function create_table(): void
@@ -1445,6 +1446,7 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
 
     public function delete_created_before(string $cutoff, int $limit): int
     {
+        $this->delete_calls[] = [$cutoff, $limit];
         if ($this->throw_on_delete) {
             throw new RuntimeException('event table unavailable; password=do-not-store');
         }
@@ -17009,6 +17011,59 @@ kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service batches, reschedules, and 
     $finished = $cleanup->run();
     kiwi_assert_same(false, $finished['schedule_worker'], 'Expected a short batch to end the cleanup chain.');
     kiwi_assert_same(2, count($repository->rows), 'Expected routine later cleanup success not to add events.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service retains open corruption fallback incidents', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($repository);
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        $event_service
+    );
+    $event_service->record_failure_action([
+        'area' => 'retention',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'correlation_key' => 'retention_archive_corruption_test',
+        'reference_type' => 'retention_archive',
+        'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+        'message' => 'Test corruption gate.',
+    ]);
+
+    $result = $cleanup->run();
+    $latest = $repository->find_latest_by_correlation_key('retention_archive_corruption_test');
+
+    kiwi_assert_same(true, $result['success'], 'Expected cleanup after a durable refresh.');
+    kiwi_assert_same('repeated', $latest['lifecycle_action'] ?? '', 'Expected the open corruption Incident to be refreshed.');
+    kiwi_assert_same(1, count($repository->delete_calls), 'Expected deletion only after the refresh persisted.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service skips deletion when corruption refresh fails', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($repository);
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        $event_service
+    );
+    $event_service->record_failure_action([
+        'area' => 'retention',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'correlation_key' => 'retention_archive_corruption_refresh_failure',
+        'reference_type' => 'retention_archive',
+        'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+        'message' => 'Test corruption gate.',
+    ]);
+    $repository->fail_next_insert = true;
+
+    $result = $cleanup->run();
+
+    kiwi_assert_same(false, $result['success'], 'Expected a failed protected refresh to fail cleanup closed.');
+    kiwi_assert_same([], $repository->delete_calls, 'Expected no deletion after the protected refresh failed.');
 });
 
 kiwi_run_test('Kiwi_Plugin schedules operational-event cleanup daily and follows a full batch once', function (): void {
