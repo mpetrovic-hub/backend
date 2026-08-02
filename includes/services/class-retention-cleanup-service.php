@@ -630,6 +630,48 @@ class Kiwi_Retention_Cleanup_Service
                     'error_message' => 'Retention worker did not receive a valid archive lock handle.',
                 ]);
             }
+            try {
+                $locked_run = $this->run_repository->find_run_by_id($run_db_id);
+            } catch (Throwable $error) {
+                return [
+                    'success' => false,
+                    'run_id' => $run_id,
+                    'status' => 'failed',
+                    'worker_phase' => 'run_recheck_failed',
+                    'error_code' => 'run_audit_recheck_failed',
+                    'error_message' => 'Retention worker stopped because its audit state could not be re-read under the archive lock.',
+                ];
+            }
+            if (!is_array($locked_run)) {
+                return [
+                    'success' => false,
+                    'run_id' => $run_id,
+                    'status' => 'failed',
+                    'worker_phase' => 'run_recheck_failed',
+                    'error_code' => 'run_audit_recheck_failed',
+                    'error_message' => 'Retention worker stopped because its audit state disappeared under the archive lock.',
+                ];
+            }
+            if ((string) ($locked_run['status'] ?? '') === 'blocked') {
+                return $this->blocked_run_result($locked_run);
+            }
+            if (($locked_run['finished_at'] ?? null) !== null
+                || !in_array(
+                    (string) ($locked_run['status'] ?? ''),
+                    ['pending', 'running', 'partial'],
+                    true
+                )
+            ) {
+                return [
+                    'success' => true,
+                    'run_id' => (string) ($locked_run['run_id'] ?? $run_id),
+                    'status' => (string) ($locked_run['status'] ?? 'failed'),
+                    'worker_phase' => (string) ($locked_run['worker_phase'] ?? 'terminal'),
+                    'error_code' => (string) ($locked_run['error_code'] ?? 'cleanup_run_terminal'),
+                    'error_message' => (string) ($locked_run['error_message'] ?? 'Retention worker stopped because the cleanup run is already terminal.'),
+                ];
+            }
+            $run = $locked_run;
             $corruption_block = $this->guard_corruption_gate(
                 $run_db_id,
                 $run,

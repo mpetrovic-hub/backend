@@ -125,12 +125,46 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $result = $wpdb->update(
             $this->get_table_name(),
             $row,
-            ['id' => $id],
+            ['id' => $id, 'finished_at' => null],
             $this->formats_for(array_keys($row)),
-            ['%d']
+            ['%d', '%s']
         );
 
-        return $result !== false;
+        if ($result === false) {
+            return false;
+        }
+        if ((int) $result > 0) {
+            return true;
+        }
+
+        $current = $this->find_run_by_id($id);
+
+        return is_array($current) && ($current['finished_at'] ?? null) === null;
+    }
+
+    public function find_run_by_id(int $id): ?array
+    {
+        if ($id <= 0) {
+            return null;
+        }
+
+        global $wpdb;
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT *
+                 FROM {$this->get_table_name()}
+                 WHERE id = %d
+                 LIMIT 1",
+                $id
+            ),
+            ARRAY_A
+        );
+        if (trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('Retention cleanup run lookup failed.');
+        }
+
+        return is_array($row) ? $row : null;
     }
 
     public function find_open_run_for_source(string $source_key): ?array
@@ -143,6 +177,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
                  FROM {$this->get_table_name()}
                  WHERE source_key = %s
                    AND status IN ('pending', 'running', 'partial', 'blocked')
+                   AND finished_at IS NULL
                  ORDER BY started_at ASC, id ASC
                  LIMIT 1",
                 $source_key

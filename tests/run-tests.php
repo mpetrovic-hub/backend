@@ -1533,10 +1533,20 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         if (!$this->update_run_result) {
             return false;
         }
+        if (array_key_exists($id, $this->rows)
+            && ($this->rows[$id]['finished_at'] ?? null) !== null
+        ) {
+            return false;
+        }
 
         $this->rows[$id] = array_merge($this->rows[$id] ?? ['id' => $id], $data);
 
         return true;
+    }
+
+    public function find_run_by_id(int $id): ?array
+    {
+        return isset($this->rows[$id]) ? $this->rows[$id] : null;
     }
 
     public function find_open_run_for_source(string $source_key): ?array
@@ -1547,6 +1557,9 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
         foreach ($this->rows as $row) {
             if (($row['source_key'] ?? '') !== $source_key) {
+                continue;
+            }
+            if (($row['finished_at'] ?? null) !== null) {
                 continue;
             }
 
@@ -1853,10 +1866,14 @@ class Kiwi_Test_Retention_Archive_Lock extends Kiwi_Retention_Archive_Lock
 {
     public $archive_attempts = 0;
     public $fail_on_archive_attempt = 0;
+    public $before_archive_acquire = null;
 
     public function acquire_for_archive(string $archive_db_path): array
     {
         $this->archive_attempts++;
+        if (is_callable($this->before_archive_acquire)) {
+            call_user_func($this->before_archive_acquire, $archive_db_path, $this->archive_attempts);
+        }
         if ($this->archive_attempts === $this->fail_on_archive_attempt) {
             return [
                 'success' => false,
@@ -13407,6 +13424,69 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker lock skip reschedules witho
     kiwi_assert_same([], $archive->chunk_calls, 'Expected lock skip not to archive any chunk.');
     kiwi_assert_same('1', $GLOBALS['kiwi_test_transients']['kiwi_retention_cleanup_worker_lock_landing_page_sessions'] ?? '', 'Expected existing worker lock to remain untouched.');
 
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service stops a terminalized stale worker under the archive lock', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive_path = sys_get_temp_dir()
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_2026_part_113.sqlite';
+    $archive->new_archive_db_path = $archive_path;
+    $archive_lock = new Kiwi_Test_Retention_Archive_Lock();
+    $archive_lock->before_archive_acquire = static function (string $path, int $attempt) use ($runs): void {
+        if ($attempt !== 1 || !isset($runs->rows[1])) {
+            return;
+        }
+        $runs->rows[1] = array_merge($runs->rows[1], [
+            'status' => 'failed',
+            'worker_phase' => 'manual_replacement_verified',
+            'error_code' => 'archive_manually_replaced',
+            'error_message' => 'Synthetic replacement terminalization.',
+            'finished_at' => '2026-08-02 14:00:00',
+        ]);
+    };
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        null,
+        $archive_lock
+    );
+    $service->eligible_rows = 2;
+    $service->target_max_primary_key = 2;
+
+    $service->run_source('landing_page_sessions', 'cron');
+    $result = $service->run_worker('landing_page_sessions');
+
+    kiwi_assert_same(true, $result['success'], 'Expected stale worker to stop without creating a new failure.');
+    kiwi_assert_same('archive_manually_replaced', $result['error_code'], 'Expected terminal replacement evidence from the locked re-read.');
+    kiwi_assert_same('failed', $runs->rows[1]['status'] ?? '', 'Expected terminal run status not to resurrect.');
+    kiwi_assert_same('manual_replacement_verified', $runs->rows[1]['worker_phase'] ?? '', 'Expected replacement terminal phase to remain immutable.');
+    kiwi_assert_same([], $archive->chunk_calls, 'Expected no SQLite archive work after terminalization.');
+    kiwi_assert_same([], $service->deleted_primary_keys, 'Expected no MySQL delete after terminalization.');
+
+    @unlink($archive_path . '.lock');
     $wpdb = $previous_wpdb;
 });
 
