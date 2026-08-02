@@ -339,11 +339,12 @@ final class Kiwi_Retention_Archive_Health_Controller
         ) {
             $verification_result = (string) ($verification['result'] ?? 'error');
             $verification_reason = (string) ($verification['reason_code'] ?? '');
-            $is_expected_block = in_array($verification_result, [
-                'corruption_detected',
-                'deferred',
-                'inconclusive',
-            ], true);
+            $is_expected_block = in_array($verification_result, ['deferred', 'inconclusive'], true)
+                || ($verification_result === 'corruption_detected'
+                    && in_array($verification_reason, [
+                        'sqlite_check_reported_corruption',
+                        'archive_lock_active',
+                    ], true));
 
             return $this->result(
                 'unblock',

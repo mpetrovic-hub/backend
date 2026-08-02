@@ -17066,6 +17066,36 @@ kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service skips deletion when corrup
     kiwi_assert_same([], $repository->delete_calls, 'Expected no deletion after the protected refresh failed.');
 });
 
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service fails closed at the protected incident query limit', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    for ($index = 1; $index <= 500; $index++) {
+        $repository->rows[$index] = [
+            'id' => $index,
+            'occurred_at' => '2026-01-01 00:00:00',
+            'created_at' => '2026-01-01 00:00:00',
+            'area' => 'retention',
+            'severity' => 'critical',
+            'event_type' => 'retention_archive_corruption_detected',
+            'lifecycle_action' => 'raised',
+            'correlation_key' => 'retention_archive_corruption_limit_' . $index,
+            'reference_type' => 'retention_archive',
+            'reference_id' => 'kiwi_retention_archive_2026_' . $index . '.sqlite',
+            'message' => 'Test corruption gate.',
+        ];
+    }
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        new Kiwi_Operational_Event_Service($repository)
+    );
+
+    $result = $cleanup->run();
+
+    kiwi_assert_same(false, $result['success'], 'Expected a full protected query page to stop cleanup fail closed.');
+    kiwi_assert_same([], $repository->delete_calls, 'Expected no deletion when additional protected Incidents may be hidden by the repository cap.');
+});
+
 kiwi_run_test('Kiwi_Plugin schedules operational-event cleanup daily and follows a full batch once', function (): void {
     $GLOBALS['kiwi_test_cron_events'] = [];
     $GLOBALS['kiwi_test_next_scheduled'] = [];

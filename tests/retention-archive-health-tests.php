@@ -1170,6 +1170,47 @@ kiwi_run_test('Unblock preserves verification errors and expected retry reasons'
     kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery mutation after failed verification.');
 });
 
+kiwi_run_test('Unblock classifies corruption gate reconciliation failures as errors', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+    ]];
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function (): array {
+            return [
+                'result' => 'corruption_detected',
+                'reason_code' => 'sqlite_check_reported_corruption',
+                'check_completed' => true,
+                'incident_open' => true,
+            ];
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $gate->block_result = [
+        'allowed' => false,
+        'reason_code' => 'corruption_gate_persist_failed',
+        'write_blocked' => false,
+        'incident_open' => false,
+        'incident_action' => 'none',
+    ];
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $result = $controller->unblock('kiwi_retention_archive_2026.sqlite', '', true);
+
+    kiwi_assert_same('error', $result['result'], 'Expected failed corruption gate reconciliation to remain technical.');
+    kiwi_assert_same('corruption_gate_persist_failed', $result['reason_code'], 'Expected the reconciliation failure reason to remain visible.');
+    kiwi_assert_same(2, $result['_exit_code'], 'Expected failed corruption gate reconciliation to exit 2.');
+    kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery mutation after gate reconciliation failed.');
+});
+
 kiwi_run_test('Manual replacement permits the active generation after year rollover', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [

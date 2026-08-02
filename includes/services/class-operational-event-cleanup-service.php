@@ -104,8 +104,8 @@ class Kiwi_Operational_Event_Cleanup_Service
         $incidents = $this->event_service->get_open_incidents([
             'area' => 'retention',
             'event_type' => self::PROTECTED_CORRUPTION_EVENT,
-        ], self::PROTECTED_INCIDENT_LIMIT + 1);
-        if ($incidents === null || count($incidents) > self::PROTECTED_INCIDENT_LIMIT) {
+        ], self::PROTECTED_INCIDENT_LIMIT);
+        if ($incidents === null || count($incidents) >= self::PROTECTED_INCIDENT_LIMIT) {
             throw new RuntimeException('Protected corruption incidents could not be read within the safety bound.');
         }
 
