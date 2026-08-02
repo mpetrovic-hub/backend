@@ -113,7 +113,7 @@ class Kiwi_Operational_Event_Cleanup_Service
         foreach ($incidents as $incident) {
             $correlation_key = (string) ($incident['correlation_key'] ?? '');
             if ($correlation_key === ''
-                || $this->event_service->record_failure_action([
+                || $this->event_service->record_failure_if_open_action([
                     'area' => 'retention',
                     'severity' => 'critical',
                     'event_type' => self::PROTECTED_CORRUPTION_EVENT,

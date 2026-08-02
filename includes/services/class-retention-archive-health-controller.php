@@ -80,7 +80,7 @@ final class Kiwi_Retention_Archive_Health_Controller
         $gate = $this->safety_gate->inspect($archive_path, true);
         if (empty($gate['allowed'])) {
             $availability_action = '';
-            if (!empty($gate['write_blocked']) || !empty($gate['incident_open'])) {
+            if (!empty($gate['corruption_write_blocked']) || !empty($gate['incident_open'])) {
                 $availability_action = $this->record_availability_recovery($archive, $check);
                 if ($availability_action === '') {
                     return $this->result(

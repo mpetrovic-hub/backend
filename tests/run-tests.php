@@ -1373,6 +1373,7 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
     public $throw_on_delete = false;
     public $delete_result = 0;
     public $delete_calls = [];
+    public $before_conditional_insert = null;
     private $next_id = 1;
 
     public function create_table(): void
@@ -1403,6 +1404,24 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
         }));
 
         return empty($matches) ? null : $matches[count($matches) - 1];
+    }
+
+    public function insert_event_if_correlation_open(array $event): int
+    {
+        if (is_callable($this->before_conditional_insert)) {
+            $callback = $this->before_conditional_insert;
+            $this->before_conditional_insert = null;
+            $callback();
+        }
+
+        $latest = $this->find_latest_by_correlation_key((string) ($event['correlation_key'] ?? ''));
+        if (!is_array($latest)
+            || !in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
+        ) {
+            return 0;
+        }
+
+        return $this->insert_event($event);
     }
 
     public function get_recent(array $filters = [], int $limit = 100): array
@@ -1468,6 +1487,17 @@ class Kiwi_Test_One_Failure_Operational_Event_Repository extends Kiwi_Test_Opera
         }
 
         return parent::insert_event($event);
+    }
+
+    public function insert_event_if_correlation_open(array $event): int
+    {
+        if ($this->fail_next_insert) {
+            $this->fail_next_insert = false;
+
+            throw new RuntimeException('conditional event insert failed');
+        }
+
+        return parent::insert_event_if_correlation_open($event);
     }
 }
 
@@ -17038,6 +17068,46 @@ kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service retains open corruption fa
     kiwi_assert_same(true, $result['success'], 'Expected cleanup after a durable refresh.');
     kiwi_assert_same('repeated', $latest['lifecycle_action'] ?? '', 'Expected the open corruption Incident to be refreshed.');
     kiwi_assert_same(1, count($repository->delete_calls), 'Expected deletion only after the refresh persisted.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service never reopens a concurrently resolved corruption incident', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($repository);
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        $event_service
+    );
+    $event_service->record_failure_action([
+        'area' => 'retention',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'correlation_key' => 'retention_archive_corruption_concurrent_recovery',
+        'reference_type' => 'retention_archive',
+        'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+        'message' => 'Test corruption gate.',
+    ]);
+    $repository->before_conditional_insert = static function () use ($event_service): void {
+        $event_service->record_recovery_action([
+            'area' => 'retention',
+            'severity' => 'info',
+            'event_type' => 'retention_archive_corruption_detected',
+            'correlation_key' => 'retention_archive_corruption_concurrent_recovery',
+            'reference_type' => 'retention_archive',
+            'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+            'message' => 'Test corruption recovery.',
+        ]);
+    };
+
+    $result = $cleanup->run();
+    $latest = $repository->find_latest_by_correlation_key(
+        'retention_archive_corruption_concurrent_recovery'
+    );
+
+    kiwi_assert_same(true, $result['success'], 'Expected cleanup to continue after concurrent confirmed recovery.');
+    kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected cleanup refresh never to reopen the recovered Incident.');
+    kiwi_assert_same(1, count($repository->delete_calls), 'Expected old-row cleanup only after the conditional append observed recovery.');
 });
 
 kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service skips deletion when corruption refresh fails', function (): void {

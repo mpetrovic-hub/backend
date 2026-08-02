@@ -72,6 +72,33 @@ class Kiwi_Operational_Event_Service
         }
     }
 
+    public function record_failure_if_open_action(array $event): string
+    {
+        $correlation_key = $this->normalize_key((string) ($event['correlation_key'] ?? ''), 191);
+        if ($correlation_key === '') {
+            return '';
+        }
+
+        try {
+            $event['lifecycle_action'] = 'repeated';
+            $row = $this->build_row($event, $correlation_key);
+            if ($row === null) {
+                return '';
+            }
+            $this->repository->insert_event_if_correlation_open($row);
+            $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
+            if (!is_array($latest)
+                || !in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
+            ) {
+                return is_array($latest) ? 'none' : '';
+            }
+
+            return (string) $latest['lifecycle_action'];
+        } catch (Throwable $error) {
+            return '';
+        }
+    }
+
     public function record_recovery(array $event): bool
     {
         return $this->record_recovery_action($event) !== '';
@@ -117,6 +144,13 @@ class Kiwi_Operational_Event_Service
 
     private function persist(array $event, string $correlation_key): bool
     {
+        $row = $this->build_row($event, $correlation_key);
+
+        return is_array($row) && $this->repository->insert_event($row) > 0;
+    }
+
+    private function build_row(array $event, string $correlation_key): ?array
+    {
         $area = $this->normalize_key((string) ($event['area'] ?? ''), 64);
         $event_type = $this->normalize_key((string) ($event['event_type'] ?? ''), 100);
         $severity = strtolower(trim((string) ($event['severity'] ?? 'error')));
@@ -130,7 +164,7 @@ class Kiwi_Operational_Event_Service
             || !in_array($severity, self::SEVERITIES, true)
             || !in_array($lifecycle_action, self::LIFECYCLE_ACTIONS, true)
         ) {
-            return false;
+            return null;
         }
 
         $context = isset($event['context']) && is_array($event['context'])
@@ -142,7 +176,7 @@ class Kiwi_Operational_Event_Service
             : null;
         $now = $this->current_time_mysql();
 
-        $row = [
+        return [
             'occurred_at' => $this->normalize_datetime((string) ($event['occurred_at'] ?? '')) ?: $now,
             'created_at' => $now,
             'area' => $area,
@@ -157,8 +191,6 @@ class Kiwi_Operational_Event_Service
             'raw_error_text' => $raw_error_text === '' ? null : $raw_error_text,
             'context_json' => $context_json,
         ];
-
-        return $this->repository->insert_event($row) > 0;
     }
 
     private function redact_value($value, string $key = '')

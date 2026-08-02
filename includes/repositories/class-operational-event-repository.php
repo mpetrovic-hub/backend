@@ -98,6 +98,69 @@ class Kiwi_Operational_Event_Repository
         );
     }
 
+    public function insert_event_if_correlation_open(array $event): int
+    {
+        global $wpdb;
+
+        $correlation_key = (string) ($event['correlation_key'] ?? '');
+        if ($correlation_key === '') {
+            return 0;
+        }
+
+        $sql = "INSERT INTO {$this->get_table_name()} (
+                    occurred_at, created_at, area, severity, event_type, lifecycle_action,
+                    idempotency_key, correlation_key, reference_type, reference_id,
+                    message, raw_error_text, context_json
+                )
+                SELECT %s, %s, %s, %s, %s, %s, NULLIF(%s, ''), %s, %s, %s, %s,
+                       NULLIF(%s, ''), NULLIF(%s, '')
+                FROM DUAL
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM {$this->get_table_name()} duplicate
+                    WHERE duplicate.idempotency_key = %s
+                )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM {$this->get_table_name()} latest
+                    WHERE latest.correlation_key = %s
+                      AND latest.lifecycle_action IN ('raised', 'repeated')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM {$this->get_table_name()} newer
+                          WHERE newer.correlation_key = latest.correlation_key
+                            AND (
+                                newer.occurred_at > latest.occurred_at
+                                OR (newer.occurred_at = latest.occurred_at AND newer.id > latest.id)
+                            )
+                      )
+                    LIMIT 1
+                )";
+        $result = $wpdb->query($wpdb->prepare(
+            $sql,
+            (string) ($event['occurred_at'] ?? ''),
+            (string) ($event['created_at'] ?? ''),
+            (string) ($event['area'] ?? ''),
+            (string) ($event['severity'] ?? ''),
+            (string) ($event['event_type'] ?? ''),
+            (string) ($event['lifecycle_action'] ?? ''),
+            (string) ($event['idempotency_key'] ?? ''),
+            $correlation_key,
+            (string) ($event['reference_type'] ?? ''),
+            (string) ($event['reference_id'] ?? ''),
+            (string) ($event['message'] ?? ''),
+            (string) ($event['raw_error_text'] ?? ''),
+            (string) ($event['context_json'] ?? ''),
+            (string) ($event['idempotency_key'] ?? ''),
+            $correlation_key
+        ));
+        if ($result === false) {
+            throw new RuntimeException('Conditional operational event insert failed.');
+        }
+
+        return (int) $result;
+    }
+
     public function find_latest_by_correlation_key(string $correlation_key): ?array
     {
         global $wpdb;

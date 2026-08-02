@@ -54,7 +54,7 @@ Interpret `raised`, `repeated`, and `resolved` as an append-only timeline. Do no
 - Default batch: 5,000 rows.
 - A full batch schedules one worker about 60 seconds later; a short batch ends the chain.
 - A transient lock prevents concurrent cleanup chains.
-- Before deleting old rows, cleanup refreshes every open `retention_archive_corruption_detected` Incident with a bounded, idempotent `repeated` row. A full bounded result page is treated as possible truncation and stops cleanup. If the read or any refresh cannot be persisted, cleanup deletes no events. This keeps the Incident fallback gate durable until confirmed recovery even when its original rows exceed the normal retention age.
+- Before deleting old rows, cleanup refreshes every open `retention_archive_corruption_detected` Incident with a bounded, idempotent `repeated` row. The append is conditional on that correlation still being open, so a concurrent confirmed recovery cannot be reopened. A full bounded result page is treated as possible truncation and stops cleanup. If the read or any required refresh cannot be persisted, cleanup deletes no events. This keeps the Incident fallback gate durable until confirmed recovery even when its original rows exceed the normal retention age.
 
 Cleanup has its own correlation, `operational_events_cleanup`. Failures raise/repeat an event when the table remains writable. If the table itself cannot accept the event, one generic PHP `error_log` line is emitted without raw database errors, credential values, recursive event writes, or a tight retry loop. The next regular run retries and its first success resolves the incident.
 

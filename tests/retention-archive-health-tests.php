@@ -534,6 +534,7 @@ kiwi_run_test('Health controller retries failed Availability resolution from an 
         'allowed' => false,
         'reason_code' => 'archive_corruption_write_blocked',
         'write_blocked' => true,
+        'corruption_write_blocked' => true,
         'incident_open' => true,
         'incident_action' => 'none',
     ];
@@ -545,6 +546,58 @@ kiwi_run_test('Health controller retries failed Availability resolution from an 
     kiwi_assert_same('blocked', $third['result'], 'Expected durable corruption gate to remain fail-closed.');
     kiwi_assert_same('resolved', $third['incident_action'] ?? '', 'Expected the next gated call to retry Availability resolution exactly once.');
     kiwi_assert_same(2, $supervisor_calls, 'Expected no additional PRAGMA check after the durable gate existed.');
+});
+
+kiwi_run_test('Health controller does not resolve Availability from a transition-only gate', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+    ]];
+    $supervisor_calls = 0;
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function () use (&$supervisor_calls): array {
+            $supervisor_calls++;
+
+            return [
+                'result' => 'inconclusive',
+                'reason_code' => 'health_child_timeout',
+                'check_completed' => false,
+            ];
+        }
+    );
+    $event_repository = new Kiwi_Test_Operational_Event_Repository();
+    $events = new Kiwi_Operational_Event_Service($event_repository);
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        $events,
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $first = $controller->check('integrity');
+    $gate->inspect_result = [
+        'allowed' => false,
+        'reason_code' => 'replacement_transition_write_blocked',
+        'write_blocked' => true,
+        'corruption_write_blocked' => false,
+        'replacement_transition_blocked' => true,
+        'incident_open' => false,
+        'incident_action' => 'none',
+    ];
+    $transition = $controller->check('integrity');
+    $availability = $events->get_open_incidents([
+        'event_type' => 'retention_archive_health_unavailable',
+    ], 10);
+
+    kiwi_assert_same('inconclusive', $first['result'], 'Expected the timeout to open Availability.');
+    kiwi_assert_same('blocked', $transition['result'], 'Expected the transition marker to remain fail closed.');
+    kiwi_assert_same('none', $transition['incident_action'] ?? 'none', 'Expected no false Availability recovery from a transition marker.');
+    kiwi_assert_same(1, count($availability ?? []), 'Expected the Availability Incident to remain open without definitive corruption evidence.');
+    kiwi_assert_same(1, $supervisor_calls, 'Expected no additional PRAGMA while the transition marker remains active.');
 });
 
 kiwi_run_test('Health controller never promotes incomplete exceptions to corruption gates', function (): void {
