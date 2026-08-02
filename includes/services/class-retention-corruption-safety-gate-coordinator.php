@@ -32,7 +32,9 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
     {
         $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
         $write_blocked = $this->lock_service->is_write_blocked_for_archive($archive_path);
-        if ($archive === '' || $write_blocked === null) {
+        $transition_blocked = $this->lock_service
+            ->is_replacement_transition_blocked_for_archive($archive_path);
+        if ($archive === '' || $write_blocked === null || $transition_blocked === null) {
             return $this->blocked('archive_gate_path_invalid', false, false);
         }
 
@@ -45,11 +47,13 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             return $this->blocked('corruption_incident_lookup_failed', (bool) $write_blocked, false);
         }
         $incident_open = !empty($incidents);
-        if (!$write_blocked && !$incident_open) {
+        if (!$write_blocked && !$transition_blocked && !$incident_open) {
             return [
                 'allowed' => true,
                 'reason_code' => 'corruption_gate_clear',
                 'write_blocked' => false,
+                'corruption_write_blocked' => false,
+                'replacement_transition_blocked' => false,
                 'incident_open' => false,
                 'incident_action' => 'none',
             ];
@@ -81,8 +85,12 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             'allowed' => false,
             'reason_code' => $write_blocked
                 ? 'archive_corruption_write_blocked'
-                : 'archive_corruption_incident_open',
-            'write_blocked' => (bool) $write_blocked,
+                : ($incident_open
+                    ? 'archive_corruption_incident_open'
+                    : 'replacement_transition_write_blocked'),
+            'write_blocked' => (bool) ($write_blocked || $transition_blocked),
+            'corruption_write_blocked' => (bool) $write_blocked,
+            'replacement_transition_blocked' => (bool) $transition_blocked,
             'incident_open' => $incident_open,
             'incident_action' => in_array($incident_action, ['raised', 'repeated'], true)
                 ? $incident_action
@@ -190,6 +198,37 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             return $this->blocked('unblock_archive_invalid', false, false);
         }
 
+        $replacement_transition_source = '';
+        if ($replacement !== '') {
+            $replacement_transition_source = $this->lock_service
+                ->get_replacement_transition_source_for_archive($replacement_archive_path);
+            if ($replacement_transition_source === null) {
+                return $this->blocked('replacement_transition_state_invalid', true, true);
+            }
+        }
+
+        $source_gate = $this->inspect($archive_path, false);
+        if (in_array((string) ($source_gate['reason_code'] ?? ''), [
+            'archive_gate_path_invalid',
+            'corruption_incident_lookup_failed',
+        ], true)) {
+            return $this->blocked(
+                (string) $source_gate['reason_code'],
+                !empty($source_gate['write_blocked']),
+                !empty($source_gate['incident_open'])
+            );
+        }
+        if (empty($source_gate['corruption_write_blocked'])
+            && empty($source_gate['incident_open'])
+            && $replacement_transition_source !== $archive
+        ) {
+            return $this->blocked(
+                'unblock_corruption_gate_required',
+                !empty($source_gate['write_blocked']),
+                false
+            );
+        }
+
         $lock = $this->lock_service->acquire_for_archive($archive_path);
         if (empty($lock['success']) || empty($lock['acquired'])) {
             return $this->blocked(
@@ -221,7 +260,15 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 if (!$replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
                     return $this->blocked('replacement_archive_lock_failed', true, true);
                 }
-                if (!$replacement_handle->persist_write_blocked()) {
+                $locked_transition_source = $this->lock_service
+                    ->get_replacement_transition_source_for_archive($replacement_archive_path);
+                if ($locked_transition_source === null
+                    || ($locked_transition_source !== ''
+                        && $locked_transition_source !== $archive)
+                ) {
+                    return $this->blocked('replacement_transition_state_invalid', true, true);
+                }
+                if (!$replacement_handle->persist_replacement_transition_blocked($archive)) {
                     return $this->blocked(
                         'replacement_transition_block_persist_failed',
                         true,
@@ -268,7 +315,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 );
             }
             if ($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle
-                && !$replacement_handle->clear_write_blocked()
+                && !$replacement_handle->clear_replacement_transition_blocked()
             ) {
                 return $this->blocked('replacement_transition_block_clear_failed', true, false);
             }

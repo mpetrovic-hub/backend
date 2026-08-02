@@ -792,12 +792,77 @@ kiwi_run_test('Replacement remains blocked until Corruption Incident resolution 
         kiwi_assert_same(false, $failed['allowed'], 'Expected failed Incident resolution to block replacement recovery.');
         kiwi_assert_same('corruption_incident_resolution_failed', $failed['reason_code'], 'Expected explicit resolution failure.');
         kiwi_assert_same(false, $lock->is_write_blocked_for_archive($archive), 'Expected A sentinel to clear before the final Incident action.');
-        kiwi_assert_same(true, $lock->is_write_blocked_for_archive($replacement), 'Expected B transition sentinel to remain fail-closed.');
+        kiwi_assert_same(false, $lock->is_write_blocked_for_archive($replacement), 'Expected B transition state not to masquerade as corruption.');
+        kiwi_assert_same(true, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected distinct B transition sentinel to remain fail-closed.');
+        kiwi_assert_same(basename($archive), $lock->get_replacement_transition_source_for_archive($replacement), 'Expected B transition state to remain bound to source A.');
         kiwi_assert_same(1, count($runs->terminalize_calls), 'Expected A run terminalization before Incident resolution.');
+
+        $replacement_gate = $coordinator->inspect($replacement, true);
+        kiwi_assert_same('replacement_transition_write_blocked', $replacement_gate['reason_code'], 'Expected Health reconciliation to preserve transition semantics.');
+        kiwi_assert_same([], $events->get_open_incidents([
+            'event_type' => 'retention_archive_corruption_detected',
+            'reference_id' => basename($replacement),
+        ]), 'Expected no false Corruption Incident for B.');
 
         $retried = $coordinator->unblock($archive, $replacement);
         kiwi_assert_same(true, $retried['allowed'], 'Expected idempotent retry after Incident storage recovers.');
-        kiwi_assert_same(false, $lock->is_write_blocked_for_archive($replacement), 'Expected B to open only after successful Incident resolution.');
+        kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected B to open only after successful Incident resolution.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Replacement requires an existing corruption gate on the source archive', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_replacement_requires_gate');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $replacement = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026_part_2.sqlite';
+    file_put_contents($archive, 'archive-a');
+    file_put_contents($replacement, 'archive-b');
+    $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
+    $lock = new Kiwi_Retention_Archive_Lock();
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        $runs
+    );
+
+    try {
+        $result = $coordinator->unblock($archive, $replacement);
+
+        kiwi_assert_same(false, $result['allowed'], 'Expected healthy A not to enter replacement recovery.');
+        kiwi_assert_same('unblock_corruption_gate_required', $result['reason_code'], 'Expected explicit source-gate requirement.');
+        kiwi_assert_same([], $runs->terminalize_calls, 'Expected no resumable run to be terminalized.');
+        kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected no B transition state on rejected recovery.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Replacement transition marker permits only its bound recovery retry', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_replacement_retry');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $replacement = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026_part_2.sqlite';
+    file_put_contents($archive, 'archive-a');
+    file_put_contents($replacement, 'archive-b');
+    $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
+    $lock = new Kiwi_Retention_Archive_Lock();
+    $replacement_lock = $lock->acquire_for_archive($replacement);
+    $replacement_handle = $replacement_lock['handle'] ?? null;
+    kiwi_assert_true($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle, 'Expected B lock fixture.');
+    kiwi_assert_same(true, $replacement_handle->persist_replacement_transition_blocked(basename($archive)), 'Expected bound B transition marker fixture.');
+    $lock->release($replacement_handle);
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        $runs
+    );
+
+    try {
+        $result = $coordinator->unblock($archive, $replacement);
+
+        kiwi_assert_same(true, $result['allowed'], 'Expected a bound in-progress transition to remain retryable.');
+        kiwi_assert_same(1, count($runs->terminalize_calls), 'Expected the bound retry to complete idempotently.');
+        kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected completed retry to clear B transition state.');
     } finally {
         kiwi_remove_directory($root);
     }

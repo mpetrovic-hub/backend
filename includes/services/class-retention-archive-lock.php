@@ -67,6 +67,29 @@ final class Kiwi_Retention_Archive_Lock_Handle
     {
         return Kiwi_Retention_Archive_Write_Block::get_path($this->lock_path);
     }
+
+    public function persist_replacement_transition_blocked(string $source_archive): bool
+    {
+        if (!is_resource($this->resource)) {
+            return false;
+        }
+
+        return Kiwi_Retention_Archive_Write_Block::persist_replacement_transition(
+            $this->lock_path,
+            $source_archive
+        );
+    }
+
+    public function clear_replacement_transition_blocked(): bool
+    {
+        if (!is_resource($this->resource)) {
+            return false;
+        }
+
+        return Kiwi_Retention_Archive_Write_Block::clear_replacement_transition(
+            $this->lock_path
+        );
+    }
 }
 
 class Kiwi_Retention_Archive_Lock
@@ -91,6 +114,34 @@ class Kiwi_Retention_Archive_Lock
         clearstatcache(true, $write_block_path);
 
         return file_exists($write_block_path);
+    }
+
+    public function is_replacement_transition_blocked_for_archive(string $archive_db_path): ?bool
+    {
+        $archive_db_path = trim($archive_db_path);
+        if ($archive_db_path === '' || !$this->is_archive_filename(basename($archive_db_path))) {
+            return null;
+        }
+
+        $path = Kiwi_Retention_Archive_Write_Block::get_replacement_transition_path(
+            $archive_db_path . '.lock'
+        );
+        clearstatcache(true, $path);
+
+        return file_exists($path);
+    }
+
+    public function get_replacement_transition_source_for_archive(
+        string $archive_db_path
+    ): ?string {
+        $archive_db_path = trim($archive_db_path);
+        if ($archive_db_path === '' || !$this->is_archive_filename(basename($archive_db_path))) {
+            return null;
+        }
+
+        return Kiwi_Retention_Archive_Write_Block::get_replacement_transition_source(
+            $archive_db_path . '.lock'
+        );
     }
 
     public function get_write_block_path_for_archive(string $archive_db_path): string
