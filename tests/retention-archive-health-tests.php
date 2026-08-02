@@ -143,6 +143,23 @@ class Kiwi_Test_Lean_Safety_Gate extends Kiwi_Retention_Corruption_Safety_Gate_C
     }
 }
 
+class Kiwi_Test_Gate_Clearing_Archive_Lock extends Kiwi_Retention_Archive_Lock
+{
+    public $clear_before_next_acquire = '';
+
+    public function acquire_for_archive(string $archive_db_path): array
+    {
+        if ($this->clear_before_next_acquire !== ''
+            && $archive_db_path === $this->clear_before_next_acquire
+        ) {
+            $this->clear_before_next_acquire = '';
+            Kiwi_Retention_Archive_Write_Block::clear($archive_db_path . '.lock');
+        }
+
+        return parent::acquire_for_archive($archive_db_path);
+    }
+}
+
 class Kiwi_Test_Unreadable_Operational_Event_Service extends Kiwi_Operational_Event_Service
 {
     public function __construct()
@@ -833,6 +850,38 @@ kiwi_run_test('Replacement requires an existing corruption gate on the source ar
         kiwi_assert_same('unblock_corruption_gate_required', $result['reason_code'], 'Expected explicit source-gate requirement.');
         kiwi_assert_same([], $runs->terminalize_calls, 'Expected no resumable run to be terminalized.');
         kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected no B transition state on rejected recovery.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Replacement revalidates the source corruption gate under its lock', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_replacement_gate_race');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $replacement = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026_part_2.sqlite';
+    file_put_contents($archive, 'archive-a');
+    file_put_contents($replacement, 'archive-b');
+    $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
+    $lock = new Kiwi_Test_Gate_Clearing_Archive_Lock();
+    $setup_lock = $lock->acquire_for_archive($archive);
+    $setup_handle = $setup_lock['handle'] ?? null;
+    kiwi_assert_true($setup_handle instanceof Kiwi_Retention_Archive_Lock_Handle, 'Expected A lock fixture.');
+    kiwi_assert_same(true, $setup_handle->persist_write_blocked(), 'Expected initial A corruption sentinel.');
+    $lock->release($setup_handle);
+    $lock->clear_before_next_acquire = $archive;
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        $runs
+    );
+
+    try {
+        $result = $coordinator->unblock($archive, $replacement);
+
+        kiwi_assert_same(false, $result['allowed'], 'Expected replacement to stop after A gate cleared before lock acquisition.');
+        kiwi_assert_same('unblock_corruption_gate_required', $result['reason_code'], 'Expected locked source-gate revalidation.');
+        kiwi_assert_same([], $runs->terminalize_calls, 'Expected no run terminalization after the gate race.');
+        kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected no B transition marker after the gate race.');
     } finally {
         kiwi_remove_directory($root);
     }

@@ -245,6 +245,36 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 return $this->blocked('archive_lock_failed', false, false);
             }
 
+            $locked_transition_source = $replacement !== ''
+                ? $this->lock_service->get_replacement_transition_source_for_archive(
+                    $replacement_archive_path
+                )
+                : '';
+            if ($locked_transition_source === null) {
+                return $this->blocked('replacement_transition_state_invalid', true, true);
+            }
+            $locked_source_gate = $this->inspect($archive_path, false);
+            if (in_array((string) ($locked_source_gate['reason_code'] ?? ''), [
+                'archive_gate_path_invalid',
+                'corruption_incident_lookup_failed',
+            ], true)) {
+                return $this->blocked(
+                    (string) $locked_source_gate['reason_code'],
+                    !empty($locked_source_gate['write_blocked']),
+                    !empty($locked_source_gate['incident_open'])
+                );
+            }
+            if (empty($locked_source_gate['corruption_write_blocked'])
+                && empty($locked_source_gate['incident_open'])
+                && $locked_transition_source !== $archive
+            ) {
+                return $this->blocked(
+                    'unblock_corruption_gate_required',
+                    !empty($locked_source_gate['write_blocked']),
+                    false
+                );
+            }
+
             if ($replacement !== '') {
                 $replacement_lock = $this->lock_service->acquire_for_archive(
                     $replacement_archive_path
