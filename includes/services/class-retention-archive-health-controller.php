@@ -79,6 +79,33 @@ final class Kiwi_Retention_Archive_Health_Controller
         $archive = (string) $active['name'];
         $gate = $this->safety_gate->inspect($archive_path, true);
         if (empty($gate['allowed'])) {
+            $gate_reason = (string) ($gate['reason_code'] ?? 'archive_corruption_blocked');
+            if (in_array($gate_reason, [
+                'archive_gate_path_invalid',
+                'corruption_incident_lookup_failed',
+            ], true)) {
+                $incident_action = $this->record_availability_failure(
+                    $gate_reason,
+                    $archive,
+                    $check,
+                    $started_at
+                );
+
+                return $this->result(
+                    'check',
+                    'error',
+                    $incident_action === ''
+                        ? 'availability_incident_persist_failed'
+                        : $gate_reason,
+                    $archive,
+                    $check,
+                    $started_at,
+                    $started,
+                    2,
+                    array_merge($gate, ['incident_action' => $incident_action])
+                );
+            }
+
             $availability_action = '';
             if (!empty($gate['corruption_write_blocked']) || !empty($gate['incident_open'])) {
                 $availability_action = $this->record_availability_recovery($archive, $check);
@@ -104,7 +131,7 @@ final class Kiwi_Retention_Archive_Health_Controller
             return $this->result(
                 'check',
                 'blocked',
-                (string) ($gate['reason_code'] ?? 'archive_corruption_blocked'),
+                $gate_reason,
                 $archive,
                 $check,
                 $started_at,

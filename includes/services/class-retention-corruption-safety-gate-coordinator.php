@@ -60,25 +60,66 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         }
 
         $incident_action = 'none';
-        if ($reconcile && $write_blocked && !$incident_open) {
-            $incident_action = $this->record_corruption(
-                $archive,
-                'integrity',
-                'corruption_write_block_present'
-            );
-            $incident_open = $incident_action !== '';
-        } elseif ($reconcile && !$write_blocked && $incident_open) {
+        if ($reconcile && $write_blocked !== $incident_open) {
             $lock = $this->lock_service->acquire_for_archive($archive_path);
-            if (!empty($lock['success'])
-                && !empty($lock['acquired'])
-                && ($lock['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
+            if (empty($lock['success'])
+                || empty($lock['acquired'])
+                || !(($lock['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle)
             ) {
-                try {
-                    $write_blocked = $lock['handle']->persist_write_blocked();
-                } finally {
-                    $this->lock_service->release($lock['handle']);
-                }
+                return [
+                    'allowed' => false,
+                    'reason_code' => (string) ($lock['error_code'] ?? 'archive_lock_active'),
+                    'write_blocked' => (bool) ($write_blocked || $transition_blocked),
+                    'corruption_write_blocked' => (bool) $write_blocked,
+                    'replacement_transition_blocked' => (bool) $transition_blocked,
+                    'incident_open' => $incident_open,
+                    'incident_action' => 'none',
+                ];
             }
+
+            try {
+                $write_blocked = $this->lock_service->is_write_blocked_for_archive($archive_path);
+                if ($write_blocked === null) {
+                    return $this->blocked('archive_gate_path_invalid', false, false);
+                }
+                $locked_incidents = $this->operational_event_service->get_open_incidents([
+                    'event_type' => self::EVENT_TYPE,
+                    'reference_type' => 'retention_archive',
+                    'reference_id' => $archive,
+                ], 10);
+                if ($locked_incidents === null) {
+                    return $this->blocked(
+                        'corruption_incident_lookup_failed',
+                        (bool) $write_blocked,
+                        false
+                    );
+                }
+                $incident_open = !empty($locked_incidents);
+                if ($write_blocked && !$incident_open) {
+                    $incident_action = $this->record_corruption(
+                        $archive,
+                        'integrity',
+                        'corruption_write_block_present'
+                    );
+                    $incident_open = $incident_action !== '';
+                } elseif (!$write_blocked && $incident_open) {
+                    $write_blocked = $lock['handle']->persist_write_blocked();
+                }
+            } finally {
+                $this->lock_service->release($lock['handle']);
+            }
+        }
+
+        if (!$write_blocked && !$transition_blocked && !$incident_open) {
+            return [
+                'allowed' => true,
+                'reason_code' => 'corruption_gate_clear',
+                'write_blocked' => false,
+                'corruption_write_blocked' => false,
+                'replacement_transition_blocked' => false,
+                'incident_open' => false,
+                'incident_action' => 'none',
+            ];
         }
 
         return [
@@ -396,6 +437,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 'sha256',
                 $archive . ':' . $check . ':' . $reason_code
             ),
+            'scope_idempotency_to_lifecycle' => true,
             'reference_type' => 'retention_archive',
             'reference_id' => $archive,
             'message' => 'A complete read-only SQLite PRAGMA check confirmed archive corruption.',

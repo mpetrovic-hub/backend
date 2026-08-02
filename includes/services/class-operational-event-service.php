@@ -55,6 +55,21 @@ class Kiwi_Operational_Event_Service
                 && in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
                     ? 'repeated'
                     : 'raised';
+            if (!empty($event['scope_idempotency_to_lifecycle'])) {
+                $base_key = (string) ($event['idempotency_key'] ?? '');
+                if ($base_key !== '' && is_array($latest)) {
+                    $latest_action = (string) ($latest['lifecycle_action'] ?? '');
+                    $latest_key = (string) ($latest['idempotency_key'] ?? '');
+                    $event['idempotency_key'] = in_array($latest_action, ['raised', 'repeated'], true)
+                        && $latest_key !== ''
+                            ? $latest_key
+                            : 'operational_failure_cycle_' . hash(
+                                'sha256',
+                                $base_key . ':' . (string) ($latest['id'] ?? '')
+                            );
+                }
+            }
+            unset($event['scope_idempotency_to_lifecycle']);
             $event['lifecycle_action'] = $lifecycle_action;
             if (!$this->persist($event, $correlation_key)) {
                 return '';
@@ -66,7 +81,7 @@ class Kiwi_Operational_Event_Service
 
             return in_array($persisted_action, ['raised', 'repeated'], true)
                 ? $persisted_action
-                : $lifecycle_action;
+                : '';
         } catch (Throwable $error) {
             return '';
         }
