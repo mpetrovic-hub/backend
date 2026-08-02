@@ -26,7 +26,7 @@ final class Kiwi_Retention_Archive_Name
 
     public static function normalize(string $archive_name): string
     {
-        $archive_name = basename(trim($archive_name));
+        $archive_name = trim($archive_name);
 
         return self::parse($archive_name) !== null ? $archive_name : '';
     }

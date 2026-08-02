@@ -79,6 +79,28 @@ final class Kiwi_Retention_Archive_Health_Controller
         $archive = (string) $active['name'];
         $gate = $this->safety_gate->inspect($archive_path, true);
         if (empty($gate['allowed'])) {
+            $availability_action = '';
+            if (!empty($gate['write_blocked']) || !empty($gate['incident_open'])) {
+                $availability_action = $this->record_availability_recovery($archive, $check);
+                if ($availability_action === '') {
+                    return $this->result(
+                        'check',
+                        'error',
+                        'availability_incident_resolution_failed',
+                        $archive,
+                        $check,
+                        $started_at,
+                        $started,
+                        2,
+                        $gate
+                    );
+                }
+            }
+            $gate_action = (string) ($gate['incident_action'] ?? '');
+            $reported_action = in_array($gate_action, ['raised', 'repeated', 'resolved'], true)
+                ? $gate_action
+                : $availability_action;
+
             return $this->result(
                 'check',
                 'blocked',
@@ -88,11 +110,22 @@ final class Kiwi_Retention_Archive_Health_Controller
                 $started_at,
                 $started,
                 1,
-                $gate
+                array_merge($gate, ['incident_action' => $reported_action])
             );
         }
 
-        $outcome = $this->supervisor->run($archive_path, $check, true);
+        $outcome = $this->supervisor->run(
+            $archive_path,
+            $check,
+            true,
+            function (string $path, string $mode, string $reason_code): array {
+                return $this->safety_gate->record_corruption_incident_while_generation_locked(
+                    $path,
+                    $mode,
+                    $reason_code
+                );
+            }
+        );
         $outcome_result = (string) ($outcome['result'] ?? 'error');
         $check_completed = !empty($outcome['check_completed']);
         if ($outcome_result === 'ok' && $check_completed) {
@@ -112,24 +145,31 @@ final class Kiwi_Retention_Archive_Health_Controller
         }
 
         if ($outcome_result === 'corruption_detected' && $check_completed) {
-            $gate = $this->safety_gate->block_after_corruption(
-                $archive_path,
-                $check,
-                (string) ($outcome['reason_code'] ?? 'sqlite_check_reported_corruption')
-            );
+            $gate = !empty($outcome['incident_open'])
+                ? $this->safety_gate->inspect($archive_path, true)
+                : $this->safety_gate->block_after_corruption(
+                    $archive_path,
+                    $check,
+                    (string) ($outcome['reason_code'] ?? 'sqlite_check_reported_corruption')
+                );
             $availability_action = $this->record_availability_recovery($archive, $check);
             $gate_persisted = !empty($gate['write_blocked']) || !empty($gate['incident_open']);
             $corruption_action = (string) ($gate['incident_action'] ?? '');
+            $handoff_action = (string) ($outcome['incident_action'] ?? '');
             $reported_action = in_array($corruption_action, ['raised', 'repeated', 'resolved'], true)
                 ? $corruption_action
-                : $availability_action;
+                : (in_array($handoff_action, ['raised', 'repeated', 'resolved'], true)
+                    ? $handoff_action
+                    : $availability_action);
 
             return $this->result(
                 'check',
                 $gate_persisted && $availability_action !== '' ? 'corruption_detected' : 'error',
-                $gate_persisted
-                    ? (string) ($gate['reason_code'] ?? 'sqlite_check_reported_corruption')
-                    : 'corruption_gate_persist_failed',
+                !$gate_persisted
+                    ? 'corruption_gate_persist_failed'
+                    : ($availability_action === ''
+                        ? 'availability_incident_resolution_failed'
+                        : (string) ($gate['reason_code'] ?? 'sqlite_check_reported_corruption')),
                 $archive,
                 $check,
                 $started_at,
@@ -182,7 +222,7 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'diagnose',
                 'error',
                 'diagnose_input_invalid',
-                Kiwi_Retention_Archive_Name::normalize(basename($archive_name)) ?: null,
+                Kiwi_Retention_Archive_Name::normalize($archive_name) ?: null,
                 $check !== '' ? $check : null,
                 $started_at,
                 $started,
@@ -228,7 +268,7 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'unblock',
                 'error',
                 $confirmed ? 'unblock_input_invalid' : 'unblock_confirmation_required',
-                Kiwi_Retention_Archive_Name::normalize(basename($archive_name)) ?: null,
+                Kiwi_Retention_Archive_Name::normalize($archive_name) ?: null,
                 'integrity',
                 $started_at,
                 $started,
@@ -362,7 +402,7 @@ final class Kiwi_Retention_Archive_Health_Controller
 
     private function find_archive(string $archive_name): ?array
     {
-        $archive_name = Kiwi_Retention_Archive_Name::normalize(basename(trim($archive_name)));
+        $archive_name = Kiwi_Retention_Archive_Name::normalize($archive_name);
         if ($archive_name === '') {
             return null;
         }

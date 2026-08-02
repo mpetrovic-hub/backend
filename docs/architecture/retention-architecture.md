@@ -48,7 +48,7 @@ External scheduling owns frequency, retries, alerts, and escalation. The runtime
 
 ## Result and safety transitions
 
-A definitive `ok` check resolves the shared availability Incident. A lock deferral, timeout, discovery failure, bootstrap failure, or other non-definitive scheduled check raises or repeats that Incident when the normal controller and Operational Event service are available. These outcomes do not prove corruption.
+A definitive `ok` check resolves the shared availability Incident. A lock deferral, timeout, discovery failure, bootstrap failure, or other non-definitive scheduled check raises or repeats that Incident when the normal controller and Operational Event service are available. These outcomes do not prove corruption. If a definitive corruption result established a durable corruption gate but Availability resolution failed, the next gated controller call retries only that idempotent resolution effect without rerunning PRAGMA.
 
 Only this evidence proves corruption:
 
@@ -57,7 +57,7 @@ Only this evidence proves corruption:
 3. the requested PRAGMA completed;
 4. its result was not exactly `ok`.
 
-The corruption transition is fail-closed: persist the generation-specific write-block while the exclusive child lock is still held, then raise the corruption Incident. Cleanup evaluates both durable gates after lock acquisition, before every SQLite write or receipt repair, and immediately before every MySQL delete. An unreadable or contradictory gate blocks destructive work. A later call may idempotently add one missing gate without rerunning PRAGMA.
+The corruption transition is fail-closed: persist the generation-specific write-block while the exclusive child lock is still held, then raise the corruption Incident. If sentinel persistence fails, the child keeps the generation lock while the parent persists the Corruption Incident and releases only after the parent acknowledges that durable fallback gate. If both gate writes fail, the command returns non-zero and never reports success. Cleanup evaluates both durable gates after lock acquisition, before every SQLite write or receipt repair, and immediately before every MySQL delete. An unreadable or contradictory gate blocks destructive work. A later call may idempotently add one missing gate without rerunning PRAGMA.
 
 ## Manual recovery
 

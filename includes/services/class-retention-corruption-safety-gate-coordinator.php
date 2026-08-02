@@ -149,6 +149,32 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         }
     }
 
+    public function record_corruption_incident_while_generation_locked(
+        string $archive_path,
+        string $check,
+        string $reason_code
+    ): array {
+        $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
+        if ($archive === '') {
+            return $this->blocked('archive_gate_path_invalid', false, false);
+        }
+
+        $incident_action = $this->record_corruption($archive, $check, $reason_code);
+        $incident_open = $incident_action !== '';
+
+        return [
+            'allowed' => false,
+            'reason_code' => $incident_open
+                ? 'sqlite_check_reported_corruption'
+                : 'corruption_incident_persist_failed',
+            'write_blocked' => false,
+            'incident_open' => $incident_open,
+            'incident_action' => in_array($incident_action, ['raised', 'repeated'], true)
+                ? $incident_action
+                : 'none',
+        ];
+    }
+
     public function unblock(
         string $archive_path,
         string $replacement_archive_path = ''

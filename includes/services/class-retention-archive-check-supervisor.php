@@ -6,6 +6,11 @@ if (!defined('ABSPATH')) {
 
 final class Kiwi_Retention_Archive_Check_Supervisor
 {
+    private const READINESS_LOCKED = 'locked';
+    private const READINESS_CORRUPTION_GATE_REQUIRED = 'corruption_gate_required';
+    private const READINESS_CORRUPTION_GATE_PERSISTED = 'corruption_gate_persisted';
+    private const READINESS_CORRUPTION_GATE_FAILED = 'corruption_gate_failed';
+
     private $config;
     private $runner;
     private $child_script_path;
@@ -26,7 +31,8 @@ final class Kiwi_Retention_Archive_Check_Supervisor
     public function run(
         string $archive_path,
         string $check,
-        bool $persist_write_block_on_corruption = false
+        bool $persist_write_block_on_corruption = false,
+        ?callable $corruption_gate_fallback = null
     ): array
     {
         $check = strtolower(trim($check));
@@ -36,13 +42,21 @@ final class Kiwi_Retention_Archive_Check_Supervisor
 
         if (is_callable($this->runner)) {
             try {
-                return $this->normalize_outcome(
+                $outcome = $this->normalize_outcome(
                     (array) call_user_func(
                         $this->runner,
                         $archive_path,
                         $check,
                         $persist_write_block_on_corruption
                     )
+                );
+
+                return $this->complete_callable_corruption_handoff(
+                    $outcome,
+                    $archive_path,
+                    $check,
+                    $persist_write_block_on_corruption,
+                    $corruption_gate_fallback
                 );
             } catch (Throwable $error) {
                 return $this->failure('health_child_exception');
@@ -52,14 +66,16 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         return $this->run_process(
             $archive_path,
             $check,
-            $persist_write_block_on_corruption
+            $persist_write_block_on_corruption,
+            $corruption_gate_fallback
         );
     }
 
     private function run_process(
         string $archive_path,
         string $check,
-        bool $persist_write_block_on_corruption
+        bool $persist_write_block_on_corruption,
+        ?callable $corruption_gate_fallback
     ): array
     {
         $started = microtime(true);
@@ -87,6 +103,7 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             'check' => $check,
             'readiness_path' => $readiness_path,
             'persist_write_block_on_corruption' => $persist_write_block_on_corruption,
+            'corruption_handoff_timeout_seconds' => $this->config->get_retention_archive_health_timeout_seconds(),
         ]);
         if (!is_string($payload)) {
             return $this->failure('health_child_payload_invalid');
@@ -117,10 +134,41 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         $timed_out = false;
         $last_status = ['running' => true, 'exitcode' => -1];
         $lock_acquired = false;
+        $gate_handoff_attempted = false;
+        $gate_handoff = [];
         $timeout_seconds = $this->config->get_retention_archive_health_timeout_seconds();
 
         while (true) {
-            $lock_acquired = $lock_acquired || @file_get_contents($readiness_path) === 'locked';
+            $readiness_state = (string) @file_get_contents($readiness_path);
+            $lock_acquired = $lock_acquired || in_array($readiness_state, [
+                self::READINESS_LOCKED,
+                self::READINESS_CORRUPTION_GATE_REQUIRED,
+                self::READINESS_CORRUPTION_GATE_PERSISTED,
+                self::READINESS_CORRUPTION_GATE_FAILED,
+            ], true);
+            if ($readiness_state === self::READINESS_CORRUPTION_GATE_REQUIRED
+                && !$gate_handoff_attempted
+            ) {
+                $gate_handoff_attempted = true;
+                $gate_handoff = $this->invoke_corruption_gate_fallback(
+                    $corruption_gate_fallback,
+                    $archive_path,
+                    $check,
+                    'sqlite_check_reported_corruption'
+                );
+                $acknowledgement = !empty($gate_handoff['incident_open'])
+                    ? self::READINESS_CORRUPTION_GATE_PERSISTED
+                    : self::READINESS_CORRUPTION_GATE_FAILED;
+                if (!$this->write_readiness_state($readiness_path, $acknowledgement)) {
+                    $gate_handoff = [
+                        'incident_open' => !empty($gate_handoff['incident_open']),
+                        'incident_action' => (string) ($gate_handoff['incident_action'] ?? 'none'),
+                        'handoff_acknowledged' => false,
+                    ];
+                } else {
+                    $gate_handoff['handoff_acknowledged'] = true;
+                }
+            }
             $last_status = proc_get_status($process);
             if (empty($last_status['running'])) {
                 break;
@@ -149,7 +197,13 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         $status_after = proc_get_status($process);
         $status_after = is_array($status_after) ? $status_after : ['running' => true];
         $child_running = !empty($status_after['running']);
-        $lock_acquired = $lock_acquired || @file_get_contents($readiness_path) === 'locked';
+        $readiness_state = (string) @file_get_contents($readiness_path);
+        $lock_acquired = $lock_acquired || in_array($readiness_state, [
+            self::READINESS_LOCKED,
+            self::READINESS_CORRUPTION_GATE_REQUIRED,
+            self::READINESS_CORRUPTION_GATE_PERSISTED,
+            self::READINESS_CORRUPTION_GATE_FAILED,
+        ], true);
         $stdout = '';
         $stderr = '';
         if (!$child_running) {
@@ -205,10 +259,19 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             return $this->failure('health_child_exit_invalid', $duration, $child_running);
         }
 
-        return $this->normalize_outcome(array_merge($decoded, [
+        $outcome = $this->normalize_outcome(array_merge($decoded, $gate_handoff, [
             'duration_seconds' => $duration,
             'child_running' => $child_running,
         ]));
+        if ($persist_write_block_on_corruption
+            && $outcome['result'] === 'corruption_detected'
+            && empty($outcome['write_blocked'])
+            && empty($outcome['incident_open'])
+        ) {
+            return $this->corruption_gate_failure($outcome);
+        }
+
+        return $outcome;
     }
 
     private function normalize_outcome(array $outcome): array
@@ -235,7 +298,97 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             'check_completed' => $check_completed,
             'lock_acquired' => !empty($outcome['lock_acquired']),
             'write_blocked' => !empty($outcome['write_blocked']),
+            'incident_open' => !empty($outcome['incident_open']),
+            'incident_action' => in_array(
+                (string) ($outcome['incident_action'] ?? ''),
+                ['raised', 'repeated', 'resolved'],
+                true
+            ) ? (string) $outcome['incident_action'] : 'none',
         ];
+    }
+
+    private function complete_callable_corruption_handoff(
+        array $outcome,
+        string $archive_path,
+        string $check,
+        bool $persist_write_block_on_corruption,
+        ?callable $corruption_gate_fallback
+    ): array {
+        if (!$persist_write_block_on_corruption
+            || $outcome['result'] !== 'corruption_detected'
+            || !empty($outcome['write_blocked'])
+            || !empty($outcome['incident_open'])
+        ) {
+            return $outcome;
+        }
+
+        $gate = $this->invoke_corruption_gate_fallback(
+            $corruption_gate_fallback,
+            $archive_path,
+            $check,
+            (string) ($outcome['reason_code'] ?? 'sqlite_check_reported_corruption')
+        );
+        $outcome = $this->normalize_outcome(array_merge($outcome, $gate));
+
+        return !empty($outcome['incident_open'])
+            ? $outcome
+            : $this->corruption_gate_failure($outcome);
+    }
+
+    private function invoke_corruption_gate_fallback(
+        ?callable $fallback,
+        string $archive_path,
+        string $check,
+        string $reason_code
+    ): array {
+        if (!is_callable($fallback)) {
+            return ['incident_open' => false, 'incident_action' => 'none'];
+        }
+
+        try {
+            $gate = (array) call_user_func($fallback, $archive_path, $check, $reason_code);
+        } catch (Throwable $error) {
+            return ['incident_open' => false, 'incident_action' => 'none'];
+        }
+
+        return [
+            'incident_open' => !empty($gate['incident_open']),
+            'incident_action' => in_array(
+                (string) ($gate['incident_action'] ?? ''),
+                ['raised', 'repeated'],
+                true
+            ) ? (string) $gate['incident_action'] : 'none',
+        ];
+    }
+
+    private function write_readiness_state(string $path, string $state): bool
+    {
+        $resource = @fopen($path, 'c+b');
+        if (!is_resource($resource)) {
+            return false;
+        }
+
+        try {
+            return @rewind($resource)
+                && @ftruncate($resource, 0)
+                && @fwrite($resource, $state) === strlen($state)
+                && @fflush($resource)
+                && (!function_exists('fsync') || @fsync($resource));
+        } finally {
+            @fclose($resource);
+        }
+    }
+
+    private function corruption_gate_failure(array $outcome): array
+    {
+        $outcome['result'] = 'error';
+        $outcome['reason_code'] = 'corruption_gate_persist_failed';
+        $outcome['check_completed'] = true;
+        $outcome['write_blocked'] = false;
+        $outcome['incident_open'] = false;
+        $outcome['incident_action'] = 'none';
+
+        return $this->normalize_outcome($outcome);
     }
 
     private function close_process_if_stopped($process, array $status): ?int

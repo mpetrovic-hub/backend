@@ -15,6 +15,25 @@ if (PHP_SAPI === 'cli'
     $check = is_array($payload) ? strtolower(trim((string) ($payload['check'] ?? ''))) : '';
     $persist_write_block_on_corruption = is_array($payload)
         && !empty($payload['persist_write_block_on_corruption']);
+    $corruption_handoff_timeout_seconds = is_array($payload)
+        ? min(3600, max(30, (int) ($payload['corruption_handoff_timeout_seconds'] ?? 600)))
+        : 600;
+    $write_readiness_state = static function (string $path, string $state): bool {
+        $resource = @fopen($path, 'c+b');
+        if (!is_resource($resource)) {
+            return false;
+        }
+
+        try {
+            return @rewind($resource)
+                && @ftruncate($resource, 0)
+                && @fwrite($resource, $state) === strlen($state)
+                && @fflush($resource)
+                && (!function_exists('fsync') || @fsync($resource));
+        } finally {
+            @fclose($resource);
+        }
+    };
     $result = [
         'result' => 'error',
         'reason_code' => 'health_child_input_invalid',
@@ -92,12 +111,43 @@ if (PHP_SAPI === 'cli'
                             $real_path . '.lock'
                         );
                     }
-                    $result = [
-                        'result' => 'corruption_detected',
-                        'reason_code' => 'sqlite_check_reported_corruption',
-                        'check_completed' => true,
-                        'write_blocked' => $write_blocked,
-                    ];
+                    if ($persist_write_block_on_corruption && !$write_blocked) {
+                        $handoff_state = '';
+                        if ($write_readiness_state($readiness_path, 'corruption_gate_required')) {
+                            $handoff_deadline = microtime(true) + $corruption_handoff_timeout_seconds;
+                            do {
+                                usleep(20000);
+                                $handoff_state = (string) @file_get_contents($readiness_path);
+                            } while (!in_array($handoff_state, [
+                                'corruption_gate_persisted',
+                                'corruption_gate_failed',
+                            ], true) && microtime(true) < $handoff_deadline);
+                        }
+
+                        if ($handoff_state === 'corruption_gate_persisted') {
+                            $result = [
+                                'result' => 'corruption_detected',
+                                'reason_code' => 'sqlite_check_reported_corruption',
+                                'check_completed' => true,
+                                'write_blocked' => false,
+                                'incident_open' => true,
+                            ];
+                        } else {
+                            $result = [
+                                'result' => 'error',
+                                'reason_code' => 'corruption_gate_persist_failed',
+                                'check_completed' => true,
+                                'write_blocked' => false,
+                            ];
+                        }
+                    } else {
+                        $result = [
+                            'result' => 'corruption_detected',
+                            'reason_code' => 'sqlite_check_reported_corruption',
+                            'check_completed' => true,
+                            'write_blocked' => $write_blocked,
+                        ];
+                    }
                 }
             }
         } catch (Throwable $error) {
