@@ -183,7 +183,10 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         $replacement = $replacement_archive_path !== ''
             ? Kiwi_Retention_Archive_Name::normalize(basename($replacement_archive_path))
             : '';
-        if ($archive === '' || ($replacement_archive_path !== '' && $replacement === '')) {
+        if ($archive === ''
+            || ($replacement_archive_path !== '' && $replacement === '')
+            || ($replacement !== '' && $replacement === $archive)
+        ) {
             return $this->blocked('unblock_archive_invalid', false, false);
         }
 
@@ -196,11 +199,37 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             );
         }
 
+        $replacement_handle = null;
         try {
             $handle = $lock['handle'] ?? null;
             if (!$handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
                 return $this->blocked('archive_lock_failed', false, false);
             }
+
+            if ($replacement !== '') {
+                $replacement_lock = $this->lock_service->acquire_for_archive(
+                    $replacement_archive_path
+                );
+                if (empty($replacement_lock['success']) || empty($replacement_lock['acquired'])) {
+                    return $this->blocked(
+                        (string) ($replacement_lock['error_code'] ?? 'archive_lock_active'),
+                        true,
+                        true
+                    );
+                }
+                $replacement_handle = $replacement_lock['handle'] ?? null;
+                if (!$replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
+                    return $this->blocked('replacement_archive_lock_failed', true, true);
+                }
+                if (!$replacement_handle->persist_write_blocked()) {
+                    return $this->blocked(
+                        'replacement_transition_block_persist_failed',
+                        true,
+                        true
+                    );
+                }
+            }
+
             if ($replacement !== ''
                 && !$this->run_repository->terminalize_open_run_for_manual_replacement(
                     $archive_path,
@@ -232,7 +261,16 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 ],
             ]);
             if ($incident_action === '') {
-                return $this->blocked('corruption_incident_resolution_failed', false, true);
+                return $this->blocked(
+                    'corruption_incident_resolution_failed',
+                    $replacement !== '',
+                    true
+                );
+            }
+            if ($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle
+                && !$replacement_handle->clear_write_blocked()
+            ) {
+                return $this->blocked('replacement_transition_block_clear_failed', true, false);
             }
 
             return [
@@ -245,6 +283,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 'incident_action' => $incident_action,
             ];
         } finally {
+            $this->lock_service->release($replacement_handle);
             $this->lock_service->release($lock['handle'] ?? null);
         }
     }

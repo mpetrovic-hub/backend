@@ -295,6 +295,19 @@ final class Kiwi_Retention_Archive_Health_Controller
                     2
                 );
             }
+
+            if (!$this->is_active_replacement($replacement)) {
+                return $this->result(
+                    'unblock',
+                    'error',
+                    'replacement_generation_not_active',
+                    (string) $archive['name'],
+                    'integrity',
+                    $started_at,
+                    $started,
+                    2
+                );
+            }
         }
 
         $verification_target = is_array($replacement) ? $replacement : $archive;
@@ -312,6 +325,19 @@ final class Kiwi_Retention_Archive_Health_Controller
                 $started,
                 1,
                 $verification
+            );
+        }
+
+        if (is_array($replacement) && !$this->is_active_replacement($replacement)) {
+            return $this->result(
+                'unblock',
+                'error',
+                'replacement_generation_not_active',
+                (string) $archive['name'],
+                'integrity',
+                $started_at,
+                $started,
+                2
             );
         }
 
@@ -418,6 +444,18 @@ final class Kiwi_Retention_Archive_Health_Controller
         }
 
         return null;
+    }
+
+    private function is_active_replacement(array $replacement): bool
+    {
+        try {
+            $active_archive_path = $this->archive_service->resolve_archive_db_path();
+        } catch (Throwable $error) {
+            return false;
+        }
+
+        return $active_archive_path !== ''
+            && $active_archive_path === (string) ($replacement['path'] ?? '');
     }
 
     private function record_availability_failure(

@@ -64,7 +64,7 @@ The corruption transition is fail-closed: persist the generation-specific write-
 Recovery is an operator decision outside normal runtime. `unblock` requires explicit confirmation and completes a full read-only `integrity_check` first.
 
 - Repaired in place: verify archive `A`, clear `A`'s sentinel, then resolve its corruption Incident.
-- Explicit replacement: verify later same-year generation `B`, terminalize unfinished cleanup runs bound to `A`, clear `A`'s sentinel, then resolve the Incident last.
+- Explicit replacement: require later same-year generation `B` to be the generation the cleanup resolver will actually select, verify `B`, and persist a temporary write block on `B` before terminalizing unfinished cleanup runs bound to `A`. Clear `A`'s sentinel and resolve `A`'s Incident as its final recovery action; `B` remains blocked until that resolution succeeds, and only then is the temporary transition block removed.
 
 This order preserves a continuous safety gate. Replacement transfers no cursor or receipt and creates no automatic successor. A later normal scheduler may create a fresh run against the explicitly available archive generation. Existing rows already deleted into a corrupt archive cannot be reconstructed by the health controller.
 

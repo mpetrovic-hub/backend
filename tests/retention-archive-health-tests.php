@@ -21,6 +21,7 @@ class Kiwi_Test_Lean_Archive_Config extends Kiwi_Config
 class Kiwi_Test_Lean_Archive_Service extends Kiwi_Retention_Sqlite_Archive_Service
 {
     public $archives = [];
+    public $resolved_archive_paths = [];
 
     public function __construct()
     {
@@ -34,6 +35,30 @@ class Kiwi_Test_Lean_Archive_Service extends Kiwi_Retention_Sqlite_Archive_Servi
     public function resolve_existing_archive_db_path_read_only(string $archive_db_path): string
     {
         return $archive_db_path;
+    }
+
+    public function resolve_archive_db_path(string $existing_archive_db_path = ''): string
+    {
+        if ($existing_archive_db_path !== '') {
+            return $existing_archive_db_path;
+        }
+        if (!empty($this->resolved_archive_paths)) {
+            return (string) array_shift($this->resolved_archive_paths);
+        }
+
+        $highest = null;
+        foreach ($this->archives as $archive) {
+            $identity = Kiwi_Retention_Archive_Name::parse((string) ($archive['name'] ?? ''));
+            if (!is_array($identity)
+                || (is_array($highest)
+                    && (int) $identity['generation'] <= (int) $highest['generation'])
+            ) {
+                continue;
+            }
+            $highest = array_merge($identity, ['path' => (string) ($archive['path'] ?? '')]);
+        }
+
+        return is_array($highest) ? (string) $highest['path'] : '';
     }
 }
 
@@ -738,6 +763,46 @@ kiwi_run_test('Corruption safety gate writes block before Incident and resolves 
     }
 });
 
+kiwi_run_test('Replacement remains blocked until Corruption Incident resolution succeeds', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_replacement_gate');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $replacement = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026_part_2.sqlite';
+    file_put_contents($archive, 'archive-a');
+    file_put_contents($replacement, 'archive-b');
+    $event_repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $events = new Kiwi_Operational_Event_Service($event_repository);
+    $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
+    $lock = new Kiwi_Retention_Archive_Lock();
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        $events,
+        $runs
+    );
+
+    try {
+        $blocked = $coordinator->block_after_corruption(
+            $archive,
+            'integrity',
+            'sqlite_check_reported_corruption'
+        );
+        kiwi_assert_same(true, $blocked['write_blocked'], 'Expected A to begin durably blocked.');
+
+        $event_repository->fail_next_insert = true;
+        $failed = $coordinator->unblock($archive, $replacement);
+        kiwi_assert_same(false, $failed['allowed'], 'Expected failed Incident resolution to block replacement recovery.');
+        kiwi_assert_same('corruption_incident_resolution_failed', $failed['reason_code'], 'Expected explicit resolution failure.');
+        kiwi_assert_same(false, $lock->is_write_blocked_for_archive($archive), 'Expected A sentinel to clear before the final Incident action.');
+        kiwi_assert_same(true, $lock->is_write_blocked_for_archive($replacement), 'Expected B transition sentinel to remain fail-closed.');
+        kiwi_assert_same(1, count($runs->terminalize_calls), 'Expected A run terminalization before Incident resolution.');
+
+        $retried = $coordinator->unblock($archive, $replacement);
+        kiwi_assert_same(true, $retried['allowed'], 'Expected idempotent retry after Incident storage recovers.');
+        kiwi_assert_same(false, $lock->is_write_blocked_for_archive($replacement), 'Expected B to open only after successful Incident resolution.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Diagnose is read-only and does not reconcile gates or Incidents', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [[
@@ -842,6 +907,84 @@ kiwi_run_test('Manual replacement verifies explicit B before terminalizing A', f
     kiwi_assert_same('/tmp/kiwi_retention_archive_2026_part_2.sqlite', $verified_paths[0][0], 'Expected B to receive the full integrity check.');
     kiwi_assert_same('integrity', $verified_paths[0][1], 'Expected full integrity mode.');
     kiwi_assert_same(1, count($gate->unblock_calls), 'Expected A/B transition only after verification.');
+});
+
+kiwi_run_test('Manual replacement rejects a generation cleanup would not select', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [
+        ['name' => 'kiwi_retention_archive_2026.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026.sqlite'],
+        ['name' => 'kiwi_retention_archive_2026_part_2.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026_part_2.sqlite'],
+        ['name' => 'kiwi_retention_archive_2026_part_3.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026_part_3.sqlite'],
+    ];
+    $supervisor_calls = 0;
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function () use (&$supervisor_calls): array {
+            $supervisor_calls++;
+
+            return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $result = $controller->unblock(
+        'kiwi_retention_archive_2026.sqlite',
+        'kiwi_retention_archive_2026_part_2.sqlite',
+        true
+    );
+
+    kiwi_assert_same('error', $result['result'], 'Expected non-active B to be rejected while C exists.');
+    kiwi_assert_same('replacement_generation_not_active', $result['reason_code'], 'Expected explicit active-generation mismatch.');
+    kiwi_assert_same(0, $supervisor_calls, 'Expected rejected B not to consume an integrity check.');
+    kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery state change for rejected B.');
+});
+
+kiwi_run_test('Manual replacement rechecks the active generation after integrity verification', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [
+        ['name' => 'kiwi_retention_archive_2026.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026.sqlite'],
+        ['name' => 'kiwi_retention_archive_2026_part_2.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026_part_2.sqlite'],
+        ['name' => 'kiwi_retention_archive_2026_part_3.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026_part_3.sqlite'],
+    ];
+    $archive_service->resolved_archive_paths = [
+        '/tmp/kiwi_retention_archive_2026_part_2.sqlite',
+        '/tmp/kiwi_retention_archive_2026_part_3.sqlite',
+    ];
+    $supervisor_calls = 0;
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function () use (&$supervisor_calls): array {
+            $supervisor_calls++;
+
+            return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $result = $controller->unblock(
+        'kiwi_retention_archive_2026.sqlite',
+        'kiwi_retention_archive_2026_part_2.sqlite',
+        true
+    );
+
+    kiwi_assert_same('error', $result['result'], 'Expected a generation change during verification to abort recovery.');
+    kiwi_assert_same('replacement_generation_not_active', $result['reason_code'], 'Expected active-generation recheck failure.');
+    kiwi_assert_same(1, $supervisor_calls, 'Expected B to be verified before the generation changed.');
+    kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery state change after the post-check failed.');
 });
 
 kiwi_run_test('Cleanup rechecks corruption gate after receipt commit before MySQL delete', function (): void {
