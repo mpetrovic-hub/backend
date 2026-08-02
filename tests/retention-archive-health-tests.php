@@ -855,6 +855,38 @@ kiwi_run_test('Replacement requires an existing corruption gate on the source ar
     }
 });
 
+kiwi_run_test('Replacement requires its own corruption gate to be recovered first', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_replacement_own_gate');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $replacement = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026_part_2.sqlite';
+    file_put_contents($archive, 'archive-a');
+    file_put_contents($replacement, 'archive-b');
+    $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        $runs
+    );
+
+    try {
+        $coordinator->block_after_corruption($archive, 'integrity', 'sqlite_check_reported_corruption');
+        $coordinator->block_after_corruption($replacement, 'integrity', 'sqlite_check_reported_corruption');
+
+        $rejected = $coordinator->unblock($archive, $replacement);
+        kiwi_assert_same(false, $rejected['allowed'], 'Expected corrupt B not to complete A replacement.');
+        kiwi_assert_same('replacement_corruption_gate_open', $rejected['reason_code'], 'Expected explicit B gate reason.');
+        kiwi_assert_same([], $runs->terminalize_calls, 'Expected A run to remain resumable while B is blocked.');
+
+        $replacement_recovered = $coordinator->unblock($replacement);
+        kiwi_assert_same(true, $replacement_recovered['allowed'], 'Expected B to support its own confirmed recovery.');
+        $completed = $coordinator->unblock($archive, $replacement);
+        kiwi_assert_same(true, $completed['allowed'], 'Expected A replacement after B gate recovery.');
+        kiwi_assert_same(1, count($runs->terminalize_calls), 'Expected terminalization only after both generations are safe.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Replacement revalidates the source corruption gate under its lock', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_replacement_gate_race');
     $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
@@ -1059,6 +1091,44 @@ kiwi_run_test('Unblock corruption verification persists a gate on the checked ge
     kiwi_assert_same(1, count($gate->locked_incident_calls), 'Expected durable fallback Incident for the checked generation.');
     kiwi_assert_same(1, count($gate->block_calls), 'Expected parent reconciliation to complete the corruption gate transition.');
     kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery state change after corrupt verification.');
+});
+
+kiwi_run_test('Unblock maps persistence failures to exit 2 and deferrals to exit 1', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+    ]];
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function (): array {
+            return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $gate->unblock_result = [
+        'allowed' => false,
+        'reason_code' => 'corruption_incident_resolution_failed',
+        'write_blocked' => false,
+        'incident_open' => true,
+        'incident_action' => 'none',
+    ];
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $persistence_failure = $controller->unblock('kiwi_retention_archive_2026.sqlite', '', true);
+    $gate->unblock_result['reason_code'] = 'archive_lock_active';
+    $deferral = $controller->unblock('kiwi_retention_archive_2026.sqlite', '', true);
+
+    kiwi_assert_same('error', $persistence_failure['result'], 'Expected persistence failure classification.');
+    kiwi_assert_same(2, $persistence_failure['_exit_code'], 'Expected persistence failure exit 2.');
+    kiwi_assert_same('blocked', $deferral['result'], 'Expected lock deferral classification.');
+    kiwi_assert_same(1, $deferral['_exit_code'], 'Expected lock deferral exit 1.');
 });
 
 kiwi_run_test('Manual replacement permits the active generation after year rollover', function (): void {

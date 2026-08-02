@@ -367,16 +367,23 @@ final class Kiwi_Retention_Archive_Health_Controller
             (string) $archive['path'],
             is_array($replacement) ? (string) $replacement['path'] : ''
         );
+        $allowed = !empty($unblocked['allowed']);
+        $reason_code = (string) ($unblocked['reason_code'] ?? 'unblock_failed');
+        $is_expected_block = in_array($reason_code, [
+            'archive_lock_active',
+            'unblock_corruption_gate_required',
+            'replacement_corruption_gate_open',
+        ], true);
 
         return $this->result(
             'unblock',
-            !empty($unblocked['allowed']) ? 'ok' : 'blocked',
-            (string) ($unblocked['reason_code'] ?? 'unblock_failed'),
+            $allowed ? 'ok' : ($is_expected_block ? 'blocked' : 'error'),
+            $reason_code,
             (string) $archive['name'],
             'integrity',
             $started_at,
             $started,
-            !empty($unblocked['allowed']) ? 0 : 1,
+            $allowed ? 0 : ($is_expected_block ? 1 : 2),
             $unblocked
         );
     }
