@@ -974,6 +974,84 @@ kiwi_run_test('Manual replacement verifies explicit B before terminalizing A', f
     kiwi_assert_same(1, count($gate->unblock_calls), 'Expected A/B transition only after verification.');
 });
 
+kiwi_run_test('Unblock corruption verification persists a gate on the checked generation', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+    ]];
+    $persist_flags = [];
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function (string $path, string $check, bool $persist) use (&$persist_flags): array {
+            $persist_flags[] = $persist;
+
+            return [
+                'result' => 'corruption_detected',
+                'reason_code' => 'sqlite_check_reported_corruption',
+                'check_completed' => true,
+                'write_blocked' => false,
+            ];
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $result = $controller->unblock('kiwi_retention_archive_2026.sqlite', '', true);
+
+    kiwi_assert_same('blocked', $result['result'], 'Expected corruption to reject unblock.');
+    kiwi_assert_same([true], $persist_flags, 'Expected unblock verification to request fail-closed gate persistence.');
+    kiwi_assert_same(1, count($gate->locked_incident_calls), 'Expected durable fallback Incident for the checked generation.');
+    kiwi_assert_same(1, count($gate->block_calls), 'Expected parent reconciliation to complete the corruption gate transition.');
+    kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery state change after corrupt verification.');
+});
+
+kiwi_run_test('Manual replacement permits the active generation after year rollover', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [
+        ['name' => 'kiwi_retention_archive_2025.sqlite', 'path' => '/tmp/kiwi_retention_archive_2025.sqlite'],
+        ['name' => 'kiwi_retention_archive_2026.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026.sqlite'],
+    ];
+    $archive_service->resolved_archive_paths = [
+        '/tmp/kiwi_retention_archive_2026.sqlite',
+        '/tmp/kiwi_retention_archive_2026.sqlite',
+    ];
+    $verified_paths = [];
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function (string $path, string $check) use (&$verified_paths): array {
+            $verified_paths[] = [$path, $check];
+
+            return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $gate->unblock_result['reason_code'] = 'manual_replacement_unblocked';
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $result = $controller->unblock(
+        'kiwi_retention_archive_2025.sqlite',
+        'kiwi_retention_archive_2026.sqlite',
+        true
+    );
+
+    kiwi_assert_same('ok', $result['result'], 'Expected active current-year B to replace prior-year A.');
+    kiwi_assert_same('/tmp/kiwi_retention_archive_2026.sqlite', $verified_paths[0][0], 'Expected full verification of active B.');
+    kiwi_assert_same(1, count($gate->unblock_calls), 'Expected A/B transition after year rollover.');
+});
+
 kiwi_run_test('Manual replacement rejects a generation cleanup would not select', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [

@@ -281,8 +281,7 @@ final class Kiwi_Retention_Archive_Health_Controller
             $replacement_identity = Kiwi_Retention_Archive_Name::parse((string) $replacement['name']);
             if (!is_array($old_identity)
                 || !is_array($replacement_identity)
-                || (string) $old_identity['year'] !== (string) $replacement_identity['year']
-                || (int) $replacement_identity['generation'] <= (int) $old_identity['generation']
+                || (string) $old_identity['name'] === (string) $replacement_identity['name']
             ) {
                 return $this->result(
                     'unblock',
@@ -311,7 +310,30 @@ final class Kiwi_Retention_Archive_Health_Controller
         }
 
         $verification_target = is_array($replacement) ? $replacement : $archive;
-        $verification = $this->supervisor->run((string) $verification_target['path'], 'integrity');
+        $verification = $this->supervisor->run(
+            (string) $verification_target['path'],
+            'integrity',
+            true,
+            function (string $path, string $mode, string $reason_code): array {
+                return $this->safety_gate->record_corruption_incident_while_generation_locked(
+                    $path,
+                    $mode,
+                    $reason_code
+                );
+            }
+        );
+        if ((string) ($verification['result'] ?? '') === 'corruption_detected'
+            && !empty($verification['check_completed'])
+        ) {
+            $verification = array_merge(
+                $verification,
+                $this->safety_gate->block_after_corruption(
+                    (string) $verification_target['path'],
+                    'integrity',
+                    (string) ($verification['reason_code'] ?? 'sqlite_check_reported_corruption')
+                )
+            );
+        }
         if ((string) ($verification['result'] ?? '') !== 'ok'
             || empty($verification['check_completed'])
         ) {
