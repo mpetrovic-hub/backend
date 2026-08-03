@@ -133,11 +133,18 @@ if (PHP_SAPI === 'cli'
                                 'incident_open' => true,
                             ];
                         } else {
+                            do {
+                                sleep(5);
+                                $write_blocked = Kiwi_Retention_Archive_Write_Block::persist(
+                                    $real_path . '.lock'
+                                );
+                            } while (!$write_blocked);
+
                             $result = [
-                                'result' => 'error',
-                                'reason_code' => 'corruption_gate_persist_failed',
+                                'result' => 'corruption_detected',
+                                'reason_code' => 'sqlite_check_reported_corruption',
                                 'check_completed' => true,
-                                'write_blocked' => false,
+                                'write_blocked' => true,
                             ];
                         }
                     } else {

@@ -135,6 +135,7 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         $last_status = ['running' => true, 'exitcode' => -1];
         $lock_acquired = false;
         $gate_handoff_attempted = false;
+        $gate_handoff_failed = false;
         $gate_handoff = [];
         $timeout_seconds = $this->config->get_retention_archive_health_timeout_seconds();
 
@@ -167,14 +168,22 @@ final class Kiwi_Retention_Archive_Check_Supervisor
                     ];
                 } else {
                     $gate_handoff['handoff_acknowledged'] = true;
+                    $gate_handoff_failed = empty($gate_handoff['incident_open']);
                 }
             }
             $last_status = proc_get_status($process);
             if (empty($last_status['running'])) {
                 break;
             }
+            if ($gate_handoff_failed) {
+                break;
+            }
             if ((microtime(true) - $started) >= $timeout_seconds) {
                 $timed_out = true;
+                if ($lock_acquired) {
+                    break;
+                }
+
                 @proc_terminate($process);
                 $terminate_deadline = microtime(true) + 0.5;
                 do {
@@ -219,6 +228,14 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             $child_exit_code = $close_exit_code;
         }
         $duration = microtime(true) - $started;
+
+        if ($gate_handoff_failed) {
+            return $this->corruption_gate_failure([
+                'duration_seconds' => $duration,
+                'child_running' => $child_running,
+                'lock_acquired' => $lock_acquired,
+            ]);
+        }
 
         if ($timed_out) {
             return [

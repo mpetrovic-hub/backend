@@ -62,6 +62,14 @@ class Kiwi_Test_Lean_Archive_Service extends Kiwi_Retention_Sqlite_Archive_Servi
     }
 }
 
+class Kiwi_Test_One_Second_Archive_Health_Config extends Kiwi_Config
+{
+    public function get_retention_archive_health_timeout_seconds(): int
+    {
+        return 1;
+    }
+}
+
 class Kiwi_Test_Lean_Safety_Gate extends Kiwi_Retention_Corruption_Safety_Gate_Coordinator
 {
     public $inspect_result = [
@@ -422,6 +430,69 @@ kiwi_run_test('Surviving child lock blocks a second health child and cleanup', f
     }
 });
 
+kiwi_run_test('Supervisor never terminates a locked child before its timeout-edge gate is durable', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_timeout_gate_handoff');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $child = $root . DIRECTORY_SEPARATOR . 'timeout-edge-child.php';
+    file_put_contents($archive, 'fixture');
+    file_put_contents($child, <<<'PHP'
+<?php
+$payload = json_decode((string) base64_decode((string) ($argv[2] ?? ''), true), true);
+$archive = (string) ($payload['archive_path'] ?? '');
+$readiness = (string) ($payload['readiness_path'] ?? '');
+$lock = fopen($archive . '.lock', 'c+');
+flock($lock, LOCK_EX);
+file_put_contents($readiness, 'locked');
+usleep(1250000);
+file_put_contents(
+    $archive . '.lock.write-blocked',
+    "kiwi_retention_archive_write_blocked_v1\n"
+);
+flock($lock, LOCK_UN);
+fclose($lock);
+echo '{"result":"corruption_detected","reason_code":"sqlite_check_reported_corruption","check_completed":true,"write_blocked":true}';
+PHP
+    );
+
+    try {
+        $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Test_One_Second_Archive_Health_Config(),
+            null,
+            $child
+        );
+        $result = $supervisor->run($archive, 'integrity', true);
+
+        kiwi_assert_same('inconclusive', $result['result'], 'Expected the wall-clock timeout result.');
+        kiwi_assert_same('health_child_timeout', $result['reason_code'], 'Expected explicit timeout reason.');
+        kiwi_assert_same(true, $result['child_running'], 'Expected the locked child to survive timeout termination.');
+        kiwi_assert_same(true, $result['lock_acquired'], 'Expected observed generation-lock ownership.');
+
+        $during = (new Kiwi_Retention_Archive_Lock())->acquire_for_archive($archive);
+        kiwi_assert_same(false, !empty($during['acquired']), 'Expected cleanup to remain locked out after parent timeout.');
+
+        $deadline = microtime(true) + 3.0;
+        do {
+            usleep(20000);
+            $write_blocked = is_file($archive . '.lock.write-blocked');
+        } while (!$write_blocked && microtime(true) < $deadline);
+        kiwi_assert_same(true, $write_blocked, 'Expected the timeout-edge child to persist its corruption gate before releasing the lock.');
+
+        $deadline = microtime(true) + 3.0;
+        $after = null;
+        do {
+            $after = (new Kiwi_Retention_Archive_Lock())->acquire_for_archive($archive);
+            if (!empty($after['acquired'])) {
+                break;
+            }
+            usleep(20000);
+        } while (microtime(true) < $deadline);
+        kiwi_assert_true(is_array($after) && !empty($after['acquired']), 'Expected child exit only after the durable gate existed.');
+        (new Kiwi_Retention_Archive_Lock())->release($after['handle'] ?? null);
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Supervisor accepts corruption only from a completed PRAGMA result', function (): void {
     $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
         new Kiwi_Config(),
@@ -640,6 +711,27 @@ kiwi_run_test('Health controller reports unreadable corruption gates as Availabi
     kiwi_assert_same(2, $result['_exit_code'], 'Expected unreadable gate state to exit 2.');
     kiwi_assert_same('raised', $result['incident_action'] ?? '', 'Expected the gate outage to raise Availability.');
     kiwi_assert_same(0, $supervisor_calls, 'Expected no PRAGMA while gate state is unreadable.');
+
+    $gate->inspect_result = [
+        'allowed' => false,
+        'reason_code' => 'replacement_transition_state_invalid',
+        'write_blocked' => false,
+        'corruption_write_blocked' => false,
+        'replacement_transition_blocked' => false,
+        'incident_open' => false,
+        'incident_action' => 'none',
+    ];
+    $malformed_transition = $controller->check('integrity');
+
+    kiwi_assert_same('error', $malformed_transition['result'], 'Expected malformed transition state to remain a technical error.');
+    kiwi_assert_same(
+        'replacement_transition_state_invalid',
+        $malformed_transition['reason_code'],
+        'Expected the malformed transition reason to remain visible.'
+    );
+    kiwi_assert_same(2, $malformed_transition['_exit_code'], 'Expected malformed transition state to exit 2.');
+    kiwi_assert_same('repeated', $malformed_transition['incident_action'] ?? '', 'Expected the gate outage to repeat Availability.');
+    kiwi_assert_same(0, $supervisor_calls, 'Expected no PRAGMA while replacement transition state is malformed.');
 });
 
 kiwi_run_test('Health controller never promotes incomplete exceptions to corruption gates', function (): void {
@@ -838,6 +930,34 @@ kiwi_run_test('Corruption safety gate fails closed when Incident state is unread
 
     kiwi_assert_same(false, $result['allowed'], 'Expected unreadable Incident state to block cleanup.');
     kiwi_assert_same('corruption_incident_lookup_failed', $result['reason_code'], 'Expected explicit fail-closed reason.');
+});
+
+kiwi_run_test('Corruption safety gate rejects malformed replacement transition markers', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_invalid_transition_marker');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    file_put_contents($archive, 'fixture');
+    file_put_contents(
+        Kiwi_Retention_Archive_Write_Block::get_replacement_transition_path($archive . '.lock'),
+        "truncated-transition-state\n"
+    );
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        new Kiwi_Retention_Archive_Lock(),
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Manual_Replacement_Run_Repository()
+    );
+
+    try {
+        $result = $coordinator->inspect($archive);
+
+        kiwi_assert_same(false, $result['allowed'], 'Expected malformed replacement state to fail closed.');
+        kiwi_assert_same(
+            'replacement_transition_state_invalid',
+            $result['reason_code'],
+            'Expected malformed transition state to remain a technical error.'
+        );
+    } finally {
+        kiwi_remove_directory($root);
+    }
 });
 
 kiwi_run_test('Corruption safety gate rechecks a lone sentinel under the generation lock', function (): void {

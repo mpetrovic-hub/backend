@@ -32,11 +32,19 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
     {
         $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
         $write_blocked = $this->lock_service->is_write_blocked_for_archive($archive_path);
-        $transition_blocked = $this->lock_service
-            ->is_replacement_transition_blocked_for_archive($archive_path);
-        if ($archive === '' || $write_blocked === null || $transition_blocked === null) {
+        if ($archive === '' || $write_blocked === null) {
             return $this->blocked('archive_gate_path_invalid', false, false);
         }
+        $transition_source = $this->lock_service
+            ->get_replacement_transition_source_for_archive($archive_path);
+        if ($transition_source === null) {
+            return $this->blocked(
+                'replacement_transition_state_invalid',
+                (bool) $write_blocked,
+                false
+            );
+        }
+        $transition_blocked = $transition_source !== '';
 
         $incidents = $this->operational_event_service->get_open_incidents([
             'event_type' => self::EVENT_TYPE,

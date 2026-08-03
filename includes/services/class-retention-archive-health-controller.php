@@ -83,6 +83,7 @@ final class Kiwi_Retention_Archive_Health_Controller
             if (in_array($gate_reason, [
                 'archive_gate_path_invalid',
                 'corruption_incident_lookup_failed',
+                'replacement_transition_state_invalid',
             ], true)) {
                 $incident_action = $this->record_availability_failure(
                     $gate_reason,
