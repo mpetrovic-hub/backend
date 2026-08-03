@@ -170,7 +170,8 @@ final class Kiwi_Retention_Archive_Health_Controller
                     $incident_action = $this->record_availability_failure(
                         $post_check_reason,
                         $archive,
-                        $check
+                        $check,
+                        $started_at
                     );
 
                     return $this->result(

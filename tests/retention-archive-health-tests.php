@@ -859,6 +859,20 @@ kiwi_run_test('Health controller rechecks Incident state before accepting a heal
             'incident_open' => true,
             'incident_action' => 'none',
         ],
+        [
+            'allowed' => true,
+            'reason_code' => 'corruption_gate_clear',
+            'write_blocked' => false,
+            'incident_open' => false,
+            'incident_action' => 'none',
+        ],
+        [
+            'allowed' => false,
+            'reason_code' => 'replacement_transition_state_invalid',
+            'write_blocked' => false,
+            'incident_open' => false,
+            'incident_action' => 'none',
+        ],
     ]);
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
     $controller = new Kiwi_Retention_Archive_Health_Controller(
@@ -871,6 +885,7 @@ kiwi_run_test('Health controller rechecks Incident state before accepting a heal
 
     $first = $controller->check('integrity');
     $second = $controller->check('quick');
+    $third = $controller->check('quick');
     $availability = $events->get_open_incidents([
         'event_type' => 'retention_archive_health_unavailable',
     ], 10);
@@ -879,6 +894,9 @@ kiwi_run_test('Health controller rechecks Incident state before accepting a heal
     kiwi_assert_same('blocked', $second['result'], 'Expected the post-child Incident recheck to block success.');
     kiwi_assert_same('archive_corruption_incident_open', $second['reason_code'], 'Expected the late Incident reason.');
     kiwi_assert_same(1, $second['_exit_code'], 'Expected a fail-closed operational block.');
+    kiwi_assert_same('error', $third['result'], 'Expected late malformed gate state to remain technical.');
+    kiwi_assert_same('replacement_transition_state_invalid', $third['reason_code'], 'Expected the technical post-check reason.');
+    kiwi_assert_same(2, $third['_exit_code'], 'Expected technical post-check state to exit 2.');
     kiwi_assert_same(1, count($availability ?? []), 'Expected Availability to remain open after the stale healthy result.');
 });
 
