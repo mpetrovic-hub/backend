@@ -185,24 +185,6 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             }
             if ((microtime(true) - $started) >= $timeout_seconds) {
                 $timed_out = true;
-                if ($lock_acquired) {
-                    break;
-                }
-
-                @proc_terminate($process);
-                $terminate_deadline = microtime(true) + 0.5;
-                do {
-                    usleep(20000);
-                    $last_status = proc_get_status($process);
-                } while (!empty($last_status['running']) && microtime(true) < $terminate_deadline);
-                if (!empty($last_status['running'])) {
-                    @proc_terminate($process, 9);
-                }
-                $reap_deadline = microtime(true) + 2.0;
-                do {
-                    usleep(20000);
-                    $last_status = proc_get_status($process);
-                } while (!empty($last_status['running']) && microtime(true) < $reap_deadline);
                 break;
             }
             usleep(20000);

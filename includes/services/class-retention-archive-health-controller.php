@@ -157,6 +157,53 @@ final class Kiwi_Retention_Archive_Health_Controller
         $outcome_result = (string) ($outcome['result'] ?? 'error');
         $check_completed = !empty($outcome['check_completed']);
         if ($outcome_result === 'ok' && $check_completed) {
+            $post_check_gate = $this->safety_gate->inspect($archive_path, false);
+            if (empty($post_check_gate['allowed'])) {
+                $post_check_reason = (string) (
+                    $post_check_gate['reason_code'] ?? 'corruption_gate_state_invalid'
+                );
+                if (in_array($post_check_reason, [
+                    'archive_gate_path_invalid',
+                    'corruption_incident_lookup_failed',
+                    'replacement_transition_state_invalid',
+                ], true)) {
+                    $incident_action = $this->record_availability_failure(
+                        $post_check_reason,
+                        $archive,
+                        $check
+                    );
+
+                    return $this->result(
+                        'check',
+                        'error',
+                        $incident_action === ''
+                            ? 'availability_incident_persist_failed'
+                            : $post_check_reason,
+                        $archive,
+                        $check,
+                        $started_at,
+                        $started,
+                        2,
+                        array_merge($outcome, $post_check_gate, [
+                            'incident_action' => $incident_action,
+                        ])
+                    );
+                }
+
+                return $this->result(
+                    'check',
+                    'blocked',
+                    $post_check_reason,
+                    $archive,
+                    $check,
+                    $started_at,
+                    $started,
+                    1,
+                    array_merge($outcome, $post_check_gate, [
+                        'incident_action' => 'none',
+                    ])
+                );
+            }
             $incident_action = $this->record_availability_recovery($archive, $check);
 
             return $this->result(

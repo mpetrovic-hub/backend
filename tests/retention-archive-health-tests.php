@@ -593,6 +593,53 @@ PHP
     }
 });
 
+kiwi_run_test('Supervisor never terminates a child that acquires its lock after timeout sampling', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_timeout_prelock_handoff');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $child = $root . DIRECTORY_SEPARATOR . 'timeout-prelock-child.php';
+    file_put_contents($archive, 'fixture');
+    file_put_contents($child, <<<'PHP'
+<?php
+$payload = json_decode((string) base64_decode((string) ($argv[2] ?? ''), true), true);
+$archive = (string) ($payload['archive_path'] ?? '');
+$readiness = (string) ($payload['readiness_path'] ?? '');
+usleep(1250000);
+$lock = fopen($archive . '.lock', 'c+');
+flock($lock, LOCK_EX);
+file_put_contents($readiness, 'locked');
+file_put_contents(
+    $archive . '.lock.write-blocked',
+    "kiwi_retention_archive_write_blocked_v1\n"
+);
+flock($lock, LOCK_UN);
+fclose($lock);
+echo '{"result":"corruption_detected","reason_code":"sqlite_check_reported_corruption","check_completed":true,"write_blocked":true}';
+PHP
+    );
+
+    try {
+        $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Test_One_Second_Archive_Health_Config(),
+            null,
+            $child
+        );
+        $result = $supervisor->run($archive, 'integrity', true);
+
+        kiwi_assert_same('health_child_timeout', $result['reason_code'], 'Expected wall-clock timeout before readiness.');
+        kiwi_assert_same(true, $result['child_running'], 'Expected the pre-lock child to survive timeout.');
+        kiwi_assert_same(false, $result['lock_acquired'], 'Expected no stale claim that readiness was already observed.');
+
+        $deadline = microtime(true) + 3.0;
+        do {
+            usleep(20000);
+            $write_blocked = is_file($archive . '.lock.write-blocked');
+        } while (!$write_blocked && microtime(true) < $deadline);
+        kiwi_assert_same(true, $write_blocked, 'Expected the surviving child to establish its durable gate later.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Supervisor accepts corruption only from a completed PRAGMA result', function (): void {
     $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
         new Kiwi_Config(),
@@ -769,6 +816,70 @@ kiwi_run_test('Health controller does not resolve Availability from a transition
     kiwi_assert_same('none', $transition['incident_action'] ?? 'none', 'Expected no false Availability recovery from a transition marker.');
     kiwi_assert_same(1, count($availability ?? []), 'Expected the Availability Incident to remain open without definitive corruption evidence.');
     kiwi_assert_same(1, $supervisor_calls, 'Expected no additional PRAGMA while the transition marker remains active.');
+});
+
+kiwi_run_test('Health controller rechecks Incident state before accepting a healthy child result', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+    ]];
+    $supervisor_calls = 0;
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function () use (&$supervisor_calls): array {
+            $supervisor_calls++;
+
+            return $supervisor_calls === 1
+                ? ['result' => 'inconclusive', 'reason_code' => 'health_child_timeout', 'check_completed' => false]
+                : ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
+        }
+    );
+    $gate = new Kiwi_Test_Sequenced_Safety_Gate([
+        [
+            'allowed' => true,
+            'reason_code' => 'corruption_gate_clear',
+            'write_blocked' => false,
+            'incident_open' => false,
+            'incident_action' => 'none',
+        ],
+        [
+            'allowed' => true,
+            'reason_code' => 'corruption_gate_clear',
+            'write_blocked' => false,
+            'incident_open' => false,
+            'incident_action' => 'none',
+        ],
+        [
+            'allowed' => false,
+            'reason_code' => 'archive_corruption_incident_open',
+            'write_blocked' => false,
+            'corruption_write_blocked' => false,
+            'replacement_transition_blocked' => false,
+            'incident_open' => true,
+            'incident_action' => 'none',
+        ],
+    ]);
+    $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        $events,
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $first = $controller->check('integrity');
+    $second = $controller->check('quick');
+    $availability = $events->get_open_incidents([
+        'event_type' => 'retention_archive_health_unavailable',
+    ], 10);
+
+    kiwi_assert_same('inconclusive', $first['result'], 'Expected the first timeout to open Availability.');
+    kiwi_assert_same('blocked', $second['result'], 'Expected the post-child Incident recheck to block success.');
+    kiwi_assert_same('archive_corruption_incident_open', $second['reason_code'], 'Expected the late Incident reason.');
+    kiwi_assert_same(1, $second['_exit_code'], 'Expected a fail-closed operational block.');
+    kiwi_assert_same(1, count($availability ?? []), 'Expected Availability to remain open after the stale healthy result.');
 });
 
 kiwi_run_test('Health controller reports unreadable corruption gates as Availability errors', function (): void {
