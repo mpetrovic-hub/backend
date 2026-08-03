@@ -89,71 +89,96 @@ if (PHP_SAPI === 'cli'
                 }
                 @fclose($readiness_resource);
 
-                $uri_path = implode('/', array_map(
-                    'rawurlencode',
-                    explode('/', str_replace('\\', '/', $real_path))
-                ));
-                $pdo = new PDO('sqlite:file:' . $uri_path . '?mode=ro');
-                $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                $pdo->exec('PRAGMA query_only = ON');
-                $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
-                $rows = is_array($rows) ? array_values(array_map('strval', $rows)) : [];
-                if (count($rows) === 1 && strtolower(trim($rows[0])) === 'ok') {
+                $write_blocked = Kiwi_Retention_Archive_Write_Block::exists(
+                    $real_path . '.lock'
+                );
+                $transition_source = Kiwi_Retention_Archive_Write_Block
+                    ::get_replacement_transition_source($real_path . '.lock');
+                if ($transition_source === null) {
                     $result = [
-                        'result' => 'ok',
-                        'reason_code' => 'sqlite_check_ok',
-                        'check_completed' => true,
+                        'result' => 'error',
+                        'reason_code' => 'replacement_transition_state_invalid',
+                        'check_completed' => false,
+                    ];
+                } elseif ($write_blocked) {
+                    $result = [
+                        'result' => 'deferred',
+                        'reason_code' => 'archive_corruption_write_blocked',
+                        'check_completed' => false,
+                    ];
+                } elseif ($transition_source !== '') {
+                    $result = [
+                        'result' => 'deferred',
+                        'reason_code' => 'replacement_transition_write_blocked',
+                        'check_completed' => false,
                     ];
                 } else {
-                    $write_blocked = false;
-                    if ($persist_write_block_on_corruption) {
-                        $write_blocked = Kiwi_Retention_Archive_Write_Block::persist(
-                            $real_path . '.lock'
-                        );
-                    }
-                    if ($persist_write_block_on_corruption && !$write_blocked) {
-                        $handoff_state = '';
-                        if ($write_readiness_state($readiness_path, 'corruption_gate_required')) {
-                            $handoff_deadline = microtime(true) + $corruption_handoff_timeout_seconds;
-                            do {
-                                usleep(20000);
-                                $handoff_state = (string) @file_get_contents($readiness_path);
-                            } while (!in_array($handoff_state, [
-                                'corruption_gate_persisted',
-                                'corruption_gate_failed',
-                            ], true) && microtime(true) < $handoff_deadline);
-                        }
-
-                        if ($handoff_state === 'corruption_gate_persisted') {
-                            $result = [
-                                'result' => 'corruption_detected',
-                                'reason_code' => 'sqlite_check_reported_corruption',
-                                'check_completed' => true,
-                                'write_blocked' => false,
-                                'incident_open' => true,
-                            ];
-                        } else {
-                            do {
-                                sleep(5);
-                                $write_blocked = Kiwi_Retention_Archive_Write_Block::persist(
-                                    $real_path . '.lock'
-                                );
-                            } while (!$write_blocked);
-
-                            $result = [
-                                'result' => 'corruption_detected',
-                                'reason_code' => 'sqlite_check_reported_corruption',
-                                'check_completed' => true,
-                                'write_blocked' => true,
-                            ];
-                        }
-                    } else {
+                    $uri_path = implode('/', array_map(
+                        'rawurlencode',
+                        explode('/', str_replace('\\', '/', $real_path))
+                    ));
+                    $pdo = new PDO('sqlite:file:' . $uri_path . '?mode=ro');
+                    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+                    $pdo->exec('PRAGMA query_only = ON');
+                    $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
+                    $rows = is_array($rows) ? array_values(array_map('strval', $rows)) : [];
+                    if (count($rows) === 1 && strtolower(trim($rows[0])) === 'ok') {
                         $result = [
-                            'result' => 'corruption_detected',
-                            'reason_code' => 'sqlite_check_reported_corruption',
+                            'result' => 'ok',
+                            'reason_code' => 'sqlite_check_ok',
                             'check_completed' => true,
-                            'write_blocked' => $write_blocked,
                         ];
+                    } else {
+                        $write_blocked = false;
+                        if ($persist_write_block_on_corruption) {
+                            $write_blocked = Kiwi_Retention_Archive_Write_Block::persist(
+                                $real_path . '.lock'
+                            );
+                        }
+                        if ($persist_write_block_on_corruption && !$write_blocked) {
+                            $handoff_state = '';
+                            if ($write_readiness_state($readiness_path, 'corruption_gate_required')) {
+                                $handoff_deadline = microtime(true) + $corruption_handoff_timeout_seconds;
+                                do {
+                                    usleep(20000);
+                                    $handoff_state = (string) @file_get_contents($readiness_path);
+                                } while (!in_array($handoff_state, [
+                                    'corruption_gate_persisted',
+                                    'corruption_gate_failed',
+                                ], true) && microtime(true) < $handoff_deadline);
+                            }
+
+                            if ($handoff_state === 'corruption_gate_persisted') {
+                                $result = [
+                                    'result' => 'corruption_detected',
+                                    'reason_code' => 'sqlite_check_reported_corruption',
+                                    'check_completed' => true,
+                                    'write_blocked' => false,
+                                    'incident_open' => true,
+                                ];
+                            } else {
+                                do {
+                                    sleep(5);
+                                    $write_blocked = Kiwi_Retention_Archive_Write_Block::persist(
+                                        $real_path . '.lock'
+                                    );
+                                } while (!$write_blocked);
+
+                                $result = [
+                                    'result' => 'corruption_detected',
+                                    'reason_code' => 'sqlite_check_reported_corruption',
+                                    'check_completed' => true,
+                                    'write_blocked' => true,
+                                ];
+                            }
+                        } else {
+                            $result = [
+                                'result' => 'corruption_detected',
+                                'reason_code' => 'sqlite_check_reported_corruption',
+                                'check_completed' => true,
+                                'write_blocked' => $write_blocked,
+                            ];
+                        }
                     }
                 }
             }

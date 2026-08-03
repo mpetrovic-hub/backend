@@ -155,9 +155,15 @@ class Kiwi_Test_Gate_Clearing_Archive_Lock extends Kiwi_Retention_Archive_Lock
 {
     public $clear_before_next_acquire = '';
     public $corrupt_transition_before_next_acquire = '';
+    public $before_next_acquire = null;
 
     public function acquire_for_archive(string $archive_db_path): array
     {
+        if (is_callable($this->before_next_acquire)) {
+            $callback = $this->before_next_acquire;
+            $this->before_next_acquire = null;
+            $callback();
+        }
         if ($this->clear_before_next_acquire !== ''
             && $archive_db_path === $this->clear_before_next_acquire
         ) {
@@ -438,6 +444,60 @@ kiwi_run_test('Surviving child lock blocks a second health child and cleanup', f
                 fclose($pipe);
             }
         }
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Health child rechecks replacement transition state under its generation lock', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_child_transition_recheck');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $readiness = $root . DIRECTORY_SEPARATOR
+        . '.kiwi_retention_health_child_' . str_repeat('a', 32) . '.ready';
+    $sqlite_php = [PHP_BINARY];
+    if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        $sqlite_extension = dirname(PHP_BINARY) . DIRECTORY_SEPARATOR
+            . 'ext' . DIRECTORY_SEPARATOR . 'php_pdo_sqlite.dll';
+        kiwi_assert_true(is_file($sqlite_extension), 'Expected the test PHP SQLite extension.');
+        $sqlite_php[] = '-d';
+        $sqlite_php[] = 'extension_dir=' . dirname($sqlite_extension);
+        $sqlite_php[] = '-d';
+        $sqlite_php[] = 'extension=' . basename($sqlite_extension);
+    }
+    $fixture = kiwi_run_retention_process(array_merge($sqlite_php, [
+        '-r',
+        '$pdo=new PDO("sqlite:".$argv[1]);$pdo->exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY)");',
+        $archive,
+    ]));
+    kiwi_assert_same(0, $fixture['exit_code'], 'Expected the SQLite fixture to be created.');
+    Kiwi_Retention_Archive_Write_Block::persist_replacement_transition(
+        $archive . '.lock',
+        'kiwi_retention_archive_2025.sqlite'
+    );
+
+    try {
+        $payload = base64_encode((string) json_encode([
+            'archive_path' => $archive,
+            'readiness_path' => $readiness,
+            'check' => 'quick',
+            'persist_write_block_on_corruption' => true,
+            'corruption_handoff_timeout_seconds' => 30,
+        ]));
+        $process = kiwi_run_retention_process(array_merge($sqlite_php, [
+            __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+            '--kiwi-retention-health-child',
+            $payload,
+        ]));
+        $result = json_decode((string) $process['stdout'], true);
+
+        kiwi_assert_same(1, $process['exit_code'], 'Expected a transition gate to defer the child.');
+        kiwi_assert_same('deferred', $result['result'] ?? '', 'Expected no definitive SQLite result behind the gate.');
+        kiwi_assert_same(
+            'replacement_transition_write_blocked',
+            $result['reason_code'] ?? '',
+            'Expected the under-lock replacement gate reason.'
+        );
+        kiwi_assert_same(false, $result['check_completed'] ?? true, 'Expected PRAGMA not to run behind the gate.');
+    } finally {
         kiwi_remove_directory($root);
     }
 });
@@ -1081,6 +1141,55 @@ kiwi_run_test('Sentinel-present corruption recording cannot reopen a concurrent 
             'Expected recovery under the generation lock to invalidate stale check evidence.'
         );
         kiwi_assert_same(false, $lock->is_write_blocked_for_archive($archive), 'Expected no stale sentinel recreation.');
+        kiwi_assert_same([], $events->get_open_incidents([
+            'event_type' => 'retention_archive_corruption_detected',
+            'reference_id' => basename($archive),
+        ]), 'Expected no stale Corruption Incident recreation.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Incident-only corruption recording cannot reopen a concurrent recovery', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_incident_record_recovery_race');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    file_put_contents($archive, 'fixture');
+    $lock = new Kiwi_Test_Gate_Clearing_Archive_Lock();
+    $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        $events,
+        new Kiwi_Test_Manual_Replacement_Run_Repository()
+    );
+    $incident = $coordinator->record_corruption_incident_while_generation_locked(
+        $archive,
+        'integrity',
+        'sqlite_check_reported_corruption'
+    );
+    kiwi_assert_same(true, $incident['incident_open'], 'Expected incident-only fallback fixture.');
+    $recovery = null;
+    $lock->before_next_acquire = static function () use (
+        $coordinator,
+        $archive,
+        &$recovery
+    ): void {
+        $recovery = $coordinator->unblock($archive);
+    };
+
+    try {
+        $result = $coordinator->block_after_corruption(
+            $archive,
+            'integrity',
+            'sqlite_check_reported_corruption'
+        );
+
+        kiwi_assert_same(true, $recovery['allowed'] ?? false, 'Expected concurrent recovery to complete first.');
+        kiwi_assert_same(
+            'corruption_gate_recovered_concurrently',
+            $result['reason_code'],
+            'Expected recovery of the incident-only gate to invalidate stale check evidence.'
+        );
+        kiwi_assert_same(false, $lock->is_write_blocked_for_archive($archive), 'Expected no stale sentinel creation.');
         kiwi_assert_same([], $events->get_open_incidents([
             'event_type' => 'retention_archive_corruption_detected',
             'reference_id' => basename($archive),
