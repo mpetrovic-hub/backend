@@ -348,7 +348,8 @@ final class Kiwi_Retention_Archive_Health_Controller
                     $mode,
                     $reason_code
                 );
-            }
+            },
+            true
         );
         if ((string) ($verification['result'] ?? '') === 'corruption_detected'
             && !empty($verification['check_completed'])

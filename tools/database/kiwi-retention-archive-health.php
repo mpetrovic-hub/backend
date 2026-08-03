@@ -15,6 +15,8 @@ if (PHP_SAPI === 'cli'
     $check = is_array($payload) ? strtolower(trim((string) ($payload['check'] ?? ''))) : '';
     $persist_write_block_on_corruption = is_array($payload)
         && !empty($payload['persist_write_block_on_corruption']);
+    $allow_blocked_recovery_verification = is_array($payload)
+        && !empty($payload['allow_blocked_recovery_verification']);
     $corruption_handoff_timeout_seconds = is_array($payload)
         ? min(3600, max(30, (int) ($payload['corruption_handoff_timeout_seconds'] ?? 600)))
         : 600;
@@ -100,13 +102,13 @@ if (PHP_SAPI === 'cli'
                         'reason_code' => 'replacement_transition_state_invalid',
                         'check_completed' => false,
                     ];
-                } elseif ($write_blocked) {
+                } elseif ($write_blocked && !$allow_blocked_recovery_verification) {
                     $result = [
                         'result' => 'deferred',
                         'reason_code' => 'archive_corruption_write_blocked',
                         'check_completed' => false,
                     ];
-                } elseif ($transition_source !== '') {
+                } elseif ($transition_source !== '' && !$allow_blocked_recovery_verification) {
                     $result = [
                         'result' => 'deferred',
                         'reason_code' => 'replacement_transition_write_blocked',

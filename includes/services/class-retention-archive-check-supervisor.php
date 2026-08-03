@@ -32,7 +32,8 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         string $archive_path,
         string $check,
         bool $persist_write_block_on_corruption = false,
-        ?callable $corruption_gate_fallback = null
+        ?callable $corruption_gate_fallback = null,
+        bool $allow_blocked_recovery_verification = false
     ): array
     {
         $check = strtolower(trim($check));
@@ -47,7 +48,8 @@ final class Kiwi_Retention_Archive_Check_Supervisor
                         $this->runner,
                         $archive_path,
                         $check,
-                        $persist_write_block_on_corruption
+                        $persist_write_block_on_corruption,
+                        $allow_blocked_recovery_verification
                     )
                 );
 
@@ -67,7 +69,8 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             $archive_path,
             $check,
             $persist_write_block_on_corruption,
-            $corruption_gate_fallback
+            $corruption_gate_fallback,
+            $allow_blocked_recovery_verification
         );
     }
 
@@ -75,7 +78,8 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         string $archive_path,
         string $check,
         bool $persist_write_block_on_corruption,
-        ?callable $corruption_gate_fallback
+        ?callable $corruption_gate_fallback,
+        bool $allow_blocked_recovery_verification
     ): array
     {
         $started = microtime(true);
@@ -103,6 +107,7 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             'check' => $check,
             'readiness_path' => $readiness_path,
             'persist_write_block_on_corruption' => $persist_write_block_on_corruption,
+            'allow_blocked_recovery_verification' => $allow_blocked_recovery_verification,
             'corruption_handoff_timeout_seconds' => $this->config->get_retention_archive_health_timeout_seconds(),
         ]);
         if (!is_string($payload)) {

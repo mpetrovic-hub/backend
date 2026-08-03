@@ -497,6 +497,34 @@ kiwi_run_test('Health child rechecks replacement transition state under its gene
             'Expected the under-lock replacement gate reason.'
         );
         kiwi_assert_same(false, $result['check_completed'] ?? true, 'Expected PRAGMA not to run behind the gate.');
+
+        $recovery_payload = base64_encode((string) json_encode([
+            'archive_path' => $archive,
+            'readiness_path' => $readiness,
+            'check' => 'integrity',
+            'persist_write_block_on_corruption' => true,
+            'allow_blocked_recovery_verification' => true,
+            'corruption_handoff_timeout_seconds' => 30,
+        ]));
+        $replacement_recovery = kiwi_run_retention_process(array_merge($sqlite_php, [
+            __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+            '--kiwi-retention-health-child',
+            $recovery_payload,
+        ]));
+        $replacement_result = json_decode((string) $replacement_recovery['stdout'], true);
+        kiwi_assert_same(0, $replacement_recovery['exit_code'], 'Expected confirmed replacement recovery verification behind its gate.');
+        kiwi_assert_same('ok', $replacement_result['result'] ?? '', 'Expected the verified replacement archive to remain healthy.');
+
+        Kiwi_Retention_Archive_Write_Block::clear_replacement_transition($archive . '.lock');
+        Kiwi_Retention_Archive_Write_Block::persist($archive . '.lock');
+        $repair_recovery = kiwi_run_retention_process(array_merge($sqlite_php, [
+            __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+            '--kiwi-retention-health-child',
+            $recovery_payload,
+        ]));
+        $repair_result = json_decode((string) $repair_recovery['stdout'], true);
+        kiwi_assert_same(0, $repair_recovery['exit_code'], 'Expected confirmed in-place recovery verification behind its gate.');
+        kiwi_assert_same('ok', $repair_result['result'] ?? '', 'Expected the repaired archive to pass integrity verification.');
     } finally {
         kiwi_remove_directory($root);
     }
@@ -1488,10 +1516,17 @@ kiwi_run_test('Manual replacement verifies explicit B before terminalizing A', f
         ['name' => 'kiwi_retention_archive_2026_part_2.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026_part_2.sqlite'],
     ];
     $verified_paths = [];
+    $recovery_flags = [];
     $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
         new Kiwi_Config(),
-        static function (string $path, string $check) use (&$verified_paths): array {
+        static function (
+            string $path,
+            string $check,
+            bool $persist,
+            bool $allow_blocked_recovery
+        ) use (&$verified_paths, &$recovery_flags): array {
             $verified_paths[] = [$path, $check];
+            $recovery_flags[] = $allow_blocked_recovery;
 
             return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
         }
@@ -1515,6 +1550,7 @@ kiwi_run_test('Manual replacement verifies explicit B before terminalizing A', f
     kiwi_assert_same('ok', $result['result'], 'Expected explicit replacement unblock.');
     kiwi_assert_same('/tmp/kiwi_retention_archive_2026_part_2.sqlite', $verified_paths[0][0], 'Expected B to receive the full integrity check.');
     kiwi_assert_same('integrity', $verified_paths[0][1], 'Expected full integrity mode.');
+    kiwi_assert_same([true], $recovery_flags, 'Expected confirmed unblock to verify behind an existing gate.');
     kiwi_assert_same(1, count($gate->unblock_calls), 'Expected A/B transition only after verification.');
 });
 
@@ -1685,10 +1721,17 @@ kiwi_run_test('Manual replacement permits the active generation after year rollo
         '/tmp/kiwi_retention_archive_2026.sqlite',
     ];
     $verified_paths = [];
+    $recovery_flags = [];
     $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
         new Kiwi_Config(),
-        static function (string $path, string $check) use (&$verified_paths): array {
+        static function (
+            string $path,
+            string $check,
+            bool $persist,
+            bool $allow_blocked_recovery
+        ) use (&$verified_paths, &$recovery_flags): array {
             $verified_paths[] = [$path, $check];
+            $recovery_flags[] = $allow_blocked_recovery;
 
             return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
         }
@@ -1711,6 +1754,7 @@ kiwi_run_test('Manual replacement permits the active generation after year rollo
 
     kiwi_assert_same('ok', $result['result'], 'Expected active current-year B to replace prior-year A.');
     kiwi_assert_same('/tmp/kiwi_retention_archive_2026.sqlite', $verified_paths[0][0], 'Expected full verification of active B.');
+    kiwi_assert_same([true], $recovery_flags, 'Expected rollover unblock to verify behind an existing gate.');
     kiwi_assert_same(1, count($gate->unblock_calls), 'Expected A/B transition after year rollover.');
 });
 
