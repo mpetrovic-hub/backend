@@ -42,6 +42,20 @@ class Kiwi_Operational_Event_Service
         }
     }
 
+    public function get_latest_event_for_correlation(string $correlation_key): ?array
+    {
+        $correlation_key = $this->normalize_key($correlation_key, 191);
+        if ($correlation_key === '') {
+            return null;
+        }
+
+        try {
+            return $this->repository->find_latest_by_correlation_key($correlation_key);
+        } catch (Throwable $error) {
+            return null;
+        }
+    }
+
     public function record_failure_action(array $event): string
     {
         return $this->record_failure_action_conditionally($event, null);
@@ -66,10 +80,10 @@ class Kiwi_Operational_Event_Service
             $transition = $this->repository->with_correlation_lifecycle_lock(
                 $correlation_key,
                 function () use ($event, $correlation_key, $should_persist): array {
-                    if (is_callable($should_persist) && !$should_persist()) {
+                    $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
+                    if (is_callable($should_persist) && !$should_persist($latest)) {
                         return ['action' => 'none', 'row' => null];
                     }
-                    $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
                     $lifecycle_action = is_array($latest)
                         && in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
                             ? 'repeated'

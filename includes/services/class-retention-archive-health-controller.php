@@ -57,6 +57,7 @@ final class Kiwi_Retention_Archive_Health_Controller
     {
         $started = microtime(true);
         $started_at = $this->now();
+        $operation_order = $this->operation_order($started);
         $check = $this->normalize_check($check);
         if ($check === '') {
             return $this->result('check', 'error', 'check_input_invalid', null, null, $started_at, $started, 2);
@@ -65,7 +66,13 @@ final class Kiwi_Retention_Archive_Health_Controller
         $active = $this->resolve_active_archive();
         if (empty($active['success'])) {
             $reason_code = (string) ($active['reason_code'] ?? 'active_archive_lookup_failed');
-            $incident_action = $this->record_availability_failure($reason_code, null, $check, $started_at);
+            $incident_action = $this->record_availability_failure(
+                $reason_code,
+                null,
+                $check,
+                $started_at,
+                $operation_order
+            );
 
             return $this->result(
                 'check',
@@ -94,7 +101,8 @@ final class Kiwi_Retention_Archive_Health_Controller
                     $gate_reason,
                     $archive,
                     $check,
-                    $started_at
+                    $started_at,
+                    $operation_order
                 );
 
                 return $this->result(
@@ -114,7 +122,11 @@ final class Kiwi_Retention_Archive_Health_Controller
 
             $availability_action = '';
             if (!empty($gate['corruption_write_blocked']) || !empty($gate['incident_open'])) {
-                $availability_action = $this->record_availability_recovery($archive, $check);
+                $availability_action = $this->record_availability_recovery(
+                    $archive,
+                    $check,
+                    $operation_order
+                );
                 if ($availability_action === '') {
                     return $this->result(
                         'check',
@@ -176,7 +188,8 @@ final class Kiwi_Retention_Archive_Health_Controller
                         $post_check_reason,
                         $archive,
                         $check,
-                        $started_at
+                        $started_at,
+                        $operation_order
                     );
 
                     return $this->result(
@@ -200,7 +213,11 @@ final class Kiwi_Retention_Archive_Health_Controller
                 if (!empty($post_check_gate['corruption_write_blocked'])
                     || !empty($post_check_gate['incident_open'])
                 ) {
-                    $availability_action = $this->record_availability_recovery($archive, $check);
+                    $availability_action = $this->record_availability_recovery(
+                        $archive,
+                        $check,
+                        $operation_order
+                    );
                     if ($availability_action === '') {
                         return $this->result(
                             'check',
@@ -234,7 +251,11 @@ final class Kiwi_Retention_Archive_Health_Controller
                     ])
                 );
             }
-            $incident_action = $this->record_availability_recovery($archive, $check);
+            $incident_action = $this->record_availability_recovery(
+                $archive,
+                $check,
+                $operation_order
+            );
 
             return $this->result(
                 'check',
@@ -255,9 +276,18 @@ final class Kiwi_Retention_Archive_Health_Controller
                 : $this->safety_gate->block_after_corruption(
                     $archive_path,
                     $check,
-                    (string) ($outcome['reason_code'] ?? 'sqlite_check_reported_corruption')
+                    (string) ($outcome['reason_code'] ?? 'sqlite_check_reported_corruption'),
+                    [
+                        'write_blocked' => !empty($outcome['write_blocked']),
+                        'incident_open' => !empty($outcome['incident_open']),
+                        'operation_order' => $operation_order,
+                    ]
                 );
-            $availability_action = $this->record_availability_recovery($archive, $check);
+            $availability_action = $this->record_availability_recovery(
+                $archive,
+                $check,
+                $operation_order
+            );
             $gate_persisted = !empty($gate['write_blocked']) || !empty($gate['incident_open']);
             $corruption_action = (string) ($gate['incident_action'] ?? '');
             $handoff_action = (string) ($outcome['incident_action'] ?? '');
@@ -271,7 +301,9 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'check',
                 $gate_persisted && $availability_action !== '' ? 'corruption_detected' : 'error',
                 !$gate_persisted
-                    ? 'corruption_gate_persist_failed'
+                    ? ((string) ($gate['reason_code'] ?? '') === 'corruption_gate_recovered_concurrently'
+                        ? 'corruption_gate_recovered_concurrently'
+                        : 'corruption_gate_persist_failed')
                     : ($availability_action === ''
                         ? 'availability_incident_resolution_failed'
                         : (string) ($gate['reason_code'] ?? 'sqlite_check_reported_corruption')),
@@ -292,6 +324,7 @@ final class Kiwi_Retention_Archive_Health_Controller
             $archive,
             $check,
             $started_at,
+            $operation_order,
             $archive_path
         );
         $result = $outcome_result === 'deferred'
@@ -362,6 +395,7 @@ final class Kiwi_Retention_Archive_Health_Controller
     ): array {
         $started = microtime(true);
         $started_at = $this->now();
+        $operation_order = $this->operation_order($started);
         $archive = $this->find_archive($archive_name);
         $replacement = trim($replacement_archive_name) !== ''
             ? $this->find_archive($replacement_archive_name)
@@ -483,7 +517,8 @@ final class Kiwi_Retention_Archive_Health_Controller
 
         $unblocked = $this->safety_gate->unblock(
             (string) $archive['path'],
-            is_array($replacement) ? (string) $replacement['path'] : ''
+            is_array($replacement) ? (string) $replacement['path'] : '',
+            $operation_order
         );
         $allowed = !empty($unblocked['allowed']);
         $reason_code = (string) ($unblocked['reason_code'] ?? 'unblock_failed');
@@ -508,13 +543,16 @@ final class Kiwi_Retention_Archive_Health_Controller
 
     public function bootstrap_failure(string $reason_code): array
     {
+        $started = microtime(true);
         $started_at = $this->now();
+        $operation_order = $this->operation_order($started);
         $reason_code = $this->normalize_reason($reason_code, 'health_bootstrap_failed');
         $incident_action = $this->record_availability_failure(
             $reason_code,
             null,
             '',
-            $started_at
+            $started_at,
+            $operation_order
         );
 
         return $this->result(
@@ -524,7 +562,7 @@ final class Kiwi_Retention_Archive_Health_Controller
             null,
             null,
             $started_at,
-            microtime(true),
+            $started,
             2,
             ['incident_action' => $incident_action]
         );
@@ -610,6 +648,7 @@ final class Kiwi_Retention_Archive_Health_Controller
         ?string $archive,
         string $check,
         string $started_at,
+        string $operation_order,
         ?string $archive_path = null
     ): string {
         $event = [
@@ -628,36 +667,44 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'archive' => $archive,
                 'check' => $check,
                 'reason_code' => $reason_code,
+                'operation_order' => $operation_order,
             ],
         ];
-        if ($reason_code !== 'archive_lock_active' || trim((string) $archive_path) === '') {
+        if ($operation_order === '') {
             return $this->operational_event_service->record_failure_action($event);
         }
 
         return $this->operational_event_service->record_failure_action_if(
             $event,
-            function () use ($archive_path): bool {
-                $lock = $this->archive_lock->acquire_for_archive((string) $archive_path);
-                if (!empty($lock['success']) && !empty($lock['acquired'])) {
-                    try {
-                        return false;
-                    } finally {
-                        $this->archive_lock->release($lock['handle'] ?? null);
+            function (?array $latest) use ($reason_code, $archive_path, $operation_order): bool {
+                if ($reason_code === 'archive_lock_active'
+                    && trim((string) $archive_path) !== ''
+                ) {
+                    $lock = $this->archive_lock->acquire_for_archive((string) $archive_path);
+                    if (!empty($lock['success']) && !empty($lock['acquired'])) {
+                        try {
+                            return false;
+                        } finally {
+                            $this->archive_lock->release($lock['handle'] ?? null);
+                        }
+                    }
+                    if (empty($lock['success'])
+                        || (string) ($lock['error_code'] ?? '') !== 'archive_lock_active'
+                    ) {
+                        throw new RuntimeException('Archive lock availability probe failed.');
                     }
                 }
-                if (!empty($lock['success'])
-                    && (string) ($lock['error_code'] ?? '') === 'archive_lock_active'
-                ) {
-                    return true;
-                }
 
-                throw new RuntimeException('Archive lock availability probe failed.');
+                return !$this->later_availability_recovery_exists($latest, $operation_order);
             }
         );
     }
 
-    private function record_availability_recovery(string $archive, string $check): string
-    {
+    private function record_availability_recovery(
+        string $archive,
+        string $check,
+        string $operation_order
+    ): string {
         return $this->operational_event_service->record_recovery_action([
             'area' => 'retention',
             'severity' => 'info',
@@ -669,8 +716,37 @@ final class Kiwi_Retention_Archive_Health_Controller
             'context' => [
                 'archive' => $archive,
                 'check' => $check,
+                'operation_order' => $operation_order,
             ],
         ]);
+    }
+
+    private function later_availability_recovery_exists(
+        ?array $latest,
+        string $operation_order
+    ): bool {
+        if (!is_array($latest)
+            || (string) ($latest['lifecycle_action'] ?? '') !== 'resolved'
+            || preg_match('/^[0-9]{1,20}$/', $operation_order) !== 1
+        ) {
+            return false;
+        }
+
+        $context = $latest['context_json'] ?? '';
+        if (is_string($context)) {
+            $context = json_decode($context, true);
+        }
+        $latest_order = is_array($context)
+            ? (string) ($context['operation_order'] ?? '')
+            : '';
+
+        return preg_match('/^[0-9]{1,20}$/', $latest_order) === 1
+            && (int) $latest_order > (int) $operation_order;
+    }
+
+    private function operation_order(float $started): string
+    {
+        return sprintf('%.0F', max(0.0, $started) * 1000000);
     }
 
     private function result(

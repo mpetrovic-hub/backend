@@ -150,7 +150,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
     public function block_after_corruption(
         string $archive_path,
         string $check,
-        string $reason_code
+        string $reason_code,
+        array $prior_gate_evidence = []
     ): array {
         $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
         if ($archive === '') {
@@ -167,7 +168,10 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         }
         $corruption_gate_observed_before_lock = !empty(
             $gate_before_lock['corruption_write_blocked']
-        ) || !empty($gate_before_lock['incident_open']);
+        ) || !empty($gate_before_lock['incident_open'])
+            || !empty($prior_gate_evidence['write_blocked'])
+            || !empty($prior_gate_evidence['incident_open']);
+        $prior_operation_order = (string) ($prior_gate_evidence['operation_order'] ?? '');
 
         $lock = $this->lock_service->acquire_for_archive($archive_path);
         if (empty($lock['success'])) {
@@ -201,7 +205,9 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             $write_blocked = !empty($gate_under_lock['corruption_write_blocked']);
             $incident_open = !empty($gate_under_lock['incident_open']);
             if ($corruption_gate_observed_before_lock && !$write_blocked && !$incident_open) {
-                return $this->blocked('corruption_gate_recovered_concurrently', false, false);
+                if ($this->verified_recovery_supersedes($archive, $prior_operation_order)) {
+                    return $this->blocked('corruption_gate_recovered_concurrently', false, false);
+                }
             }
             if (!$write_blocked) {
                 $write_blocked = $handle->persist_write_blocked();
@@ -253,7 +259,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
 
     public function unblock(
         string $archive_path,
-        string $replacement_archive_path = ''
+        string $replacement_archive_path = '',
+        string $operation_order = ''
     ): array {
         $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
         $replacement = $replacement_archive_path !== ''
@@ -275,7 +282,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             }
         }
 
-        $source_gate = $this->inspect($archive_path, false);
+        $source_gate = $this->inspect($archive_path, true);
         if (in_array((string) ($source_gate['reason_code'] ?? ''), [
             'archive_gate_path_invalid',
             'corruption_incident_lookup_failed',
@@ -296,6 +303,11 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 !empty($source_gate['write_blocked']),
                 false
             );
+        }
+        if (!empty($source_gate['corruption_write_blocked'])
+            && empty($source_gate['incident_open'])
+        ) {
+            return $this->blocked('corruption_incident_persist_failed', true, false);
         }
 
         $lock = $this->lock_service->acquire_for_archive($archive_path);
@@ -425,6 +437,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                         : 'manual_repair_verified',
                     'archive' => $archive,
                     'replacement_archive' => $replacement !== '' ? $replacement : null,
+                    'operation_order' => $operation_order,
                 ],
             ]);
             if ($incident_action === '') {
@@ -481,6 +494,40 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
     private function correlation_key(string $archive): string
     {
         return 'retention_archive_corruption_' . hash('sha256', $archive);
+    }
+
+    private function verified_recovery_supersedes(
+        string $archive,
+        string $prior_operation_order
+    ): bool {
+        $latest = $this->operational_event_service->get_latest_event_for_correlation(
+            $this->correlation_key($archive)
+        );
+        if (!is_array($latest) || (string) ($latest['lifecycle_action'] ?? '') !== 'resolved') {
+            return false;
+        }
+
+        $context = $latest['context_json'] ?? '';
+        if (is_string($context)) {
+            $context = json_decode($context, true);
+        }
+        if (!is_array($context)
+            || !in_array((string) ($context['resolution_reason'] ?? ''), [
+                'manual_repair_verified',
+                'manual_replacement_verified',
+            ], true)
+        ) {
+            return false;
+        }
+        if ($prior_operation_order === '') {
+            return true;
+        }
+
+        $recovery_order = (string) ($context['operation_order'] ?? '');
+
+        return preg_match('/^[0-9]{1,20}$/', $prior_operation_order) === 1
+            && preg_match('/^[0-9]{1,20}$/', $recovery_order) === 1
+            && (int) $recovery_order > (int) $prior_operation_order;
     }
 
     private function blocked(
