@@ -695,7 +695,11 @@ final class Kiwi_Retention_Archive_Health_Controller
                     }
                 }
 
-                return !$this->later_availability_recovery_exists($latest, $operation_order);
+                return !$this->later_availability_transition_exists(
+                    $latest,
+                    $operation_order,
+                    ['resolved']
+                );
             }
         );
     }
@@ -705,7 +709,7 @@ final class Kiwi_Retention_Archive_Health_Controller
         string $check,
         string $operation_order
     ): string {
-        return $this->operational_event_service->record_recovery_action([
+        $event = [
             'area' => 'retention',
             'severity' => 'info',
             'event_type' => self::AVAILABILITY_EVENT_TYPE,
@@ -718,15 +722,27 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'check' => $check,
                 'operation_order' => $operation_order,
             ],
-        ]);
+        ];
+
+        return $this->operational_event_service->record_recovery_action_if(
+            $event,
+            function (?array $latest) use ($operation_order): bool {
+                return !$this->later_availability_transition_exists(
+                    $latest,
+                    $operation_order,
+                    ['raised', 'repeated']
+                );
+            }
+        );
     }
 
-    private function later_availability_recovery_exists(
+    private function later_availability_transition_exists(
         ?array $latest,
-        string $operation_order
+        string $operation_order,
+        array $lifecycle_actions
     ): bool {
         if (!is_array($latest)
-            || (string) ($latest['lifecycle_action'] ?? '') !== 'resolved'
+            || !in_array((string) ($latest['lifecycle_action'] ?? ''), $lifecycle_actions, true)
             || preg_match('/^[0-9]{1,20}$/', $operation_order) !== 1
         ) {
             return false;

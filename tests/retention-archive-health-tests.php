@@ -1226,6 +1226,68 @@ kiwi_run_test('Older timeout cannot reopen Availability after a later definitive
     kiwi_assert_same(0, count($availability ?? []), 'Expected the superseded timeout not to reopen Availability.');
 });
 
+kiwi_run_test('Older definitive check cannot resolve a later Availability failure', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'year' => '2026',
+        'generation' => 1,
+    ]];
+    $repository = new Kiwi_Test_Interleaved_Operational_Event_Repository();
+    $repository->insert_event([
+        'event_type' => 'retention_archive_health_unavailable',
+        'lifecycle_action' => 'raised',
+        'correlation_key' => 'retention_archive_health_availability',
+    ]);
+    $events = new Kiwi_Operational_Event_Service($repository);
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Config(),
+            static function (): array {
+                return [
+                    'result' => 'ok',
+                    'reason_code' => 'sqlite_check_ok',
+                    'check_completed' => true,
+                ];
+            }
+        ),
+        new Kiwi_Test_Lean_Safety_Gate(),
+        $events,
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $later_failure_action = null;
+    $repository->before_lifecycle_lock = static function () use ($events, &$later_failure_action): void {
+        $later_failure_action = $events->record_failure_action([
+            'area' => 'retention',
+            'severity' => 'warning',
+            'event_type' => 'retention_archive_health_unavailable',
+            'correlation_key' => 'retention_archive_health_availability',
+            'reference_type' => 'retention_archive_health',
+            'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+            'message' => 'A later archive health check was not definitive.',
+            'context' => [
+                'operation_order' => '9000000000000000000',
+            ],
+        ]);
+    };
+    $result = $controller->check('quick');
+    $latest = $repository->find_latest_by_correlation_key(
+        'retention_archive_health_availability'
+    );
+    $availability = $events->get_open_incidents([
+        'event_type' => 'retention_archive_health_unavailable',
+    ], 10);
+
+    kiwi_assert_same('repeated', $later_failure_action, 'Expected the later failure to remain the current Availability evidence.');
+    kiwi_assert_same('ok', $result['result'] ?? '', 'Expected the older command to retain its definitive check result.');
+    kiwi_assert_same('', $result['incident_action'] ?? '', 'Expected the older recovery write to be suppressed.');
+    kiwi_assert_same('repeated', $latest['lifecycle_action'] ?? '', 'Expected the later failure to remain the latest lifecycle action.');
+    kiwi_assert_same(1, count($availability ?? []), 'Expected the later Availability failure to remain open.');
+});
+
 kiwi_run_test('Completed timeout without a later definitive check still opens Availability', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [[
