@@ -161,19 +161,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         if ($write_blocked === null) {
             return $this->blocked('archive_gate_path_invalid', false, false);
         }
-        if ($write_blocked) {
-            $incident_action = $this->record_corruption($archive, $check, $reason_code);
-
-            return [
-                'allowed' => false,
-                'reason_code' => 'sqlite_check_reported_corruption',
-                'write_blocked' => true,
-                'incident_open' => $incident_action !== '',
-                'incident_action' => in_array($incident_action, ['raised', 'repeated'], true)
-                    ? $incident_action
-                    : 'none',
-            ];
-        }
+        $sentinel_observed_before_lock = $write_blocked;
 
         $lock = $this->lock_service->acquire_for_archive($archive_path);
         if (empty($lock['success']) || empty($lock['acquired'])) {
@@ -185,8 +173,25 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         }
 
         try {
-            $write_blocked = ($lock['handle'] ?? null) instanceof Kiwi_Retention_Archive_Lock_Handle
-                && $lock['handle']->persist_write_blocked();
+            $handle = $lock['handle'] ?? null;
+            if (!$handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
+                return $this->blocked('archive_lock_failed', false, false);
+            }
+            $write_blocked = $this->lock_service->is_write_blocked_for_archive($archive_path);
+            if ($write_blocked === null) {
+                return $this->blocked('archive_gate_path_invalid', false, false);
+            }
+            if ($sentinel_observed_before_lock && !$write_blocked) {
+                $recovered_gate = $this->inspect($archive_path, false);
+                if (empty($recovered_gate['allowed'])) {
+                    return $recovered_gate;
+                }
+
+                return $this->blocked('corruption_gate_recovered_concurrently', false, false);
+            }
+            if (!$write_blocked) {
+                $write_blocked = $handle->persist_write_blocked();
+            }
             $incident_action = $this->record_corruption($archive, $check, $reason_code);
             $incident_open = $incident_action !== '';
 

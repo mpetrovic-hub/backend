@@ -1050,6 +1050,46 @@ kiwi_run_test('Corruption safety gate writes block before Incident and resolves 
     }
 });
 
+kiwi_run_test('Sentinel-present corruption recording cannot reopen a concurrent recovery', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_corruption_record_recovery_race');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    file_put_contents($archive, 'fixture');
+    $lock = new Kiwi_Test_Gate_Clearing_Archive_Lock();
+    $setup = $lock->acquire_for_archive($archive);
+    $handle = $setup['handle'] ?? null;
+    kiwi_assert_true($handle instanceof Kiwi_Retention_Archive_Lock_Handle, 'Expected setup generation lock.');
+    kiwi_assert_same(true, $handle->persist_write_blocked(), 'Expected existing corruption sentinel fixture.');
+    $lock->release($handle);
+    $lock->clear_before_next_acquire = $archive;
+    $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        $events,
+        new Kiwi_Test_Manual_Replacement_Run_Repository()
+    );
+
+    try {
+        $result = $coordinator->block_after_corruption(
+            $archive,
+            'integrity',
+            'sqlite_check_reported_corruption'
+        );
+
+        kiwi_assert_same(
+            'corruption_gate_recovered_concurrently',
+            $result['reason_code'],
+            'Expected recovery under the generation lock to invalidate stale check evidence.'
+        );
+        kiwi_assert_same(false, $lock->is_write_blocked_for_archive($archive), 'Expected no stale sentinel recreation.');
+        kiwi_assert_same([], $events->get_open_incidents([
+            'event_type' => 'retention_archive_corruption_detected',
+            'reference_id' => basename($archive),
+        ]), 'Expected no stale Corruption Incident recreation.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Replacement remains blocked until Corruption Incident resolution succeeds', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_replacement_gate');
     $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
