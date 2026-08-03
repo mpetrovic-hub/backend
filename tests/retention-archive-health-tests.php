@@ -73,6 +73,8 @@ class Kiwi_Test_One_Second_Archive_Health_Config extends Kiwi_Config
 class Kiwi_Test_Interleaved_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
 {
     public $before_insert = null;
+    private $lifecycle_lock_active = false;
+    private $queued_lifecycle_callbacks = [];
 
     public function insert_event(array $event): int
     {
@@ -94,6 +96,45 @@ class Kiwi_Test_Interleaved_Operational_Event_Repository extends Kiwi_Test_Opera
         }
 
         return parent::insert_event_if_correlation_open($event);
+    }
+
+    public function with_correlation_lifecycle_lock(string $correlation_key, callable $callback)
+    {
+        if ($this->lifecycle_lock_active) {
+            $this->queued_lifecycle_callbacks[] = $callback;
+
+            return 'none';
+        }
+
+        $this->lifecycle_lock_active = true;
+        try {
+            $result = $callback();
+        } finally {
+            $this->lifecycle_lock_active = false;
+        }
+
+        while (!empty($this->queued_lifecycle_callbacks)) {
+            $queued = array_shift($this->queued_lifecycle_callbacks);
+            $this->with_correlation_lifecycle_lock($correlation_key, $queued);
+        }
+
+        return $result;
+    }
+}
+
+class Kiwi_Test_Failing_Archive_State_Run_Repository extends Kiwi_Test_Retention_Cleanup_Run_Repository
+{
+    public function find_open_archive_state(): ?array
+    {
+        throw new RuntimeException('Synthetic active archive lookup failure.');
+    }
+}
+
+class Kiwi_Test_Failing_Archive_Discovery_Service extends Kiwi_Test_Lean_Archive_Service
+{
+    public function list_archive_files(): array
+    {
+        throw new RuntimeException('Synthetic archive discovery failure.');
     }
 }
 
@@ -991,6 +1032,109 @@ kiwi_run_test('Concurrent deferred health failure cannot reopen a definitive Ava
     kiwi_assert_same('', $deferred['incident_action'] ?? '', 'Expected no public Incident action after suppressing the stale failure append.');
     kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the definitive recovery to remain the latest lifecycle action.');
     kiwi_assert_same(0, count($availability ?? []), 'Expected the resolved Availability Incident not to reopen.');
+});
+
+kiwi_run_test('Concurrent new Availability raise cannot follow a definitive healthy check', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'year' => '2026',
+        'generation' => 1,
+    ]];
+    $repository = new Kiwi_Test_Interleaved_Operational_Event_Repository();
+    $repository->insert_event([
+        'event_type' => 'retention_archive_health_unavailable',
+        'lifecycle_action' => 'resolved',
+        'correlation_key' => 'retention_archive_health_availability',
+    ]);
+    $events = new Kiwi_Operational_Event_Service($repository);
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $healthy_controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Config(),
+            static function (): array {
+                return [
+                    'result' => 'ok',
+                    'reason_code' => 'sqlite_check_ok',
+                    'check_completed' => true,
+                ];
+            }
+        ),
+        $gate,
+        $events,
+        $runs
+    );
+    $deferred_controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Config(),
+            static function (): array {
+                return [
+                    'result' => 'deferred',
+                    'reason_code' => 'archive_lock_active',
+                    'check_completed' => false,
+                ];
+            }
+        ),
+        $gate,
+        $events,
+        $runs
+    );
+
+    $healthy = null;
+    $repository->before_insert = static function (array $event) use ($healthy_controller, &$healthy): void {
+        if (($event['lifecycle_action'] ?? '') === 'raised') {
+            $healthy = $healthy_controller->check('integrity');
+        }
+    };
+    $deferred = $deferred_controller->check('quick');
+    $availability = $events->get_open_incidents([
+        'event_type' => 'retention_archive_health_unavailable',
+    ], 10);
+    $latest = $repository->find_latest_by_correlation_key('retention_archive_health_availability');
+
+    kiwi_assert_same('ok', $healthy['result'] ?? '', 'Expected the overlapping definitive check to succeed.');
+    kiwi_assert_same('', $healthy['incident_action'] ?? '', 'Expected no recovery append while Availability is already closed.');
+    kiwi_assert_same('deferred', $deferred['result'], 'Expected the overlapping lock failure to remain deferred.');
+    kiwi_assert_same('raised', $deferred['incident_action'] ?? '', 'Expected the earlier lock failure to record before the serialized recovery.');
+    kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the definitive healthy result to remain the latest lifecycle state.');
+    kiwi_assert_same(0, count($availability ?? []), 'Expected the closed Availability Incident not to reopen.');
+});
+
+kiwi_run_test('Health controller classifies active archive resolution failures as technical errors', function (): void {
+    $cases = [
+        'active archive lookup failure' => [
+            'archive_service' => new Kiwi_Test_Lean_Archive_Service(),
+            'run_repository' => new Kiwi_Test_Failing_Archive_State_Run_Repository(),
+            'reason_code' => 'active_archive_lookup_failed',
+        ],
+        'archive discovery failure' => [
+            'archive_service' => new Kiwi_Test_Failing_Archive_Discovery_Service(),
+            'run_repository' => new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+            'reason_code' => 'archive_discovery_failed',
+        ],
+    ];
+
+    foreach ($cases as $label => $case) {
+        $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
+        $controller = new Kiwi_Retention_Archive_Health_Controller(
+            $case['archive_service'],
+            new Kiwi_Retention_Archive_Check_Supervisor(),
+            new Kiwi_Test_Lean_Safety_Gate(),
+            $events,
+            $case['run_repository']
+        );
+
+        $result = $controller->check('integrity');
+
+        kiwi_assert_same('error', $result['result'], 'Expected ' . $label . ' to remain a technical error.');
+        kiwi_assert_same($case['reason_code'], $result['reason_code'], 'Expected ' . $label . ' to preserve its specific reason.');
+        kiwi_assert_same(2, $result['_exit_code'], 'Expected ' . $label . ' to exit 2.');
+        kiwi_assert_same('raised', $result['incident_action'] ?? '', 'Expected ' . $label . ' to raise Availability.');
+    }
 });
 
 kiwi_run_test('Health controller reports unreadable corruption gates as Availability errors', function (): void {

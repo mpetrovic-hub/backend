@@ -50,36 +50,67 @@ class Kiwi_Operational_Event_Service
         }
 
         try {
-            $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
-            $lifecycle_action = is_array($latest)
-                && in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
-                    ? 'repeated'
-                    : 'raised';
-            if (!empty($event['scope_idempotency_to_lifecycle'])) {
-                $base_key = (string) ($event['idempotency_key'] ?? '');
-                if ($base_key !== '' && is_array($latest)) {
-                    $latest_action = (string) ($latest['lifecycle_action'] ?? '');
-                    $latest_key = (string) ($latest['idempotency_key'] ?? '');
-                    $event['idempotency_key'] = in_array($latest_action, ['raised', 'repeated'], true)
-                        && $latest_key !== ''
-                            ? $latest_key
-                            : 'operational_failure_cycle_' . hash(
-                                'sha256',
-                                $base_key . ':' . (string) ($latest['id'] ?? '')
-                            );
+            $transition = $this->repository->with_correlation_lifecycle_lock(
+                $correlation_key,
+                function () use ($event, $correlation_key): array {
+                    $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
+                    $lifecycle_action = is_array($latest)
+                        && in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
+                            ? 'repeated'
+                            : 'raised';
+                    if (!empty($event['scope_idempotency_to_lifecycle'])) {
+                        $base_key = (string) ($event['idempotency_key'] ?? '');
+                        if ($base_key !== '' && is_array($latest)) {
+                            $latest_action = (string) ($latest['lifecycle_action'] ?? '');
+                            $latest_key = (string) ($latest['idempotency_key'] ?? '');
+                            $event['idempotency_key'] = in_array($latest_action, ['raised', 'repeated'], true)
+                                && $latest_key !== ''
+                                    ? $latest_key
+                                    : 'operational_failure_cycle_' . hash(
+                                        'sha256',
+                                        $base_key . ':' . (string) ($latest['id'] ?? '')
+                                    );
+                        }
+                    }
+                    unset($event['scope_idempotency_to_lifecycle']);
+                    $event['lifecycle_action'] = $lifecycle_action;
+                    $row = $this->build_row($event, $correlation_key);
+                    if ($row === null) {
+                        return ['action' => '', 'row' => null];
+                    }
+                    if ($lifecycle_action === 'repeated') {
+                        return ['action' => 'repeated', 'row' => $row];
+                    }
+                    if ($this->repository->insert_event($row) <= 0) {
+                        return ['action' => '', 'row' => null];
+                    }
+
+                    $persisted = $this->repository->find_latest_by_correlation_key($correlation_key);
+                    $persisted_action = is_array($persisted)
+                        ? (string) ($persisted['lifecycle_action'] ?? '')
+                        : '';
+
+                    return [
+                        'action' => in_array($persisted_action, ['raised', 'repeated'], true)
+                            ? $persisted_action
+                            : '',
+                        'row' => null,
+                    ];
                 }
-            }
-            unset($event['scope_idempotency_to_lifecycle']);
-            $event['lifecycle_action'] = $lifecycle_action;
-            if ($lifecycle_action === 'repeated') {
-                $row = $this->build_row($event, $correlation_key);
-                if ($row === null) {
-                    return '';
-                }
-                $this->repository->insert_event_if_correlation_open($row);
-            } elseif (!$this->persist($event, $correlation_key)) {
+            );
+            if (!is_array($transition) || (string) ($transition['action'] ?? '') === '') {
                 return '';
             }
+            $lifecycle_action = (string) $transition['action'];
+            if ($lifecycle_action !== 'repeated') {
+                return $lifecycle_action;
+            }
+
+            $row = $transition['row'] ?? null;
+            if (!is_array($row)) {
+                return '';
+            }
+            $this->repository->insert_event_if_correlation_open($row);
             $persisted = $this->repository->find_latest_by_correlation_key($correlation_key);
             $persisted_action = is_array($persisted)
                 ? (string) ($persisted['lifecycle_action'] ?? '')
@@ -133,20 +164,25 @@ class Kiwi_Operational_Event_Service
         }
 
         try {
-            $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
-            if (!is_array($latest)
-                || !in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
-            ) {
-                return 'none';
-            }
+            return (string) $this->repository->with_correlation_lifecycle_lock(
+                $correlation_key,
+                function () use ($event, $correlation_key): string {
+                    $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
+                    if (!is_array($latest)
+                        || !in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
+                    ) {
+                        return 'none';
+                    }
 
-            $event['lifecycle_action'] = 'resolved';
-            $event['idempotency_key'] = 'operational_recovery_' . hash(
-                'sha256',
-                $correlation_key . ':' . (string) ($latest['id'] ?? '')
+                    $event['lifecycle_action'] = 'resolved';
+                    $event['idempotency_key'] = 'operational_recovery_' . hash(
+                        'sha256',
+                        $correlation_key . ':' . (string) ($latest['id'] ?? '')
+                    );
+
+                    return $this->persist($event, $correlation_key) ? 'resolved' : '';
+                }
             );
-
-            return $this->persist($event, $correlation_key) ? 'resolved' : '';
         } catch (Throwable $error) {
             return '';
         }

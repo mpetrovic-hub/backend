@@ -1424,6 +1424,11 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
         return $this->insert_event($event);
     }
 
+    public function with_correlation_lifecycle_lock(string $correlation_key, callable $callback)
+    {
+        return $callback();
+    }
+
     public function get_recent(array $filters = [], int $limit = 100): array
     {
         $rows = array_reverse(array_values($this->rows));
@@ -16903,6 +16908,81 @@ kiwi_run_test('Kiwi_Operational_Event_Repository declares append-only schema and
     }
     kiwi_assert_contains('UNIQUE KEY idempotency_key', $sql, 'Expected database-enforced idempotency.');
     kiwi_assert_contains('KEY area_severity_occurred_id', $sql, 'Expected UI-oriented area/severity/time lookup index.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Repository serializes lifecycle transitions with a bounded hashed lock', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $queries = [];
+        public $responses = [1, 1];
+
+        public function prepare(string $query, ...$args): string
+        {
+            return $query . ' :: ' . implode(' :: ', array_map('strval', $args));
+        }
+
+        public function get_var(string $query)
+        {
+            $this->queries[] = $query;
+
+            return array_shift($this->responses);
+        }
+    };
+    $callback_calls = 0;
+    $result = (new Kiwi_Operational_Event_Repository())->with_correlation_lifecycle_lock(
+        'retention_archive_health_availability',
+        static function () use (&$callback_calls): string {
+            $callback_calls++;
+
+            return 'serialized';
+        }
+    );
+
+    kiwi_assert_same('serialized', $result, 'Expected the lifecycle callback result to pass through.');
+    kiwi_assert_same(1, $callback_calls, 'Expected exactly one callback invocation while the lock is held.');
+    kiwi_assert_contains('SELECT GET_LOCK(', $wpdb->queries[0] ?? '', 'Expected a bounded MySQL lifecycle lock acquisition.');
+    kiwi_assert_contains(' :: 5', $wpdb->queries[0] ?? '', 'Expected the lifecycle lock wait to stay bounded to five seconds.');
+    kiwi_assert_contains('SELECT RELEASE_LOCK(', $wpdb->queries[1] ?? '', 'Expected the lifecycle lock to be released after the callback.');
+    kiwi_assert_true(
+        strpos(implode("\n", $wpdb->queries), 'retention_archive_health_availability') === false,
+        'Expected the lock name to contain only a hash of the correlation key.'
+    );
+
+    $wpdb->queries = [];
+    $wpdb->responses = [0];
+    $blocked_callback_calls = 0;
+    $acquisition_failed = false;
+    try {
+        (new Kiwi_Operational_Event_Repository())->with_correlation_lifecycle_lock(
+            'retention_archive_health_availability',
+            static function () use (&$blocked_callback_calls): void {
+                $blocked_callback_calls++;
+            }
+        );
+    } catch (RuntimeException $error) {
+        $acquisition_failed = true;
+    }
+    kiwi_assert_same(true, $acquisition_failed, 'Expected unavailable lifecycle serialization to fail closed.');
+    kiwi_assert_same(0, $blocked_callback_calls, 'Expected no lifecycle callback without the correlation lock.');
+
+    $wpdb->queries = [];
+    $wpdb->responses = [1, 0];
+    $release_failed = false;
+    try {
+        (new Kiwi_Operational_Event_Repository())->with_correlation_lifecycle_lock(
+            'retention_archive_health_availability',
+            static function (): string {
+                return 'persisted-but-unconfirmed';
+            }
+        );
+    } catch (RuntimeException $error) {
+        $release_failed = true;
+    }
+    kiwi_assert_same(true, $release_failed, 'Expected an unconfirmed lifecycle lock release to fail closed.');
 
     $wpdb = $previous_wpdb;
 });

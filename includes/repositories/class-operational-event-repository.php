@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Operational_Event_Repository
 {
+    private const LIFECYCLE_LOCK_TIMEOUT_SECONDS = 5;
+
     public function get_table_name(): string
     {
         global $wpdb;
@@ -159,6 +161,44 @@ class Kiwi_Operational_Event_Repository
         }
 
         return (int) $result;
+    }
+
+    public function with_correlation_lifecycle_lock(string $correlation_key, callable $callback)
+    {
+        global $wpdb;
+
+        $correlation_key = trim($correlation_key);
+        if ($correlation_key === '') {
+            throw new InvalidArgumentException('Operational event correlation key is required.');
+        }
+
+        $lock_name = 'kiwi_oe_lifecycle_' . hash('sha1', $correlation_key);
+        $acquired = $wpdb->get_var($wpdb->prepare(
+            'SELECT GET_LOCK(%s, %d)',
+            $lock_name,
+            self::LIFECYCLE_LOCK_TIMEOUT_SECONDS
+        ));
+        if ((string) $acquired !== '1') {
+            throw new RuntimeException('Operational event lifecycle lock acquisition failed.');
+        }
+
+        $result = null;
+        $callback_error = null;
+        try {
+            $result = $callback();
+        } catch (Throwable $error) {
+            $callback_error = $error;
+        }
+
+        $released = $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock_name));
+        if ($callback_error instanceof Throwable) {
+            throw $callback_error;
+        }
+        if ((string) $released !== '1') {
+            throw new RuntimeException('Operational event lifecycle lock release failed.');
+        }
+
+        return $result;
     }
 
     public function find_latest_by_correlation_key(string $correlation_key): ?array

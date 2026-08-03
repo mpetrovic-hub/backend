@@ -46,6 +46,8 @@ Required event fields:
 
 Recovery idempotency is derived from the open correlation row, so concurrent attempts to resolve the same observed incident cannot persist duplicate `resolved` rows.
 
+The closed-to-`raised` decision and recovery read/write are serialized by one short, bounded MySQL advisory lock derived from a hash of the `correlation_key`. If the correlation is already open, the lock is released before the existing conditional `repeated` append. This preserves append-only lifecycle ordering across overlapping producers without adding a mutable incident row, a Health state file, or routine `resolved` rows while no incident is open. Lock acquisition or release failure is a persistence failure; it is never treated as a successful lifecycle change.
+
 The latest event for a correlation decides whether the incident is open. The repository exposes bounded internal reads for recent events, the latest correlation event, and open incidents.
 
 ## Producer contract

@@ -46,6 +46,8 @@ LIMIT 100;
 
 Interpret `raised`, `repeated`, and `resolved` as an append-only timeline. Do not update rows manually to close an incident.
 
+Lifecycle creation and recovery use a correlation-scoped MySQL advisory lock with a five-second acquisition bound. It protects only the short latest-row decision and required insert; it does not serialize retention archive PRAGMA work or replace the non-waiting per-generation archive lock. A lock acquisition or release failure means the requested event transition did not complete reliably and must be handled as an Operational Event persistence failure.
+
 ## Cleanup
 
 - Daily hook: `kiwi_operational_event_cleanup_daily`.

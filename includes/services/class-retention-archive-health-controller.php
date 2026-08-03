@@ -64,13 +64,13 @@ final class Kiwi_Retention_Archive_Health_Controller
 
             return $this->result(
                 'check',
-                $incident_action === '' ? 'error' : 'inconclusive',
+                'error',
                 $incident_action === '' ? 'availability_incident_persist_failed' : $reason_code,
                 null,
                 $check,
                 $started_at,
                 $started,
-                $incident_action === '' ? 2 : 1,
+                2,
                 ['incident_action' => $incident_action]
             );
         }
