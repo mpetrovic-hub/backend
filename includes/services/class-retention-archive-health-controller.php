@@ -15,6 +15,7 @@ final class Kiwi_Retention_Archive_Health_Controller
     private $operational_event_service;
     private $run_repository;
     private $clock;
+    private $archive_lock;
 
     public function __construct(
         ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
@@ -22,7 +23,8 @@ final class Kiwi_Retention_Archive_Health_Controller
         ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $safety_gate = null,
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
         ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
-        ?callable $clock = null
+        ?callable $clock = null,
+        ?Kiwi_Retention_Archive_Lock $archive_lock = null
     ) {
         $this->archive_service = $archive_service instanceof Kiwi_Retention_Sqlite_Archive_Service
             ? $archive_service
@@ -46,6 +48,9 @@ final class Kiwi_Retention_Archive_Health_Controller
         $this->clock = $clock ?? static function (): DateTimeImmutable {
             return new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin'));
         };
+        $this->archive_lock = $archive_lock instanceof Kiwi_Retention_Archive_Lock
+            ? $archive_lock
+            : new Kiwi_Retention_Archive_Lock();
     }
 
     public function check(string $check): array
@@ -286,7 +291,8 @@ final class Kiwi_Retention_Archive_Health_Controller
             $reason_code,
             $archive,
             $check,
-            $started_at
+            $started_at,
+            $archive_path
         );
         $result = $outcome_result === 'deferred'
             ? 'deferred'
@@ -603,9 +609,10 @@ final class Kiwi_Retention_Archive_Health_Controller
         string $reason_code,
         ?string $archive,
         string $check,
-        string $started_at
+        string $started_at,
+        ?string $archive_path = null
     ): string {
-        return $this->operational_event_service->record_failure_action([
+        $event = [
             'area' => 'retention',
             'severity' => 'error',
             'event_type' => self::AVAILABILITY_EVENT_TYPE,
@@ -622,7 +629,31 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'check' => $check,
                 'reason_code' => $reason_code,
             ],
-        ]);
+        ];
+        if ($reason_code !== 'archive_lock_active' || trim((string) $archive_path) === '') {
+            return $this->operational_event_service->record_failure_action($event);
+        }
+
+        return $this->operational_event_service->record_failure_action_if(
+            $event,
+            function () use ($archive_path): bool {
+                $lock = $this->archive_lock->acquire_for_archive((string) $archive_path);
+                if (!empty($lock['success']) && !empty($lock['acquired'])) {
+                    try {
+                        return false;
+                    } finally {
+                        $this->archive_lock->release($lock['handle'] ?? null);
+                    }
+                }
+                if (!empty($lock['success'])
+                    && (string) ($lock['error_code'] ?? '') === 'archive_lock_active'
+                ) {
+                    return true;
+                }
+
+                throw new RuntimeException('Archive lock availability probe failed.');
+            }
+        );
     }
 
     private function record_availability_recovery(string $archive, string $check): string

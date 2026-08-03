@@ -73,11 +73,16 @@ class Kiwi_Test_One_Second_Archive_Health_Config extends Kiwi_Config
 class Kiwi_Test_Interleaved_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
 {
     public $before_insert = null;
+    public $before_lifecycle_lock = null;
+    public $lifecycle_locked_actions = [];
     private $lifecycle_lock_active = false;
     private $queued_lifecycle_callbacks = [];
 
     public function insert_event(array $event): int
     {
+        if ($this->lifecycle_lock_active) {
+            $this->lifecycle_locked_actions[] = (string) ($event['lifecycle_action'] ?? '');
+        }
         if (is_callable($this->before_insert)) {
             $callback = $this->before_insert;
             $this->before_insert = null;
@@ -100,6 +105,11 @@ class Kiwi_Test_Interleaved_Operational_Event_Repository extends Kiwi_Test_Opera
 
     public function with_correlation_lifecycle_lock(string $correlation_key, callable $callback)
     {
+        if (!$this->lifecycle_lock_active && is_callable($this->before_lifecycle_lock)) {
+            $before_lifecycle_lock = $this->before_lifecycle_lock;
+            $this->before_lifecycle_lock = null;
+            $before_lifecycle_lock();
+        }
         if ($this->lifecycle_lock_active) {
             $this->queued_lifecycle_callbacks[] = $callback;
 
@@ -119,6 +129,32 @@ class Kiwi_Test_Interleaved_Operational_Event_Repository extends Kiwi_Test_Opera
         }
 
         return $result;
+    }
+}
+
+class Kiwi_Test_Archive_Lock_Probe extends Kiwi_Retention_Archive_Lock
+{
+    public $available = false;
+    public $acquire_calls = [];
+    public $release_calls = 0;
+
+    public function acquire_for_archive(string $archive_db_path): array
+    {
+        $this->acquire_calls[] = $archive_db_path;
+
+        return [
+            'success' => true,
+            'acquired' => $this->available,
+            'handle' => null,
+            'lock_path' => $archive_db_path . '.lock',
+            'error_code' => $this->available ? '' : 'archive_lock_active',
+            'error_message' => $this->available ? '' : 'Archive generation lock is active.',
+        ];
+    }
+
+    public function release(?Kiwi_Retention_Archive_Lock_Handle $handle): void
+    {
+        $this->release_calls++;
     }
 }
 
@@ -963,6 +999,7 @@ kiwi_run_test('Concurrent deferred health failure cannot reopen a definitive Ava
     $events = new Kiwi_Operational_Event_Service($repository);
     $gate = new Kiwi_Test_Lean_Safety_Gate();
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $active_lock = new Kiwi_Test_Archive_Lock_Probe();
     $opening_controller = new Kiwi_Retention_Archive_Health_Controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
@@ -1009,29 +1046,32 @@ kiwi_run_test('Concurrent deferred health failure cannot reopen a definitive Ava
         ),
         $gate,
         $events,
-        $runs
+        $runs,
+        null,
+        $active_lock
     );
 
     $opened = $opening_controller->check('integrity');
-    $healthy = null;
-    $repository->before_insert = static function (array $event) use ($healthy_controller, &$healthy): void {
-        if (($event['lifecycle_action'] ?? '') === 'repeated') {
-            $healthy = $healthy_controller->check('integrity');
-        }
-    };
+    $repository->lifecycle_locked_actions = [];
     $deferred = $deferred_controller->check('quick');
+    $latest_deferred = $repository->find_latest_by_correlation_key(
+        'retention_archive_health_availability'
+    );
+    $healthy = $healthy_controller->check('integrity');
     $availability = $events->get_open_incidents([
         'event_type' => 'retention_archive_health_unavailable',
     ], 10);
     $latest = $repository->find_latest_by_correlation_key('retention_archive_health_availability');
 
     kiwi_assert_same('raised', $opened['incident_action'] ?? '', 'Expected the initial incomplete check to open Availability.');
+    kiwi_assert_same('deferred', $deferred['result'], 'Expected the overlapping lock failure to remain deferred.');
+    kiwi_assert_same('repeated', $deferred['incident_action'] ?? '', 'Expected the still-current lock failure to repeat Availability.');
+    kiwi_assert_same('repeated', $latest_deferred['lifecycle_action'] ?? '', 'Expected the lock failure to persist before recovery.');
     kiwi_assert_same('ok', $healthy['result'] ?? '', 'Expected the overlapping definitive check to succeed.');
     kiwi_assert_same('resolved', $healthy['incident_action'] ?? '', 'Expected the overlapping definitive check to resolve Availability.');
-    kiwi_assert_same('deferred', $deferred['result'], 'Expected the overlapping lock failure to remain deferred.');
-    kiwi_assert_same('', $deferred['incident_action'] ?? '', 'Expected no public Incident action after suppressing the stale failure append.');
     kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the definitive recovery to remain the latest lifecycle action.');
     kiwi_assert_same(0, count($availability ?? []), 'Expected the resolved Availability Incident not to reopen.');
+    kiwi_assert_same(['repeated', 'resolved'], $repository->lifecycle_locked_actions, 'Expected the current deferral and later recovery to persist in lifecycle-lock order.');
 });
 
 kiwi_run_test('Concurrent new Availability raise cannot follow a definitive healthy check', function (): void {
@@ -1045,12 +1085,14 @@ kiwi_run_test('Concurrent new Availability raise cannot follow a definitive heal
     $repository = new Kiwi_Test_Interleaved_Operational_Event_Repository();
     $repository->insert_event([
         'event_type' => 'retention_archive_health_unavailable',
-        'lifecycle_action' => 'resolved',
+        'lifecycle_action' => 'raised',
         'correlation_key' => 'retention_archive_health_availability',
     ]);
     $events = new Kiwi_Operational_Event_Service($repository);
     $gate = new Kiwi_Test_Lean_Safety_Gate();
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $released_lock = new Kiwi_Test_Archive_Lock_Probe();
+    $released_lock->available = true;
     $healthy_controller = new Kiwi_Retention_Archive_Health_Controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
@@ -1067,11 +1109,14 @@ kiwi_run_test('Concurrent new Availability raise cannot follow a definitive heal
         $events,
         $runs
     );
+    $deferred_supervisor_calls = 0;
     $deferred_controller = new Kiwi_Retention_Archive_Health_Controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
-            static function (): array {
+            static function () use (&$deferred_supervisor_calls): array {
+                $deferred_supervisor_calls++;
+
                 return [
                     'result' => 'deferred',
                     'reason_code' => 'archive_lock_active',
@@ -1081,14 +1126,14 @@ kiwi_run_test('Concurrent new Availability raise cannot follow a definitive heal
         ),
         $gate,
         $events,
-        $runs
+        $runs,
+        null,
+        $released_lock
     );
 
     $healthy = null;
-    $repository->before_insert = static function (array $event) use ($healthy_controller, &$healthy): void {
-        if (($event['lifecycle_action'] ?? '') === 'raised') {
-            $healthy = $healthy_controller->check('integrity');
-        }
+    $repository->before_lifecycle_lock = static function () use ($healthy_controller, &$healthy): void {
+        $healthy = $healthy_controller->check('integrity');
     };
     $deferred = $deferred_controller->check('quick');
     $availability = $events->get_open_incidents([
@@ -1097,11 +1142,15 @@ kiwi_run_test('Concurrent new Availability raise cannot follow a definitive heal
     $latest = $repository->find_latest_by_correlation_key('retention_archive_health_availability');
 
     kiwi_assert_same('ok', $healthy['result'] ?? '', 'Expected the overlapping definitive check to succeed.');
-    kiwi_assert_same('', $healthy['incident_action'] ?? '', 'Expected no recovery append while Availability is already closed.');
+    kiwi_assert_same('resolved', $healthy['incident_action'] ?? '', 'Expected the earlier definitive check to resolve Availability.');
     kiwi_assert_same('deferred', $deferred['result'], 'Expected the overlapping lock failure to remain deferred.');
-    kiwi_assert_same('raised', $deferred['incident_action'] ?? '', 'Expected the earlier lock failure to record before the serialized recovery.');
+    kiwi_assert_same('', $deferred['incident_action'] ?? '', 'Expected the stale lock failure not to reopen Availability.');
     kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the definitive healthy result to remain the latest lifecycle state.');
     kiwi_assert_same(0, count($availability ?? []), 'Expected the closed Availability Incident not to reopen.');
+    kiwi_assert_same(1, $deferred_supervisor_calls, 'Expected the deferred Health command to remain one-shot without a SQLite retry.');
+    kiwi_assert_same(['/tmp/kiwi_retention_archive_2026.sqlite'], $released_lock->acquire_calls, 'Expected one current generation-lock probe before Availability persistence.');
+    kiwi_assert_same(1, $released_lock->release_calls, 'Expected the probe lock to be released without opening SQLite.');
+    kiwi_assert_same(['resolved'], $repository->lifecycle_locked_actions, 'Expected no stale failure append after the definitive lifecycle recovery.');
 });
 
 kiwi_run_test('Health controller classifies active archive resolution failures as technical errors', function (): void {

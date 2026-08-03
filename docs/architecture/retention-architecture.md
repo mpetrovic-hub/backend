@@ -48,7 +48,7 @@ External scheduling owns frequency, retries, alerts, and escalation. The runtime
 
 ## Result and safety transitions
 
-A definitive `ok` check resolves the shared availability Incident. A lock deferral, timeout, discovery failure, bootstrap failure, or other non-definitive scheduled check raises or repeats that Incident when the normal controller and Operational Event service are available. These outcomes do not prove corruption. If a definitive corruption result established a durable corruption gate but Availability resolution failed, the next gated controller call retries only that idempotent resolution effect without rerunning PRAGMA.
+A definitive `ok` check resolves the shared availability Incident. A lock deferral, timeout, discovery failure, bootstrap failure, or other non-definitive scheduled check raises or repeats that Incident when the normal controller and Operational Event service are available. Immediately before an `archive_lock_active` transition, the controller serializes the Availability lifecycle and probes the generation lock once without waiting: if the lock is still active, it persists the failure; if the lock has become available, it briefly acquires and releases it and suppresses only the stale Availability transition. The command remains a one-shot `deferred` result and never reruns SQLite. These outcomes do not prove corruption. If a definitive corruption result established a durable corruption gate but Availability resolution failed, the next gated controller call retries only that idempotent resolution effect without rerunning PRAGMA.
 
 Only this evidence proves corruption:
 

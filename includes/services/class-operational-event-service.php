@@ -44,6 +44,19 @@ class Kiwi_Operational_Event_Service
 
     public function record_failure_action(array $event): string
     {
+        return $this->record_failure_action_conditionally($event, null);
+    }
+
+    public function record_failure_action_if(array $event, callable $should_persist): string
+    {
+        return $this->record_failure_action_conditionally($event, $should_persist);
+    }
+
+    private function record_failure_action_conditionally(
+        array $event,
+        ?callable $should_persist
+    ): string
+    {
         $correlation_key = $this->normalize_key((string) ($event['correlation_key'] ?? ''), 191);
         if ($correlation_key === '') {
             return '';
@@ -52,7 +65,10 @@ class Kiwi_Operational_Event_Service
         try {
             $transition = $this->repository->with_correlation_lifecycle_lock(
                 $correlation_key,
-                function () use ($event, $correlation_key): array {
+                function () use ($event, $correlation_key, $should_persist): array {
+                    if (is_callable($should_persist) && !$should_persist()) {
+                        return ['action' => 'none', 'row' => null];
+                    }
                     $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
                     $lifecycle_action = is_array($latest)
                         && in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
@@ -79,6 +95,24 @@ class Kiwi_Operational_Event_Service
                         return ['action' => '', 'row' => null];
                     }
                     if ($lifecycle_action === 'repeated') {
+                        if (is_callable($should_persist)) {
+                            if ($this->repository->insert_event($row) <= 0) {
+                                return ['action' => '', 'row' => null];
+                            }
+                            $persisted = $this->repository->find_latest_by_correlation_key(
+                                $correlation_key
+                            );
+                            $persisted_action = is_array($persisted)
+                                ? (string) ($persisted['lifecycle_action'] ?? '')
+                                : '';
+
+                            return [
+                                'action' => $persisted_action === 'repeated' ? 'repeated' : '',
+                                'row' => null,
+                                'persisted' => true,
+                            ];
+                        }
+
                         return ['action' => 'repeated', 'row' => $row];
                     }
                     if ($this->repository->insert_event($row) <= 0) {
@@ -98,12 +132,21 @@ class Kiwi_Operational_Event_Service
                     ];
                 }
             );
-            if (!is_array($transition) || (string) ($transition['action'] ?? '') === '') {
+            if (!is_array($transition)) {
                 return '';
             }
             $lifecycle_action = (string) $transition['action'];
+            if ($lifecycle_action === 'none') {
+                return 'none';
+            }
+            if ($lifecycle_action === '') {
+                return '';
+            }
             if ($lifecycle_action !== 'repeated') {
                 return $lifecycle_action;
+            }
+            if (!empty($transition['persisted'])) {
+                return 'repeated';
             }
 
             $row = $transition['row'] ?? null;
