@@ -154,6 +154,7 @@ class Kiwi_Test_Lean_Safety_Gate extends Kiwi_Retention_Corruption_Safety_Gate_C
 class Kiwi_Test_Gate_Clearing_Archive_Lock extends Kiwi_Retention_Archive_Lock
 {
     public $clear_before_next_acquire = '';
+    public $corrupt_transition_before_next_acquire = '';
 
     public function acquire_for_archive(string $archive_db_path): array
     {
@@ -162,6 +163,17 @@ class Kiwi_Test_Gate_Clearing_Archive_Lock extends Kiwi_Retention_Archive_Lock
         ) {
             $this->clear_before_next_acquire = '';
             Kiwi_Retention_Archive_Write_Block::clear($archive_db_path . '.lock');
+        }
+        if ($this->corrupt_transition_before_next_acquire !== ''
+            && $archive_db_path === $this->corrupt_transition_before_next_acquire
+        ) {
+            $this->corrupt_transition_before_next_acquire = '';
+            file_put_contents(
+                Kiwi_Retention_Archive_Write_Block::get_replacement_transition_path(
+                    $archive_db_path . '.lock'
+                ),
+                "truncated-transition-state\n"
+            );
         }
 
         return parent::acquire_for_archive($archive_db_path);
@@ -1108,6 +1120,50 @@ kiwi_run_test('Replacement requires an existing corruption gate on the source ar
         kiwi_assert_same('unblock_corruption_gate_required', $result['reason_code'], 'Expected explicit source-gate requirement.');
         kiwi_assert_same([], $runs->terminalize_calls, 'Expected no resumable run to be terminalized.');
         kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected no B transition state on rejected recovery.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Unblock preserves malformed source transition errors before and under lock', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_unblock_invalid_source_transition');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    file_put_contents($archive, 'archive-a');
+    $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
+    $lock = new Kiwi_Test_Gate_Clearing_Archive_Lock();
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        $runs
+    );
+    $transition_path = Kiwi_Retention_Archive_Write_Block::get_replacement_transition_path(
+        $archive . '.lock'
+    );
+
+    try {
+        file_put_contents($transition_path, "truncated-transition-state\n");
+        $before_lock = $coordinator->unblock($archive);
+        kiwi_assert_same(
+            'replacement_transition_state_invalid',
+            $before_lock['reason_code'],
+            'Expected the initial source-gate check to preserve malformed durable state.'
+        );
+
+        unlink($transition_path);
+        $setup = $lock->acquire_for_archive($archive);
+        $handle = $setup['handle'] ?? null;
+        kiwi_assert_true($handle instanceof Kiwi_Retention_Archive_Lock_Handle, 'Expected setup generation lock.');
+        kiwi_assert_same(true, $handle->persist_write_blocked(), 'Expected source corruption gate fixture.');
+        $lock->release($handle);
+        $lock->corrupt_transition_before_next_acquire = $archive;
+
+        $under_lock = $coordinator->unblock($archive);
+        kiwi_assert_same(
+            'replacement_transition_state_invalid',
+            $under_lock['reason_code'],
+            'Expected the locked source-gate recheck to preserve malformed durable state.'
+        );
+        kiwi_assert_same([], $runs->terminalize_calls, 'Expected no replacement mutation for malformed source state.');
     } finally {
         kiwi_remove_directory($root);
     }

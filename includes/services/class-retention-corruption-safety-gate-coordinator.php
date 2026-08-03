@@ -260,6 +260,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         if (in_array((string) ($source_gate['reason_code'] ?? ''), [
             'archive_gate_path_invalid',
             'corruption_incident_lookup_failed',
+            'replacement_transition_state_invalid',
         ], true)) {
             return $this->blocked(
                 (string) $source_gate['reason_code'],
@@ -306,6 +307,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             if (in_array((string) ($locked_source_gate['reason_code'] ?? ''), [
                 'archive_gate_path_invalid',
                 'corruption_incident_lookup_failed',
+                'replacement_transition_state_invalid',
             ], true)) {
                 return $this->blocked(
                     (string) $locked_source_gate['reason_code'],
