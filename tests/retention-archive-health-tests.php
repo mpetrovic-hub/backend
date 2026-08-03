@@ -1124,6 +1124,70 @@ kiwi_run_test('Health controller persists corruption gates only after completed 
     kiwi_assert_same(true, $result['write_blocked'] ?? false, 'Expected write-block evidence in output.');
 });
 
+kiwi_run_test('Health controller preserves a child write block when reconciliation lock is deferred', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_child_gate_reconciliation_deferred');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    file_put_contents($archive, 'fixture');
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => basename($archive),
+        'path' => $archive,
+        'year' => '2026',
+        'generation' => 1,
+    ]];
+    $lock_service = new Kiwi_Test_Gate_Clearing_Archive_Lock();
+    $competing_lock_service = new Kiwi_Retention_Archive_Lock();
+    $competing_lock_handle = null;
+    $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
+    $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock_service,
+        $events,
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function (string $path): array {
+            $write_blocked = Kiwi_Retention_Archive_Write_Block::persist($path . '.lock');
+
+            return [
+                'result' => 'corruption_detected',
+                'reason_code' => 'sqlite_check_reported_corruption',
+                'check_completed' => true,
+                'write_blocked' => $write_blocked,
+            ];
+        }
+    );
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        $events,
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+    $lock_service->before_next_acquire = static function () use (
+        $competing_lock_service,
+        $archive,
+        &$competing_lock_handle
+    ): void {
+        $competing = $competing_lock_service->acquire_for_archive($archive);
+        kiwi_assert_same(true, !empty($competing['acquired']), 'Expected cleanup fixture to acquire the released generation lock.');
+        $competing_lock_handle = $competing['handle'] ?? null;
+    };
+
+    try {
+        $result = $controller->check('integrity');
+
+        kiwi_assert_same(true, is_file($archive . '.lock.write-blocked'), 'Expected the child-persisted corruption sentinel to remain durable.');
+        kiwi_assert_same('corruption_detected', $result['result'], 'Expected the durable child gate to preserve definitive corruption.');
+        kiwi_assert_same('archive_lock_active', $result['reason_code'], 'Expected deferred Incident reconciliation to retain its lock reason.');
+        kiwi_assert_same(1, $result['_exit_code'], 'Expected a durable gate with deferred reconciliation to remain operational exit 1.');
+        kiwi_assert_same(true, $result['write_blocked'] ?? false, 'Expected the observed child write-block evidence in output.');
+    } finally {
+        $competing_lock_service->release($competing_lock_handle);
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Supervisor persists fallback Incident before a corruption child releases its lock', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_corruption_handoff');
     $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';

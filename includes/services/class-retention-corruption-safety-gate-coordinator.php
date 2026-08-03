@@ -170,11 +170,18 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         ) || !empty($gate_before_lock['incident_open']);
 
         $lock = $this->lock_service->acquire_for_archive($archive_path);
-        if (empty($lock['success']) || empty($lock['acquired'])) {
+        if (empty($lock['success'])) {
             return $this->blocked(
                 (string) ($lock['error_code'] ?? 'archive_lock_active'),
                 false,
                 false
+            );
+        }
+        if (empty($lock['acquired'])) {
+            return $this->blocked(
+                (string) ($lock['error_code'] ?? 'archive_lock_active'),
+                !empty($gate_before_lock['corruption_write_blocked']),
+                !empty($gate_before_lock['incident_open'])
             );
         }
 
