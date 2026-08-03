@@ -70,6 +70,33 @@ class Kiwi_Test_One_Second_Archive_Health_Config extends Kiwi_Config
     }
 }
 
+class Kiwi_Test_Interleaved_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
+{
+    public $before_insert = null;
+
+    public function insert_event(array $event): int
+    {
+        if (is_callable($this->before_insert)) {
+            $callback = $this->before_insert;
+            $this->before_insert = null;
+            $callback($event);
+        }
+
+        return parent::insert_event($event);
+    }
+
+    public function insert_event_if_correlation_open(array $event): int
+    {
+        if (is_callable($this->before_insert)) {
+            $callback = $this->before_insert;
+            $this->before_insert = null;
+            $callback($event);
+        }
+
+        return parent::insert_event_if_correlation_open($event);
+    }
+}
+
 class Kiwi_Test_Lean_Safety_Gate extends Kiwi_Retention_Corruption_Safety_Gate_Coordinator
 {
     public $inspect_result = [
@@ -818,7 +845,7 @@ kiwi_run_test('Health controller does not resolve Availability from a transition
     kiwi_assert_same(1, $supervisor_calls, 'Expected no additional PRAGMA while the transition marker remains active.');
 });
 
-kiwi_run_test('Health controller rechecks Incident state before accepting a healthy child result', function (): void {
+kiwi_run_test('Health controller resolves Availability when a late corruption gate supersedes a healthy child result', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [[
         'name' => 'kiwi_retention_archive_2026.sqlite',
@@ -859,20 +886,6 @@ kiwi_run_test('Health controller rechecks Incident state before accepting a heal
             'incident_open' => true,
             'incident_action' => 'none',
         ],
-        [
-            'allowed' => true,
-            'reason_code' => 'corruption_gate_clear',
-            'write_blocked' => false,
-            'incident_open' => false,
-            'incident_action' => 'none',
-        ],
-        [
-            'allowed' => false,
-            'reason_code' => 'replacement_transition_state_invalid',
-            'write_blocked' => false,
-            'incident_open' => false,
-            'incident_action' => 'none',
-        ],
     ]);
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
     $controller = new Kiwi_Retention_Archive_Health_Controller(
@@ -885,7 +898,6 @@ kiwi_run_test('Health controller rechecks Incident state before accepting a heal
 
     $first = $controller->check('integrity');
     $second = $controller->check('quick');
-    $third = $controller->check('quick');
     $availability = $events->get_open_incidents([
         'event_type' => 'retention_archive_health_unavailable',
     ], 10);
@@ -894,10 +906,91 @@ kiwi_run_test('Health controller rechecks Incident state before accepting a heal
     kiwi_assert_same('blocked', $second['result'], 'Expected the post-child Incident recheck to block success.');
     kiwi_assert_same('archive_corruption_incident_open', $second['reason_code'], 'Expected the late Incident reason.');
     kiwi_assert_same(1, $second['_exit_code'], 'Expected a fail-closed operational block.');
-    kiwi_assert_same('error', $third['result'], 'Expected late malformed gate state to remain technical.');
-    kiwi_assert_same('replacement_transition_state_invalid', $third['reason_code'], 'Expected the technical post-check reason.');
-    kiwi_assert_same(2, $third['_exit_code'], 'Expected technical post-check state to exit 2.');
-    kiwi_assert_same(1, count($availability ?? []), 'Expected Availability to remain open after the stale healthy result.');
+    kiwi_assert_same('resolved', $second['incident_action'] ?? '', 'Expected definitive late corruption evidence to resolve Availability.');
+    kiwi_assert_same(0, count($availability ?? []), 'Expected no open Availability Incident after definitive corruption evidence.');
+});
+
+kiwi_run_test('Concurrent deferred health failure cannot reopen a definitive Availability recovery', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'year' => '2026',
+        'generation' => 1,
+    ]];
+    $repository = new Kiwi_Test_Interleaved_Operational_Event_Repository();
+    $events = new Kiwi_Operational_Event_Service($repository);
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $opening_controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Config(),
+            static function (): array {
+                return [
+                    'result' => 'inconclusive',
+                    'reason_code' => 'health_child_timeout',
+                    'check_completed' => false,
+                ];
+            }
+        ),
+        $gate,
+        $events,
+        $runs
+    );
+    $healthy_controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Config(),
+            static function (): array {
+                return [
+                    'result' => 'ok',
+                    'reason_code' => 'sqlite_check_ok',
+                    'check_completed' => true,
+                ];
+            }
+        ),
+        $gate,
+        $events,
+        $runs
+    );
+    $deferred_controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        new Kiwi_Retention_Archive_Check_Supervisor(
+            new Kiwi_Config(),
+            static function (): array {
+                return [
+                    'result' => 'deferred',
+                    'reason_code' => 'archive_lock_active',
+                    'check_completed' => false,
+                ];
+            }
+        ),
+        $gate,
+        $events,
+        $runs
+    );
+
+    $opened = $opening_controller->check('integrity');
+    $healthy = null;
+    $repository->before_insert = static function (array $event) use ($healthy_controller, &$healthy): void {
+        if (($event['lifecycle_action'] ?? '') === 'repeated') {
+            $healthy = $healthy_controller->check('integrity');
+        }
+    };
+    $deferred = $deferred_controller->check('quick');
+    $availability = $events->get_open_incidents([
+        'event_type' => 'retention_archive_health_unavailable',
+    ], 10);
+    $latest = $repository->find_latest_by_correlation_key('retention_archive_health_availability');
+
+    kiwi_assert_same('raised', $opened['incident_action'] ?? '', 'Expected the initial incomplete check to open Availability.');
+    kiwi_assert_same('ok', $healthy['result'] ?? '', 'Expected the overlapping definitive check to succeed.');
+    kiwi_assert_same('resolved', $healthy['incident_action'] ?? '', 'Expected the overlapping definitive check to resolve Availability.');
+    kiwi_assert_same('deferred', $deferred['result'], 'Expected the overlapping lock failure to remain deferred.');
+    kiwi_assert_same('', $deferred['incident_action'] ?? '', 'Expected no public Incident action after suppressing the stale failure append.');
+    kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the definitive recovery to remain the latest lifecycle action.');
+    kiwi_assert_same(0, count($availability ?? []), 'Expected the resolved Availability Incident not to reopen.');
 });
 
 kiwi_run_test('Health controller reports unreadable corruption gates as Availability errors', function (): void {

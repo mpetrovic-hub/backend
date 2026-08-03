@@ -191,6 +191,30 @@ final class Kiwi_Retention_Archive_Health_Controller
                     );
                 }
 
+                $availability_action = '';
+                if (!empty($post_check_gate['corruption_write_blocked'])
+                    || !empty($post_check_gate['incident_open'])
+                ) {
+                    $availability_action = $this->record_availability_recovery($archive, $check);
+                    if ($availability_action === '') {
+                        return $this->result(
+                            'check',
+                            'error',
+                            'availability_incident_resolution_failed',
+                            $archive,
+                            $check,
+                            $started_at,
+                            $started,
+                            2,
+                            array_merge($outcome, $post_check_gate)
+                        );
+                    }
+                }
+                $gate_action = (string) ($post_check_gate['incident_action'] ?? '');
+                $reported_action = in_array($gate_action, ['raised', 'repeated', 'resolved'], true)
+                    ? $gate_action
+                    : $availability_action;
+
                 return $this->result(
                     'check',
                     'blocked',
@@ -201,7 +225,7 @@ final class Kiwi_Retention_Archive_Health_Controller
                     $started,
                     1,
                     array_merge($outcome, $post_check_gate, [
-                        'incident_action' => 'none',
+                        'incident_action' => $reported_action,
                     ])
                 );
             }

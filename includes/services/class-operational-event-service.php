@@ -71,7 +71,13 @@ class Kiwi_Operational_Event_Service
             }
             unset($event['scope_idempotency_to_lifecycle']);
             $event['lifecycle_action'] = $lifecycle_action;
-            if (!$this->persist($event, $correlation_key)) {
+            if ($lifecycle_action === 'repeated') {
+                $row = $this->build_row($event, $correlation_key);
+                if ($row === null) {
+                    return '';
+                }
+                $this->repository->insert_event_if_correlation_open($row);
+            } elseif (!$this->persist($event, $correlation_key)) {
                 return '';
             }
             $persisted = $this->repository->find_latest_by_correlation_key($correlation_key);
@@ -81,7 +87,7 @@ class Kiwi_Operational_Event_Service
 
             return in_array($persisted_action, ['raised', 'repeated'], true)
                 ? $persisted_action
-                : '';
+                : ($lifecycle_action === 'repeated' && $persisted_action === 'resolved' ? 'none' : '');
         } catch (Throwable $error) {
             return '';
         }
