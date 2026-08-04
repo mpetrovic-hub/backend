@@ -4,6 +4,46 @@ require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-n
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-write-block.php';
 require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
 
+function kiwi_retention_archive_health_open_readonly(string $real_path): PDO
+{
+    foreach ([
+        [
+            'path' => $real_path . '-wal',
+            'invalid_reason' => 'sqlite_wal_state_invalid',
+            'nonempty_reason' => 'sqlite_wal_not_empty',
+        ],
+        [
+            'path' => $real_path . '-journal',
+            'invalid_reason' => 'sqlite_rollback_journal_state_invalid',
+            'nonempty_reason' => 'sqlite_rollback_journal_not_empty',
+        ],
+    ] as $sidecar) {
+        $sidecar_path = $sidecar['path'];
+        clearstatcache(true, $sidecar_path);
+        if (is_link($sidecar_path)
+            || (file_exists($sidecar_path) && !is_file($sidecar_path))
+        ) {
+            throw new RuntimeException($sidecar['invalid_reason']);
+        }
+        if (is_file($sidecar_path)) {
+            $sidecar_size = @filesize($sidecar_path);
+            if (!is_int($sidecar_size)) {
+                throw new RuntimeException($sidecar['invalid_reason']);
+            }
+            if ($sidecar_size > 0) {
+                throw new RuntimeException($sidecar['nonempty_reason']);
+            }
+        }
+    }
+
+    $uri_path = implode('/', array_map(
+        'rawurlencode',
+        explode('/', str_replace('\\', '/', $real_path))
+    ));
+
+    return new PDO('sqlite:file:' . $uri_path . '?mode=ro&immutable=1');
+}
+
 if (PHP_SAPI === 'cli'
     && isset($argv[1], $argv[2])
     && $argv[1] === '--kiwi-retention-health-child'
@@ -115,11 +155,7 @@ if (PHP_SAPI === 'cli'
                         'check_completed' => false,
                     ];
                 } else {
-                    $uri_path = implode('/', array_map(
-                        'rawurlencode',
-                        explode('/', str_replace('\\', '/', $real_path))
-                    ));
-                    $pdo = new PDO('sqlite:file:' . $uri_path . '?mode=ro');
+                    $pdo = kiwi_retention_archive_health_open_readonly($real_path);
                     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
                     $pdo->exec('PRAGMA query_only = ON');
                     $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
@@ -185,9 +221,17 @@ if (PHP_SAPI === 'cli'
                 }
             }
         } catch (Throwable $error) {
+            $reason_code = in_array($error->getMessage(), [
+                'sqlite_wal_not_empty',
+                'sqlite_wal_state_invalid',
+                'sqlite_rollback_journal_not_empty',
+                'sqlite_rollback_journal_state_invalid',
+            ], true)
+                ? $error->getMessage()
+                : 'sqlite_readonly_check_failed';
             $result = [
                 'result' => 'error',
-                'reason_code' => 'sqlite_readonly_check_failed',
+                'reason_code' => $reason_code,
                 'check_completed' => false,
             ];
         } finally {

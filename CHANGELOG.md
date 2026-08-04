@@ -4,6 +4,7 @@ Changes are listed by date (newest first). Only medium-impact or higher updates 
 
 2026-08-04:
 - [DB Retention Archive Health] Registered the missing `kiwi retention` WP-CLI command container so the external `kiwi retention archive-health` command and its `check`, `diagnose`, and `unblock` modes are available under WP-CLI 2.12. The command-registration test double now rejects missing parent command containers to cover the production bootstrap contract.
+- [DB Retention Archive Health] Opened Health PRAGMA checks through an immutable read-only SQLite URI so `diagnose` and scheduled checks no longer create WAL/SHM sidecars. A pre-existing non-empty WAL or rollback journal now fails closed before the PRAGMA instead of letting an immutable snapshot ignore uncheckpointed committed rows or pages requiring crash rollback.
 
 2026-08-01:
 - [DB Retention Archive Health] Replaced the controller state machine, daily/annual campaign planner, quarantine generations, and automatic successor recovery with a lean external `check`/`diagnose`/confirmed `unblock` contract. Health children and cleanup now use the same exclusive non-waiting generation lock; only a completed non-`ok` SQLite PRAGMA can set the corruption write block and Incident, while cleanup rechecks that shared fail-closed gate before every SQLite mutation, receipt repair, and MySQL delete. `diagnose` remains read-only, and repair or replacement requires an explicit full-integrity-verified operator action.
