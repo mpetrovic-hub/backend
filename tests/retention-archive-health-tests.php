@@ -816,6 +816,58 @@ kiwi_run_test('Health controller raises repeats and resolves one availability co
     kiwi_assert_same('ok', $third['result'], 'Expected definitive healthy check.');
 });
 
+kiwi_run_test('Availability idempotency remains unique for checks in the same second', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [[
+        'name' => 'kiwi_retention_archive_2026.sqlite',
+        'path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'year' => '2026',
+        'generation' => 1,
+    ]];
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function (): array {
+            return [
+                'result' => 'error',
+                'reason_code' => 'sqlite_readonly_check_failed',
+                'check_completed' => false,
+            ];
+        }
+    );
+    $event_repository = new Kiwi_Test_Operational_Event_Repository();
+    $events = new Kiwi_Operational_Event_Service($event_repository);
+    $fixed_time = new DateTimeImmutable('2026-08-01T10:00:00+02:00');
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        new Kiwi_Test_Lean_Safety_Gate(),
+        $events,
+        new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        static function () use ($fixed_time): DateTimeImmutable {
+            return $fixed_time;
+        }
+    );
+
+    $first = $controller->check('quick');
+    $second = $controller->check('quick');
+    $availability_rows = array_values(array_filter(
+        $event_repository->rows,
+        static function (array $row): bool {
+            return (string) ($row['event_type'] ?? '') === 'retention_archive_health_unavailable';
+        }
+    ));
+
+    kiwi_assert_same('raised', $first['incident_action'] ?? '', 'Expected the first same-second failure to raise Availability.');
+    kiwi_assert_same('repeated', $second['incident_action'] ?? '', 'Expected the second same-second failure to repeat Availability.');
+    kiwi_assert_same('sqlite_readonly_check_failed', $second['reason_code'] ?? '', 'Expected no false persistence error from idempotency deduplication.');
+    kiwi_assert_same(2, count($availability_rows), 'Expected one persisted Availability event per check.');
+    kiwi_assert_true(
+        (string) ($availability_rows[0]['idempotency_key'] ?? '')
+            !== (string) ($availability_rows[1]['idempotency_key'] ?? ''),
+        'Expected distinct idempotency keys for same-second checks.'
+    );
+});
+
 kiwi_run_test('Health controller retries failed Availability resolution from an existing corruption gate', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [[

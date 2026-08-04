@@ -658,7 +658,7 @@ final class Kiwi_Retention_Archive_Health_Controller
             'correlation_key' => self::AVAILABILITY_CORRELATION,
             'idempotency_key' => 'retention_archive_health_availability_' . hash(
                 'sha256',
-                $started_at . ':' . $reason_code . ':' . (string) $archive
+                $started_at . ':' . $operation_order . ':' . $reason_code . ':' . (string) $archive
             ),
             'reference_type' => 'retention_archive_health',
             'reference_id' => $archive ?? 'current',
