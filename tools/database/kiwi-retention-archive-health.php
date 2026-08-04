@@ -455,6 +455,7 @@ final class Kiwi_Retention_Archive_Health_Command
 }
 
 WP_CLI::add_command('kiwi', new Kiwi_WP_CLI_Command_Namespace());
+WP_CLI::add_command('kiwi retention', new Kiwi_WP_CLI_Command_Namespace());
 $registered = WP_CLI::add_command(
     'kiwi retention archive-health',
     new Kiwi_Retention_Archive_Health_Command(),
