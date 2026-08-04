@@ -6,20 +6,33 @@ require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
 
 function kiwi_retention_archive_health_open_readonly(string $real_path): PDO
 {
-    $wal_path = $real_path . '-wal';
-    clearstatcache(true, $wal_path);
-    if (is_link($wal_path)
-        || (file_exists($wal_path) && !is_file($wal_path))
-    ) {
-        throw new RuntimeException('sqlite_wal_state_invalid');
-    }
-    if (is_file($wal_path)) {
-        $wal_size = @filesize($wal_path);
-        if (!is_int($wal_size)) {
-            throw new RuntimeException('sqlite_wal_state_invalid');
+    foreach ([
+        [
+            'path' => $real_path . '-wal',
+            'invalid_reason' => 'sqlite_wal_state_invalid',
+            'nonempty_reason' => 'sqlite_wal_not_empty',
+        ],
+        [
+            'path' => $real_path . '-journal',
+            'invalid_reason' => 'sqlite_rollback_journal_state_invalid',
+            'nonempty_reason' => 'sqlite_rollback_journal_not_empty',
+        ],
+    ] as $sidecar) {
+        $sidecar_path = $sidecar['path'];
+        clearstatcache(true, $sidecar_path);
+        if (is_link($sidecar_path)
+            || (file_exists($sidecar_path) && !is_file($sidecar_path))
+        ) {
+            throw new RuntimeException($sidecar['invalid_reason']);
         }
-        if ($wal_size > 0) {
-            throw new RuntimeException('sqlite_wal_not_empty');
+        if (is_file($sidecar_path)) {
+            $sidecar_size = @filesize($sidecar_path);
+            if (!is_int($sidecar_size)) {
+                throw new RuntimeException($sidecar['invalid_reason']);
+            }
+            if ($sidecar_size > 0) {
+                throw new RuntimeException($sidecar['nonempty_reason']);
+            }
         }
     }
 
@@ -211,6 +224,8 @@ if (PHP_SAPI === 'cli'
             $reason_code = in_array($error->getMessage(), [
                 'sqlite_wal_not_empty',
                 'sqlite_wal_state_invalid',
+                'sqlite_rollback_journal_not_empty',
+                'sqlite_rollback_journal_state_invalid',
             ], true)
                 ? $error->getMessage()
                 : 'sqlite_readonly_check_failed';

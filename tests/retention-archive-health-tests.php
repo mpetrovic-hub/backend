@@ -1016,6 +1016,90 @@ kiwi_run_test('Health child fails closed instead of ignoring a non-empty WAL', f
     }
 });
 
+kiwi_run_test('Health child fails closed instead of ignoring a hot rollback journal', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_hot_rollback_journal');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $readiness = $root . DIRECTORY_SEPARATOR
+        . '.kiwi_retention_health_child_' . str_repeat('e', 32) . '.ready';
+    $sqlite_php = kiwi_test_retention_sqlite_php_command();
+    $fixture = kiwi_run_retention_process(array_merge($sqlite_php, [
+        '-r',
+        '$pdo=new PDO("sqlite:".$argv[1]);$pdo->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_EXCEPTION);$pdo->exec("PRAGMA journal_mode=DELETE");$pdo->exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)");$pdo->beginTransaction();$statement=$pdo->prepare("INSERT INTO fixture (id,payload) VALUES (?,?)");for($id=1;$id<=200;$id++){$statement->execute([$id,"original-".$id."-".str_repeat("x",4096)]);}$pdo->commit();',
+        $archive,
+    ]));
+    kiwi_assert_same(0, $fixture['exit_code'], 'Expected the rollback-journal fixture to be created.');
+
+    $holder = null;
+    $holder_pipes = [];
+    try {
+        $holder_command = array_merge($sqlite_php, [
+            '-r',
+            '$pdo=new PDO("sqlite:".$argv[1]);$pdo->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_EXCEPTION);$pdo->exec("PRAGMA journal_mode=DELETE");$pdo->exec("PRAGMA cache_size=10");$pdo->beginTransaction();$pdo->exec("UPDATE fixture SET payload=replace(payload,\'original-\',\'changed--\')");echo "transaction_open\\n";flush();sleep(30);',
+            $archive,
+        ]);
+        $holder = proc_open(
+            $holder_command,
+            [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ],
+            $holder_pipes,
+            null,
+            null,
+            ['bypass_shell' => true]
+        );
+        kiwi_assert_true(is_resource($holder), 'Expected the rollback-journal writer to start.');
+        fclose($holder_pipes[0]);
+        kiwi_assert_same('transaction_open', trim((string) fgets($holder_pipes[1])), 'Expected open transaction readiness.');
+        proc_terminate($holder);
+        fclose($holder_pipes[1]);
+        fclose($holder_pipes[2]);
+        proc_close($holder);
+        $holder = null;
+        $holder_pipes = [];
+
+        clearstatcache(true, $archive . '-journal');
+        kiwi_assert_true((int) filesize($archive . '-journal') > 0, 'Expected a hot rollback journal after interruption.');
+
+        $payload = base64_encode((string) json_encode([
+            'archive_path' => $archive,
+            'readiness_path' => $readiness,
+            'check' => 'integrity',
+            'persist_write_block_on_corruption' => true,
+            'allow_blocked_recovery_verification' => true,
+            'corruption_handoff_timeout_seconds' => 30,
+        ]));
+        $process = kiwi_run_retention_process(array_merge($sqlite_php, [
+            __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+            '--kiwi-retention-health-child',
+            $payload,
+        ]));
+        $result = json_decode((string) $process['stdout'], true);
+
+        kiwi_assert_same(2, $process['exit_code'], 'Expected a hot rollback journal to fail technically.');
+        kiwi_assert_same('error', $result['result'] ?? '', 'Expected no false healthy or corruption result.');
+        kiwi_assert_same(
+            'sqlite_rollback_journal_not_empty',
+            $result['reason_code'] ?? '',
+            'Expected explicit rollback-journal reason.'
+        );
+        kiwi_assert_same(false, $result['check_completed'] ?? true, 'Expected no immutable PRAGMA before journal recovery.');
+        kiwi_assert_same(false, is_file($archive . '.lock.write-blocked'), 'Expected no corruption gate from journal state alone.');
+    } finally {
+        if (is_resource($holder)) {
+            @proc_terminate($holder);
+            @proc_close($holder);
+        }
+        foreach ($holder_pipes as $pipe) {
+            if (is_resource($pipe)) {
+                @fclose($pipe);
+            }
+        }
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Health controller raises repeats and resolves one availability correlation', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [[
