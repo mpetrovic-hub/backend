@@ -405,6 +405,22 @@ function kiwi_run_retention_lock_probe(string $archive): array
     return $process;
 }
 
+function kiwi_test_retention_sqlite_php_command(): array
+{
+    $command = [PHP_BINARY];
+    if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        $sqlite_extension = dirname(PHP_BINARY) . DIRECTORY_SEPARATOR
+            . 'ext' . DIRECTORY_SEPARATOR . 'php_pdo_sqlite.dll';
+        kiwi_assert_true(is_file($sqlite_extension), 'Expected the test PHP SQLite extension.');
+        $command[] = '-d';
+        $command[] = 'extension_dir=' . dirname($sqlite_extension);
+        $command[] = '-d';
+        $command[] = 'extension=' . basename($sqlite_extension);
+    }
+
+    return $command;
+}
+
 kiwi_run_test('Kiwi_Config preserves the bounded 600 second archive health timeout', function (): void {
     $config = new Kiwi_Config();
 
@@ -873,6 +889,131 @@ kiwi_run_test('Invalid scheduled checks raise and repeat Availability failures',
 
     kiwi_assert_same('availability_incident_persist_failed', $failed['reason_code'], 'Expected invalid input to expose Availability persistence failure.');
     kiwi_assert_same(2, $failed['_exit_code'], 'Expected failed Availability persistence to remain technical exit 2.');
+});
+
+kiwi_run_test('Health child checks WAL archives without creating SQLite sidecars', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_readonly_sidecars');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $sqlite_php = kiwi_test_retention_sqlite_php_command();
+    $fixture = kiwi_run_retention_process(array_merge($sqlite_php, [
+        '-r',
+        '$pdo=new PDO("sqlite:".$argv[1]);$pdo->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_EXCEPTION);$pdo->exec("PRAGMA journal_mode=WAL");$pdo->exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY)");$pdo->exec("INSERT INTO fixture (id) VALUES (1)");$pdo->query("PRAGMA wal_checkpoint(TRUNCATE)")->fetchAll();$pdo=null;@unlink($argv[1]."-wal");@unlink($argv[1]."-shm");',
+        $archive,
+    ]));
+
+    try {
+        kiwi_assert_same(0, $fixture['exit_code'], 'Expected the WAL fixture to be created.');
+        kiwi_assert_same(false, is_file($archive . '-wal'), 'Expected no fixture WAL before Health.');
+        kiwi_assert_same(false, is_file($archive . '-shm'), 'Expected no fixture SHM before Health.');
+        $before_size = filesize($archive);
+        $before_mtime = filemtime($archive);
+
+        foreach (['quick', 'integrity'] as $index => $check) {
+            $readiness = $root . DIRECTORY_SEPARATOR
+                . '.kiwi_retention_health_child_'
+                . str_repeat((string) ($index + 1), 32)
+                . '.ready';
+            $payload = base64_encode((string) json_encode([
+                'archive_path' => $archive,
+                'readiness_path' => $readiness,
+                'check' => $check,
+                'persist_write_block_on_corruption' => false,
+                'corruption_handoff_timeout_seconds' => 30,
+            ]));
+            $process = kiwi_run_retention_process(array_merge($sqlite_php, [
+                __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+                '--kiwi-retention-health-child',
+                $payload,
+            ]));
+            $result = json_decode((string) $process['stdout'], true);
+
+            kiwi_assert_same(0, $process['exit_code'], 'Expected read-only ' . $check . ' check success.');
+            kiwi_assert_same('', $process['stderr'], 'Expected no read-only child diagnostics.');
+            kiwi_assert_same('ok', $result['result'] ?? '', 'Expected healthy immutable SQLite result.');
+            kiwi_assert_same(false, is_file($archive . '-wal'), 'Expected no WAL side effect after ' . $check . '.');
+            kiwi_assert_same(false, is_file($archive . '-shm'), 'Expected no SHM side effect after ' . $check . '.');
+        }
+
+        clearstatcache(true, $archive);
+        kiwi_assert_same($before_size, filesize($archive), 'Expected immutable Health checks not to resize SQLite.');
+        kiwi_assert_same($before_mtime, filemtime($archive), 'Expected immutable Health checks not to touch SQLite mtime.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Health child fails closed instead of ignoring a non-empty WAL', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_nonempty_wal');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $readiness = $root . DIRECTORY_SEPARATOR
+        . '.kiwi_retention_health_child_' . str_repeat('f', 32) . '.ready';
+    $sqlite_php = kiwi_test_retention_sqlite_php_command();
+    $fixture = kiwi_run_retention_process(array_merge($sqlite_php, [
+        '-r',
+        '$pdo=new PDO("sqlite:".$argv[1]);$pdo->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_EXCEPTION);$pdo->exec("PRAGMA journal_mode=WAL");$pdo->exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY)");$pdo->exec("INSERT INTO fixture (id) VALUES (1)");$pdo->query("PRAGMA wal_checkpoint(TRUNCATE)")->fetchAll();',
+        $archive,
+    ]));
+    kiwi_assert_same(0, $fixture['exit_code'], 'Expected the base WAL fixture to be created.');
+
+    $holder = null;
+    $holder_pipes = [];
+    try {
+        $holder_command = array_merge($sqlite_php, [
+            '-r',
+            '$pdo=new PDO("sqlite:".$argv[1]);$pdo->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_EXCEPTION);$pdo->exec("INSERT INTO fixture (id) VALUES (2)");echo "wal_ready\\n";flush();fgets(STDIN);',
+            $archive,
+        ]);
+        $holder = proc_open(
+            $holder_command,
+            [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ],
+            $holder_pipes,
+            null,
+            null,
+            ['bypass_shell' => true]
+        );
+        kiwi_assert_true(is_resource($holder), 'Expected the WAL holder to start.');
+        kiwi_assert_same('wal_ready', trim((string) fgets($holder_pipes[1])), 'Expected non-empty WAL readiness.');
+        clearstatcache(true, $archive . '-wal');
+        kiwi_assert_true((int) filesize($archive . '-wal') > 0, 'Expected committed rows in the live WAL.');
+
+        $payload = base64_encode((string) json_encode([
+            'archive_path' => $archive,
+            'readiness_path' => $readiness,
+            'check' => 'quick',
+            'persist_write_block_on_corruption' => true,
+            'corruption_handoff_timeout_seconds' => 30,
+        ]));
+        $process = kiwi_run_retention_process(array_merge($sqlite_php, [
+            __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+            '--kiwi-retention-health-child',
+            $payload,
+        ]));
+        $result = json_decode((string) $process['stdout'], true);
+
+        kiwi_assert_same(2, $process['exit_code'], 'Expected a non-empty WAL to fail technically.');
+        kiwi_assert_same('error', $result['result'] ?? '', 'Expected no false healthy or corruption result.');
+        kiwi_assert_same('sqlite_wal_not_empty', $result['reason_code'] ?? '', 'Expected explicit WAL reason.');
+        kiwi_assert_same(false, $result['check_completed'] ?? true, 'Expected no PRAGMA against an incomplete main-file view.');
+        kiwi_assert_same(false, is_file($archive . '.lock.write-blocked'), 'Expected no corruption gate from WAL state alone.');
+    } finally {
+        if (isset($holder_pipes[0]) && is_resource($holder_pipes[0])) {
+            fwrite($holder_pipes[0], "close\n");
+            fclose($holder_pipes[0]);
+        }
+        foreach ([1, 2] as $pipe_index) {
+            if (isset($holder_pipes[$pipe_index]) && is_resource($holder_pipes[$pipe_index])) {
+                fclose($holder_pipes[$pipe_index]);
+            }
+        }
+        if (is_resource($holder)) {
+            proc_close($holder);
+        }
+        kiwi_remove_directory($root);
+    }
 });
 
 kiwi_run_test('Health controller raises repeats and resolves one availability correlation', function (): void {

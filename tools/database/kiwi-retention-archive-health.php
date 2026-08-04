@@ -4,6 +4,33 @@ require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-n
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-write-block.php';
 require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
 
+function kiwi_retention_archive_health_open_readonly(string $real_path): PDO
+{
+    $wal_path = $real_path . '-wal';
+    clearstatcache(true, $wal_path);
+    if (is_link($wal_path)
+        || (file_exists($wal_path) && !is_file($wal_path))
+    ) {
+        throw new RuntimeException('sqlite_wal_state_invalid');
+    }
+    if (is_file($wal_path)) {
+        $wal_size = @filesize($wal_path);
+        if (!is_int($wal_size)) {
+            throw new RuntimeException('sqlite_wal_state_invalid');
+        }
+        if ($wal_size > 0) {
+            throw new RuntimeException('sqlite_wal_not_empty');
+        }
+    }
+
+    $uri_path = implode('/', array_map(
+        'rawurlencode',
+        explode('/', str_replace('\\', '/', $real_path))
+    ));
+
+    return new PDO('sqlite:file:' . $uri_path . '?mode=ro&immutable=1');
+}
+
 if (PHP_SAPI === 'cli'
     && isset($argv[1], $argv[2])
     && $argv[1] === '--kiwi-retention-health-child'
@@ -115,11 +142,7 @@ if (PHP_SAPI === 'cli'
                         'check_completed' => false,
                     ];
                 } else {
-                    $uri_path = implode('/', array_map(
-                        'rawurlencode',
-                        explode('/', str_replace('\\', '/', $real_path))
-                    ));
-                    $pdo = new PDO('sqlite:file:' . $uri_path . '?mode=ro');
+                    $pdo = kiwi_retention_archive_health_open_readonly($real_path);
                     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
                     $pdo->exec('PRAGMA query_only = ON');
                     $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
@@ -185,9 +208,15 @@ if (PHP_SAPI === 'cli'
                 }
             }
         } catch (Throwable $error) {
+            $reason_code = in_array($error->getMessage(), [
+                'sqlite_wal_not_empty',
+                'sqlite_wal_state_invalid',
+            ], true)
+                ? $error->getMessage()
+                : 'sqlite_readonly_check_failed';
             $result = [
                 'result' => 'error',
-                'reason_code' => 'sqlite_readonly_check_failed',
+                'reason_code' => $reason_code,
                 'check_completed' => false,
             ];
         } finally {
