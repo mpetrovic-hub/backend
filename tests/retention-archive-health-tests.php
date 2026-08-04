@@ -2084,6 +2084,50 @@ kiwi_run_test('Supervisor persists fallback Incident before a corruption child r
     }
 });
 
+kiwi_run_test('Supervisor retries a transient fallback Incident acknowledgement failure', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_corruption_handoff_ack_retry');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    file_put_contents($archive, 'fixture');
+    $fallback_calls = 0;
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Test_One_Second_Archive_Health_Config(),
+        null,
+        __DIR__ . '/fixtures/retention-corruption-handoff-ack-retry-child.php'
+    );
+
+    try {
+        $result = $supervisor->run(
+            $archive,
+            'integrity',
+            true,
+            static function () use ($root, &$fallback_calls): array {
+                $fallback_calls++;
+                $readiness_paths = glob(
+                    $root . DIRECTORY_SEPARATOR . '.kiwi_retention_health_child_*.ready'
+                );
+                $readiness_path = is_array($readiness_paths) && count($readiness_paths) === 1
+                    ? (string) $readiness_paths[0]
+                    : '';
+                if ($readiness_path !== '') {
+                    @unlink($readiness_path);
+                    @mkdir($readiness_path);
+                }
+
+                return ['incident_open' => true, 'incident_action' => 'raised'];
+            }
+        );
+
+        kiwi_assert_same(1, $fallback_calls, 'Expected fallback Incident persistence exactly once.');
+        kiwi_assert_same('corruption_detected', $result['result'], 'Expected the retried acknowledgement to preserve confirmed corruption.');
+        kiwi_assert_same('sqlite_check_reported_corruption', $result['reason_code'], 'Expected no false child timeout after the transient acknowledgement failure.');
+        kiwi_assert_same(true, $result['check_completed'], 'Expected the completed PRAGMA evidence to remain definitive.');
+        kiwi_assert_same(true, $result['incident_open'], 'Expected the already durable fallback Incident.');
+        kiwi_assert_same(false, $result['child_running'], 'Expected the acknowledged child to release normally.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Health controller reconciles a failed child sentinel from the Incident created under lock', function (): void {
     $archive_service = new Kiwi_Test_Lean_Archive_Service();
     $archive_service->archives = [[
@@ -2247,6 +2291,34 @@ kiwi_run_test('Replacement transition marker refresh uses atomic file replacemen
     } finally {
         kiwi_remove_directory($root);
     }
+});
+
+kiwi_run_test('Atomic marker publication syncs its parent directory before success', function (): void {
+    $source = (string) file_get_contents(
+        __DIR__ . '/../includes/services/class-retention-archive-write-block.php'
+    );
+    $rename_position = strpos($source, '!@rename($temporary_path, $path)');
+    $helper_position = strpos($source, 'private static function sync_parent_directory');
+    $windows_position = strpos($source, "if (PHP_OS_FAMILY === 'Windows')", $helper_position ?: 0);
+    $windows_fsync_position = strpos($source, 'return @fsync($published_marker)', $windows_position ?: 0);
+    $directory_fsync_position = strpos($source, '@fsync($directory)', $helper_position ?: 0);
+
+    kiwi_assert_true(is_int($rename_position), 'Expected atomic marker rename publication.');
+    kiwi_assert_true(is_int($helper_position), 'Expected a focused parent-directory sync helper.');
+    kiwi_assert_true(is_int($windows_position), 'Expected an explicit Windows durability path.');
+    kiwi_assert_true(
+        is_int($windows_fsync_position) && $windows_fsync_position > $windows_position,
+        'Expected Windows publication to fsync the renamed marker rather than report an unchecked success.'
+    );
+    kiwi_assert_true(is_int($directory_fsync_position), 'Expected the parent directory handle to be fsynced.');
+    kiwi_assert_true(
+        substr_count($source, 'return self::sync_parent_directory($path);') >= 2,
+        'Expected both renamed and already-complete marker paths to require directory durability.'
+    );
+    kiwi_assert_true(
+        strpos($source, 'return self::sync_parent_directory($path);', $rename_position) > $rename_position,
+        'Expected directory sync only after the atomic rename succeeds.'
+    );
 });
 
 kiwi_run_test('Corruption safety gate rechecks a lone sentinel under the generation lock', function (): void {

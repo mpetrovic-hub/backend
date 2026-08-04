@@ -139,6 +139,7 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         $last_status = ['running' => true, 'exitcode' => -1];
         $lock_acquired = false;
         $gate_handoff_attempted = false;
+        $gate_handoff_acknowledgement = '';
         $gate_handoff_failed = false;
         $gate_handoff = [];
         $timeout_seconds = $this->config->get_retention_archive_health_timeout_seconds();
@@ -161,10 +162,15 @@ final class Kiwi_Retention_Archive_Check_Supervisor
                     $check,
                     'sqlite_check_reported_corruption'
                 );
-                $acknowledgement = !empty($gate_handoff['incident_open'])
+                $gate_handoff_acknowledgement = !empty($gate_handoff['incident_open'])
                     ? self::READINESS_CORRUPTION_GATE_PERSISTED
                     : self::READINESS_CORRUPTION_GATE_FAILED;
-                if (!$this->write_readiness_state($readiness_path, $acknowledgement)) {
+            }
+            if ($gate_handoff_acknowledgement !== '') {
+                if (!$this->write_readiness_state(
+                    $readiness_path,
+                    $gate_handoff_acknowledgement
+                )) {
                     $gate_handoff = [
                         'incident_open' => !empty($gate_handoff['incident_open']),
                         'incident_action' => (string) ($gate_handoff['incident_action'] ?? 'none'),
@@ -173,6 +179,7 @@ final class Kiwi_Retention_Archive_Check_Supervisor
                 } else {
                     $gate_handoff['handoff_acknowledged'] = true;
                     $gate_handoff_failed = empty($gate_handoff['incident_open']);
+                    $gate_handoff_acknowledgement = '';
                 }
             }
             $last_status = proc_get_status($process);

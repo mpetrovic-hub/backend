@@ -52,7 +52,7 @@ final class Kiwi_Retention_Archive_Write_Block
 
         clearstatcache(true, $path);
         if (file_exists($path) && @file_get_contents($path) === $sentinel) {
-            return true;
+            return self::sync_parent_directory($path);
         }
 
         try {
@@ -82,7 +82,42 @@ final class Kiwi_Retention_Archive_Write_Block
             return false;
         }
 
-        return true;
+        return self::sync_parent_directory($path);
+    }
+
+    private static function sync_parent_directory(string $path): bool
+    {
+        $directory_path = dirname($path);
+        if (!is_dir($directory_path)) {
+            return false;
+        }
+        if (!function_exists('fsync')) {
+            return false;
+        }
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            $published_marker = @fopen($path, 'r+b');
+            if (!is_resource($published_marker)) {
+                return false;
+            }
+
+            try {
+                return @fsync($published_marker);
+            } finally {
+                @fclose($published_marker);
+            }
+        }
+
+        $directory = @fopen($directory_path, 'rb');
+        if (!is_resource($directory)) {
+            return false;
+        }
+
+        try {
+            return @fsync($directory);
+        } finally {
+            @fclose($directory);
+        }
     }
 
     public static function exists(string $lock_path): bool
