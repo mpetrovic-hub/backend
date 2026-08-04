@@ -9,6 +9,8 @@ class Kiwi_Operational_Event_Cleanup_Service
     private const LOCK_KEY = 'kiwi_operational_event_cleanup_lock';
     private const LOCK_TTL_SECONDS = 300;
     private const CORRELATION_KEY = 'operational_events_cleanup';
+    private const PROTECTED_CORRUPTION_EVENT = 'retention_archive_corruption_detected';
+    private const PROTECTED_INCIDENT_LIMIT = 500;
 
     private $config;
     private $repository;
@@ -40,6 +42,7 @@ class Kiwi_Operational_Event_Cleanup_Service
             $retention_days = $this->config->get_operational_events_retention_days();
             $batch_size = $this->config->get_operational_events_cleanup_batch_size();
             $cutoff = $this->build_cutoff($retention_days);
+            $this->refresh_protected_corruption_incidents();
             $deleted_rows = $this->repository->delete_created_before($cutoff, $batch_size);
             $this->event_service->record_recovery([
                 'area' => 'cron',
@@ -94,6 +97,40 @@ class Kiwi_Operational_Event_Cleanup_Service
         $timestamp = strtotime($today . ' -' . max(1, $retention_days) . ' days');
 
         return ($timestamp === false ? $today : gmdate('Y-m-d', $timestamp)) . ' 00:00:00';
+    }
+
+    private function refresh_protected_corruption_incidents(): void
+    {
+        $incidents = $this->event_service->get_open_incidents([
+            'area' => 'retention',
+            'event_type' => self::PROTECTED_CORRUPTION_EVENT,
+        ], self::PROTECTED_INCIDENT_LIMIT);
+        if ($incidents === null || count($incidents) >= self::PROTECTED_INCIDENT_LIMIT) {
+            throw new RuntimeException('Protected corruption incidents could not be read within the safety bound.');
+        }
+
+        $date = substr($this->current_time_mysql(), 0, 10);
+        foreach ($incidents as $incident) {
+            $correlation_key = (string) ($incident['correlation_key'] ?? '');
+            if ($correlation_key === ''
+                || $this->event_service->record_failure_if_open_action([
+                    'area' => 'retention',
+                    'severity' => 'critical',
+                    'event_type' => self::PROTECTED_CORRUPTION_EVENT,
+                    'correlation_key' => $correlation_key,
+                    'idempotency_key' => 'retention_corruption_retention_refresh_' . hash(
+                        'sha256',
+                        $correlation_key . ':' . $date
+                    ),
+                    'reference_type' => (string) ($incident['reference_type'] ?? 'retention_archive'),
+                    'reference_id' => (string) ($incident['reference_id'] ?? ''),
+                    'message' => 'An open retention archive corruption gate was retained during event cleanup.',
+                    'context' => ['reason_code' => 'operational_event_retention_refresh'],
+                ]) === ''
+            ) {
+                throw new RuntimeException('Protected corruption incident refresh failed.');
+            }
+        }
     }
 
     private function has_lock(): bool

@@ -6,9 +6,6 @@ if (!defined('ABSPATH')) {
 
 final class Kiwi_Retention_Archive_Lock_Handle
 {
-    private const WRITE_BLOCKED_SENTINEL = "kiwi_retention_archive_write_blocked_v1\n";
-    private const WRITE_BLOCKED_SUFFIX = '.write-blocked';
-
     private $resource;
     private $lock_path;
 
@@ -29,26 +26,7 @@ final class Kiwi_Retention_Archive_Lock_Handle
             return false;
         }
 
-        $write_block = @fopen($this->get_write_block_path(), 'c+b');
-        if (!is_resource($write_block)) {
-            return false;
-        }
-
-        $sentinel = self::WRITE_BLOCKED_SENTINEL;
-        try {
-            if (!@rewind($write_block) || !@ftruncate($write_block, 0)) {
-                return false;
-            }
-
-            $written = @fwrite($write_block, $sentinel);
-            if ($written !== strlen($sentinel) || !@fflush($write_block)) {
-                return false;
-            }
-
-            return !function_exists('fsync') || @fsync($write_block);
-        } finally {
-            @fclose($write_block);
-        }
+        return Kiwi_Retention_Archive_Write_Block::persist($this->lock_path);
     }
 
     public function is_write_blocked(): bool
@@ -57,10 +35,7 @@ final class Kiwi_Retention_Archive_Lock_Handle
             return true;
         }
 
-        $write_block_path = $this->get_write_block_path();
-        clearstatcache(true, $write_block_path);
-
-        return file_exists($write_block_path);
+        return Kiwi_Retention_Archive_Write_Block::exists($this->lock_path);
     }
 
     public function release(): void
@@ -79,9 +54,41 @@ final class Kiwi_Retention_Archive_Lock_Handle
         $this->release();
     }
 
-    private function get_write_block_path(): string
+    public function clear_write_blocked(): bool
     {
-        return $this->lock_path . self::WRITE_BLOCKED_SUFFIX;
+        if (!is_resource($this->resource)) {
+            return false;
+        }
+
+        return Kiwi_Retention_Archive_Write_Block::clear($this->lock_path);
+    }
+
+    public function get_write_block_path(): string
+    {
+        return Kiwi_Retention_Archive_Write_Block::get_path($this->lock_path);
+    }
+
+    public function persist_replacement_transition_blocked(string $source_archive): bool
+    {
+        if (!is_resource($this->resource)) {
+            return false;
+        }
+
+        return Kiwi_Retention_Archive_Write_Block::persist_replacement_transition(
+            $this->lock_path,
+            $source_archive
+        );
+    }
+
+    public function clear_replacement_transition_blocked(): bool
+    {
+        if (!is_resource($this->resource)) {
+            return false;
+        }
+
+        return Kiwi_Retention_Archive_Write_Block::clear_replacement_transition(
+            $this->lock_path
+        );
     }
 }
 
@@ -97,29 +104,54 @@ class Kiwi_Retention_Archive_Lock
         return $this->acquire_lock_file($archive_db_path . '.lock');
     }
 
-    public function acquire_shared_for_archive(string $archive_db_path): array
+    public function is_write_blocked_for_archive(string $archive_db_path): ?bool
+    {
+        $write_block_path = $this->get_write_block_path_for_archive($archive_db_path);
+        if ($write_block_path === '') {
+            return null;
+        }
+
+        clearstatcache(true, $write_block_path);
+
+        return file_exists($write_block_path);
+    }
+
+    public function is_replacement_transition_blocked_for_archive(string $archive_db_path): ?bool
     {
         $archive_db_path = trim($archive_db_path);
         if ($archive_db_path === '' || !$this->is_archive_filename(basename($archive_db_path))) {
-            return $this->failure('archive_lock_path_invalid', 'Archive lock path is invalid.');
+            return null;
         }
 
-        return $this->acquire_lock_file($archive_db_path . '.lock', LOCK_SH | LOCK_NB);
+        $path = Kiwi_Retention_Archive_Write_Block::get_replacement_transition_path(
+            $archive_db_path . '.lock'
+        );
+        clearstatcache(true, $path);
+
+        return file_exists($path);
     }
 
-    public function acquire_controller(string $archive_directory): array
-    {
-        $archive_directory = rtrim(trim($archive_directory), '/\\');
-        if ($archive_directory === '' || !is_dir($archive_directory)) {
-            return $this->failure(
-                'archive_controller_lock_directory_invalid',
-                'Archive controller lock directory is unavailable.'
-            );
+    public function get_replacement_transition_source_for_archive(
+        string $archive_db_path
+    ): ?string {
+        $archive_db_path = trim($archive_db_path);
+        if ($archive_db_path === '' || !$this->is_archive_filename(basename($archive_db_path))) {
+            return null;
         }
 
-        return $this->acquire_lock_file(
-            $archive_directory . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_health_controller.lock'
+        return Kiwi_Retention_Archive_Write_Block::get_replacement_transition_source(
+            $archive_db_path . '.lock'
         );
+    }
+
+    public function get_write_block_path_for_archive(string $archive_db_path): string
+    {
+        $archive_db_path = trim($archive_db_path);
+        if ($archive_db_path === '' || !$this->is_archive_filename(basename($archive_db_path))) {
+            return '';
+        }
+
+        return Kiwi_Retention_Archive_Write_Block::get_path($archive_db_path . '.lock');
     }
 
     public function release(?Kiwi_Retention_Archive_Lock_Handle $handle): void
@@ -185,9 +217,7 @@ class Kiwi_Retention_Archive_Lock
 
     private function is_archive_filename(string $filename): bool
     {
-        return preg_match(
-            '/^kiwi_retention_archive_[0-9]{4}(?:_part_(?:[2-9]|[1-9][0-9]+))?\.sqlite$/',
-            $filename
-        ) === 1;
+        return class_exists('Kiwi_Retention_Archive_Name')
+            && Kiwi_Retention_Archive_Name::parse($filename) !== null;
     }
 }

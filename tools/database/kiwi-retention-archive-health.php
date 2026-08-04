@@ -1,33 +1,8 @@
 <?php
 
+require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-name.php';
+require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-write-block.php';
 require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
-
-function kiwi_retention_archive_health_is_definitive_corruption(Throwable $error): bool
-{
-    $error_info = $error instanceof PDOException && is_array($error->errorInfo ?? null)
-        ? $error->errorInfo
-        : [];
-    $sqlite_code = (int) ($error_info[1] ?? 0);
-    $sqlite_primary_code = $sqlite_code > 0 ? ($sqlite_code & 0xff) : 0;
-    if (in_array($sqlite_primary_code, [11, 24, 26], true)) {
-        return true;
-    }
-
-    $message = strtolower($error->getMessage());
-    foreach ([
-        'database disk image is malformed',
-        'file is not a database',
-        'database corruption',
-        'malformed database schema',
-        'unsupported file format',
-    ] as $corruption_message) {
-        if (strpos($message, $corruption_message) !== false) {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 if (PHP_SAPI === 'cli'
     && isset($argv[1], $argv[2])
@@ -35,32 +10,54 @@ if (PHP_SAPI === 'cli'
 ) {
     $payload_raw = base64_decode((string) $argv[2], true);
     $payload = is_string($payload_raw) ? json_decode($payload_raw, true) : null;
-    $archive_path = is_array($payload) ? (string) ($payload['archive_path'] ?? '') : '';
-    $readiness_path = is_array($payload) ? (string) ($payload['readiness_path'] ?? '') : '';
-    $check = is_array($payload) ? strtolower((string) ($payload['check'] ?? '')) : '';
+    $archive_path = is_array($payload) ? trim((string) ($payload['archive_path'] ?? '')) : '';
+    $readiness_path = is_array($payload) ? trim((string) ($payload['readiness_path'] ?? '')) : '';
+    $check = is_array($payload) ? strtolower(trim((string) ($payload['check'] ?? ''))) : '';
+    $persist_write_block_on_corruption = is_array($payload)
+        && !empty($payload['persist_write_block_on_corruption']);
+    $allow_blocked_recovery_verification = is_array($payload)
+        && !empty($payload['allow_blocked_recovery_verification']);
+    $corruption_handoff_timeout_seconds = is_array($payload)
+        ? min(3600, max(30, (int) ($payload['corruption_handoff_timeout_seconds'] ?? 600)))
+        : 600;
+    $write_readiness_state = static function (string $path, string $state): bool {
+        $resource = @fopen($path, 'c+b');
+        if (!is_resource($resource)) {
+            return false;
+        }
+
+        try {
+            return @rewind($resource)
+                && @ftruncate($resource, 0)
+                && @fwrite($resource, $state) === strlen($state)
+                && @fflush($resource)
+                && (!function_exists('fsync') || @fsync($resource));
+        } finally {
+            @fclose($resource);
+        }
+    };
     $result = [
         'result' => 'error',
         'reason_code' => 'health_child_input_invalid',
-        'check_started' => false,
+        'check_completed' => false,
     ];
 
     if (in_array($check, ['quick', 'integrity'], true)
-        && $archive_path !== ''
+        && Kiwi_Retention_Archive_Name::parse(basename($archive_path)) !== null
         && $readiness_path !== ''
         && is_file($archive_path)
         && !is_link($archive_path)
         && class_exists('PDO')
         && in_array('sqlite', PDO::getAvailableDrivers(), true)
     ) {
+        $lock_resource = null;
         try {
             $real_path = realpath($archive_path);
-            if (!is_string($real_path) || $real_path === '') {
-                throw new RuntimeException('archive_path_unresolvable');
-            }
-
-            $archive_directory = realpath(dirname($real_path));
+            $archive_directory = is_string($real_path) ? realpath(dirname($real_path)) : false;
             $readiness_directory = realpath(dirname($readiness_path));
-            if (!is_string($archive_directory)
+            if (!is_string($real_path)
+                || $real_path === ''
+                || !is_string($archive_directory)
                 || !is_string($readiness_directory)
                 || $archive_directory !== $readiness_directory
                 || preg_match(
@@ -68,68 +65,147 @@ if (PHP_SAPI === 'cli'
                     basename($readiness_path)
                 ) !== 1
             ) {
-                throw new RuntimeException('health_child_readiness_path_invalid');
+                throw new RuntimeException('health_child_path_invalid');
             }
 
             $lock_resource = @fopen($real_path . '.lock', 'c+');
-            if (!is_resource($lock_resource)
-                || !@flock($lock_resource, LOCK_SH | LOCK_NB)
-            ) {
-                throw new RuntimeException('health_child_lock_handshake_failed');
+            if (!is_resource($lock_resource)) {
+                throw new RuntimeException('health_child_lock_open_failed');
             }
-            register_shutdown_function(static function (string $path): void {
-                @unlink($path);
-            }, $readiness_path);
-            $readiness_resource = @fopen($readiness_path, 'x');
-            if (!is_resource($readiness_resource)
-                || @fwrite($readiness_resource, 'locked') !== 6
-                || !@fflush($readiness_resource)
-            ) {
-                throw new RuntimeException('health_child_lock_handshake_failed');
-            }
-            @fclose($readiness_resource);
-            $result['check_started'] = true;
+            if (!@flock($lock_resource, LOCK_EX | LOCK_NB)) {
+                $result = [
+                    'result' => 'deferred',
+                    'reason_code' => 'archive_lock_active',
+                    'check_completed' => false,
+                ];
+            } else {
+                register_shutdown_function(static function (string $path): void {
+                    @unlink($path);
+                }, $readiness_path);
+                $readiness_resource = @fopen($readiness_path, 'x');
+                if (!is_resource($readiness_resource)
+                    || @fwrite($readiness_resource, 'locked') !== 6
+                    || !@fflush($readiness_resource)
+                ) {
+                    throw new RuntimeException('health_child_lock_handshake_failed');
+                }
+                @fclose($readiness_resource);
 
-            $uri_path = implode('/', array_map(
-                'rawurlencode',
-                explode('/', str_replace('\\', '/', $real_path))
-            ));
-            $pdo = new PDO('sqlite:file:' . $uri_path . '?mode=ro');
-            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-            $pdo->exec('PRAGMA query_only = ON');
-            $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
-            $rows = is_array($rows) ? array_values(array_map('strval', $rows)) : [];
-            $result = count($rows) === 1 && strtolower(trim($rows[0])) === 'ok'
-                ? [
-                    'result' => 'ok',
-                    'reason_code' => 'sqlite_check_ok',
-                    'check_started' => true,
-                ]
-                : [
-                    'result' => 'corruption_detected',
-                    'reason_code' => 'sqlite_check_reported_corruption',
-                    'check_started' => true,
-                ];
+                $write_blocked = Kiwi_Retention_Archive_Write_Block::exists(
+                    $real_path . '.lock'
+                );
+                $transition_source = Kiwi_Retention_Archive_Write_Block
+                    ::get_replacement_transition_source($real_path . '.lock');
+                if ($transition_source === null) {
+                    $result = [
+                        'result' => 'error',
+                        'reason_code' => 'replacement_transition_state_invalid',
+                        'check_completed' => false,
+                    ];
+                } elseif ($write_blocked && !$allow_blocked_recovery_verification) {
+                    $result = [
+                        'result' => 'deferred',
+                        'reason_code' => 'archive_corruption_write_blocked',
+                        'check_completed' => false,
+                    ];
+                } elseif ($transition_source !== '' && !$allow_blocked_recovery_verification) {
+                    $result = [
+                        'result' => 'deferred',
+                        'reason_code' => 'replacement_transition_write_blocked',
+                        'check_completed' => false,
+                    ];
+                } else {
+                    $uri_path = implode('/', array_map(
+                        'rawurlencode',
+                        explode('/', str_replace('\\', '/', $real_path))
+                    ));
+                    $pdo = new PDO('sqlite:file:' . $uri_path . '?mode=ro');
+                    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+                    $pdo->exec('PRAGMA query_only = ON');
+                    $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
+                    $rows = is_array($rows) ? array_values(array_map('strval', $rows)) : [];
+                    if (count($rows) === 1 && strtolower(trim($rows[0])) === 'ok') {
+                        $result = [
+                            'result' => 'ok',
+                            'reason_code' => 'sqlite_check_ok',
+                            'check_completed' => true,
+                        ];
+                    } else {
+                        $write_blocked = false;
+                        if ($persist_write_block_on_corruption) {
+                            $write_blocked = Kiwi_Retention_Archive_Write_Block::persist(
+                                $real_path . '.lock'
+                            );
+                        }
+                        if ($persist_write_block_on_corruption && !$write_blocked) {
+                            $handoff_state = '';
+                            if ($write_readiness_state($readiness_path, 'corruption_gate_required')) {
+                                $handoff_deadline = microtime(true) + $corruption_handoff_timeout_seconds;
+                                do {
+                                    usleep(20000);
+                                    $handoff_state = (string) @file_get_contents($readiness_path);
+                                } while (!in_array($handoff_state, [
+                                    'corruption_gate_persisted',
+                                    'corruption_gate_failed',
+                                ], true) && microtime(true) < $handoff_deadline);
+                            }
+
+                            if ($handoff_state === 'corruption_gate_persisted') {
+                                $result = [
+                                    'result' => 'corruption_detected',
+                                    'reason_code' => 'sqlite_check_reported_corruption',
+                                    'check_completed' => true,
+                                    'write_blocked' => false,
+                                    'incident_open' => true,
+                                ];
+                            } else {
+                                do {
+                                    sleep(5);
+                                    $write_blocked = Kiwi_Retention_Archive_Write_Block::persist(
+                                        $real_path . '.lock'
+                                    );
+                                } while (!$write_blocked);
+
+                                $result = [
+                                    'result' => 'corruption_detected',
+                                    'reason_code' => 'sqlite_check_reported_corruption',
+                                    'check_completed' => true,
+                                    'write_blocked' => true,
+                                ];
+                            }
+                        } else {
+                            $result = [
+                                'result' => 'corruption_detected',
+                                'reason_code' => 'sqlite_check_reported_corruption',
+                                'check_completed' => true,
+                                'write_blocked' => $write_blocked,
+                            ];
+                        }
+                    }
+                }
+            }
         } catch (Throwable $error) {
-            $result = kiwi_retention_archive_health_is_definitive_corruption($error)
-                ? [
-                    'result' => 'corruption_detected',
-                    'reason_code' => 'sqlite_check_reported_corruption',
-                    'check_started' => !empty($result['check_started']),
-                ]
-                : [
-                    'result' => 'error',
-                    'reason_code' => 'sqlite_readonly_check_failed',
-                    'check_started' => !empty($result['check_started']),
-                ];
+            $result = [
+                'result' => 'error',
+                'reason_code' => 'sqlite_readonly_check_failed',
+                'check_completed' => false,
+            ];
+        } finally {
+            if (is_resource($lock_resource)) {
+                @flock($lock_resource, LOCK_UN);
+                @fclose($lock_resource);
+            }
         }
     }
 
     $json = json_encode($result, JSON_UNESCAPED_SLASHES);
     echo is_string($json)
         ? $json
-        : '{"result":"error","reason_code":"health_child_json_failed"}';
-    exit((string) ($result['result'] ?? '') === 'error' ? 2 : 0);
+        : '{"result":"error","reason_code":"health_child_json_failed","check_completed":false}';
+    $child_result = (string) ($result['result'] ?? 'error');
+    exit(in_array($child_result, ['ok', 'corruption_detected'], true)
+        ? 0
+        : ($child_result === 'deferred' ? 1 : 2));
 }
 
 function kiwi_retention_archive_health_cli_has_required_api(string $class_name): bool
@@ -148,44 +224,40 @@ function kiwi_retention_archive_health_cli_has_required_api(string $class_name):
 }
 
 function kiwi_retention_archive_health_bootstrap_failure(
+    string $command,
     string $reason_code,
     ?array $durable_result = null
-): void
-{
-    $now = (new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin')))->format(DATE_ATOM);
-    $result = is_array($durable_result) ? $durable_result : [
-        'schema_version' => 1,
-        'status' => 'failed',
-        'exit_code' => 2,
-        'check' => null,
-        'scope' => 'bootstrap',
-        'archive' => null,
-        'result' => 'error',
-        'reason_code' => $reason_code,
-        'started_at' => $now,
-        'finished_at' => $now,
-        'duration_seconds' => 0,
-        'incident_action' => null,
-    ];
+): void {
+    $result = is_array($durable_result)
+        ? $durable_result
+        : (new Kiwi_Retention_Archive_Health_Bootstrap_Recorder())->record($reason_code, $command);
+    $exit_code = (int) ($result['_exit_code'] ?? 2);
+    unset($result['_exit_code']);
     $json = json_encode($result, JSON_UNESCAPED_SLASHES);
+    if (!is_string($json) || strpos($json, "\n") !== false) {
+        $fallback = (new Kiwi_Retention_Archive_Health_Bootstrap_Recorder())
+            ->record('json_encode_failed', $command);
+        unset($fallback['_exit_code']);
+        $json = json_encode($fallback, JSON_UNESCAPED_SLASHES);
+    }
     $line = is_string($json)
         ? $json
-        : '{"schema_version":1,"status":"failed","exit_code":2,"check":null,"scope":"bootstrap","archive":null,"result":"error","reason_code":"json_encode_failed","started_at":"","finished_at":"","duration_seconds":0,"incident_action":null}';
+        : '{"schema_version":1,"command":"check","result":"error","reason_code":"json_encode_failed","archive":null,"check":null,"started_at":"","finished_at":"","duration_seconds":0}';
 
     if (class_exists('WP_CLI') && method_exists('WP_CLI', 'line') && method_exists('WP_CLI', 'halt')) {
         WP_CLI::line($line);
-        WP_CLI::halt(2);
+        WP_CLI::halt(min(2, max(1, $exit_code)));
     }
 
     echo $line;
-    exit(2);
+    exit(min(2, max(1, $exit_code)));
 }
 
 if (!defined('WP_CLI')
     || !WP_CLI
     || !kiwi_retention_archive_health_cli_has_required_api('WP_CLI')
 ) {
-    kiwi_retention_archive_health_bootstrap_failure('wp_cli_api_unavailable');
+    kiwi_retention_archive_health_bootstrap_failure('check', 'wp_cli_api_unavailable');
 }
 
 if (!class_exists('Kiwi_WP_CLI_Command_Namespace')) {
@@ -211,8 +283,13 @@ final class Kiwi_Retention_Archive_Health_Command
             ? $required_classes
             : [
                 'Kiwi_Config',
+                'Kiwi_Retention_Archive_Name',
+                'Kiwi_Retention_Archive_Write_Block',
                 'Kiwi_Retention_Archive_Lock',
                 'Kiwi_Retention_Sqlite_Archive_Service',
+                'Kiwi_Retention_Archive_Check_Supervisor',
+                'Kiwi_Retention_Corruption_Safety_Gate_Coordinator',
+                'Kiwi_Retention_Archive_Health_Controller',
                 'Kiwi_Retention_Archive_Health_Service',
                 'Kiwi_Operational_Event_Service',
                 'Kiwi_Retention_Cleanup_Run_Repository',
@@ -226,9 +303,11 @@ final class Kiwi_Retention_Archive_Health_Command
                 : json_encode($result, JSON_UNESCAPED_SLASHES);
         };
         $this->bootstrap_failure_recorder = $bootstrap_failure_recorder ?? static function (
-            string $reason_code
+            string $reason_code,
+            string $command
         ): ?array {
-            if (class_exists('Kiwi_Retention_Archive_Health_Service')
+            if ($command === 'check'
+                && class_exists('Kiwi_Retention_Archive_Health_Service')
                 && method_exists(
                     'Kiwi_Retention_Archive_Health_Service',
                     'record_scheduled_bootstrap_failure'
@@ -238,28 +317,21 @@ final class Kiwi_Retention_Archive_Health_Command
                     return (new Kiwi_Retention_Archive_Health_Service())
                         ->record_scheduled_bootstrap_failure($reason_code);
                 } catch (Throwable $error) {
-                    // A missing constructor dependency is handled by the standalone recorder.
                 }
             }
 
             try {
-                return (new Kiwi_Retention_Archive_Health_Bootstrap_Recorder())->record(
-                    $reason_code
-                );
+                return (new Kiwi_Retention_Archive_Health_Bootstrap_Recorder())
+                    ->record($reason_code, $command);
             } catch (Throwable $error) {
                 return null;
             }
         };
     }
 
-    public function scheduled(array $args, array $assoc_args): void
+    public function check(array $args, array $assoc_args): void
     {
-        $this->run('scheduled', $assoc_args);
-    }
-
-    public function status(array $args, array $assoc_args): void
-    {
-        $this->run('status', $assoc_args);
+        $this->run('check', $assoc_args);
     }
 
     public function diagnose(array $args, array $assoc_args): void
@@ -267,9 +339,9 @@ final class Kiwi_Retention_Archive_Health_Command
         $this->run('diagnose', $assoc_args);
     }
 
-    public function preflight(array $args, array $assoc_args): void
+    public function unblock(array $args, array $assoc_args): void
     {
-        $this->run('preflight', $assoc_args);
+        $this->run('unblock', $assoc_args);
     }
 
     private function run(string $mode, array $assoc_args): void
@@ -300,7 +372,7 @@ final class Kiwi_Retention_Archive_Health_Command
             $this->fail_before_service($mode, 'plugins_loaded_not_reached');
         }
 
-        kiwi_retention_archive_health_bootstrap_failure('runner_returned_before_halt');
+        $this->fail_before_service($mode, 'runner_returned_before_halt');
     }
 
     private function execute(string $mode, array $assoc_args): void
@@ -311,7 +383,6 @@ final class Kiwi_Retention_Archive_Health_Command
         ) {
             $this->fail_before_service($mode, 'wordpress_lifecycle_invalid');
         }
-
         foreach ($this->required_classes as $required_class) {
             if (!is_string($required_class) || !class_exists($required_class)) {
                 $this->fail_before_service($mode, 'required_class_missing');
@@ -328,46 +399,58 @@ final class Kiwi_Retention_Archive_Health_Command
         }
 
         try {
-            if ($mode === 'diagnose') {
+            if ($mode === 'check') {
+                $result = $service->check((string) ($assoc_args['check'] ?? ''));
+            } elseif ($mode === 'diagnose') {
                 $result = $service->diagnose(
                     (string) ($assoc_args['archive'] ?? ''),
                     (string) ($assoc_args['check'] ?? '')
                 );
-            } elseif (in_array($mode, ['scheduled', 'status', 'preflight'], true)) {
-                $result = $service->{$mode}();
+            } elseif ($mode === 'unblock') {
+                $confirm = $assoc_args['confirm'] ?? null;
+                $confirmed = $confirm === true
+                    || in_array(strtolower(trim((string) $confirm)), ['1', 'true', 'yes'], true);
+                $result = $service->unblock(
+                    (string) ($assoc_args['archive'] ?? ''),
+                    (string) ($assoc_args['replacement'] ?? ''),
+                    $confirmed
+                );
             } else {
-                kiwi_retention_archive_health_bootstrap_failure('command_mode_invalid');
+                $this->fail_before_service($mode, 'command_mode_invalid');
             }
         } catch (Throwable $error) {
             $this->fail_before_service($mode, 'health_service_exception');
         }
-
         if (!is_array($result)) {
-            kiwi_retention_archive_health_bootstrap_failure('health_result_invalid');
+            $this->fail_before_service($mode, 'health_result_invalid');
         }
 
+        $exit_code = min(2, max(0, (int) ($result['_exit_code'] ?? 2)));
+        unset($result['_exit_code']);
         $json = call_user_func($this->json_encoder, $result);
         if (!is_string($json) || strpos($json, "\n") !== false) {
-            kiwi_retention_archive_health_bootstrap_failure('json_encode_failed');
+            $this->fail_before_service($mode, 'json_encode_failed');
         }
 
         WP_CLI::line($json);
-        WP_CLI::halt((int) ($result['exit_code'] ?? 2));
+        WP_CLI::halt($exit_code);
     }
 
     private function fail_before_service(string $mode, string $reason_code): void
     {
         $durable_result = null;
-        if ($mode === 'scheduled') {
-            try {
-                $candidate = call_user_func($this->bootstrap_failure_recorder, $reason_code);
-                $durable_result = is_array($candidate) ? $candidate : null;
-            } catch (Throwable $error) {
-                $durable_result = null;
-            }
+        try {
+            $candidate = call_user_func(
+                $this->bootstrap_failure_recorder,
+                $reason_code,
+                $mode
+            );
+            $durable_result = is_array($candidate) ? $candidate : null;
+        } catch (Throwable $error) {
+            $durable_result = null;
         }
 
-        kiwi_retention_archive_health_bootstrap_failure($reason_code, $durable_result);
+        kiwi_retention_archive_health_bootstrap_failure($mode, $reason_code, $durable_result);
     }
 }
 
@@ -377,10 +460,9 @@ $registered = WP_CLI::add_command(
     new Kiwi_Retention_Archive_Health_Command(),
     [
         'when' => 'before_wp_load',
-        'shortdesc' => 'Inspect and schedule retention archive health checks.',
+        'shortdesc' => 'Run, diagnose, or manually unblock retention archive health.',
     ]
 );
-
 if (!$registered) {
-    kiwi_retention_archive_health_bootstrap_failure('command_registration_failed');
+    kiwi_retention_archive_health_bootstrap_failure('check', 'command_registration_failed');
 }

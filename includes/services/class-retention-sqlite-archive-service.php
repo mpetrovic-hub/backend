@@ -57,16 +57,9 @@ class Kiwi_Retention_Sqlite_Archive_Service
             return $this->build_generation_path($year, 1);
         }
 
-        if ($highest_path !== '') {
-            if (!$this->is_quarantined($highest_path)) {
-                return $highest_path;
-            }
-            if (!$this->is_quarantine_reconciled($highest_path)) {
-                return $highest_path;
-            }
-        }
-
-        return $this->build_generation_path($year, $highest_generation + 1);
+        return $highest_path !== ''
+            ? $highest_path
+            : $this->build_generation_path($year, $highest_generation);
     }
 
     public function resolve_existing_archive_db_path_read_only(string $archive_db_path): string
@@ -76,24 +69,6 @@ class Kiwi_Retention_Sqlite_Archive_Service
         }
 
         return $archive_db_path;
-    }
-
-    public function resolve_quarantine_successor_path(string $quarantined_archive_db_path): string
-    {
-        $this->ensure_archive_directory($this->get_archive_directory());
-        if (!$this->is_quarantined($quarantined_archive_db_path)) {
-            throw new RuntimeException('Retention archive quarantine successor requires a quarantined archive.');
-        }
-
-        $identity = $this->parse_generation_filename(basename($quarantined_archive_db_path));
-        if ($identity === null) {
-            throw new RuntimeException('Retention archive quarantine generation is invalid.');
-        }
-
-        return $this->build_generation_path(
-            (string) $identity['year'],
-            (int) $identity['generation'] + 1
-        );
     }
 
     public function list_archive_files(): array
@@ -122,7 +97,6 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $archives[] = array_merge($identity, [
                 'name' => basename($path),
                 'path' => $path,
-                'quarantined' => $this->is_quarantined($path),
                 'size_bytes' => (int) (@filesize($path) ?: 0),
             ]);
         }
@@ -137,139 +111,6 @@ class Kiwi_Retention_Sqlite_Archive_Service
         });
 
         return $archives;
-    }
-
-    public function find_quarantined_predecessor(string $successor_archive_db_path): ?array
-    {
-        if (!$this->is_safe_archive_path($successor_archive_db_path)) {
-            throw new InvalidArgumentException('Retention successor archive path is invalid.');
-        }
-
-        $successor = $this->parse_generation_filename(basename($successor_archive_db_path));
-        if (!is_array($successor) || (int) ($successor['generation'] ?? 0) <= 1) {
-            return null;
-        }
-
-        $predecessor_generation = (int) $successor['generation'] - 1;
-        foreach ($this->list_archive_files() as $archive) {
-            if ((string) ($archive['year'] ?? '') === (string) ($successor['year'] ?? '')
-                && (int) ($archive['generation'] ?? 0) === $predecessor_generation
-                && !empty($archive['quarantined'])
-            ) {
-                return $archive;
-            }
-        }
-
-        return null;
-    }
-
-    public function is_quarantined(string $archive_db_path): bool
-    {
-        return $this->is_safe_archive_path($archive_db_path)
-            && is_file($this->get_quarantine_marker_path($archive_db_path));
-    }
-
-    public function get_quarantine_marker_path(string $archive_db_path): string
-    {
-        if (!$this->is_safe_archive_path($archive_db_path)) {
-            throw new RuntimeException('Retention archive quarantine path is invalid.');
-        }
-
-        return $archive_db_path . '.quarantine.json';
-    }
-
-    public function mark_quarantined(string $archive_db_path, array $details): bool
-    {
-        if (!is_file($archive_db_path) || !$this->is_safe_archive_path($archive_db_path)) {
-            return false;
-        }
-
-        $marker_path = $this->get_quarantine_marker_path($archive_db_path);
-        if (is_file($marker_path)) {
-            return true;
-        }
-
-        $payload = [
-            'schema_version' => 1,
-            'archive' => basename($archive_db_path),
-            'detected_at' => (string) ($details['detected_at'] ?? $this->current_time_mysql()),
-            'check' => (string) ($details['check'] ?? ''),
-            'reason_code' => (string) ($details['reason_code'] ?? 'sqlite_corruption_confirmed'),
-            'active_generation' => !empty($details['active_generation']),
-        ];
-        $json = function_exists('wp_json_encode')
-            ? wp_json_encode($payload)
-            : json_encode($payload);
-        if (!is_string($json)) {
-            return false;
-        }
-
-        return $this->write_atomic_file($marker_path, $json . "\n");
-    }
-
-    public function mark_quarantine_reconciled(string $archive_db_path, string $recorded_at): bool
-    {
-        if (!$this->is_quarantined($archive_db_path) || trim($recorded_at) === '') {
-            return false;
-        }
-
-        try {
-            $timestamp = new DateTimeImmutable($recorded_at);
-        } catch (Throwable $error) {
-            return false;
-        }
-        if ($timestamp->format(DATE_ATOM) !== $recorded_at) {
-            return false;
-        }
-
-        $marker_path = $this->get_quarantine_marker_path($archive_db_path);
-        $raw = @file_get_contents($marker_path);
-        $payload = is_string($raw) ? json_decode($raw, true) : null;
-        if (!is_array($payload)
-            || (int) ($payload['schema_version'] ?? 0) !== 1
-            || (string) ($payload['archive'] ?? '') !== basename($archive_db_path)
-        ) {
-            return false;
-        }
-        $existing_recorded_at = trim((string) ($payload['controller_recorded_at'] ?? ''));
-        if ($existing_recorded_at !== '') {
-            try {
-                $existing_timestamp = new DateTimeImmutable($existing_recorded_at);
-            } catch (Throwable $error) {
-                return false;
-            }
-
-            return $existing_timestamp->format(DATE_ATOM) === $existing_recorded_at;
-        }
-
-        $payload['controller_recorded_at'] = $recorded_at;
-        $json = function_exists('wp_json_encode')
-            ? wp_json_encode($payload)
-            : json_encode($payload);
-
-        return is_string($json) && $this->write_atomic_file($marker_path, $json . "\n");
-    }
-
-    public function is_quarantine_reconciled(string $archive_db_path): bool
-    {
-        if (!$this->is_quarantined($archive_db_path)) {
-            return false;
-        }
-        $raw = @file_get_contents($this->get_quarantine_marker_path($archive_db_path));
-        $payload = is_string($raw) ? json_decode($raw, true) : null;
-        $recorded_at = is_array($payload)
-            ? trim((string) ($payload['controller_recorded_at'] ?? ''))
-            : '';
-        if ($recorded_at === '') {
-            return false;
-        }
-        try {
-            $timestamp = new DateTimeImmutable($recorded_at);
-        } catch (Throwable $error) {
-            return false;
-        }
-
-        return $timestamp->format(DATE_ATOM) === $recorded_at;
     }
 
     public function get_relative_archive_name(string $archive_db_path): string
@@ -1154,35 +995,19 @@ class Kiwi_Retention_Sqlite_Archive_Service
 
     private function build_generation_path(string $year, int $generation): string
     {
-        if (preg_match('/^[0-9]{4}$/', $year) !== 1) {
+        $filename = Kiwi_Retention_Archive_Name::build($year, max(1, $generation));
+        if ($filename === '') {
             throw new InvalidArgumentException('Retention archive year is invalid.');
         }
 
-        $generation = max(1, $generation);
-        $suffix = $generation === 1 ? '' : '_part_' . $generation;
-
         return $this->get_archive_directory()
             . DIRECTORY_SEPARATOR
-            . 'kiwi_retention_archive_'
-            . $year
-            . $suffix
-            . '.sqlite';
+            . $filename;
     }
 
     private function parse_generation_filename(string $filename): ?array
     {
-        if (preg_match(
-            '/^kiwi_retention_archive_([0-9]{4})(?:_part_([2-9]|[1-9][0-9]+))?\.sqlite$/',
-            $filename,
-            $matches
-        ) !== 1) {
-            return null;
-        }
-
-        return [
-            'year' => (string) $matches[1],
-            'generation' => isset($matches[2]) ? (int) $matches[2] : 1,
-        ];
+        return Kiwi_Retention_Archive_Name::parse($filename);
     }
 
     private function is_safe_archive_path(string $archive_db_path): bool
@@ -1205,38 +1030,6 @@ class Kiwi_Retention_Sqlite_Archive_Service
         }
 
         return !is_link($archive_db_path);
-    }
-
-    private function write_atomic_file(string $target_path, string $contents): bool
-    {
-        $directory = dirname($target_path);
-        if (!is_dir($directory) || !is_writable($directory)) {
-            return false;
-        }
-
-        try {
-            $suffix = function_exists('random_bytes')
-                ? bin2hex(random_bytes(8))
-                : substr(md5(uniqid('', true)), 0, 16);
-        } catch (Throwable $error) {
-            $suffix = substr(md5(uniqid('', true)), 0, 16);
-        }
-
-        $temporary_path = $target_path . '.tmp.' . $suffix;
-        $written = @file_put_contents($temporary_path, $contents, LOCK_EX);
-        if ($written === false || $written !== strlen($contents)) {
-            @unlink($temporary_path);
-
-            return false;
-        }
-
-        if (!@rename($temporary_path, $target_path)) {
-            @unlink($temporary_path);
-
-            return false;
-        }
-
-        return true;
     }
 
     private function normalize_primary_keys(array $primary_keys): array

@@ -426,11 +426,16 @@ require_once __DIR__ . '/../includes/services/class-landing-funnel-daily-tkzone-
 require_once __DIR__ . '/../includes/services/class-landing-session-raw-context-compaction-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-source-registry.php';
 require_once __DIR__ . '/../includes/services/class-retention-coverage-gate.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-name.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-write-block.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-lock.php';
 require_once __DIR__ . '/../includes/services/class-retention-sqlite-archive-service.php';
-require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-operational-event-service.php';
 require_once __DIR__ . '/../includes/services/class-operational-event-cleanup-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-check-supervisor.php';
+require_once __DIR__ . '/../includes/services/class-retention-corruption-safety-gate-coordinator.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-health-controller.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
@@ -1367,6 +1372,8 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
     public $rows = [];
     public $throw_on_delete = false;
     public $delete_result = 0;
+    public $delete_calls = [];
+    public $before_conditional_insert = null;
     private $next_id = 1;
 
     public function create_table(): void
@@ -1397,6 +1404,29 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
         }));
 
         return empty($matches) ? null : $matches[count($matches) - 1];
+    }
+
+    public function insert_event_if_correlation_open(array $event): int
+    {
+        if (is_callable($this->before_conditional_insert)) {
+            $callback = $this->before_conditional_insert;
+            $this->before_conditional_insert = null;
+            $callback();
+        }
+
+        $latest = $this->find_latest_by_correlation_key((string) ($event['correlation_key'] ?? ''));
+        if (!is_array($latest)
+            || !in_array((string) ($latest['lifecycle_action'] ?? ''), ['raised', 'repeated'], true)
+        ) {
+            return 0;
+        }
+
+        return $this->insert_event($event);
+    }
+
+    public function with_correlation_lifecycle_lock(string $correlation_key, callable $callback)
+    {
+        return $callback();
     }
 
     public function get_recent(array $filters = [], int $limit = 100): array
@@ -1440,6 +1470,7 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
 
     public function delete_created_before(string $cutoff, int $limit): int
     {
+        $this->delete_calls[] = [$cutoff, $limit];
         if ($this->throw_on_delete) {
             throw new RuntimeException('event table unavailable; password=do-not-store');
         }
@@ -1461,6 +1492,17 @@ class Kiwi_Test_One_Failure_Operational_Event_Repository extends Kiwi_Test_Opera
         }
 
         return parent::insert_event($event);
+    }
+
+    public function insert_event_if_correlation_open(array $event): int
+    {
+        if ($this->fail_next_insert) {
+            $this->fail_next_insert = false;
+
+            throw new RuntimeException('conditional event insert failed');
+        }
+
+        return parent::insert_event_if_correlation_open($event);
     }
 }
 
@@ -1502,8 +1544,6 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
     public $stale_run_ids = [];
     public $stale_detection_result = [];
     public $stale_detection_calls = [];
-    public $quarantine_successor_result = null;
-    public $quarantine_successor_calls = [];
     public $open_run_lookup_failure = false;
     private $next_id = 1;
 
@@ -1530,10 +1570,20 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         if (!$this->update_run_result) {
             return false;
         }
+        if (array_key_exists($id, $this->rows)
+            && ($this->rows[$id]['finished_at'] ?? null) !== null
+        ) {
+            return false;
+        }
 
         $this->rows[$id] = array_merge($this->rows[$id] ?? ['id' => $id], $data);
 
         return true;
+    }
+
+    public function find_run_by_id(int $id): ?array
+    {
+        return isset($this->rows[$id]) ? $this->rows[$id] : null;
     }
 
     public function find_open_run_for_source(string $source_key): ?array
@@ -1544,6 +1594,9 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
         foreach ($this->rows as $row) {
             if (($row['source_key'] ?? '') !== $source_key) {
+                continue;
+            }
+            if (($row['finished_at'] ?? null) !== null) {
                 continue;
             }
 
@@ -1557,38 +1610,6 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         }
 
         return null;
-    }
-
-    public function find_unresolved_completed_empty_recovery_contexts(
-        string $source_key
-    ): ?array {
-        $matches = [];
-        foreach ($this->rows as $row) {
-            if ((string) ($row['source_key'] ?? '') !== $source_key
-                || (string) ($row['triggered_by'] ?? '') !== 'archive_recovery'
-                || !in_array(
-                    (string) ($row['status'] ?? ''),
-                    ['completed', 'completed_noop'],
-                    true
-                )
-                || (int) ($row['eligible_rows'] ?? -1) !== 0
-                || ($row['finished_at'] ?? null) === null
-                || trim((string) ($row['error_message'] ?? '')) === ''
-                || (string) ($row['error_code'] ?? '') === 'archive_recovery_resolved'
-            ) {
-                continue;
-            }
-
-            $matches[] = [
-                'id' => (int) ($row['id'] ?? 0),
-                'run_id' => (string) ($row['run_id'] ?? ''),
-                'source_key' => (string) ($row['source_key'] ?? ''),
-                'archive_db_path' => (string) ($row['archive_db_path'] ?? ''),
-                'error_message' => (string) ($row['error_message'] ?? ''),
-            ];
-        }
-
-        return $matches;
     }
 
     public function find_open_archive_state(): ?array
@@ -1651,23 +1672,6 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
         return $marked;
     }
 
-    public function create_quarantine_successor(
-        int $run_db_id,
-        string $new_archive_db_path,
-        int $remaining_rows,
-        array $transition_context
-    ): ?array {
-        $this->quarantine_successor_calls[] = [
-            'run_db_id' => $run_db_id,
-            'new_archive_db_path' => $new_archive_db_path,
-            'remaining_rows' => $remaining_rows,
-            'transition_context' => $transition_context,
-        ];
-
-        return is_array($this->quarantine_successor_result)
-            ? $this->quarantine_successor_result
-            : null;
-    }
 }
 
 class Kiwi_Test_Retention_Table_Growth_Snapshot_Repository extends Kiwi_Retention_Table_Growth_Snapshot_Repository
@@ -1715,10 +1719,6 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
     public $integrity_check = 'ok';
     public $receipt_results = [];
     public $verified_receipt_batches = [];
-    public $quarantined = false;
-    public $quarantine_reconciled = true;
-    public $quarantine_results = [];
-    public $quarantined_predecessor = null;
     public $archive_files = [];
     public $new_archive_db_path = '';
     public $result = [
@@ -1742,34 +1742,6 @@ class Kiwi_Test_Retention_Sqlite_Archive_Service extends Kiwi_Retention_Sqlite_A
             : ($this->new_archive_db_path !== ''
                 ? $this->new_archive_db_path
                 : sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite');
-    }
-
-    public function resolve_quarantine_successor_path(string $quarantined_archive_db_path): string
-    {
-        return $this->new_archive_db_path !== ''
-            ? $this->new_archive_db_path
-            : $this->resolve_archive_db_path('');
-    }
-
-    public function is_quarantined(string $archive_db_path): bool
-    {
-        if (!empty($this->quarantine_results)) {
-            return (bool) array_shift($this->quarantine_results);
-        }
-
-        return $this->quarantined;
-    }
-
-    public function is_quarantine_reconciled(string $archive_db_path): bool
-    {
-        return $this->quarantine_reconciled;
-    }
-
-    public function find_quarantined_predecessor(string $successor_archive_db_path): ?array
-    {
-        return is_array($this->quarantined_predecessor)
-            ? $this->quarantined_predecessor
-            : null;
     }
 
     public function list_archive_files(): array
@@ -1931,10 +1903,14 @@ class Kiwi_Test_Retention_Archive_Lock extends Kiwi_Retention_Archive_Lock
 {
     public $archive_attempts = 0;
     public $fail_on_archive_attempt = 0;
+    public $before_archive_acquire = null;
 
     public function acquire_for_archive(string $archive_db_path): array
     {
         $this->archive_attempts++;
+        if (is_callable($this->before_archive_acquire)) {
+            call_user_func($this->before_archive_acquire, $archive_db_path, $this->archive_attempts);
+        }
         if ($this->archive_attempts === $this->fail_on_archive_attempt) {
             return [
                 'success' => false,
@@ -2053,6 +2029,30 @@ class Kiwi_Test_Retention_Coverage_Gate extends Kiwi_Retention_Coverage_Gate
     }
 }
 
+class Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator
+    extends Kiwi_Retention_Corruption_Safety_Gate_Coordinator
+{
+    public function __construct()
+    {
+    }
+
+    public function inspect(string $archive_path, bool $reconcile = false): array
+    {
+        $blocked = (new Kiwi_Retention_Archive_Lock())
+            ->is_write_blocked_for_archive($archive_path);
+
+        return [
+            'allowed' => $blocked === false,
+            'reason_code' => $blocked
+                ? 'archive_corruption_write_blocked'
+                : ($blocked === null ? 'archive_gate_path_invalid' : 'corruption_gate_clear'),
+            'write_blocked' => $blocked === true,
+            'incident_open' => false,
+            'incident_action' => 'none',
+        ];
+    }
+}
+
 class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
 {
     public $eligible_rows = 0;
@@ -2065,6 +2065,32 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
     public $existing_primary_keys = null;
     public $events = [];
     public $remaining_row_count_failures = 0;
+
+    public function __construct(
+        ?Kiwi_Config $config = null,
+        ?Kiwi_Retention_Source_Registry $source_registry = null,
+        ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
+        ?Kiwi_Retention_Table_Growth_Snapshot_Repository $snapshot_repository = null,
+        ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
+        ?Kiwi_Retention_Coverage_Gate $coverage_gate = null,
+        ?Kiwi_Operational_Event_Service $operational_event_service = null,
+        ?Kiwi_Retention_Archive_Lock $archive_lock = null,
+        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null
+    ) {
+        parent::__construct(
+            $config,
+            $source_registry,
+            $run_repository,
+            $snapshot_repository,
+            $archive_service,
+            $coverage_gate,
+            $operational_event_service,
+            $archive_lock,
+            $corruption_safety_gate instanceof Kiwi_Retention_Corruption_Safety_Gate_Coordinator
+                ? $corruption_safety_gate
+                : new Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator()
+        );
+    }
 
     protected function count_eligible_rows(array $source, string $cutoff_value): int
     {
@@ -13438,6 +13464,69 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service worker lock skip reschedules witho
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Retention_Cleanup_Service stops a terminalized stale worker under the archive lock', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive_path = sys_get_temp_dir()
+        . DIRECTORY_SEPARATOR
+        . 'kiwi_retention_archive_2026_part_113.sqlite';
+    $archive->new_archive_db_path = $archive_path;
+    $archive_lock = new Kiwi_Test_Retention_Archive_Lock();
+    $archive_lock->before_archive_acquire = static function (string $path, int $attempt) use ($runs): void {
+        if ($attempt !== 1 || !isset($runs->rows[1])) {
+            return;
+        }
+        $runs->rows[1] = array_merge($runs->rows[1], [
+            'status' => 'failed',
+            'worker_phase' => 'manual_replacement_verified',
+            'error_code' => 'archive_manually_replaced',
+            'error_message' => 'Synthetic replacement terminalization.',
+            'finished_at' => '2026-08-02 14:00:00',
+        ]);
+    };
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']),
+        null,
+        $archive_lock
+    );
+    $service->eligible_rows = 2;
+    $service->target_max_primary_key = 2;
+
+    $service->run_source('landing_page_sessions', 'cron');
+    $result = $service->run_worker('landing_page_sessions');
+
+    kiwi_assert_same(true, $result['success'], 'Expected stale worker to stop without creating a new failure.');
+    kiwi_assert_same('archive_manually_replaced', $result['error_code'], 'Expected terminal replacement evidence from the locked re-read.');
+    kiwi_assert_same('failed', $runs->rows[1]['status'] ?? '', 'Expected terminal run status not to resurrect.');
+    kiwi_assert_same('manual_replacement_verified', $runs->rows[1]['worker_phase'] ?? '', 'Expected replacement terminal phase to remain immutable.');
+    kiwi_assert_same([], $archive->chunk_calls, 'Expected no SQLite archive work after terminalization.');
+    kiwi_assert_same([], $service->deleted_primary_keys, 'Expected no MySQL delete after terminalization.');
+
+    @unlink($archive_path . '.lock');
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks archive and delete work after confirmed corruption', function (): void {
     global $wpdb;
 
@@ -13462,7 +13551,7 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks archive and delete work aft
     $locks = new Kiwi_Retention_Archive_Lock();
 
     try {
-        $health_lock = $locks->acquire_shared_for_archive($archive_path);
+        $health_lock = $locks->acquire_for_archive($archive_path);
         kiwi_assert_true(
             !empty($health_lock['success'])
                 && !empty($health_lock['acquired'])
@@ -16823,6 +16912,81 @@ kiwi_run_test('Kiwi_Operational_Event_Repository declares append-only schema and
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi_Operational_Event_Repository serializes lifecycle transitions with a bounded hashed lock', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new class {
+        public $queries = [];
+        public $responses = [1, 1];
+
+        public function prepare(string $query, ...$args): string
+        {
+            return $query . ' :: ' . implode(' :: ', array_map('strval', $args));
+        }
+
+        public function get_var(string $query)
+        {
+            $this->queries[] = $query;
+
+            return array_shift($this->responses);
+        }
+    };
+    $callback_calls = 0;
+    $result = (new Kiwi_Operational_Event_Repository())->with_correlation_lifecycle_lock(
+        'retention_archive_health_availability',
+        static function () use (&$callback_calls): string {
+            $callback_calls++;
+
+            return 'serialized';
+        }
+    );
+
+    kiwi_assert_same('serialized', $result, 'Expected the lifecycle callback result to pass through.');
+    kiwi_assert_same(1, $callback_calls, 'Expected exactly one callback invocation while the lock is held.');
+    kiwi_assert_contains('SELECT GET_LOCK(', $wpdb->queries[0] ?? '', 'Expected a bounded MySQL lifecycle lock acquisition.');
+    kiwi_assert_contains(' :: 5', $wpdb->queries[0] ?? '', 'Expected the lifecycle lock wait to stay bounded to five seconds.');
+    kiwi_assert_contains('SELECT RELEASE_LOCK(', $wpdb->queries[1] ?? '', 'Expected the lifecycle lock to be released after the callback.');
+    kiwi_assert_true(
+        strpos(implode("\n", $wpdb->queries), 'retention_archive_health_availability') === false,
+        'Expected the lock name to contain only a hash of the correlation key.'
+    );
+
+    $wpdb->queries = [];
+    $wpdb->responses = [0];
+    $blocked_callback_calls = 0;
+    $acquisition_failed = false;
+    try {
+        (new Kiwi_Operational_Event_Repository())->with_correlation_lifecycle_lock(
+            'retention_archive_health_availability',
+            static function () use (&$blocked_callback_calls): void {
+                $blocked_callback_calls++;
+            }
+        );
+    } catch (RuntimeException $error) {
+        $acquisition_failed = true;
+    }
+    kiwi_assert_same(true, $acquisition_failed, 'Expected unavailable lifecycle serialization to fail closed.');
+    kiwi_assert_same(0, $blocked_callback_calls, 'Expected no lifecycle callback without the correlation lock.');
+
+    $wpdb->queries = [];
+    $wpdb->responses = [1, 0];
+    $release_failed = false;
+    try {
+        (new Kiwi_Operational_Event_Repository())->with_correlation_lifecycle_lock(
+            'retention_archive_health_availability',
+            static function (): string {
+                return 'persisted-but-unconfirmed';
+            }
+        );
+    } catch (RuntimeException $error) {
+        $release_failed = true;
+    }
+    kiwi_assert_same(true, $release_failed, 'Expected an unconfirmed lifecycle lock release to fail closed.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi_Operational_Event_Service applies lifecycle, idempotency, limits, and credential redaction', function (): void {
     $repository = new Kiwi_Test_Operational_Event_Repository();
     $service = new Kiwi_Operational_Event_Service($repository);
@@ -16957,6 +17121,129 @@ kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service batches, reschedules, and 
     $finished = $cleanup->run();
     kiwi_assert_same(false, $finished['schedule_worker'], 'Expected a short batch to end the cleanup chain.');
     kiwi_assert_same(2, count($repository->rows), 'Expected routine later cleanup success not to add events.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service retains open corruption fallback incidents', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($repository);
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        $event_service
+    );
+    $event_service->record_failure_action([
+        'area' => 'retention',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'correlation_key' => 'retention_archive_corruption_test',
+        'reference_type' => 'retention_archive',
+        'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+        'message' => 'Test corruption gate.',
+    ]);
+
+    $result = $cleanup->run();
+    $latest = $repository->find_latest_by_correlation_key('retention_archive_corruption_test');
+
+    kiwi_assert_same(true, $result['success'], 'Expected cleanup after a durable refresh.');
+    kiwi_assert_same('repeated', $latest['lifecycle_action'] ?? '', 'Expected the open corruption Incident to be refreshed.');
+    kiwi_assert_same(1, count($repository->delete_calls), 'Expected deletion only after the refresh persisted.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service never reopens a concurrently resolved corruption incident', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($repository);
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        $event_service
+    );
+    $event_service->record_failure_action([
+        'area' => 'retention',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'correlation_key' => 'retention_archive_corruption_concurrent_recovery',
+        'reference_type' => 'retention_archive',
+        'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+        'message' => 'Test corruption gate.',
+    ]);
+    $repository->before_conditional_insert = static function () use ($event_service): void {
+        $event_service->record_recovery_action([
+            'area' => 'retention',
+            'severity' => 'info',
+            'event_type' => 'retention_archive_corruption_detected',
+            'correlation_key' => 'retention_archive_corruption_concurrent_recovery',
+            'reference_type' => 'retention_archive',
+            'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+            'message' => 'Test corruption recovery.',
+        ]);
+    };
+
+    $result = $cleanup->run();
+    $latest = $repository->find_latest_by_correlation_key(
+        'retention_archive_corruption_concurrent_recovery'
+    );
+
+    kiwi_assert_same(true, $result['success'], 'Expected cleanup to continue after concurrent confirmed recovery.');
+    kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected cleanup refresh never to reopen the recovered Incident.');
+    kiwi_assert_same(1, count($repository->delete_calls), 'Expected old-row cleanup only after the conditional append observed recovery.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service skips deletion when corruption refresh fails', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($repository);
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        $event_service
+    );
+    $event_service->record_failure_action([
+        'area' => 'retention',
+        'severity' => 'critical',
+        'event_type' => 'retention_archive_corruption_detected',
+        'correlation_key' => 'retention_archive_corruption_refresh_failure',
+        'reference_type' => 'retention_archive',
+        'reference_id' => 'kiwi_retention_archive_2026.sqlite',
+        'message' => 'Test corruption gate.',
+    ]);
+    $repository->fail_next_insert = true;
+
+    $result = $cleanup->run();
+
+    kiwi_assert_same(false, $result['success'], 'Expected a failed protected refresh to fail cleanup closed.');
+    kiwi_assert_same([], $repository->delete_calls, 'Expected no deletion after the protected refresh failed.');
+});
+
+kiwi_run_test('Kiwi_Operational_Event_Cleanup_Service fails closed at the protected incident query limit', function (): void {
+    $GLOBALS['kiwi_test_transients'] = [];
+    $repository = new Kiwi_Test_Operational_Event_Repository();
+    for ($index = 1; $index <= 500; $index++) {
+        $repository->rows[$index] = [
+            'id' => $index,
+            'occurred_at' => '2026-01-01 00:00:00',
+            'created_at' => '2026-01-01 00:00:00',
+            'area' => 'retention',
+            'severity' => 'critical',
+            'event_type' => 'retention_archive_corruption_detected',
+            'lifecycle_action' => 'raised',
+            'correlation_key' => 'retention_archive_corruption_limit_' . $index,
+            'reference_type' => 'retention_archive',
+            'reference_id' => 'kiwi_retention_archive_2026_' . $index . '.sqlite',
+            'message' => 'Test corruption gate.',
+        ];
+    }
+    $cleanup = new Kiwi_Operational_Event_Cleanup_Service(
+        new Kiwi_Test_Operational_Event_Cleanup_Config(),
+        $repository,
+        new Kiwi_Operational_Event_Service($repository)
+    );
+
+    $result = $cleanup->run();
+
+    kiwi_assert_same(false, $result['success'], 'Expected a full protected query page to stop cleanup fail closed.');
+    kiwi_assert_same([], $repository->delete_calls, 'Expected no deletion when additional protected Incidents may be hidden by the repository cap.');
 });
 
 kiwi_run_test('Kiwi_Plugin schedules operational-event cleanup daily and follows a full batch once', function (): void {

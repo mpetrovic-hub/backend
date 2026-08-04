@@ -28,6 +28,7 @@ Architecture docs describe stable internal contracts and boundaries. They are no
 | `click-attribution-and-postbacks.md` | Shared attribution capture, conversion matching, and affiliate postback boundary. |
 | `landing-page-architecture.md` | Filesystem landing-page contract, discovery model, metadata contract, and filesystem-only rendering boundary. |
 | `operational-events.md` | Append-only operational-event model, lifecycle, correlation, idempotency, sanitizing, and producer contract. |
+| `retention-architecture.md` | Shared archive-before-delete contract, source boundaries, lean SQLite health check, corruption safety gate, and manual recovery. |
 
 ## Maintenance notes
 
