@@ -64,7 +64,25 @@ class WP_CLI
 
     public static function add_command($name, $callable, $args = []): bool
     {
-        self::$commands[(string) $name] = [
+        $name = trim((string) $name);
+        $path = preg_split('/\s+/', $name);
+        if (!is_array($path) || $path === []) {
+            return false;
+        }
+
+        if (count($path) > 1) {
+            array_pop($path);
+            $parent = implode(' ', $path);
+            if (!isset(self::$commands[$parent])) {
+                return false;
+            }
+        }
+
+        if (isset(self::$commands[$name])) {
+            return false;
+        }
+
+        self::$commands[$name] = [
             'callable' => $callable,
             'args' => (array) $args,
         ];

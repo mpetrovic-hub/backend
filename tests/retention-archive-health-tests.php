@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../tools/database/class-retention-archive-health-bootstrap-recorder.php';
+require_once __DIR__ . '/../tools/database/kiwi-retention-archive-health.php';
 
 class Kiwi_Test_Lean_Archive_Config extends Kiwi_Config
 {
@@ -3410,6 +3411,17 @@ kiwi_run_test('WP-CLI exposes exactly check diagnose and unblock with compact JS
     }
 
     kiwi_assert_same(['check', 'diagnose', 'unblock'], $public_methods, 'Expected exactly three public WP-CLI modes.');
+    kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention']), 'Expected the intermediate retention command container.');
+    kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention archive-health']), 'Expected the complete Health command path to register.');
+    kiwi_assert_true(
+        WP_CLI::$commands['kiwi retention archive-health']['callable'] instanceof Kiwi_Retention_Archive_Health_Command,
+        'Expected the registered Health command object.'
+    );
+    kiwi_assert_same(
+        'before_wp_load',
+        WP_CLI::$commands['kiwi retention archive-health']['args']['when'] ?? '',
+        'Expected Health commands to invoke before WordPress loads normally.'
+    );
     kiwi_assert_true(strpos($source, "LOCK_EX | LOCK_NB") !== false, 'Expected the Health child to own the exclusive generation lock.');
     kiwi_assert_true(strpos($source, 'unset($result[\'_exit_code\'])') !== false, 'Expected process exit code not to be duplicated in public JSON.');
     kiwi_assert_true(strpos($source, "'scope'") === false, 'Expected no Daily/Annual scope field.');
