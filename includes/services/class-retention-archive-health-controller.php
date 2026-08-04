@@ -60,7 +60,25 @@ final class Kiwi_Retention_Archive_Health_Controller
         $operation_order = $this->operation_order($started);
         $check = $this->normalize_check($check);
         if ($check === '') {
-            return $this->result('check', 'error', 'check_input_invalid', null, null, $started_at, $started, 2);
+            $incident_action = $this->record_availability_failure(
+                'check_input_invalid',
+                null,
+                '',
+                $started_at,
+                $operation_order
+            );
+
+            return $this->result(
+                'check',
+                'error',
+                $incident_action === '' ? 'availability_incident_persist_failed' : 'check_input_invalid',
+                null,
+                null,
+                $started_at,
+                $started,
+                2,
+                ['incident_action' => $incident_action]
+            );
         }
 
         $active = $this->resolve_active_archive();
@@ -523,7 +541,12 @@ final class Kiwi_Retention_Archive_Health_Controller
         $unblocked = $this->safety_gate->unblock(
             (string) $archive['path'],
             is_array($replacement) ? (string) $replacement['path'] : '',
-            $operation_order
+            $operation_order,
+            is_array($replacement)
+                ? function () use ($replacement): bool {
+                    return $this->is_active_replacement($replacement);
+                }
+                : null
         );
         $allowed = !empty($unblocked['allowed']);
         $reason_code = (string) ($unblocked['reason_code'] ?? 'unblock_failed');

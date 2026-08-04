@@ -249,8 +249,21 @@ class Kiwi_Test_Lean_Safety_Gate extends Kiwi_Retention_Corruption_Safety_Gate_C
     public function unblock(
         string $archive_path,
         string $replacement_archive_path = '',
-        string $operation_order = ''
+        string $operation_order = '',
+        ?callable $replacement_active_validator = null
     ): array {
+        if ($replacement_archive_path !== ''
+            && (!is_callable($replacement_active_validator)
+                || !call_user_func($replacement_active_validator))
+        ) {
+            return [
+                'allowed' => false,
+                'reason_code' => 'replacement_generation_not_active',
+                'write_blocked' => true,
+                'incident_open' => true,
+                'incident_action' => 'none',
+            ];
+        }
         $this->unblock_calls[] = [$archive_path, $replacement_archive_path];
 
         return $this->unblock_result;
@@ -813,6 +826,52 @@ kiwi_run_test('Supervisor accepts corruption only from a completed PRAGMA result
 
     kiwi_assert_same('error', $result['result'], 'Expected incomplete corruption claims to be rejected.');
     kiwi_assert_same(false, $result['check_completed'], 'Expected rejected claims to remain incomplete.');
+});
+
+kiwi_run_test('Invalid scheduled checks raise and repeat Availability failures', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $supervisor_calls = 0;
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function () use (&$supervisor_calls): array {
+            $supervisor_calls++;
+
+            return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
+        }
+    );
+    $event_repository = new Kiwi_Test_Operational_Event_Repository();
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        new Kiwi_Test_Lean_Safety_Gate(),
+        new Kiwi_Operational_Event_Service($event_repository),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $missing = $controller->check('');
+    $unsupported = $controller->check('unsupported');
+
+    kiwi_assert_same('check_input_invalid', $missing['reason_code'], 'Expected the missing check mode to remain explicit.');
+    kiwi_assert_same('raised', $missing['incident_action'] ?? '', 'Expected the first invalid scheduled check to raise Availability.');
+    kiwi_assert_same(2, $missing['_exit_code'], 'Expected invalid scheduled input to remain technical exit 2.');
+    kiwi_assert_same('check_input_invalid', $unsupported['reason_code'], 'Expected the unsupported check mode to remain explicit.');
+    kiwi_assert_same('repeated', $unsupported['incident_action'] ?? '', 'Expected the repeated invalid scheduled check to repeat Availability.');
+    kiwi_assert_same(2, $unsupported['_exit_code'], 'Expected repeated invalid scheduled input to remain technical exit 2.');
+    kiwi_assert_same(0, $supervisor_calls, 'Expected invalid input not to start a health child.');
+
+    $failing_repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $failing_repository->fail_next_insert = true;
+    $failing_controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        new Kiwi_Test_Lean_Safety_Gate(),
+        new Kiwi_Operational_Event_Service($failing_repository),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+    $failed = $failing_controller->check('invalid');
+
+    kiwi_assert_same('availability_incident_persist_failed', $failed['reason_code'], 'Expected invalid input to expose Availability persistence failure.');
+    kiwi_assert_same(2, $failed['_exit_code'], 'Expected failed Availability persistence to remain technical exit 2.');
 });
 
 kiwi_run_test('Health controller raises repeats and resolves one availability correlation', function (): void {
@@ -2321,6 +2380,31 @@ kiwi_run_test('Atomic marker publication syncs its parent directory before succe
     );
 });
 
+kiwi_run_test('Unix marker removal syncs its parent directory before success', function (): void {
+    $source = (string) file_get_contents(
+        __DIR__ . '/../includes/services/class-retention-archive-write-block.php'
+    );
+    $clear_position = strpos($source, 'private static function clear_marker');
+    $unlink_position = strpos($source, '@unlink($path)', $clear_position ?: 0);
+    $platform_position = strpos($source, "PHP_OS_FAMILY === 'Windows'", $unlink_position ?: 0);
+    $sync_position = strpos(
+        $source,
+        'return self::sync_parent_directory($path);',
+        $unlink_position ?: 0
+    );
+
+    kiwi_assert_true(is_int($clear_position), 'Expected a focused marker removal helper.');
+    kiwi_assert_true(is_int($unlink_position), 'Expected marker removal to use unlink.');
+    kiwi_assert_true(
+        is_int($platform_position) && $platform_position > $unlink_position,
+        'Expected explicit platform handling after marker removal.'
+    );
+    kiwi_assert_true(
+        is_int($sync_position) && $sync_position > $platform_position,
+        'Expected Unix removal to propagate the parent-directory sync result.'
+    );
+});
+
 kiwi_run_test('Corruption safety gate rechecks a lone sentinel under the generation lock', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_corruption_reconcile_race');
     $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
@@ -2521,7 +2605,14 @@ kiwi_run_test('Replacement remains blocked until Corruption Incident resolution 
         kiwi_assert_same(true, $blocked['write_blocked'], 'Expected A to begin durably blocked.');
 
         $event_repository->fail_next_insert = true;
-        $failed = $coordinator->unblock($archive, $replacement);
+        $failed = $coordinator->unblock(
+            $archive,
+            $replacement,
+            '',
+            static function (): bool {
+                return true;
+            }
+        );
         kiwi_assert_same(false, $failed['allowed'], 'Expected failed Incident resolution to block replacement recovery.');
         kiwi_assert_same('corruption_incident_resolution_failed', $failed['reason_code'], 'Expected explicit resolution failure.');
         kiwi_assert_same(false, $lock->is_write_blocked_for_archive($archive), 'Expected A sentinel to clear before the final Incident action.');
@@ -2566,6 +2657,66 @@ kiwi_run_test('Replacement requires an existing corruption gate on the source ar
         kiwi_assert_same('unblock_corruption_gate_required', $result['reason_code'], 'Expected explicit source-gate requirement.');
         kiwi_assert_same([], $runs->terminalize_calls, 'Expected no resumable run to be terminalized.');
         kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected no B transition state on rejected recovery.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Replacement validates the active generation while both transition locks are held', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_replacement_active_transition');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $replacement = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026_part_2.sqlite';
+    file_put_contents($archive, 'archive-a');
+    file_put_contents($replacement, 'archive-b');
+    $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
+    $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
+    $lock = new Kiwi_Retention_Archive_Lock();
+    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+        $lock,
+        $events,
+        $runs
+    );
+    $validator_calls = 0;
+    $competing_acquisitions = [];
+
+    try {
+        $coordinator->block_after_corruption(
+            $archive,
+            'integrity',
+            'sqlite_check_reported_corruption'
+        );
+        $result = $coordinator->unblock(
+            $archive,
+            $replacement,
+            '',
+            static function () use (
+                $archive,
+                $replacement,
+                &$validator_calls,
+                &$competing_acquisitions
+            ): bool {
+                $validator_calls++;
+                $probe = new Kiwi_Retention_Archive_Lock();
+                $source_lock = $probe->acquire_for_archive($archive);
+                $replacement_lock = $probe->acquire_for_archive($replacement);
+                $competing_acquisitions = [
+                    !empty($source_lock['acquired']),
+                    !empty($replacement_lock['acquired']),
+                ];
+                $probe->release($source_lock['handle'] ?? null);
+                $probe->release($replacement_lock['handle'] ?? null);
+
+                return false;
+            }
+        );
+
+        kiwi_assert_same(false, $result['allowed'], 'Expected inactive B to abort the locked recovery transition.');
+        kiwi_assert_same('replacement_generation_not_active', $result['reason_code'], 'Expected the active-generation transition reason.');
+        kiwi_assert_same(1, $validator_calls, 'Expected exactly one transition-time active-generation check.');
+        kiwi_assert_same([false, false], $competing_acquisitions, 'Expected the validator to run while both A and B locks are held.');
+        kiwi_assert_same([], $runs->terminalize_calls, 'Expected no run terminalization after transition validation failed.');
+        kiwi_assert_same(true, $lock->is_write_blocked_for_archive($archive), 'Expected A to remain durably blocked.');
+        kiwi_assert_same(false, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected no B transition marker before validation succeeds.');
     } finally {
         kiwi_remove_directory($root);
     }
@@ -2639,7 +2790,14 @@ kiwi_run_test('Replacement requires its own corruption gate to be recovered firs
 
         $replacement_recovered = $coordinator->unblock($replacement);
         kiwi_assert_same(true, $replacement_recovered['allowed'], 'Expected B to support its own confirmed recovery.');
-        $completed = $coordinator->unblock($archive, $replacement);
+        $completed = $coordinator->unblock(
+            $archive,
+            $replacement,
+            '',
+            static function (): bool {
+                return true;
+            }
+        );
         kiwi_assert_same(true, $completed['allowed'], 'Expected A replacement after B gate recovery.');
         kiwi_assert_same(1, count($runs->terminalize_calls), 'Expected terminalization only after both generations are safe.');
     } finally {
@@ -2988,6 +3146,7 @@ kiwi_run_test('Manual replacement permits the active generation after year rollo
     $archive_service->resolved_archive_paths = [
         '/tmp/kiwi_retention_archive_2026.sqlite',
         '/tmp/kiwi_retention_archive_2026.sqlite',
+        '/tmp/kiwi_retention_archive_2026.sqlite',
     ];
     $verified_paths = [];
     $recovery_flags = [];
@@ -3103,6 +3262,49 @@ kiwi_run_test('Manual replacement rechecks the active generation after integrity
     kiwi_assert_same('replacement_generation_not_active', $result['reason_code'], 'Expected active-generation recheck failure.');
     kiwi_assert_same(1, $supervisor_calls, 'Expected B to be verified before the generation changed.');
     kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery state change after the post-check failed.');
+});
+
+kiwi_run_test('Manual replacement rechecks the active generation inside the recovery transition', function (): void {
+    $archive_service = new Kiwi_Test_Lean_Archive_Service();
+    $archive_service->archives = [
+        ['name' => 'kiwi_retention_archive_2026.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026.sqlite'],
+        ['name' => 'kiwi_retention_archive_2026_part_2.sqlite', 'path' => '/tmp/kiwi_retention_archive_2026_part_2.sqlite'],
+        ['name' => 'kiwi_retention_archive_2027.sqlite', 'path' => '/tmp/kiwi_retention_archive_2027.sqlite'],
+    ];
+    $archive_service->resolved_archive_paths = [
+        '/tmp/kiwi_retention_archive_2026_part_2.sqlite',
+        '/tmp/kiwi_retention_archive_2026_part_2.sqlite',
+        '/tmp/kiwi_retention_archive_2027.sqlite',
+    ];
+    $supervisor_calls = 0;
+    $supervisor = new Kiwi_Retention_Archive_Check_Supervisor(
+        new Kiwi_Config(),
+        static function () use (&$supervisor_calls): array {
+            $supervisor_calls++;
+
+            return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
+        }
+    );
+    $gate = new Kiwi_Test_Lean_Safety_Gate();
+    $gate->unblock_result['reason_code'] = 'manual_replacement_unblocked';
+    $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $archive_service,
+        $supervisor,
+        $gate,
+        new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository()
+    );
+
+    $result = $controller->unblock(
+        'kiwi_retention_archive_2026.sqlite',
+        'kiwi_retention_archive_2026_part_2.sqlite',
+        true
+    );
+
+    kiwi_assert_same('error', $result['result'], 'Expected an active generation change at transition time to abort recovery.');
+    kiwi_assert_same('replacement_generation_not_active', $result['reason_code'], 'Expected the locked transition revalidation reason.');
+    kiwi_assert_same(1, $supervisor_calls, 'Expected B to be verified before the transition-time generation change.');
+    kiwi_assert_same([], $gate->unblock_calls, 'Expected no recovery mutation after the transition-time check failed.');
 });
 
 kiwi_run_test('Cleanup rechecks corruption gate after receipt commit before MySQL delete', function (): void {

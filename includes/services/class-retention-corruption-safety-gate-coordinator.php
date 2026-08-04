@@ -260,7 +260,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
     public function unblock(
         string $archive_path,
         string $replacement_archive_path = '',
-        string $operation_order = ''
+        string $operation_order = '',
+        ?callable $replacement_active_validator = null
     ): array {
         $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
         $replacement = $replacement_archive_path !== ''
@@ -400,6 +401,16 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                         && $locked_transition_source !== $archive)
                 ) {
                     return $this->blocked('replacement_transition_state_invalid', true, true);
+                }
+                if ($locked_transition_source === ''
+                    && (!is_callable($replacement_active_validator)
+                        || !call_user_func($replacement_active_validator))
+                ) {
+                    return $this->blocked(
+                        'replacement_generation_not_active',
+                        !empty($locked_source_gate['write_blocked']),
+                        !empty($locked_source_gate['incident_open'])
+                    );
                 }
                 if (!$replacement_handle->persist_replacement_transition_blocked($archive)) {
                     return $this->blocked(

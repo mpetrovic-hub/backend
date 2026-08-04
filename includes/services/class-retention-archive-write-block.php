@@ -183,7 +183,13 @@ final class Kiwi_Retention_Archive_Write_Block
         }
 
         clearstatcache(true, $path);
+        if (file_exists($path) && !@unlink($path)) {
+            return false;
+        }
+        if (PHP_OS_FAMILY === 'Windows') {
+            return true;
+        }
 
-        return !file_exists($path) || @unlink($path);
+        return self::sync_parent_directory($path);
     }
 }
