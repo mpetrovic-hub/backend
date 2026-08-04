@@ -471,7 +471,12 @@ final class Kiwi_Retention_Archive_Health_Controller
                 $this->safety_gate->block_after_corruption(
                     (string) $verification_target['path'],
                     'integrity',
-                    (string) ($verification['reason_code'] ?? 'sqlite_check_reported_corruption')
+                    (string) ($verification['reason_code'] ?? 'sqlite_check_reported_corruption'),
+                    [
+                        'write_blocked' => !empty($verification['write_blocked']),
+                        'incident_open' => !empty($verification['incident_open']),
+                        'operation_order' => $operation_order,
+                    ]
                 )
             );
         }
@@ -698,7 +703,7 @@ final class Kiwi_Retention_Archive_Health_Controller
                 return !$this->later_availability_transition_exists(
                     $latest,
                     $operation_order,
-                    ['resolved']
+                    ['raised', 'repeated', 'resolved']
                 );
             }
         );

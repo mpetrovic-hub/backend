@@ -85,7 +85,6 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         $started = microtime(true);
         if (!function_exists('proc_open')
             || !function_exists('proc_get_status')
-            || !function_exists('proc_terminate')
             || !is_file($this->child_script_path)
         ) {
             return $this->failure('health_child_api_unavailable');

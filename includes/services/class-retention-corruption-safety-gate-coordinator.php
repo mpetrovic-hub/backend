@@ -285,6 +285,7 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         $source_gate = $this->inspect($archive_path, true);
         if (in_array((string) ($source_gate['reason_code'] ?? ''), [
             'archive_gate_path_invalid',
+            'archive_lock_active',
             'corruption_incident_lookup_failed',
             'replacement_transition_state_invalid',
         ], true)) {

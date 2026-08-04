@@ -50,20 +50,39 @@ final class Kiwi_Retention_Archive_Write_Block
             return false;
         }
 
-        $resource = @fopen($path, 'c+b');
+        clearstatcache(true, $path);
+        if (file_exists($path) && @file_get_contents($path) === $sentinel) {
+            return true;
+        }
+
+        try {
+            $token = bin2hex(random_bytes(8));
+        } catch (Throwable $error) {
+            $token = str_replace('.', '', uniqid('', true));
+        }
+        $temporary_path = $path . '.tmp.' . $token;
+
+        $resource = @fopen($temporary_path, 'x+b');
         if (!is_resource($resource)) {
             return false;
         }
 
+        $complete = false;
         try {
-            return @rewind($resource)
-                && @ftruncate($resource, 0)
-                && @fwrite($resource, $sentinel) === strlen($sentinel)
+            $complete = @fwrite($resource, $sentinel) === strlen($sentinel)
                 && @fflush($resource)
                 && (!function_exists('fsync') || @fsync($resource));
         } finally {
             @fclose($resource);
         }
+
+        if (!$complete || !@rename($temporary_path, $path)) {
+            @unlink($temporary_path);
+
+            return false;
+        }
+
+        return true;
     }
 
     public static function exists(string $lock_path): bool
