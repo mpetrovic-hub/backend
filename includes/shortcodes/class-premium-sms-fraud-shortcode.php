@@ -15,7 +15,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
         Kiwi_Premium_Sms_Fraud_Signal_Repository $repository,
         ?Kiwi_Config $config = null,
         ?Kiwi_Frontend_Auth_Gate $frontend_auth_gate = null,
-        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null
+        ?Kiwi_Landing_Session_Engagement_Repository $landing_engagement_repository = null
     ) {
         $this->repository = $repository;
         $this->config = $config instanceof Kiwi_Config
@@ -485,7 +485,7 @@ class Kiwi_Premium_Sms_Fraud_Shortcode
 
     private function load_engagement_rows(array $filters): array
     {
-        if (!$this->landing_engagement_repository instanceof Kiwi_Premium_Sms_Landing_Engagement_Repository) {
+        if (!$this->landing_engagement_repository instanceof Kiwi_Landing_Session_Engagement_Repository) {
             return [];
         }
 

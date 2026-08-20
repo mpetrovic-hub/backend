@@ -163,6 +163,7 @@ final class Kiwi_Database_Command
     private function default_required_classes(): array
     {
         return [
+            'Kiwi_Database_Table_Names',
             'Kiwi_Dimoco_Callback_Operator_Lookup_Repository',
             'Kiwi_Dimoco_Callback_Refund_Repository',
             'Kiwi_Dimoco_Callback_Blacklist_Repository',
@@ -175,7 +176,7 @@ final class Kiwi_Database_Command
             'Kiwi_Landing_Kpi_Summary_Repository',
             'Kiwi_Landing_Handoff_Event_Repository',
             'Kiwi_Sms_Body_Variant_Repository',
-            'Kiwi_Premium_Sms_Landing_Engagement_Repository',
+            'Kiwi_Landing_Session_Engagement_Repository',
             'Kiwi_Premium_Sms_Fraud_Signal_Repository',
             'Kiwi_Operational_Event_Repository',
             'Kiwi_Retention_Cleanup_Run_Repository',

@@ -18,7 +18,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
     public function __construct(
         Kiwi_Config $config,
         Kiwi_Landing_Kpi_Service $kpi_service,
-        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null,
+        ?Kiwi_Landing_Session_Engagement_Repository $landing_engagement_repository = null,
         ?Kiwi_Click_Attribution_Repository $click_attribution_repository = null,
         ?Kiwi_Landing_Handoff_Event_Repository $handoff_event_repository = null,
         ?Kiwi_Sms_Body_Variant_Repository $sms_body_variant_repository = null,
@@ -221,7 +221,7 @@ class Kiwi_Landing_Kpi_Rest_Routes
         array $params,
         array $landing
     ): bool {
-        if (!$this->landing_engagement_repository instanceof Kiwi_Premium_Sms_Landing_Engagement_Repository) {
+        if (!$this->landing_engagement_repository instanceof Kiwi_Landing_Session_Engagement_Repository) {
             return false;
         }
 

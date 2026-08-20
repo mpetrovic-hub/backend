@@ -62,7 +62,7 @@ return [
         'columns' => ['id', 'created_at', 'provider_key', 'service_key', 'flow_key', 'pid', 'click_id', 'tksource', 'tkzone', 'country', 'source_event_key', 'identity_type', 'identity_value', 'occurred_at', 'count_1h', 'count_24h', 'count_total', 'is_soft_flag', 'soft_flag_reason', 'billing_outcome', 'billing_outcome_at', 'billing_transaction_id', 'sale_id', 'sale_completed_at', 'aggregator_status_code', 'aggregator_status_text', 'meta_json'],
         'indexes' => ['PRIMARY', 'source_event_identity', 'service_key', 'provider_key', 'flow_key', 'pid', 'click_id', 'tksource', 'tkzone', 'identity_lookup', 'billing_outcome', 'billing_transaction_id', 'sale_id', 'occurred_at', 'is_soft_flag'],
     ],
-    'kiwi_premium_sms_landing_engagements' => [
+    Kiwi_Database_Table_Names::LANDING_SESSION_ENGAGEMENTS => [
         'columns' => ['id', 'created_at', 'updated_at', 'provider_key', 'service_key', 'flow_key', 'pid', 'click_id', 'tksource', 'tkzone', 'landing_key', 'session_token', 'page_loaded_at', 'first_cta_click_at', 'last_cta_click_at', 'cta_click_count', 'first_cta1_click_at', 'last_cta1_click_at', 'cta1_click_count', 'first_cta2_click_at', 'last_cta2_click_at', 'cta2_click_count', 'first_cta3_click_at', 'last_cta3_click_at', 'cta3_click_count', 'ua_ch_supported', 'ua_ch_mobile', 'ua_ch_platform', 'ua_ch_platform_version', 'ua_ch_model', 'ua_ch_brands', 'ua_ch_full_version_list', 'user_agent', 'last_event_at', 'is_soft_flag', 'soft_flag_reason', 'soft_flag_rule_key', 'soft_flag_evaluated_at'],
         'indexes' => ['PRIMARY', 'landing_session', 'service_key', 'provider_key', 'flow_key', 'pid', 'click_id', 'tksource', 'tkzone', 'updated_at', 'is_soft_flag_updated', 'created_landing_session'],
     ],

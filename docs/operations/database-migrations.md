@@ -63,7 +63,7 @@ classes, or execution after `init` all stop before a schema operation.
 
 - obtains one database-scoped MySQL advisory lock and rejects a concurrent apply;
 - refuses a newer or unrecognized installed schema version so an older deployment artifact cannot downgrade version evidence;
-- refuses known legacy columns that require a reviewed, migration-specific external artifact;
+- refuses known legacy columns or tables that require a reviewed, migration-specific external artifact;
 - applies the canonical repository table and view definitions;
 - verifies every schema step against real postconditions;
 - applies and verifies required static seeds;
@@ -106,8 +106,114 @@ Keep the site unavailable until the external bootstrap succeeds:
 An old backup may contain missing objects or legacy columns. Keep the site in maintenance and run `status` first.
 
 - Missing additive objects can be handled by the reviewed generic `apply`.
-- `legacy_column` means stop. The generic runner intentionally does not transform or delete that data. Prepare and review a migration-specific external artifact.
+- `legacy_column` or `legacy_table` means stop. The generic runner intentionally does not transform, rename, or delete that data. Use the reviewed migration-specific external artifact for that exact state.
 - Re-run `status` after every approved operation. Do not open the site until it is green.
+
+## Landing-session engagement table rename
+
+Issue #96 changes the shared landing-session engagement table from
+`wp_kiwi_premium_sms_landing_engagements` to
+`wp_kiwi_landing_session_engagements`. The expected predecessor schema version
+is exactly `2026-07-20-1`; the target version is `2026-07-23-1`.
+
+The generic `kiwi database apply` never performs this rename. When the old
+table exists it returns non-zero with `legacy_migration_required` before schema
+mutation. New installations are different: the generic runner creates the new
+canonical table directly.
+
+The historical artifact is loaded separately from the WordPress root:
+
+```bash
+wp --require=wp-content/plugins/backend/tools/database/migrations/landing-session-engagements.php kiwi database migration landing-session-engagements check
+wp --require=wp-content/plugins/backend/tools/database/migrations/landing-session-engagements.php kiwi database migration landing-session-engagements apply
+wp --require=wp-content/plugins/backend/tools/database/migrations/landing-session-engagements.php kiwi database migration landing-session-engagements rollback
+```
+
+`check` is read-only. It exits `0` only for these complete states:
+
+- `success=true`, `state=pending`, `installed_version=2026-07-20-1`, old base table only, and an exact schema snapshot;
+- `success=true`, `state=applied`, `installed_version=2026-07-23-1`, new base table only, and an exact schema snapshot.
+
+Its snapshot reports sanitized evidence only: row count, minimum/maximum ID,
+`AUTO_INCREMENT`, column/index counts, and hashes of complete column/index
+metadata. Both table names, neither name, a view or other wrong object type,
+missing columns/indexes, an inspection failure, or a table/version mismatch are
+non-zero stop gates without mutation.
+
+`apply` requires the exact `pending` state and explicit User/Operator approval.
+It obtains the same database-scoped advisory lock as the generic runner,
+captures the complete predecessor snapshot, executes one atomic `RENAME TABLE`,
+compares the complete post-rename snapshot, and writes `2026-07-23-1` last.
+Repeated `apply` in the complete `applied` state is a successful no-op.
+
+`rollback` is not automatic. It requires explicit approval, continued
+maintenance, no new target-code writes, and the complete `applied` state. It
+performs the reverse atomic rename, verifies the old snapshot, and restores
+`2026-07-20-1` last. Repeated `rollback` in the complete `pending` state is a
+successful no-op. A partial state remains visible and blocked; do not repair it
+with direct SQL or an improvised version update.
+
+### Production cutover gates
+
+The Implementer does not run these Production actions. The later authorized
+Deployment Codex/Operator must:
+
+1. Deploy only the exact merge commit that passed the post-merge scratch rehearsal described below.
+2. Confirm the Production target, compatible predecessor release, WP-CLI 2.12, and the exact pause/resume procedure.
+3. Have the User download and confirm a current Hostinger database backup.
+4. Enable full maintenance, then separately pause WP-Cron, schedulers, workers, and all other writing WP-CLI processes.
+5. Run migration `check`; require exit `0`, `state=pending`, version `2026-07-20-1`, the expected schema, and a plausible non-empty snapshot unless the User explicitly accepts loss of historical engagement/soft-flag data.
+6. Obtain explicit User/Operator approval, then run migration `apply` once.
+7. Require exit `0`, `state=applied`, `mutated=true`, version `2026-07-23-1`, and an unchanged row/ID/`AUTO_INCREMENT`/column/index snapshot.
+8. Run generic `kiwi database status`; require exit `0`, `ready=true`, target version `2026-07-23-1`, and no drift.
+9. Smoke-test the engagement write/read path, Main and TK-zone summaries, Device Model Harvest, the landing-session Retention Coverage Gate, managed views, Sales Attribution, and relevant Premium-SMS fraud/MO reads.
+10. Keep maintenance active on any non-zero result or unproven postcondition. Use approved `rollback` only before new writes, and restore the matching predecessor code as part of the same controlled recovery.
+11. Resume controlled jobs/smokes first, then public traffic, and monitor briefly.
+
+The database lock does not replace maintenance. The artifact creates no backup,
+does not manage traffic/jobs, does not accept data loss, and does not write
+Operational Events. If a qualified failure occurs, preserve the sanitized
+original JSON/exit and record failure/recovery later through
+`Kiwi_Operational_Event_Service` under the existing operational-event contract.
+
+### Required post-merge scratch rehearsal
+
+Before Production, the Deployment Codex must rehearse the exact merge commit in
+an isolated temporary Git worktree and disposable environment. A correction
+commit invalidates earlier evidence and requires the full rehearsal again.
+
+Prerequisites:
+
+- exact commit resolved from `origin/main` and recorded with `git rev-parse`;
+- disposable WordPress installation with the plugin active;
+- WP-CLI 2.12;
+- disposable MariaDB database with no Production connection or data;
+- the exact predecessor release or a reviewed fixture that creates the complete `2026-07-20-1` schema;
+- synthetic engagement rows only, including known IDs and an explicitly advanced `AUTO_INCREMENT`.
+
+Run every command with an explicit scratch WordPress path and the runner from
+the exact worktree, for example:
+
+```bash
+wp --path=<scratch-wordpress> --require=<exact-worktree>/tools/database/migrations/landing-session-engagements.php kiwi database migration landing-session-engagements check
+wp --path=<scratch-wordpress> --require=<exact-worktree>/tools/database/migrations/landing-session-engagements.php kiwi database migration landing-session-engagements apply
+wp --path=<scratch-wordpress> --require=<exact-worktree>/tools/database/kiwi-database.php kiwi database status
+wp --path=<scratch-wordpress> --require=<exact-worktree>/tools/database/migrations/landing-session-engagements.php kiwi database migration landing-session-engagements apply
+```
+
+The success database must prove `pending` check, real apply, generic green
+status, repeated-apply no-op, identical row/min-ID/max-ID/`AUTO_INCREMENT` and
+column/index hashes, plus the listed consumer smokes. A separate fresh scratch
+database must prove real rollback, repeated-rollback no-op, and non-zero
+`conflict`, `missing`, `version_mismatch`, `schema_mismatch`, query-error, and
+lock/postcondition failure cases. Preserve sanitized commands, exits, JSON,
+snapshots, environment versions, exact commit, and smoke results.
+
+Finally deactivate/remove the scratch plugin, drop only the explicitly named
+disposable databases, remove the temporary worktree, and verify those scratch
+artifacts are gone. This rehearsal proves the implemented PHP/WP-CLI path; it
+does not prove Hostinger permissions, Production maintenance, backup, or
+Production smokes.
 
 ## Failure handling
 

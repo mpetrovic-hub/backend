@@ -271,7 +271,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
         global $wpdb;
 
         $view_name = $this->get_view_name();
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $click_attribution_table = $wpdb->prefix . 'kiwi_click_attributions';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $default_from = self::DEFAULT_FROM;
@@ -339,7 +339,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
 
         $view_name = $this->get_one_for_all_view_name();
         $landing_session_table = $wpdb->prefix . 'kiwi_landing_page_sessions';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $click_attribution_table = $wpdb->prefix . 'kiwi_click_attributions';
         $sales_table = $wpdb->prefix . 'kiwi_sales';

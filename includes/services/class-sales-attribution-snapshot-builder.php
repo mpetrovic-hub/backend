@@ -13,7 +13,7 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
 
     public function __construct(
         ?Kiwi_Landing_Page_Session_Repository $landing_page_session_repository = null,
-        ?Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository = null,
+        ?Kiwi_Landing_Session_Engagement_Repository $landing_engagement_repository = null,
         ?Kiwi_Device_Context_Normalizer $device_context_normalizer = null,
         ?Kiwi_Client_Ip_Resolver $client_ip_resolver = null
     ) {
@@ -185,7 +185,7 @@ class Kiwi_Sales_Attribution_Snapshot_Builder
 
     private function find_landing_engagement(string $landing_key, string $session_ref): ?array
     {
-        if (!$this->landing_engagement_repository instanceof Kiwi_Premium_Sms_Landing_Engagement_Repository) {
+        if (!$this->landing_engagement_repository instanceof Kiwi_Landing_Session_Engagement_Repository) {
             return null;
         }
 

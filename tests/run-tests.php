@@ -20,6 +20,7 @@ $GLOBALS['kiwi_test_styles'] = [];
 $GLOBALS['kiwi_test_scripts'] = [];
 $GLOBALS['kiwi_test_transients'] = [];
 $GLOBALS['kiwi_test_options'] = [];
+$GLOBALS['kiwi_test_update_option_fail'] = false;
 $GLOBALS['kiwi_test_shortcodes'] = [];
 $GLOBALS['kiwi_test_rest_routes'] = [];
 $GLOBALS['kiwi_test_http_responses'] = [];
@@ -160,6 +161,10 @@ function get_option($option, $default = false)
 
 function update_option($option, $value, $autoload = null): bool
 {
+    if (!empty($GLOBALS['kiwi_test_update_option_fail'])) {
+        return false;
+    }
+
     $GLOBALS['kiwi_test_options'][(string) $option] = $value;
 
     return true;
@@ -359,6 +364,7 @@ if (!class_exists('WP_REST_Response')) {
 
 require_once __DIR__ . '/../includes/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/../includes/core/class-config.php';
+require_once __DIR__ . '/../includes/core/class-database-table-names.php';
 require_once __DIR__ . '/../includes/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
@@ -390,7 +396,8 @@ require_once __DIR__ . '/../includes/repositories/class-sales-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-kpi-summary-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-landing-handoff-event-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-sms-body-variant-repository.php';
-require_once __DIR__ . '/../includes/repositories/class-premium-sms-landing-engagement-repository.php';
+require_once __DIR__ . '/../includes/services/class-landing-session-engagement-evaluator-interface.php';
+require_once __DIR__ . '/../includes/repositories/class-landing-session-engagement-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-premium-sms-fraud-signal-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-operational-event-repository.php';
 require_once __DIR__ . '/../includes/repositories/class-retention-cleanup-run-repository.php';
@@ -3533,7 +3540,7 @@ class Kiwi_Test_Click_Attribution_Repository extends Kiwi_Click_Attribution_Repo
     }
 }
 
-class Kiwi_Test_Premium_Sms_Landing_Engagement_Repository extends Kiwi_Premium_Sms_Landing_Engagement_Repository
+class Kiwi_Test_Landing_Session_Engagement_Repository extends Kiwi_Landing_Session_Engagement_Repository
 {
     public $rows = [];
     private $next_id = 1;
@@ -6575,7 +6582,7 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver persists sales attribution s
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $sales_repository = new Kiwi_Test_Sales_Repository();
     $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
 
     $sales_repository->upsert([
         'sale_reference' => 'sale-snapshot-1',
@@ -6876,7 +6883,7 @@ kiwi_run_test('Kiwi_Device_Model_Brand_Harvest_Service inserts frequent unknown 
 });
 
 kiwi_run_test('Kiwi_Sales_Attribution_Snapshot_Builder restricts device brands to known rules', function (): void {
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
     $builder = new Kiwi_Sales_Attribution_Snapshot_Builder(null, $engagement_repository);
 
     $assert_brand = static function (string $expected, string $session_token, string $model, string $user_agent = '') use ($builder, $engagement_repository): void {
@@ -7248,7 +7255,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records landing engagement events wi
         ]
     );
     $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
     $service = new Kiwi_Landing_Kpi_Service($config, $summary_repository);
     $routes = new Kiwi_Landing_Kpi_Rest_Routes($config, $service, $engagement_repository);
 
@@ -7307,7 +7314,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes enriches landing session device cont
 
     try {
         $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
-        $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
         $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
         $landing_session_repository->insert([
             'landing_key' => 'lp2-fr',
@@ -7377,7 +7384,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes enriches landing session device cont
 
     try {
         $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
-        $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
         $landing_session_repository = new Kiwi_Test_Landing_Page_Session_Repository();
         $landing_session_repository->insert([
             'landing_key' => 'lp2-fr',
@@ -7450,7 +7457,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes gates UA context by landing tracking
     try {
         $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
         $service = new Kiwi_Landing_Kpi_Service(new Kiwi_Test_Landing_Ua_Config('disabled', $landing_pages), $summary_repository);
-        $disabled_engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $disabled_engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
         $disabled_handoff_repository = new Kiwi_Test_Landing_Handoff_Event_Repository();
         $disabled_routes = new Kiwi_Landing_Kpi_Rest_Routes(
             new Kiwi_Test_Landing_Ua_Config('disabled', $landing_pages),
@@ -7493,7 +7500,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes gates UA context by landing tracking
 
         $onclick_config = new Kiwi_Test_Landing_Ua_Config('onclick', $landing_pages);
         $onclick_service = new Kiwi_Landing_Kpi_Service($onclick_config, new Kiwi_Test_Landing_Kpi_Summary_Repository());
-        $onclick_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $onclick_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
         $onclick_routes = new Kiwi_Landing_Kpi_Rest_Routes($onclick_config, $onclick_service, $onclick_repository);
 
         $onclick_routes->handle_event(new WP_REST_Request([], [
@@ -7525,7 +7532,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes gates UA context by landing tracking
 
         $onload_config = new Kiwi_Test_Landing_Ua_Config('onload', $landing_pages);
         $onload_service = new Kiwi_Landing_Kpi_Service($onload_config, new Kiwi_Test_Landing_Kpi_Summary_Repository());
-        $onload_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+        $onload_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
         $onload_routes = new Kiwi_Landing_Kpi_Rest_Routes($onload_config, $onload_service, $onload_repository);
         $onload_routes->handle_event(new WP_REST_Request([], [
             'landing_key' => 'lp2-fr',
@@ -7566,7 +7573,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes resolves traffic source fields from 
         ]
     );
     $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
     $click_repository = new Kiwi_Test_Click_Attribution_Repository();
     $click_repository->upsert_capture([
         'tracking_token' => 'TOKSOURCEFALLBACK1',
@@ -8715,8 +8722,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service evaluates l
     kiwi_assert_same(Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service::RULE_KEY, (string) ($normal['soft_flag_rule_key'] ?? ''), 'Expected evaluation to expose the persisted rule key.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository upserts by landing/session and preserves first timestamps', function (): void {
-    $repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+kiwi_run_test('Kiwi_Landing_Session_Engagement_Repository upserts by landing/session and preserves first timestamps', function (): void {
+    $repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
 
     $first_load = $repository->upsert_event([
         'landing_key' => 'lp2-fr',
@@ -8753,8 +8760,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository upserts by landing
     kiwi_assert_same(0, (int) ($second_click['cta3_click_count'] ?? 0), 'Expected untouched CTA3 step count to remain zero.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository ignores invalid cta_step for step-specific counts', function (): void {
-    $repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+kiwi_run_test('Kiwi_Landing_Session_Engagement_Repository ignores invalid cta_step for step-specific counts', function (): void {
+    $repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
 
     $row = $repository->upsert_event([
         'landing_key' => 'lp2-fr',
@@ -8768,8 +8775,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository ignores invalid ct
     kiwi_assert_same(0, (int) ($row['cta3_click_count'] ?? 0), 'Expected invalid cta_step not to increment CTA3 count.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository persists landing engagement soft-flag snapshots', function (): void {
-    $repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+kiwi_run_test('Kiwi_Landing_Session_Engagement_Repository persists landing engagement soft-flag snapshots', function (): void {
+    $repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
 
     $page_load = $repository->upsert_event([
         'landing_key' => 'lp2-fr',
@@ -8794,8 +8801,8 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository persists landing e
     kiwi_assert_same('missing_load', (string) ($missing_load['soft_flag_reason'] ?? ''), 'Expected CTA without page load to persist reason.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository filters flagged engagement rows before applying limit', function (): void {
-    $repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+kiwi_run_test('Kiwi_Landing_Session_Engagement_Repository filters flagged engagement rows before applying limit', function (): void {
+    $repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
 
     $repository->upsert_event([
         'landing_key' => 'lp5-fr',
@@ -8837,7 +8844,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository filters flagged en
     kiwi_assert_same('fast_click', (string) ($rows[0]['soft_flag_reason'] ?? ''), 'Expected persisted flagged reason to be returned from storage.');
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository SQL filters flagged rows before limit', function (): void {
+kiwi_run_test('Kiwi_Landing_Session_Engagement_Repository SQL filters flagged rows before limit', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
@@ -8865,7 +8872,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository SQL filters flagge
         }
     };
 
-    $repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+    $repository = new Kiwi_Landing_Session_Engagement_Repository();
     $repository->get_recent([
         'service_key' => 'nth_fr_one_off_jplay',
         'flagged_only' => true,
@@ -8879,7 +8886,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository SQL filters flagge
     $wpdb = $previous_wpdb;
 });
 
-kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository schema includes CTA step columns', function (): void {
+kiwi_run_test('Kiwi_Landing_Session_Engagement_Repository schema includes CTA step columns', function (): void {
     global $wpdb;
 
     $previous_wpdb = $wpdb ?? null;
@@ -8894,7 +8901,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Landing_Engagement_Repository schema includes CT
         }
     };
 
-    $repository = new Kiwi_Premium_Sms_Landing_Engagement_Repository();
+    $repository = new Kiwi_Landing_Session_Engagement_Repository();
     $repository->create_table();
     $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
 
@@ -9229,7 +9236,7 @@ kiwi_run_test('Landing funnel source schemas include daily refresh composite ind
     };
 
     (new Kiwi_Landing_Page_Session_Repository())->create_table();
-    (new Kiwi_Premium_Sms_Landing_Engagement_Repository())->create_table();
+    (new Kiwi_Landing_Session_Engagement_Repository())->create_table();
     (new Kiwi_Landing_Handoff_Event_Repository())->create_table();
     (new Kiwi_Sales_Repository())->create_table();
 
@@ -9267,7 +9274,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service records unknown 
         1
     );
     $click_repository = new Kiwi_Test_Click_Attribution_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
     $evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
         $config,
         $click_repository,
@@ -9337,7 +9344,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service does not soft-flag unknown
     );
     $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
     $click_repository = new Kiwi_Test_Click_Attribution_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
     $evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
         $config,
         $click_repository,
@@ -9386,7 +9393,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Monitor_Service merges engagement reasons 
     );
     $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
     $click_repository = new Kiwi_Test_Click_Attribution_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
     $evaluator = new Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service(
         $config,
         $click_repository,
@@ -10934,7 +10941,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service builds idem
     kiwi_assert_contains('INSERT INTO abc_kiwi_landing_funnel_daily_summary', $insert_sql, 'Expected refresh to populate the persistent summary table.');
     kiwi_assert_contains('FROM abc_kiwi_landing_page_sessions', $insert_sql, 'Expected refresh to aggregate canonical landing sessions.');
     kiwi_assert_true(strpos($insert_sql, 'engagement_sessions AS') === false, 'Expected main summary refresh not to materialize engagement sessions before joining.');
-    kiwi_assert_contains('LEFT JOIN abc_kiwi_premium_sms_landing_engagements e', $insert_sql, 'Expected engagement metrics to join directly to landing sessions.');
+    kiwi_assert_contains('LEFT JOIN abc_kiwi_landing_session_engagements e', $insert_sql, 'Expected engagement metrics to join directly to landing sessions.');
     kiwi_assert_contains('AND e.created_at >= %s', $insert_sql, 'Expected direct engagement joins to keep the refresh day lower bound.');
     kiwi_assert_contains('AND e.created_at < %s', $insert_sql, 'Expected direct engagement joins to keep the refresh day upper bound.');
     kiwi_assert_true(strpos($insert_sql, 'handoff_by_session AS') === false, 'Expected main summary refresh not to materialize handoff sessions before joining.');
@@ -11398,7 +11405,7 @@ kiwi_run_test('Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service buil
     kiwi_assert_contains('FROM abc_kiwi_landing_page_sessions', $insert_sql, 'Expected tkzone refresh to aggregate canonical landing sessions.');
     kiwi_assert_contains('AND pid IN (%s, %s)', $insert_sql, 'Expected tkzone session facts to be limited to configured PIDs.');
     kiwi_assert_true(strpos($insert_sql, 'engagement_sessions AS') === false, 'Expected tkzone summary refresh not to materialize engagement sessions before joining.');
-    kiwi_assert_contains('LEFT JOIN abc_kiwi_premium_sms_landing_engagements e', $insert_sql, 'Expected engagement metrics to join directly to landing sessions.');
+    kiwi_assert_contains('LEFT JOIN abc_kiwi_landing_session_engagements e', $insert_sql, 'Expected engagement metrics to join directly to landing sessions.');
     kiwi_assert_contains('AND e.created_at >= %s', $insert_sql, 'Expected direct tkzone engagement joins to keep the refresh day lower bound.');
     kiwi_assert_contains('AND e.created_at < %s', $insert_sql, 'Expected direct tkzone engagement joins to keep the refresh day upper bound.');
     kiwi_assert_contains('LEFT JOIN handoff_by_session h', $insert_sql, 'Expected handoff metrics to join to landing sessions.');
@@ -11564,7 +11571,7 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
 
     kiwi_assert_true($created, 'Expected traffic-source statistics view setup to succeed without database errors.');
     kiwi_assert_contains('CREATE OR REPLACE VIEW abc_kiwi_v_load_to_cta_by_tksource_tkzone AS', $wpdb->queries[0] ?? '', 'Expected setup to replace the managed statistics view non-destructively.');
-    kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed landing engagement table.');
+    kiwi_assert_contains('abc_kiwi_landing_session_engagements', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed landing engagement table.');
     kiwi_assert_contains('abc_kiwi_click_attributions', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed click-attribution table.');
     kiwi_assert_contains('abc_kiwi_sales', $wpdb->queries[0] ?? '', 'Expected view SQL to read the prefixed sales table.');
     kiwi_assert_contains('s.completed_at AS metric_at', $wpdb->queries[0] ?? '', 'Expected completed sale metrics to be timestamped by completion time.');
@@ -11576,7 +11583,7 @@ kiwi_run_test('Kiwi_Traffic_Source_Funnel_Statistics_Repository creates plugin-m
     kiwi_assert_contains('LEFT JOIN', $wpdb->queries[0] ?? '', 'Expected completed sale metrics to tolerate missing temporary attribution rows.');
     kiwi_assert_contains('CREATE OR REPLACE VIEW abc_kiwi_v_one_for_all AS', $wpdb->queries[1] ?? '', 'Expected setup to also replace the one-for-all analytics view.');
     kiwi_assert_contains('abc_kiwi_landing_page_sessions', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing page sessions.');
-    kiwi_assert_contains('abc_kiwi_premium_sms_landing_engagements', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing engagement UA context.');
+    kiwi_assert_contains('abc_kiwi_landing_session_engagements', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include landing engagement UA context.');
     kiwi_assert_contains('abc_kiwi_landing_handoff_events', $wpdb->queries[1] ?? '', 'Expected one-for-all view SQL to include handoff diagnostics.');
     kiwi_assert_contains('device_brand', $wpdb->queries[1] ?? '', 'Expected one-for-all view to expose computed device_brand.');
     kiwi_assert_true(strpos($wpdb->queries[1] ?? '', "WHEN ua_ch_model <> '' THEN SUBSTRING_INDEX(ua_ch_model, ' ', 1)") === false, 'Expected one-for-all device brand logic not to promote unknown model tokens to brands.');
@@ -12027,6 +12034,7 @@ kiwi_run_test('Kiwi_Config exposes final retention defaults for landing page ses
 
     $config = new Kiwi_Config();
     $settings = $config->get_retention_source_settings('landing_page_sessions');
+    $all_settings = $config->get_default_retention_settings();
 
     kiwi_assert_same(false, $settings['enabled'], 'Expected landing-page-session retention to be disabled by default.');
     kiwi_assert_same(true, $settings['dry_run'], 'Expected landing-page-session retention to default to dry-run.');
@@ -12036,6 +12044,8 @@ kiwi_run_test('Kiwi_Config exposes final retention defaults for landing page ses
     kiwi_assert_same(60, $config->get_retention_worker_time_limit_seconds(), 'Expected bounded worker time limit to default to 60 seconds.');
     kiwi_assert_same(60, $config->get_retention_worker_reschedule_delay_seconds(), 'Expected worker reschedule delay to default to 60 seconds.');
     kiwi_assert_same(300, $config->get_retention_worker_lock_ttl_seconds(), 'Expected worker lock TTL to default to 300 seconds.');
+    kiwi_assert_true(isset($all_settings['landing_session_engagements']), 'Expected the shared engagement retention key to be generic.');
+    kiwi_assert_same(false, isset($all_settings['premium_sms_landing_engagements']), 'Expected the old Premium-SMS-specific retention key to be removed.');
 });
 
 kiwi_run_test('Kiwi_Config exposes safe landing-session raw-context compaction defaults and clamps age', function (): void {
@@ -16313,9 +16323,9 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag col
     ];
 
     $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $landing_session_engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
 
-    $engagement_repository->upsert_event([
+    $landing_session_engagement_repository->upsert_event([
         'landing_key' => 'lp5-fr',
         'session_token' => 'sess-fast-flagged',
         'service_key' => 'nth_fr_one_off_jplay',
@@ -16326,7 +16336,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag col
         'tksource' => 'source-fast',
         'tkzone' => 'zone-fast',
     ], 'page_loaded', '2026-04-01 12:00:00');
-    $engagement_repository->upsert_event([
+    $landing_session_engagement_repository->upsert_event([
         'landing_key' => 'lp5-fr',
         'session_token' => 'sess-fast-flagged',
         'service_key' => 'nth_fr_one_off_jplay',
@@ -16334,14 +16344,14 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag col
         'flow_key' => 'nth-fr-one-off',
     ], 'cta_click', '2026-04-01 12:00:00');
 
-    $engagement_repository->upsert_event([
+    $landing_session_engagement_repository->upsert_event([
         'landing_key' => 'lp5-fr',
         'session_token' => 'sess-normal-unflagged',
         'service_key' => 'nth_fr_one_off_jplay',
         'provider_key' => 'nth',
         'flow_key' => 'nth-fr-one-off',
     ], 'page_loaded', '2026-04-01 12:00:00');
-    $engagement_repository->upsert_event([
+    $landing_session_engagement_repository->upsert_event([
         'landing_key' => 'lp5-fr',
         'session_token' => 'sess-normal-unflagged',
         'service_key' => 'nth_fr_one_off_jplay',
@@ -16353,7 +16363,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders engagement soft-flag col
         $fraud_repository,
         new Kiwi_Test_Config(),
         new Kiwi_Frontend_Auth_Gate(),
-        $engagement_repository
+        $landing_session_engagement_repository
     );
 
     $output = $shortcode->render();
@@ -16386,16 +16396,16 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders persisted flagged engage
     ];
 
     $fraud_repository = new Kiwi_Test_Premium_Sms_Fraud_Signal_Repository();
-    $engagement_repository = new Kiwi_Test_Premium_Sms_Landing_Engagement_Repository();
+    $landing_session_engagement_repository = new Kiwi_Test_Landing_Session_Engagement_Repository();
 
-    $engagement_repository->upsert_event([
+    $landing_session_engagement_repository->upsert_event([
         'landing_key' => 'lp5-fr',
         'session_token' => 'older-flagged-fast-click',
         'service_key' => 'nth_fr_one_off_jplay',
         'provider_key' => 'nth',
         'flow_key' => 'nth-fr-one-off',
     ], 'page_loaded', '2026-04-01 11:59:00');
-    $engagement_repository->upsert_event([
+    $landing_session_engagement_repository->upsert_event([
         'landing_key' => 'lp5-fr',
         'session_token' => 'older-flagged-fast-click',
         'service_key' => 'nth_fr_one_off_jplay',
@@ -16405,14 +16415,14 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders persisted flagged engage
 
     for ($index = 1; $index <= 520; $index++) {
         $session_token = 'newer-unflagged-' . str_pad((string) $index, 3, '0', STR_PAD_LEFT);
-        $engagement_repository->upsert_event([
+        $landing_session_engagement_repository->upsert_event([
             'landing_key' => 'lp5-fr',
             'session_token' => $session_token,
             'service_key' => 'nth_fr_one_off_jplay',
             'provider_key' => 'nth',
             'flow_key' => 'nth-fr-one-off',
         ], 'page_loaded', '2026-04-01 12:00:00');
-        $engagement_repository->upsert_event([
+        $landing_session_engagement_repository->upsert_event([
             'landing_key' => 'lp5-fr',
             'session_token' => $session_token,
             'service_key' => 'nth_fr_one_off_jplay',
@@ -16425,7 +16435,7 @@ kiwi_run_test('Kiwi_Premium_Sms_Fraud_Shortcode renders persisted flagged engage
         $fraud_repository,
         new Kiwi_Test_Config(),
         new Kiwi_Frontend_Auth_Gate(),
-        $engagement_repository
+        $landing_session_engagement_repository
     );
 
     $output = $shortcode->render();
@@ -17334,4 +17344,5 @@ kiwi_run_test('Kiwi_Config exposes bounded operational-event cleanup defaults', 
 });
 
 require_once __DIR__ . '/database-deployment-tests.php';
+require_once __DIR__ . '/landing-session-engagements-migration-tests.php';
 require_once __DIR__ . '/retention-archive-health-tests.php';

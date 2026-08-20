@@ -660,7 +660,7 @@ class Kiwi_Config
                 'dry_run' => true,
                 'retention_days' => 14,
             ],
-            'premium_sms_landing_engagements' => [
+            'landing_session_engagements' => [
                 'enabled' => false,
                 'dry_run' => true,
                 'retention_days' => 14,

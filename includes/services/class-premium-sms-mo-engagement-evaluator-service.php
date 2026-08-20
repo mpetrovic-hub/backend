@@ -13,7 +13,7 @@ class Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service
     public function __construct(
         Kiwi_Config $config,
         Kiwi_Click_Attribution_Repository $click_attribution_repository,
-        Kiwi_Premium_Sms_Landing_Engagement_Repository $landing_engagement_repository
+        Kiwi_Landing_Session_Engagement_Repository $landing_engagement_repository
     ) {
         $this->config = $config;
         $this->click_attribution_repository = $click_attribution_repository;

@@ -201,7 +201,7 @@ class Kiwi_Retention_Coverage_Gate
 
         $source_table = (string) ($source['source_table'] ?? '');
         $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_summary';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
 
@@ -273,7 +273,7 @@ class Kiwi_Retention_Coverage_Gate
 
         $source_table = (string) ($source['source_table'] ?? '');
         $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
 
@@ -341,7 +341,7 @@ class Kiwi_Retention_Coverage_Gate
         $metric_date = (string) ($result['metric_date'] ?? '');
         $source_table = (string) ($source['source_table'] ?? '');
         $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_summary';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
 
         if ($metric_date === '' || !$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table])) {
@@ -395,7 +395,7 @@ class Kiwi_Retention_Coverage_Gate
         $metric_date = (string) ($result['metric_date'] ?? '');
         $source_table = (string) ($source['source_table'] ?? '');
         $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
 
         if ($metric_date === '' || !$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table])) {

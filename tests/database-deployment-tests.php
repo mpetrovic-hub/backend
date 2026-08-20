@@ -651,7 +651,7 @@ kiwi_run_test('Kiwi database apply blocks newer and unknown schema versions', fu
 
     $previous_wpdb = $wpdb ?? null;
 
-    foreach (['2026-07-21-1', 'future-release'] as $installed_version) {
+    foreach (['2026-07-24-1', 'future-release'] as $installed_version) {
         $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
         $contract = kiwi_test_database_contract()['kiwi_test_table'];
         $wpdb->objects['abc_kiwi_test_table'] = [
@@ -801,7 +801,7 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
         'kiwi_nth_flow_transactions',
         'kiwi_operational_events',
         'kiwi_premium_sms_fraud_signals',
-        'kiwi_premium_sms_landing_engagements',
+        'kiwi_landing_session_engagements',
         'kiwi_retention_cleanup_runs',
         'kiwi_retention_table_growth_snapshots',
         'kiwi_sales',

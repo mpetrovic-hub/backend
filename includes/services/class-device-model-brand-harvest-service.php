@@ -116,7 +116,7 @@ class Kiwi_Device_Model_Brand_Harvest_Service
         $rows = [];
 
         foreach ([
-            $wpdb->prefix . 'kiwi_premium_sms_landing_engagements',
+            Kiwi_Database_Table_Names::landing_session_engagements(),
             $wpdb->prefix . 'kiwi_landing_handoff_events',
         ] as $table_name) {
             $source_rows = $wpdb->get_results(
