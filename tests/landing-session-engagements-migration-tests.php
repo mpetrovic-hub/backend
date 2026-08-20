@@ -342,6 +342,53 @@ kiwi_run_test('Kiwi landing-session engagement migration check is read-only for 
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi landing-session engagement migration accepts MariaDB information-schema NULL defaults', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('pending');
+    $source = $wpdb->prefix . Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_TABLE_SUFFIX;
+
+    foreach ($wpdb->objects[$source]['columns'] as &$column) {
+        if (($column['COLUMN_DEFAULT'] ?? null) === null) {
+            $column['COLUMN_DEFAULT'] = 'NULL';
+        }
+    }
+    unset($column);
+
+    $result = (new Kiwi_Landing_Session_Engagements_Migration_Service())->check();
+
+    kiwi_assert_same(true, $result['success'], 'Expected MariaDB NULL metadata defaults to satisfy the predecessor contract.');
+    kiwi_assert_same('pending', $result['state'], 'Expected MariaDB NULL metadata defaults to keep the migration pending.');
+    kiwi_assert_same(false, $result['mutated'], 'Expected metadata normalization to remain read-only.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi landing-session engagement migration rejects quoted NULL defaults', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('pending');
+    $source = $wpdb->prefix . Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_TABLE_SUFFIX;
+
+    foreach ($wpdb->objects[$source]['columns'] as &$column) {
+        if (($column['COLUMN_DEFAULT'] ?? null) === null) {
+            $column['COLUMN_DEFAULT'] = "'NULL'";
+            break;
+        }
+    }
+    unset($column);
+
+    $result = (new Kiwi_Landing_Session_Engagements_Migration_Service())->check();
+
+    kiwi_assert_same(false, $result['success'], 'Expected a quoted NULL default to remain metadata drift.');
+    kiwi_assert_same('schema_mismatch', $result['state'], 'Expected a quoted NULL default to fail closed.');
+    kiwi_assert_same(false, $result['mutated'], 'Expected a quoted NULL default not to mutate the database.');
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi landing-session engagement migration fails closed for conflict missing schema and version states', function (): void {
     global $wpdb;
 
