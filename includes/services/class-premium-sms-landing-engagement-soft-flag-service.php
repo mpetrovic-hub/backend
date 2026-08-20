@@ -4,7 +4,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service
+class Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service implements Kiwi_Landing_Session_Engagement_Evaluator_Interface
 {
     public const RULE_KEY = 'landing_engagement_v1';
 

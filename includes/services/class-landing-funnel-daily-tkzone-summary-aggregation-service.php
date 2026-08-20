@@ -127,7 +127,7 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
             : $tkzone_summary_pids;
         $summary_table = $this->repository->get_table_name();
         $landing_session_table = $wpdb->prefix . 'kiwi_landing_page_sessions';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $pid_placeholders = $this->build_placeholder_list(count($tkzone_summary_pids));

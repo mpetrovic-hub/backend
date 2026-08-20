@@ -90,7 +90,7 @@ The main summary UI/CSV does not emit sale ID lists, transaction ID lists, `tkzo
 - `wp_kiwi_device_model_brand_map`: optional exact model-to-brand mapping used before heuristic brand rules; `(unknown)` entries do not stop safe built-in heuristics.
 - `wp_kiwi_click_attributions`: temporary server-side attribution state with click ID, internal `transaction_id`, refs, postback audit, and TTL expiry.
 - `wp_kiwi_sales`: durable confirmed sale records with service/landing/session/source/device/IP snapshots and `attribution_metric_date`.
-- `wp_kiwi_premium_sms_landing_engagements`: landing-session engagement evidence, step-specific CTA evidence, source snapshots, and optional raw UA context.
+- `wp_kiwi_landing_session_engagements`: shared landing-session engagement evidence, step-specific CTA evidence, source snapshots, and optional raw UA context. It is a flow-neutral analytics source, not owned by Premium-SMS fraud.
 - `wp_kiwi_landing_handoff_events`: click-to-SMS handoff evidence with source snapshots and optional UA Client Hints.
 - `wp_kiwi_sms_body_variant_assignments`: visible SMS token assignments for the FR click-to-SMS experiment.
 - `wp_kiwi_sms_body_variant_summary`: aggregated SMS body variant metrics.
@@ -132,6 +132,7 @@ Main rules:
 - IPv4 is bucketed as `/24`, IPv6 as `/48`, and missing or invalid values use `(unknown)`.
 - Raw `client_ip` and `client_ip_hash` are not stored or exported by the main summary.
 - Same-session cross-midnight handoff attempts and hidden/success events are kept together by scanning next-day handoff rows and rejecting reused tokens owned by a later landing day.
+- All active consumers resolve the shared engagement table through the focused `Kiwi_Database_Table_Names::landing_session_engagements()` source. Direct historical names are reserved for the external rename artifact.
 
 Refresh behavior:
 

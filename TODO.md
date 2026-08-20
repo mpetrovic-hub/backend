@@ -129,43 +129,6 @@ Für die spätere Umsetzung sollte zuerst ein kleines Config-Metadatenmodell gep
 
 
 
-## 2. Refactor Tabellenbenennung `wp_kiwi_premium_sms_landing_engagements`
-
-### Ziel
-
-Die unglückliche Benennung `wp_kiwi_premium_sms_landing_engagements` perspektivisch generischer machen.
-
-### Hintergrund
-
-Die Tabelle enthält inzwischen generische Landing-Engagement-Daten wie Page Load, CTA Clicks, Traffic Source, Session-Kontext und künftig UA Device Context. Das ist nicht mehr Premium-SMS-spezifisch.
-
-### Erwartetes Verhalten
-
-Seit der CTA-Step-Erweiterung werden neben den generischen Legacy-Spalten `first_cta_click_at`, `last_cta_click_at` und `cta_click_count` auch step-spezifische CTA1/CTA2/CTA3-Spalten gepflegt. Nach Rollout der step-spezifischen Summary-/Statistics-Auswertung muss separat entschieden werden, ob die Legacy-CTA-Spalten dauerhaft als KompatibilitÃ¤tsschicht bleiben oder kontrolliert entfernt werden.
-
-Langfristig soll die Tabelle bzw. Repository-Benennung generischer werden, z.B. Richtung `landing_engagements`.
-
-### Akzeptanzkriterien
-
-- [ ] Migrationsstrategie ohne Datenverlust skizziert
-- [ ] Backward Compatibility für bestehende Queries/Views bedacht
-- [ ] Repositories/Shortcodes/Views können schrittweise umgestellt werden
-- [ ] Keine harte Kopplung an Premium-SMS-Flows bleibt übrig
-
-### Nicht-Ziele
-
-Kein sofortiger Rename ohne saubere Migration.
-
-### Hinweise für Codex
-
-Erst Analyse/Plan erstellen. Mögliche Strategie: neue generische View/Alias-Schicht vor echtem Table-Rename.
-
-### Manuelle Tests
-
-- [ ] Bestehende Fraud-/Statistics-/Landing-Reports nach Refactor prüfen
-
-
-
 ## 3. Temporaere Debug-/Logging-Experimente wieder entfernen
 
 ### Ziel

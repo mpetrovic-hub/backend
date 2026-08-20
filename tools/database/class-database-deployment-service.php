@@ -13,18 +13,28 @@ if (!defined('ABSPATH')) {
 class Kiwi_Database_Deployment_Service
 {
     public const SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    public const TARGET_SCHEMA_VERSION = '2026-07-20-1';
+    public const TARGET_SCHEMA_VERSION = '2026-07-23-1';
 
     private const LOCK_PREFIX = 'kiwi_backend_database_apply_';
 
     private $schema_steps;
     private $schema_contract;
+    private $legacy_migration_inspector;
     private $mutation_started = false;
 
-    public function __construct(?array $schema_steps = null, ?array $schema_contract = null)
+    public function __construct(
+        ?array $schema_steps = null,
+        ?array $schema_contract = null,
+        ?callable $legacy_migration_inspector = null
+    )
     {
         $this->schema_steps = is_array($schema_steps) ? $schema_steps : $this->build_schema_steps();
         $this->schema_contract = is_array($schema_contract) ? $schema_contract : $this->build_schema_contract();
+        $this->legacy_migration_inspector = $legacy_migration_inspector;
+
+        if ($legacy_migration_inspector === null && $schema_steps === null && $schema_contract === null) {
+            $this->legacy_migration_inspector = $this->build_legacy_migration_inspector();
+        }
     }
 
     public function status(): array
@@ -116,7 +126,7 @@ class Kiwi_Database_Deployment_Service
             $legacy_drift = array_values(array_filter(
                 $preflight_drift,
                 static function (array $drift): bool {
-                    return ($drift['kind'] ?? '') === 'legacy_column';
+                    return in_array(($drift['kind'] ?? ''), ['legacy_column', 'legacy_table'], true);
                 }
             ));
 
@@ -245,7 +255,8 @@ class Kiwi_Database_Deployment_Service
         $contract_drift = (array) ($inspection['drift'] ?? []);
         $inspection['drift'] = array_merge(
             $contract_drift,
-            $this->inspect_seed_drift($contract_drift)
+            $this->inspect_seed_drift($contract_drift),
+            $this->inspect_legacy_migration_drift()
         );
 
         return $inspection;
@@ -680,7 +691,7 @@ class Kiwi_Database_Deployment_Service
             ['name' => 'landing_kpi_summary', 'repository' => new Kiwi_Landing_Kpi_Summary_Repository(), 'objects' => ['kiwi_landing_kpi_summary']],
             ['name' => 'landing_handoff_events', 'repository' => new Kiwi_Landing_Handoff_Event_Repository(), 'objects' => ['kiwi_landing_handoff_events']],
             ['name' => 'sms_body_variants', 'repository' => new Kiwi_Sms_Body_Variant_Repository(), 'objects' => ['kiwi_sms_body_variant_assignments', 'kiwi_sms_body_variant_summary']],
-            ['name' => 'premium_sms_landing_engagements', 'repository' => new Kiwi_Premium_Sms_Landing_Engagement_Repository(), 'objects' => ['kiwi_premium_sms_landing_engagements']],
+            ['name' => 'landing_session_engagements', 'repository' => new Kiwi_Landing_Session_Engagement_Repository(), 'objects' => [Kiwi_Database_Table_Names::LANDING_SESSION_ENGAGEMENTS]],
             ['name' => 'premium_sms_fraud_signals', 'repository' => new Kiwi_Premium_Sms_Fraud_Signal_Repository(), 'objects' => ['kiwi_premium_sms_fraud_signals']],
             ['name' => 'operational_events', 'repository' => new Kiwi_Operational_Event_Repository(), 'objects' => ['kiwi_operational_events']],
             ['name' => 'retention_cleanup_runs', 'repository' => new Kiwi_Retention_Cleanup_Run_Repository(), 'objects' => ['kiwi_retention_cleanup_runs']],
@@ -696,5 +707,37 @@ class Kiwi_Database_Deployment_Service
         $contract = require __DIR__ . '/schema-contract.php';
 
         return is_array($contract) ? $contract : [];
+    }
+
+    private function inspect_legacy_migration_drift(): array
+    {
+        if (!is_callable($this->legacy_migration_inspector)) {
+            return [];
+        }
+
+        try {
+            $drift = call_user_func($this->legacy_migration_inspector);
+        } catch (Throwable $error) {
+            return [[
+                'kind' => 'inspection_error',
+                'object' => 'historical_migrations',
+                'detail' => $this->sanitize_error($error->getMessage()),
+            ]];
+        }
+
+        return is_array($drift) ? array_values($drift) : [[
+            'kind' => 'inspection_error',
+            'object' => 'historical_migrations',
+            'detail' => 'Historical migration inspection returned an invalid result.',
+        ]];
+    }
+
+    private function build_legacy_migration_inspector(): callable
+    {
+        return static function (): array {
+            require_once __DIR__ . '/migrations/class-landing-session-engagements-migration-service.php';
+
+            return (new Kiwi_Landing_Session_Engagements_Migration_Service())->inspect_general_apply_blocker();
+        };
     }
 }

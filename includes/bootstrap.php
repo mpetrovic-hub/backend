@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
  */
 require_once __DIR__ . '/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/core/class-config.php';
+require_once __DIR__ . '/core/class-database-table-names.php';
 require_once __DIR__ . '/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/core/class-plugin.php';
 
@@ -84,6 +85,7 @@ require_once __DIR__ . '/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/services/class-retention-cleanup-service.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
+require_once __DIR__ . '/services/class-landing-session-engagement-evaluator-interface.php';
 require_once __DIR__ . '/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/services/class-premium-sms-mo-engagement-evaluator-service.php';
 require_once __DIR__ . '/services/class-premium-sms-completed-sale-cooldown-service.php';
@@ -105,7 +107,7 @@ require_once __DIR__ . '/repositories/class-click-attribution-repository.php';
 require_once __DIR__ . '/repositories/class-sales-repository.php';
 require_once __DIR__ . '/repositories/class-landing-kpi-summary-repository.php';
 require_once __DIR__ . '/repositories/class-landing-handoff-event-repository.php';
-require_once __DIR__ . '/repositories/class-premium-sms-landing-engagement-repository.php';
+require_once __DIR__ . '/repositories/class-landing-session-engagement-repository.php';
 require_once __DIR__ . '/repositories/class-premium-sms-fraud-signal-repository.php';
 require_once __DIR__ . '/repositories/class-operational-event-repository.php';
 require_once __DIR__ . '/repositories/class-retention-cleanup-run-repository.php';

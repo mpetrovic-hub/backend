@@ -116,7 +116,7 @@ class Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service
 
         $summary_table = $this->repository->get_table_name();
         $landing_session_table = $wpdb->prefix . 'kiwi_landing_page_sessions';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
 

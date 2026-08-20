@@ -4,24 +4,20 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Kiwi_Premium_Sms_Landing_Engagement_Repository
+class Kiwi_Landing_Session_Engagement_Repository
 {
     private const CTA_STEPS = ['cta1', 'cta2', 'cta3'];
 
-    private $soft_flag_service;
+    private $engagement_evaluator;
 
-    public function __construct(?Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service $soft_flag_service = null)
+    public function __construct(?Kiwi_Landing_Session_Engagement_Evaluator_Interface $engagement_evaluator = null)
     {
-        $this->soft_flag_service = $soft_flag_service instanceof Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service
-            ? $soft_flag_service
-            : new Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service();
+        $this->engagement_evaluator = $engagement_evaluator;
     }
 
     private function get_table_name(): string
     {
-        global $wpdb;
-
-        return $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        return Kiwi_Database_Table_Names::landing_session_engagements();
     }
 
     public function create_table(): void
@@ -695,7 +691,11 @@ class Kiwi_Premium_Sms_Landing_Engagement_Repository
 
     private function build_soft_flag_data(array $row, string $evaluated_at): array
     {
-        $result = $this->soft_flag_service->evaluate($row);
+        if (!$this->engagement_evaluator instanceof Kiwi_Landing_Session_Engagement_Evaluator_Interface) {
+            throw new RuntimeException('A landing-session engagement evaluator is required for write operations.');
+        }
+
+        $result = $this->engagement_evaluator->evaluate($row);
 
         return [
             'is_soft_flag' => !empty($result['is_soft_flag']) ? 1 : 0,

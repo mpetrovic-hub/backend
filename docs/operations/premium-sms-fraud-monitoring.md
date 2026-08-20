@@ -40,13 +40,24 @@ The current shared default is observe mode. In block mode, supported adapters ma
 - `pid`, `click_id`, `tksource`, and `tkzone` source snapshots
 - soft-flag state and reason
 
-`wp_kiwi_premium_sms_landing_engagements` stores landing engagement evidence used by fraud monitoring:
+`wp_kiwi_landing_session_engagements` stores shared landing-session engagement evidence used by fraud monitoring and other analytics consumers:
 
 - page load and CTA timestamps/counts
 - CTA1/CTA2/CTA3 step-specific evidence
 - source snapshots
 - optional UA context according to the landing UA tracking mode
 - persisted landing-engagement soft flags such as `missing_load`, `click_before_load`, and `fast_click`
+
+The generic `Kiwi_Landing_Session_Engagement_Repository` depends only on
+`Kiwi_Landing_Session_Engagement_Evaluator_Interface`. The existing
+`Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service` implements that neutral
+contract and is injected explicitly by `Kiwi_Plugin`; schema-only construction
+does not invent a fallback policy, and productive writes fail without an
+evaluator. The Premium-SMS evaluator retains its existing rules and thresholds.
+
+`Kiwi_Premium_Sms_Fraud_Signal_Repository` and
+`wp_kiwi_premium_sms_fraud_signals` remain separate, genuinely fraud-specific
+storage. They are not the ownership boundary for the shared engagement table.
 
 ## Soft-flag interpretation
 

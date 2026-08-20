@@ -9,6 +9,19 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
     public const DEFAULT_FROM = '2026-05-12 20:00:00';
 
     private $last_error = '';
+    private $engagement_table_name;
+
+    public function __construct(string $engagement_table_name = '')
+    {
+        $engagement_table_name = trim($engagement_table_name);
+        if ($engagement_table_name !== ''
+            && preg_match('/^[A-Za-z0-9_]+$/D', $engagement_table_name) !== 1
+        ) {
+            throw new InvalidArgumentException('The landing-session engagement table name is invalid.');
+        }
+
+        $this->engagement_table_name = $engagement_table_name;
+    }
 
     public function create_table(): void
     {
@@ -271,7 +284,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
         global $wpdb;
 
         $view_name = $this->get_view_name();
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = $this->get_engagement_table_name();
         $click_attribution_table = $wpdb->prefix . 'kiwi_click_attributions';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $default_from = self::DEFAULT_FROM;
@@ -339,7 +352,7 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
 
         $view_name = $this->get_one_for_all_view_name();
         $landing_session_table = $wpdb->prefix . 'kiwi_landing_page_sessions';
-        $engagement_table = $wpdb->prefix . 'kiwi_premium_sms_landing_engagements';
+        $engagement_table = $this->get_engagement_table_name();
         $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
         $click_attribution_table = $wpdb->prefix . 'kiwi_click_attributions';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
@@ -584,6 +597,13 @@ class Kiwi_Traffic_Source_Funnel_Statistics_Repository implements Kiwi_Statistic
                 d.android_version,
                 d.browser,
                 hm.median_hidden_seconds";
+    }
+
+    private function get_engagement_table_name(): string
+    {
+        return $this->engagement_table_name !== ''
+            ? $this->engagement_table_name
+            : Kiwi_Database_Table_Names::landing_session_engagements();
     }
 
     private function has_database_error(): bool
