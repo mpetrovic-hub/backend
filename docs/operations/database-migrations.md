@@ -143,6 +143,11 @@ type against the explicit canonical contract. Both table names, neither name, a
 view or other wrong object type, any metadata drift, an inspection failure, or
 a table/version mismatch are non-zero stop gates without mutation.
 
+For nullable columns, the unquoted `NULL` marker that MariaDB exposes through
+WordPress `information_schema` results is normalized to an absent default. A
+quoted default value such as `'NULL'` remains a literal value and therefore
+continues to be detected as metadata drift.
+
 `apply` requires the exact `pending` state and explicit User/Operator approval.
 It obtains the same database-scoped advisory lock as the generic runner,
 captures the complete predecessor snapshot, executes one atomic `RENAME TABLE`,

@@ -3,6 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-08-20:
+- [Database Deployments] Fixed the landing-session engagement rename preflight to normalize MariaDB/WordPress `information_schema`'s unquoted `NULL` default marker while preserving quoted `'NULL'` values as contract drift. Added regression coverage for both representations.
 - [Landing Session Engagements] Renamed the shared landing-engagement repository and canonical table contract to `Kiwi_Landing_Session_Engagement_Repository` and `wp_kiwi_landing_session_engagements`, centralized the active table name, and separated the generic repository from the explicitly injected Premium-SMS soft-flag evaluator without changing fraud rules.
 - [Database Deployments] Added the external, versioned `landing-session-engagements` check/apply/rollback artifact for the atomic table rename from schema `2026-07-20-1` to `2026-07-23-1`. It verifies complete column/index metadata, rebuilds and validates both managed analytics views for apply and rollback, and blocks partial target-table/predecessor-version states from the generic database apply. The generic runner never performs the historical rename.
 

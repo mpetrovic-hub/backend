@@ -491,6 +491,10 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
         }
 
         $default = trim((string) $default);
+        if (strcasecmp($default, 'NULL') === 0) {
+            return null;
+        }
+
         if (strlen($default) >= 2 && $default[0] === "'" && substr($default, -1) === "'") {
             return str_replace("''", "'", substr($default, 1, -1));
         }
