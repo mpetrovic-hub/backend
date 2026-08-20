@@ -45,6 +45,7 @@ final class Kiwi_Landing_Session_Engagements_Migration_Command
             : [
                 'Kiwi_Database_Table_Names',
                 'Kiwi_Landing_Session_Engagement_Repository',
+                'Kiwi_Traffic_Source_Funnel_Statistics_Repository',
             ];
         $this->service_factory = $service_factory ?? static function () {
             require_once dirname(__DIR__) . '/class-database-deployment-service.php';

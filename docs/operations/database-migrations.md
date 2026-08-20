@@ -117,9 +117,10 @@ Issue #96 changes the shared landing-session engagement table from
 is exactly `2026-07-20-1`; the target version is `2026-07-23-1`.
 
 The generic `kiwi database apply` never performs this rename. When the old
-table exists it returns non-zero with `legacy_migration_required` before schema
-mutation. New installations are different: the generic runner creates the new
-canonical table directly.
+table exists, or when only the target table exists while the predecessor
+version is still installed, it returns non-zero with
+`legacy_migration_required` before schema mutation. New installations are
+different: the generic runner creates the new canonical table directly.
 
 The historical artifact is loaded separately from the WordPress root:
 
@@ -136,22 +137,27 @@ wp --require=wp-content/plugins/backend/tools/database/migrations/landing-sessio
 
 Its snapshot reports sanitized evidence only: row count, minimum/maximum ID,
 `AUTO_INCREMENT`, column/index counts, and hashes of complete column/index
-metadata. Both table names, neither name, a view or other wrong object type,
-missing columns/indexes, an inspection failure, or a table/version mismatch are
-non-zero stop gates without mutation.
+metadata. The precondition compares column type, nullability, default, extra
+attributes and order plus index uniqueness, ordered columns, prefix lengths and
+type against the explicit canonical contract. Both table names, neither name, a
+view or other wrong object type, any metadata drift, an inspection failure, or
+a table/version mismatch are non-zero stop gates without mutation.
 
 `apply` requires the exact `pending` state and explicit User/Operator approval.
 It obtains the same database-scoped advisory lock as the generic runner,
 captures the complete predecessor snapshot, executes one atomic `RENAME TABLE`,
-compares the complete post-rename snapshot, and writes `2026-07-23-1` last.
-Repeated `apply` in the complete `applied` state is a successful no-op.
+compares the complete post-rename snapshot, rebuilds both managed analytics
+views against the target table, verifies that both views are executable, and
+writes `2026-07-23-1` last. Repeated `apply` in the complete `applied` state is
+a successful no-op.
 
 `rollback` is not automatic. It requires explicit approval, continued
 maintenance, no new target-code writes, and the complete `applied` state. It
-performs the reverse atomic rename, verifies the old snapshot, and restores
-`2026-07-20-1` last. Repeated `rollback` in the complete `pending` state is a
-successful no-op. A partial state remains visible and blocked; do not repair it
-with direct SQL or an improvised version update.
+performs the reverse atomic rename, verifies the old snapshot, rebuilds and
+validates both managed analytics views against the predecessor table, and
+restores `2026-07-20-1` last. Repeated `rollback` in the complete `pending`
+state is a successful no-op. A partial state remains visible and blocked; do
+not repair it with direct SQL or an improvised version update.
 
 ### Production cutover gates
 

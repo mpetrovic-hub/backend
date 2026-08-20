@@ -4,7 +4,7 @@ Changes are listed by date (newest first). Only medium-impact or higher updates 
 
 2026-08-20:
 - [Landing Session Engagements] Renamed the shared landing-engagement repository and canonical table contract to `Kiwi_Landing_Session_Engagement_Repository` and `wp_kiwi_landing_session_engagements`, centralized the active table name, and separated the generic repository from the explicitly injected Premium-SMS soft-flag evaluator without changing fraud rules.
-- [Database Deployments] Added the external, versioned `landing-session-engagements` check/apply/rollback artifact for the atomic table rename from schema `2026-07-20-1` to `2026-07-23-1`. The generic database apply now blocks the predecessor table fail-closed and never performs the historical rename.
+- [Database Deployments] Added the external, versioned `landing-session-engagements` check/apply/rollback artifact for the atomic table rename from schema `2026-07-20-1` to `2026-07-23-1`. It verifies complete column/index metadata, rebuilds and validates both managed analytics views for apply and rollback, and blocks partial target-table/predecessor-version states from the generic database apply. The generic runner never performs the historical rename.
 
 2026-08-04:
 - [DB Retention Archive Health] Registered the missing `kiwi retention` WP-CLI command container so the external `kiwi retention archive-health` command and its `check`, `diagnose`, and `unblock` modes are available under WP-CLI 2.12. The command-registration test double now rejects missing parent command containers to cover the production bootstrap contract.

@@ -17,6 +17,10 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
     public const SOURCE_TABLE_SUFFIX = 'kiwi_premium_sms_landing_engagements';
 
     private const LOCK_PREFIX = 'kiwi_backend_database_apply_';
+    private const MANAGED_VIEW_SUFFIXES = [
+        'kiwi_v_load_to_cta_by_tksource_tkzone',
+        'kiwi_v_one_for_all',
+    ];
 
     private $mutation_started = false;
 
@@ -25,26 +29,45 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
      */
     public function inspect_general_apply_blocker(): array
     {
-        $table_name = $this->source_table_name();
-        $type = $this->inspect_table_type($table_name);
+        $source_table = $this->source_table_name();
+        $target_table = $this->target_table_name();
+        $source_type = $this->inspect_table_type($source_table);
 
         if ($this->get_database_error() !== '') {
             return [[
                 'kind' => 'inspection_error',
-                'object' => $table_name,
+                'object' => $source_table,
                 'detail' => $this->sanitize_error($this->get_database_error()),
             ]];
         }
 
-        if ($type === null) {
-            return [];
+        $target_type = $this->inspect_table_type($target_table);
+        if ($this->get_database_error() !== '') {
+            return [[
+                'kind' => 'inspection_error',
+                'object' => $target_table,
+                'detail' => $this->sanitize_error($this->get_database_error()),
+            ]];
         }
 
-        return [[
-            'kind' => 'legacy_table',
-            'object' => $table_name,
-            'required_migration' => 'landing-session-engagements',
-        ]];
+        if ($source_type !== null) {
+            return [[
+                'kind' => 'legacy_table',
+                'object' => $source_table,
+                'required_migration' => 'landing-session-engagements',
+            ]];
+        }
+
+        if ($target_type !== null && $this->get_installed_schema_version() === self::SOURCE_SCHEMA_VERSION) {
+            return [[
+                'kind' => 'legacy_table',
+                'object' => $target_table,
+                'detail' => 'The target table exists while the predecessor schema version is still installed.',
+                'required_migration' => 'landing-session-engagements',
+            ]];
+        }
+
+        return [];
     }
 
     public function check(): array
@@ -170,6 +193,20 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
                 );
             }
 
+            $view_error = $this->rebuild_managed_views($target_table);
+            if ($view_error !== '') {
+                return $this->failure_result(
+                    $mode,
+                    'rebuild_views',
+                    'managed_view_rebuild_failed',
+                    $view_error
+                );
+            }
+
+            if (!$this->has_lock()) {
+                return $this->failure_result($mode, 'verify_views', 'lock_lost', 'The database deployment lock was lost while rebuilding managed views.');
+            }
+
             $target_version = $mode === 'apply' ? self::TARGET_SCHEMA_VERSION : self::SOURCE_SCHEMA_VERSION;
             if (!$this->persist_schema_version($target_version)) {
                 return $this->failure_result(
@@ -259,6 +296,11 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
         $schema_error = $this->validate_snapshot_contract($snapshot);
         if ($schema_error !== '') {
             return $this->failure_result($mode, 'inspect_schema', 'schema_mismatch', $schema_error, 'schema_mismatch');
+        }
+
+        $view_error = $this->validate_managed_views();
+        if ($view_error !== '') {
+            return $this->failure_result($mode, 'inspect_views', 'schema_mismatch', $view_error, 'schema_mismatch');
         }
 
         return [
@@ -361,6 +403,8 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
         }, (array) ($snapshot['indexes'] ?? []))));
         $expected_columns = array_values((array) ($definition['columns'] ?? []));
         $expected_indexes = array_values((array) ($definition['indexes'] ?? []));
+        $expected_column_metadata = (array) ($definition['column_metadata'] ?? []);
+        $expected_index_metadata = (array) ($definition['index_metadata'] ?? []);
 
         if ($actual_columns !== $expected_columns) {
             return 'The landing-session engagement column contract does not match exactly.';
@@ -372,11 +416,129 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
             return 'The landing-session engagement index contract does not match exactly.';
         }
 
+        if (empty($expected_column_metadata) || empty($expected_index_metadata)) {
+            return 'The complete landing-session engagement metadata contract is unavailable.';
+        }
+
+        $actual_column_metadata = [];
+        foreach ((array) ($snapshot['columns'] ?? []) as $position => $row) {
+            $name = (string) ($row['COLUMN_NAME'] ?? '');
+            $actual_column_metadata[$name] = [
+                'type' => $this->normalize_column_type((string) ($row['COLUMN_TYPE'] ?? '')),
+                'nullable' => strtoupper((string) ($row['IS_NULLABLE'] ?? '')) === 'YES',
+                'default' => $this->normalize_column_default($row['COLUMN_DEFAULT'] ?? null),
+                'extra' => $this->normalize_column_extra((string) ($row['EXTRA'] ?? '')),
+                'ordinal_position' => (int) ($row['ORDINAL_POSITION'] ?? 0),
+            ];
+        }
+
+        $normalized_expected_columns = [];
+        foreach ($expected_column_metadata as $position => $metadata) {
+            $name = is_string($position) ? $position : '';
+            $metadata = is_array($metadata) ? $metadata : [];
+            $normalized_expected_columns[$name] = [
+                'type' => $this->normalize_column_type((string) ($metadata['type'] ?? '')),
+                'nullable' => !empty($metadata['nullable']),
+                'default' => $this->normalize_column_default($metadata['default'] ?? null),
+                'extra' => $this->normalize_column_extra((string) ($metadata['extra'] ?? '')),
+                'ordinal_position' => count($normalized_expected_columns) + 1,
+            ];
+        }
+
+        if ($actual_column_metadata !== $normalized_expected_columns) {
+            return 'The complete landing-session engagement column metadata does not match exactly.';
+        }
+
+        $actual_index_metadata = $this->normalize_index_metadata((array) ($snapshot['indexes'] ?? []));
+        $normalized_expected_indexes = [];
+        foreach ($expected_index_metadata as $name => $metadata) {
+            $metadata = is_array($metadata) ? $metadata : [];
+            $normalized_expected_indexes[(string) $name] = [
+                'unique' => !empty($metadata['unique']),
+                'columns' => array_values(array_map('strval', (array) ($metadata['columns'] ?? []))),
+                'sub_parts' => array_values(array_map(static function ($value) {
+                    return $value === null ? null : (int) $value;
+                }, (array) ($metadata['sub_parts'] ?? []))),
+                'type' => strtoupper(trim((string) ($metadata['type'] ?? ''))),
+            ];
+        }
+        ksort($normalized_expected_indexes, SORT_STRING);
+
+        if ($actual_index_metadata !== $normalized_expected_indexes) {
+            return 'The complete landing-session engagement index metadata does not match exactly.';
+        }
+
         if (($snapshot['auto_increment'] ?? null) === null || (int) $snapshot['auto_increment'] < 1) {
             return 'The landing-session engagement AUTO_INCREMENT value is unavailable.';
         }
 
         return '';
+    }
+
+    private function normalize_column_type(string $type): string
+    {
+        $type = strtolower(trim((string) preg_replace('/\s+/', ' ', $type)));
+        $type = (string) preg_replace('/\b(bigint|int|integer|smallint|mediumint)\([0-9]+\)/', '$1', $type);
+        $type = (string) preg_replace('/\bdatetime\(0\)/', 'datetime', $type);
+
+        return trim((string) preg_replace('/\s+/', ' ', $type));
+    }
+
+    private function normalize_column_default($default): ?string
+    {
+        if ($default === null) {
+            return null;
+        }
+
+        $default = trim((string) $default);
+        if (strlen($default) >= 2 && $default[0] === "'" && substr($default, -1) === "'") {
+            return str_replace("''", "'", substr($default, 1, -1));
+        }
+
+        return $default;
+    }
+
+    private function normalize_column_extra(string $extra): string
+    {
+        $tokens = preg_split('/\s+/', strtolower(trim($extra))) ?: [];
+        $tokens = array_values(array_filter($tokens, static function (string $token): bool {
+            return $token !== '' && $token !== 'default_generated';
+        }));
+
+        return implode(' ', $tokens);
+    }
+
+    private function normalize_index_metadata(array $rows): array
+    {
+        $normalized = [];
+
+        foreach ($rows as $row) {
+            $name = (string) ($row['INDEX_NAME'] ?? '');
+            $sequence = max(1, (int) ($row['SEQ_IN_INDEX'] ?? 0));
+            if (!isset($normalized[$name])) {
+                $normalized[$name] = [
+                    'unique' => (string) ($row['NON_UNIQUE'] ?? '') === '0',
+                    'columns' => [],
+                    'sub_parts' => [],
+                    'type' => strtoupper(trim((string) ($row['INDEX_TYPE'] ?? ''))),
+                ];
+            }
+
+            $normalized[$name]['columns'][$sequence - 1] = (string) ($row['COLUMN_NAME'] ?? '');
+            $sub_part = $row['SUB_PART'] ?? null;
+            $normalized[$name]['sub_parts'][$sequence - 1] = $sub_part === null ? null : (int) $sub_part;
+        }
+
+        foreach ($normalized as &$metadata) {
+            ksort($metadata['columns'], SORT_NUMERIC);
+            ksort($metadata['sub_parts'], SORT_NUMERIC);
+            $metadata['columns'] = array_values($metadata['columns']);
+            $metadata['sub_parts'] = array_values($metadata['sub_parts']);
+        }
+        unset($metadata);
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
     }
 
     private function snapshots_match(array $before, array $after): bool
@@ -423,6 +585,52 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
         }
 
         return $normalized;
+    }
+
+    private function rebuild_managed_views(string $engagement_table): string
+    {
+        if (!class_exists('Kiwi_Traffic_Source_Funnel_Statistics_Repository')) {
+            return 'The managed analytics view repository is unavailable.';
+        }
+
+        try {
+            $repository = new Kiwi_Traffic_Source_Funnel_Statistics_Repository($engagement_table);
+        } catch (Throwable $error) {
+            return 'The managed analytics view repository could not be initialized.';
+        }
+
+        if (!$repository->create_view()) {
+            $detail = trim((string) $repository->get_last_error());
+
+            return $detail !== '' ? $detail : 'The managed analytics views could not be rebuilt.';
+        }
+
+        return $this->validate_managed_views();
+    }
+
+    private function validate_managed_views(): string
+    {
+        global $wpdb;
+
+        $prefix = is_object($wpdb) ? (string) ($wpdb->prefix ?? '') : '';
+        foreach (self::MANAGED_VIEW_SUFFIXES as $suffix) {
+            $view_name = $prefix . $suffix;
+            $type = $this->inspect_table_type($view_name);
+            if ($this->get_database_error() !== '') {
+                return $this->get_database_error();
+            }
+            if ($type !== 'VIEW') {
+                return 'A required managed analytics view is missing or has the wrong object type.';
+            }
+
+            $this->reset_database_error();
+            $this->query('SELECT 1 FROM ' . $this->quote_identifier($view_name) . ' LIMIT 0');
+            if ($this->get_database_error() !== '') {
+                return $this->get_database_error();
+            }
+        }
+
+        return '';
     }
 
     private function inspect_table_type(string $table_name): ?string

@@ -15,6 +15,7 @@ class Kiwi_Test_Landing_Session_Engagements_Migration_Wpdb
     public $lock_lost_after_rename = false;
     public $inspection_error_for = '';
     public $snapshot_mismatch_after_rename = false;
+    public $view_create_failure = false;
     public $prepared_statements = [];
 
     public function prepare($query, ...$args)
@@ -130,6 +131,40 @@ class Kiwi_Test_Landing_Session_Engagements_Migration_Wpdb
         $sql = (string) $sql;
         $this->queries[] = $sql;
 
+        if (preg_match('/^CREATE OR REPLACE VIEW ([a-zA-Z0-9_]+) AS\s/s', $sql, $matches)) {
+            if ($this->view_create_failure) {
+                $this->last_error = 'managed view creation failed';
+
+                return false;
+            }
+
+            $this->objects[(string) $matches[1]] = [
+                'type' => 'VIEW',
+                'definition' => $sql,
+            ];
+
+            return true;
+        }
+
+        if (preg_match('/^SELECT 1 FROM `([^`]+)` LIMIT 0$/', $sql, $matches)) {
+            $view_name = (string) $matches[1];
+            $view = (array) ($this->objects[$view_name] ?? []);
+            $definition = (string) ($view['definition'] ?? '');
+            $source = $this->prefix . Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_TABLE_SUFFIX;
+            $target = $this->prefix . Kiwi_Database_Table_Names::LANDING_SESSION_ENGAGEMENTS;
+
+            if (($view['type'] ?? '') !== 'VIEW'
+                || (strpos($definition, $source) !== false && !isset($this->objects[$source]))
+                || (strpos($definition, $target) !== false && !isset($this->objects[$target]))
+            ) {
+                $this->last_error = 'invalid managed view dependency';
+
+                return false;
+            }
+
+            return 0;
+        }
+
         if (!preg_match('/^RENAME TABLE `([^`]+)` TO `([^`]+)`$/', $sql, $matches)) {
             $this->last_error = 'unsupported query';
 
@@ -214,27 +249,33 @@ function kiwi_test_landing_session_engagements_migration_table(): array
     $contract = require __DIR__ . '/../tools/database/schema-contract.php';
     $definition = $contract[Kiwi_Database_Table_Names::LANDING_SESSION_ENGAGEMENTS];
     $columns = [];
-    foreach ((array) $definition['columns'] as $index => $column) {
+    foreach ((array) $definition['column_metadata'] as $column => $metadata) {
+        $default = $metadata['default'] ?? null;
+        if ($default !== null) {
+            $default = "'" . str_replace("'", "''", (string) $default) . "'";
+        }
         $columns[] = [
             'COLUMN_NAME' => $column,
-            'COLUMN_TYPE' => $column === 'id' ? 'bigint(20) unsigned' : 'varchar(191)',
-            'IS_NULLABLE' => $column === 'page_loaded_at' ? 'YES' : 'NO',
-            'COLUMN_DEFAULT' => null,
-            'EXTRA' => $column === 'id' ? 'auto_increment' : '',
-            'ORDINAL_POSITION' => $index + 1,
+            'COLUMN_TYPE' => (string) ($metadata['type'] ?? ''),
+            'IS_NULLABLE' => !empty($metadata['nullable']) ? 'YES' : 'NO',
+            'COLUMN_DEFAULT' => $default,
+            'EXTRA' => (string) ($metadata['extra'] ?? ''),
+            'ORDINAL_POSITION' => count($columns) + 1,
         ];
     }
 
     $indexes = [];
-    foreach ((array) $definition['indexes'] as $index) {
-        $indexes[] = [
-            'INDEX_NAME' => $index,
-            'NON_UNIQUE' => $index === 'PRIMARY' ? '0' : '1',
-            'SEQ_IN_INDEX' => '1',
-            'COLUMN_NAME' => 'id',
-            'SUB_PART' => null,
-            'INDEX_TYPE' => 'BTREE',
-        ];
+    foreach ((array) $definition['index_metadata'] as $index => $metadata) {
+        foreach ((array) ($metadata['columns'] ?? []) as $position => $column) {
+            $indexes[] = [
+                'INDEX_NAME' => $index,
+                'NON_UNIQUE' => !empty($metadata['unique']) ? '0' : '1',
+                'SEQ_IN_INDEX' => (string) ($position + 1),
+                'COLUMN_NAME' => $column,
+                'SUB_PART' => $metadata['sub_parts'][$position] ?? null,
+                'INDEX_TYPE' => (string) ($metadata['type'] ?? ''),
+            ];
+        }
     }
 
     return [
@@ -260,6 +301,15 @@ function kiwi_test_landing_session_engagements_migration_state(string $state): K
     }
     if (in_array($state, ['applied', 'conflict'], true)) {
         $wpdb->objects[$target] = $table;
+    }
+
+    $engagement_table = $state === 'applied' ? $target : $source;
+    foreach (['kiwi_v_load_to_cta_by_tksource_tkzone', 'kiwi_v_one_for_all'] as $view_suffix) {
+        $view_name = $wpdb->prefix . $view_suffix;
+        $wpdb->objects[$view_name] = [
+            'type' => 'VIEW',
+            'definition' => 'SELECT * FROM ' . $engagement_table,
+        ];
     }
 
     $GLOBALS['kiwi_test_options'] = [
@@ -331,6 +381,30 @@ kiwi_run_test('Kiwi landing-session engagement migration fails closed for confli
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi landing-session engagement migration rejects complete-name metadata drift', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    foreach (['column_type', 'index_uniqueness'] as $drift) {
+        $wpdb = kiwi_test_landing_session_engagements_migration_state('pending');
+        $source = $wpdb->prefix . Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_TABLE_SUFFIX;
+
+        if ($drift === 'column_type') {
+            $wpdb->objects[$source]['columns'][1]['COLUMN_TYPE'] = 'text';
+        } else {
+            $wpdb->objects[$source]['indexes'][1]['NON_UNIQUE'] = '1';
+        }
+
+        $result = (new Kiwi_Landing_Session_Engagements_Migration_Service())->check();
+
+        kiwi_assert_same(false, $result['success'], "Expected {$drift} drift to fail check.");
+        kiwi_assert_same('schema_mismatch', $result['state'], "Expected {$drift} drift to expose schema_mismatch.");
+        kiwi_assert_same(false, $result['mutated'], "Expected {$drift} drift not to mutate the database.");
+    }
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi landing-session engagement migration sanitizes query errors without mutation', function (): void {
     global $wpdb;
 
@@ -375,6 +449,26 @@ kiwi_run_test('Kiwi landing-session engagement migration apply preserves identit
     $wpdb = $previous_wpdb;
 });
 
+kiwi_run_test('Kiwi landing-session engagement migration rebuilds managed views after apply', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('pending');
+    $result = (new Kiwi_Landing_Session_Engagements_Migration_Service())->apply();
+    $target = $wpdb->prefix . Kiwi_Database_Table_Names::LANDING_SESSION_ENGAGEMENTS;
+    $view_queries = array_values(array_filter($wpdb->queries, static function (string $query): bool {
+        return strpos($query, 'CREATE OR REPLACE VIEW ') === 0;
+    }));
+
+    kiwi_assert_same(true, $result['success'], 'Expected apply to remain successful while rebuilding managed views.');
+    kiwi_assert_same(2, count($view_queries), 'Expected both managed views to be rebuilt after apply.');
+    foreach ($view_queries as $query) {
+        kiwi_assert_contains('FROM ' . $target, $query, 'Expected rebuilt apply view to reference the target table.');
+    }
+
+    $wpdb = $previous_wpdb;
+});
+
 kiwi_run_test('Kiwi landing-session engagement migration rollback preserves identity and is idempotent', function (): void {
     global $wpdb;
 
@@ -394,6 +488,26 @@ kiwi_run_test('Kiwi landing-session engagement migration rollback preserves iden
     kiwi_assert_same(true, $second['success'], 'Expected repeated rollback to succeed.');
     kiwi_assert_same(true, $second['no_op'], 'Expected repeated rollback to be a no-op.');
     kiwi_assert_same(false, $second['mutated'], 'Expected repeated rollback not to mutate.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi landing-session engagement migration rebuilds managed views after rollback', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('applied');
+    $result = (new Kiwi_Landing_Session_Engagements_Migration_Service())->rollback();
+    $source = $wpdb->prefix . Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_TABLE_SUFFIX;
+    $view_queries = array_values(array_filter($wpdb->queries, static function (string $query): bool {
+        return strpos($query, 'CREATE OR REPLACE VIEW ') === 0;
+    }));
+
+    kiwi_assert_same(true, $result['success'], 'Expected rollback to remain successful while rebuilding managed views.');
+    kiwi_assert_same(2, count($view_queries), 'Expected both managed views to be rebuilt after rollback.');
+    foreach ($view_queries as $query) {
+        kiwi_assert_contains('FROM ' . $source, $query, 'Expected rebuilt rollback view to reference the predecessor table.');
+    }
 
     $wpdb = $previous_wpdb;
 });
@@ -438,6 +552,13 @@ kiwi_run_test('Kiwi landing-session engagement migration exposes fail-closed loc
     kiwi_assert_same(true, $version_failed['mutated'], 'Expected version persistence failure after rename to report mutation.');
     kiwi_assert_same(Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_SCHEMA_VERSION, get_option(Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION), 'Expected failed persistence not to claim the target version.');
     $GLOBALS['kiwi_test_update_option_fail'] = false;
+
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('pending');
+    $wpdb->view_create_failure = true;
+    $view_failed = (new Kiwi_Landing_Session_Engagements_Migration_Service())->apply();
+    kiwi_assert_same('managed_view_rebuild_failed', $view_failed['error_code'], 'Expected a managed-view rebuild failure to stop before version publication.');
+    kiwi_assert_same(true, $view_failed['mutated'], 'Expected a view failure after rename to expose the partial mutation.');
+    kiwi_assert_same(Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_SCHEMA_VERSION, get_option(Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION), 'Expected a view rebuild failure not to publish the target version.');
 
     $lock_statements = array_values(array_filter($wpdb->prepared_statements, static function (array $statement): bool {
         return preg_match('/SELECT (?:GET_LOCK|IS_USED_LOCK|RELEASE_LOCK)\(/', (string) ($statement['query'] ?? '')) === 1;
@@ -520,6 +641,42 @@ kiwi_run_test('Kiwi general database apply uses the real migration blocker for t
     kiwi_assert_same('legacy_migration_required', $result['error_code'], 'Expected the production migration inspector to block the predecessor table.');
     kiwi_assert_same(0, $step->calls, 'Expected the real blocker to stop before schema mutation.');
     kiwi_assert_same(false, $result['mutated'], 'Expected the real blocker not to mutate the database.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi general database apply blocks a renamed table with the predecessor version', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('applied');
+    $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION] = Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_SCHEMA_VERSION;
+    $contract = kiwi_test_database_contract();
+    $step = new class {
+        public $calls = 0;
+
+        public function create_table(): void
+        {
+            $this->calls++;
+        }
+    };
+    $service = new Kiwi_Test_Database_Deployment_Service(
+        [[
+            'name' => 'test_table',
+            'repository' => $step,
+            'objects' => ['kiwi_test_table'],
+        ]],
+        $contract,
+        static function (): array {
+            return (new Kiwi_Landing_Session_Engagements_Migration_Service())->inspect_general_apply_blocker();
+        }
+    );
+
+    $result = $service->apply();
+
+    kiwi_assert_same('legacy_migration_required', $result['error_code'], 'Expected general apply to block the partial rename state.');
+    kiwi_assert_same(0, $step->calls, 'Expected the partial rename blocker to stop before schema mutation.');
+    kiwi_assert_same(false, $result['mutated'], 'Expected general apply not to publish the target version for a partial rename.');
 
     $wpdb = $previous_wpdb;
 });
