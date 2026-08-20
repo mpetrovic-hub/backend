@@ -1,17 +1,18 @@
 # Issue #96 – bereinigter Plan für das Landing-Session-Engagement-Renaming
 
-> Stand: 2026-07-30
+> Stand: 2026-08-06
 > Planungsstatus: fachlich und technisch abgeschlossen, noch nicht implementiert
 > Aktuell bindender GitHub-Plan: [Codex Planner Report in Issue #96](https://github.com/mpetrovic-hub/backend/issues/96#issuecomment-5073397024)
-> Synchronisationsstatus: Der GitHub-Issue-Text und der einzelne bindende Planner Report wurden am 2026-07-30 mit der verpflichtenden Post-Merge-/Pre-Production-Generalprobe synchronisiert und vollständig live verifiziert.
+> Synchronisationsstatus: Der GitHub-Issue-Text und der einzelne bindende Planner Report wurden am 2026-08-06 mit dem aktuellen #113/PR-#116-Retention-Archive-Health-Baseline-Stand, der verpflichtenden Post-Merge-/Pre-Production-Generalprobe und den getrennten Retention-Gates synchronisiert und vollständig live verifiziert.
 
 Diese temporäre Root-Datei ist die lokale Arbeits- und Migrations-Checkliste. Sie ist keine dauerhafte Architektur- oder Betriebsdokumentation. Nach der Implementierung müssen die unten genannten kanonischen Dokumente den tatsächlich umgesetzten Stand beschreiben.
 
 ## 1. Aktuell verifizierter Stand
 
-- `origin/main` steht beim Abgleich auf `7711b5c9d943bf2b584ea8d2d2774cf11b418e2d`.
+- `origin/main` steht beim Abgleich auf `2096f8ffb4729e01b32217acbbc4934af2201cd8` und enthält den gemergten PR #116 (`7c4e6f0113d1a560fb246c5cacbb2e4891558be4`).
 - Issue #103 ist abgeschlossen. Der allgemeine externe Datenbank-Runner ist über das repository-eigene WP-CLI-`--require` aktiv und stellt `kiwi database status|apply` bereit.
 - Der kanonische Schema-Stand auf `main` ist weiterhin `2026-07-20-1`.
+- Issue #113 und PR #116 bilden den aktuellen Retention-Archive-Health-Baseline-Stand. Das ist keine technische Abhängigkeit der Rename-Implementierung; #96 basiert darauf und verändert diesen Vertrag nicht.
 - Issue #96 ist offen und noch nicht implementiert:
   - Tabelle, Repository, Consumer und Tests verwenden weiterhin `premium_sms_landing_engagement...`.
   - Unter `tools/database/migrations/` existiert noch kein Issue-#96-Artefakt.
@@ -211,7 +212,8 @@ Der Implementer greift nicht auf Production zu und führt dort weder `check`, `a
 - Lock-Kollision/-Verlust, Query-Fehler, Rename-Fehler, Postcondition-Fehler und Versionspersistenzfehler.
 - Nachweis, dass der allgemeine `apply` weder Rename noch Rollback ausführt und keine parallele leere Zieltabelle erzeugt.
 - Repository-/DI-Tests für den neutralen Evaluator und unveränderte Soft-Flag-Ergebnisse.
-- Main-/TK-zone-Summary, KPI/Statistics, Device Harvest, Retention Gate, Views, Sales Attribution sowie Premium-SMS-Fraud-/MO-Consumer.
+- Main-/TK-zone-Summary, KPI/Statistics, Device Harvest, das separate Landing-Session-Retention-Coverage-Gate, Views, Sales Attribution sowie Premium-SMS-Fraud-/MO-Consumer.
+- Retention-Archive-Health aus #113/PR #116 nur als aktueller Baseline-/Kompatibilitäts-Smoke: externer `check`, strikt read-only `diagnose` und bestätigungspflichtiges `unblock`; nichtleere WAL- oder Rollback-Journals bleiben fail-closed. Beide Retention-Verträge werden nicht verwechselt.
 - Vollständige Suche nach nicht erlaubten alten Datenquellen-Namen.
 - PHP-Lint, `php tests/run-tests.php`, Dokumentations-/Linkprüfung und `git diff --check`.
 
@@ -223,7 +225,7 @@ Nach dem Merge und vor jedem Production-Deployment wird der exakte Merge-Commit 
 2. In einer vollständig von Production getrennten Wegwerf-Umgebung werden WordPress, WP-CLI 2.12 und MariaDB mit synthetischen Daten betrieben. Production-Zugänge, Production-Dumps und echte Kunden-/Subscriber-Daten sind ausgeschlossen.
 3. Der vorherige stabile Code beziehungsweise eine daraus abgeleitete geprüfte Fixture erzeugt den echten Vorgängerzustand: Version `2026-07-20-1`, alter Tabellenname, vollständiges altes Schema und künstliche Engagement-Zeilen.
 4. Danach wird ausschließlich der exakte gemergte Issue-#96-Stand geladen.
-5. Mit den tatsächlich implementierten vollständigen `wp --require=...`-Befehlen werden mindestens Migrations-`check`, `apply`, allgemeiner `kiwi database status`, wiederholtes `apply` als No-op sowie die relevanten WordPress-Schreib-/Lesepfade und Consumer-Smokes ausgeführt.
+5. Mit den tatsächlich implementierten vollständigen `wp --require=...`-Befehlen werden mindestens Migrations-`check`, `apply`, allgemeiner `kiwi database status`, wiederholtes `apply` als No-op sowie die relevanten WordPress-Schreib-/Lesepfade und Consumer-Smokes ausgeführt. Falls Retention-Health als Baseline-/Kompatibilitäts-Smoke berührt wird, gelten ausschließlich der aktuelle externe `check`-/strikt read-only `diagnose`-/bestätigungspflichtige `unblock`-Vertrag und das fail-closed Verhalten für WAL-/Rollback-Journals; das Landing-Session-Retention-Coverage-Gate bleibt getrennt.
 6. In einer separaten frischen Scratch-Datenbank werden der kontrollierte `rollback`, wiederholtes `rollback` und die fail-closed Zustände `conflict`, `missing`, `version_mismatch` und `schema_mismatch` über das echte PHP-/WP-CLI-Artefakt geprüft.
 7. Der Bericht hält Merge-Commit, Umgebungsversionen, bereinigte Befehle/Ergebnisse, Daten-/Schema-Snapshots, Smokes und Cleanup fest. Scratch-Datenbanken, Worktree und Wegwerf-Artefakte werden anschließend entfernt.
 
@@ -260,6 +262,13 @@ Die Generalprobe bestätigt MariaDB-Rename und Zustandslogik. Sie bestätigt nic
 - `origin/main`, `CHANGELOG.md`, `tools/database/`, Schema-Contract, Runner, relevante Consumer, Dokumentationsindizes und TODO-Kontext geprüft.
 - Graphify-Abhängigkeitsabfrage und gezielte Repository-Suche bestätigen: Der Rename ist noch nicht implementiert; die festgelegte externe Issue-#103-Grenze passt weiterhin zum aktuellen Code.
 
+### Cross-Issue-Baseline-Audit vom 2026-08-06
+
+- `origin/main` auf `2096f8ffb4729e01b32217acbbc4934af2201cd8` sowie PR #116 und dessen Merge-Stand geprüft.
+- Issue #113 enthält den aktuellen Retention-Archive-Health-Vertrag und Production-Nachweise; der erste erfolgreiche Production-`diagnose`-Lauf mit gemergtem PR-#116-Code ist am 2026-08-04 dokumentiert.
+- `CHANGELOG.md`-Abschnitte 2026-08-04 und 2026-08-01 geprüft: externe `check`/read-only `diagnose`/bestätigungspflichtige `unblock`-Oberfläche sowie immutable SQLite-Lesen und fail-closed WAL-/Rollback-Journal-Prüfung.
+- Retention-Archive-Health und Landing-Session-Retention-Coverage-Gate sind getrennte Verträge. #113/PR #116 sind Baseline, aber kein Implementierungsumfang von #96.
+
 ## 8. Offene Punkte
 
 Es gibt aktuell keine unbeantwortete fachliche oder architektonische Entscheidung.
@@ -268,7 +277,7 @@ Offen bleiben bewusst folgende Freigabe- und Freshness-Gates:
 
 1. Der neue Generalproben-Vertrag wird vor Implementierungsbeginn in den einzelnen bindenden GitHub Planner Report übernommen und dort erneut verifiziert.
 2. Der User entscheidet danach, wann Issue #96 zur Implementierung freigegeben wird und ob das entfernte Label `2 - codex-implement-ready` im vorgesehenen Workflow wieder gesetzt werden soll.
-3. Unmittelbar vor Implementierungsbeginn werden `origin/main`, Issue-/Planner-Report, Schema-Version und konkurrierende Datenbankänderungen erneut geprüft.
+3. Unmittelbar vor Implementierungsbeginn werden `origin/main` einschließlich des #113/PR-#116-Baselines, Issue-/Planner-Report, Schema-Version und konkurrierende Datenbankänderungen erneut geprüft.
 4. Vor Production müssen die lokale Generalprobe vollständig grün und die konkreten Maintenance-/Job-Pause-/Wiederaufnahme-Schritte für die Zielumgebung dokumentiert sein.
 5. Nur im Fehlerfall entscheidet der User über Datenverlustakzeptanz, Rollback/Restore und die Ausnahmefreigabe bei isoliertem Operational-Event-Logging-Fehler.
 
@@ -283,8 +292,8 @@ Die Reihenfolge ist verbindlich. Ein Schritt beginnt erst, wenn der vorherige er
 - [x] 1. `[Planner]` Architektur-, Migrations-, Rollback-, Fehler- und Freigabeentscheidungen abschließen; MariaDB-Prototyp ausführen und den einzelnen aktuellen Planner Report in Issue #96 verifizieren.
 - [x] 2. `[Planner]` Plan am 2026-07-30 gegen aktuellen Repository-/GitHub-Stand prüfen, Redundanzen entfernen und offene Gates sichtbar festhalten.
 - [x] 3. `[Planner]` Die verpflichtende Post-Merge-/Pre-Production-Generalprobe in den einzelnen bindenden GitHub Planner Report übernehmen, den gespeicherten Report vollständig verifizieren und keine Project-Status-Änderung vornehmen.
-- [ ] 4. `[User]` Aktualisierten Planner Report und Hard-Cutover-Ablauf erneut prüfen, die Implementierung ausdrücklich freigeben und entscheiden, ob `2 - codex-implement-ready` wieder gesetzt werden soll.
-- [ ] 5. `[Implementer]` Vor Arbeitsbeginn `origin/main`, den einzelnen aktuellen Planner Report, Schema-Version und konkurrierende Datenbankänderungen prüfen; bei geändertem Vorgängerstand stoppen und neu planen.
+- [ ] 4. `[User]` Den aktualisierten Planner Report und den vollständigen Umstellungsablauf prüfen. Wenn du mit der Umsetzung einverstanden bist, sie ausdrücklich freigeben. Entscheide außerdem, ob `2 - codex-implement-ready` wieder gesetzt werden soll.
+- [ ] 5. `[Implementer]` Vor Arbeitsbeginn `origin/main` einschließlich des aktuellen #113/PR-#116-Baselines, den einzelnen aktuellen Planner Report, Schema-Version und konkurrierende Datenbankänderungen prüfen; bei geändertem Vorgängerstand stoppen und neu planen. #113/PR #116 nicht im Rahmen von #96 implementieren oder verändern.
 
 ### B. Implementierung und Review
 
@@ -292,14 +301,14 @@ Die Reihenfolge ist verbindlich. Ein Schritt beginnt erst, wenn der vorherige er
 - [ ] 7. `[Implementer]` Zustands-/Lock-/Snapshot-/Lifecycle-/Versions- und Consumer-Regressionstests sowie vollständige Namenssuche, PHP-Lint, Testsuite, Dokumentationsprüfung und `git diff --check` ausführen; keine Production-Datenbank verändern.
 - [ ] 8. `[Implementer]` Kanonische Dokumentation und TODO aktualisieren und in der Abschlussbesprechung exakte Production-Befehle/JSON, Maintenance-/Job-Steuerung, Generalproben-Voraussetzungen sowie alle offenen Operator-Aktionen ausweisen.
 - [ ] 9. `[User/Reviewer]` Implementierung, Tests, Dokumentation und Deployment-/Rollback-Anleitung prüfen und den PR zum Merge freigeben.
-- [ ] 10. `[User/Reviewer]` PR mergen und den exakten Merge-Commit aus `origin/main` als einzigen Kandidaten für Generalprobe und Production dokumentieren.
+- [ ] 10. `[User/Reviewer]` Den freigegebenen PR nach `main` mergen und die dadurch entstandene genaue Code-Version (`Merge-Commit`) festhalten. Nur genau diese Version darf anschließend in der lokalen Generalprobe geprüft und später auf Production eingesetzt werden.
 
 ### C. Verpflichtende lokale Generalprobe
 
 - [ ] 11. `[Deployment-Codex]` Den exakten Merge-Commit in einem isolierten temporären Worktree bereitstellen und eine vollständig von Production getrennte WordPress-/WP-CLI-2.12-/MariaDB-Wegwerf-Umgebung aufbauen.
 - [ ] 12. `[Deployment-Codex]` Den geprüften Vorgängerzustand mit altem Code beziehungsweise Fixture und künstlichen Daten herstellen; danach mit dem exakten Merge-Commit den vollständigen Erfolgs-, No-op-, Consumer-Smoke-, Rollback- und fail-closed Ablauf über die echten PHP-/WP-CLI-Befehle ausführen.
 - [ ] 13. `[Deployment-Codex]` Merge-Commit, Umgebung, bereinigte Befehle/JSON, Vorher-/Nachher-Snapshots, Smokes und Cleanup dokumentieren; Scratch-Datenbanken, temporären Worktree und Wegwerf-Artefakte entfernen.
-- [ ] 14. `[User/Reviewer]` Generalproben-Nachweis prüfen. Bei Fehler Production blockieren, Korrektur-PR erstellen und ab Schritt 9 mit dem neuen Merge-Commit wiederholen; nur bei vollständig grünem Lauf den exakten Commit für Production freigeben.
+- [ ] 14. `[User/Reviewer]` Generalproben-Nachweis prüfen. Bei einem Fehler das Production-Deployment dieses Commits nicht freigeben, einen Korrektur-PR erstellen und ab Schritt 9 mit dem neuen Merge-Commit wiederholen. Nur nach einer vollständig grünen Generalprobe den exakt geprüften Commit für das Production-Deployment freigeben.
 
 ### D. Vorbereitung des Production-Fensters
 
@@ -307,27 +316,27 @@ Die Reihenfolge ist verbindlich. Ein Schritt beginnt erst, wenn der vorherige er
 - [ ] 16. `[Deployment-Codex/Operator]` Zielumgebung, lokal geprüften Merge-Commit, vorherigen kompatiblen Code-Release, Zugänge und die exakten Maintenance-/Pause-/Wiederaufnahme-Schritte bestätigen.
 - [ ] 17. `[User]` Aktuelles Hostinger-Datenbank-Backup herunterladen und Zeitpunkt/Bezeichnung sowie lokale Verfügbarkeit bestätigen.
 - [ ] 18. `[Deployment-Codex/Operator]` Vorzustand soweit mit dem freigegebenen Artefakt ohne Code-Aktivierung möglich read-only erfassen.
-- [ ] 19. `[User/Operator]` Maintenance aktivieren und Website-, REST-, AJAX- und Admin-Traffic sperren.
+- [ ] 19. `[User/Operator]` Den Wartungsmodus aktivieren. Danach dürfen weder Besucher noch eingeloggte Administratoren oder automatische Schnittstellenanfragen die Anwendung erreichen oder Daten schreiben. Die Jobs werden erst im nächsten Schritt separat pausiert.
 - [ ] 20. `[Operator]` WP-Cron, externe Scheduler, Worker und andere schreibende WP-CLI-Prozesse pausieren; Schreibstopp bestätigen.
-- [ ] 21. `[Operator]` Exakt den lokal geprüften Release bereitstellen, ohne Website oder Jobs freizugeben.
+- [ ] 21. `[Operator]` Exakt den in der lokalen Generalprobe geprüften Merge-Commit auf dem Production-Server installieren. Maintenance-Modus und Job-Pausen bleiben aktiv; noch keinen öffentlichen Traffic freigeben und noch kein `apply` ausführen.
 
 ### E. Externer Hard Cutover
 
 - [ ] 22. `[Operator]` Migrations-`check` ausführen und nur `success=true`, `state=pending`, Exit `0`, Vorgängerversion `2026-07-20-1` und vollständiges altes Schema akzeptieren.
 - [ ] 23. `[Operator]` Vorher-Snapshot mit Row Count, Min-/Max-ID, `AUTO_INCREMENT`, Spalten und Indizes dokumentieren; unerwartete Leere als Stop-Gate behandeln.
-- [ ] 24. `[User/Operator]` Grünen Ausgangscheck, lokal geprüften Commit und verfügbares Hostinger-Backup nochmals bestätigen.
-- [ ] 25. `[User/Operator]` `apply` ausdrücklich freigeben und ausführen.
+- [ ] 24. `[User/Operator]` Vor der Tabellenumbenennung gemeinsam bestätigen: Der migrationsspezifische `check` (Schritt 22) war erfolgreich, auf dem Hostinger-Production-Server läuft genau die lokal generalgeprobte Code-Version und das aktuelle Hostinger-Datenbank-Backup ist verfügbar.
+- [ ] 25. `[User/Operator]` Die tatsächliche Tabellenumbenennung (`apply`) ausdrücklich freigeben und ausführen.
 - [ ] 26. `[Operator]` Rename, Snapshot-Erhalt, Ziel-Postconditions und erst danach gespeicherte Version `2026-07-23-1` bestätigen.
 - [ ] 27. `[Operator]` Allgemeinen read-only `kiwi database status` ausführen und Exit `0`, `ready=true`, `installed_version=2026-07-23-1` sowie keine Drift verlangen.
-- [ ] 28. `[Operator]` Neuen Schreib-/Lesepfad, KPI/Statistics, Main-/TK-zone-Summary, Device Harvest, Retention Gate, Views, Sales Attribution und relevante Premium-SMS-Fraud-/MO-Pfade kontrolliert prüfen.
+- [ ] 28. `[Operator]` Neuen Schreib-/Lesepfad, KPI/Statistics, Main-/TK-zone-Summary, Device Harvest, das separate Landing-Session-Retention-Coverage-Gate, Views, Sales Attribution und relevante Premium-SMS-Fraud-/MO-Pfade kontrolliert prüfen. Retention-Archive-Health aus #113/PR #116 bleibt dabei die aktuelle Baseline: Falls sie im Smoke berührt wird, ausschließlich den externen `check`-/strikt read-only `diagnose`-/bestätigungspflichtigen `unblock`-Vertrag verwenden; ein nichtleeres WAL- oder Rollback-Journal muss fail-closed bleiben. #96 implementiert oder verändert #113/PR #116 nicht.
 
 ### F. Stop, Rollback oder Wiederfreigabe
 
 - [ ] 29. `[Stop-Gate/Operator]` Bei nicht vollständig beweisbarem Erfolg Maintenance und Schreibstopp beibehalten, bereinigtes Original-JSON/Exit sichern, Zustand diagnostizieren und einen qualifizierten Fehler separat über den Operational-Event-Service erfassen.
-- [ ] 30. `[User]` Bei unerwartet leerem historischem Engagement-Bestand ausdrücklich zwischen akzeptiertem Verlust und Restore beziehungsweise sicherem Rollback entscheiden.
+- [ ] 30. `[User]` Falls die bisherigen historischen Engagement-/Soft-Flag-Daten unerwartet leer sind, ausdrücklich entscheiden: aus dem Backup wiederherstellen, sicher zurückrollen oder den Verlust dieser historischen Daten akzeptieren. Sales-, Billing- und Transaktionsdaten sind davon getrennt.
 - [ ] 31. `[Operator]` Bei akzeptiertem Verlust Struktur, neue Schreib-/Lesepfade, relevante Smokes und fail-closed Retention Gate bestätigen.
-- [ ] 32. `[User/Operator]` Falls erforderlich `rollback` ausdrücklich freigeben und nur vor neuen Schreibzugriffen ausführen; anschließend alten Zustand, Vorgängerversion und vorherigen kompatiblen Code verifizieren.
-- [ ] 33. `[User/Operator]` Bei vollständig grüner Technik Wiederfreigabe genehmigen. Scheitert ausschließlich Event-/Recovery-Logging, den bereinigten Fehler und die offene Nachholung dokumentieren und die Ausnahme ausdrücklich freigeben.
+- [ ] 32. `[User/Operator]` Falls ein `rollback` erforderlich ist, ihn ausdrücklich freigeben und vor neuen Schreibzugriffen ausführen. Danach prüfen, dass wieder der alte Tabellenname, die vorherige Datenbankversion und der dazu passende frühere Code aktiv sind.
+- [ ] 33. `[User/Operator]` Wenn Datenbank, Anwendung und alle notwendigen Prüfungen grün sind, die Website wieder öffnen. Falls ausschließlich der Eintrag ins technische Fehler-/Recovery-Protokoll nicht geschrieben werden kann, den bereinigten Fehler und die noch ausstehende Nachholung dokumentieren. Die Website darf dann nur nach ausdrücklicher Ausnahmefreigabe wieder geöffnet werden.
 - [ ] 34. `[Operator]` Zuerst kontrollierte Jobs/Smokes und danach öffentlichen Traffic freigeben; kurzfristig überwachen.
 
 ### G. Abschluss und Folgearbeit
@@ -335,4 +344,4 @@ Die Reihenfolge ist verbindlich. Ein Schritt beginnt erst, wenn der vorherige er
 - [ ] 35. `[Operator/Deployment-Codex]` Einen noch fehlenden Operational-Event-/Recovery-Eintrag ohne Direkt-SQL über den bestehenden Service nachtragen und verifizieren; bis dahin Issue #96 offen lassen.
 - [ ] 36. `[Operator]` Release, lokale Generalprobe, Backup, Vorher-/Nachher-Werte, Commands, Production-Smokes, Datenverlust/Rollback, Events und verbleibende Risiken in Issue #96 dokumentieren.
 - [ ] 37. `[Planner/User]` Issue #72 nach erfolgreichem Rename in Titel, Beschreibung und Akzeptanzkriterien auf `wp_kiwi_landing_session_engagements` umstellen.
-- [ ] 38. `[User]` Erst nach vollständiger Nachweisprüfung und ohne fehlenden erforderlichen Event-/Recovery-Eintrag über den Abschluss von Issue #96 entscheiden.
+- [ ] 38. `[User]` Erst entscheiden, ob Issue #96 abgeschlossen wird, wenn alle vorgesehenen Nachweise dokumentiert sind. Hat es während der Umstellung einen Migrationsfehler gegeben, müssen außerdem die zugehörigen Einträge im technischen Fehler-/Recovery-Protokoll vorhanden sein. Bei vollständig erfolgreichem Ablauf ist kein solcher Eintrag nötig.
