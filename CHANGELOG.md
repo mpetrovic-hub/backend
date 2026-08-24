@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-08-24:
+- [Database Deployments] Corrected the Issue #96 landing-session engagement rename preflight to accept the one verified complete historical `2026-07-20-1` physical column order alongside the canonical contract order. Column metadata remains strict per name, index metadata remains strict, rename snapshots continue to preserve physical order, and arbitrary third orders fail closed. Added regression coverage and clarified the required fresh rehearsal fixture.
+
 2026-08-20:
 - [Database Deployments] Fixed the landing-session engagement rename preflight to normalize MariaDB/WordPress `information_schema`'s unquoted `NULL` default marker while preserving quoted `'NULL'` values as contract drift. Added regression coverage for both representations.
 - [Landing Session Engagements] Renamed the shared landing-engagement repository and canonical table contract to `Kiwi_Landing_Session_Engagement_Repository` and `wp_kiwi_landing_session_engagements`, centralized the active table name, and separated the generic repository from the explicitly injected Premium-SMS soft-flag evaluator without changing fraud rules.
