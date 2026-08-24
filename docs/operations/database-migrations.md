@@ -138,10 +138,15 @@ wp --require=wp-content/plugins/backend/tools/database/migrations/landing-sessio
 Its snapshot reports sanitized evidence only: row count, minimum/maximum ID,
 `AUTO_INCREMENT`, column/index counts, and hashes of complete column/index
 metadata. The precondition compares column type, nullability, default, extra
-attributes and order plus index uniqueness, ordered columns, prefix lengths and
-type against the explicit canonical contract. Both table names, neither name, a
-view or other wrong object type, any metadata drift, an inspection failure, or
-a table/version mismatch are non-zero stop gates without mutation.
+attributes against the explicit canonical contract. Its physical column order
+must be either the canonical contract order or the one complete documented
+historical order of the verified `2026-07-20-1` predecessor. This is a narrow
+compatibility rule, not an order-insensitive comparison: a partial, arbitrary,
+or third reordered schema remains a non-zero stop gate. Index uniqueness,
+ordered columns, prefix lengths, and type remain exact. Both table names,
+neither name, a view or other wrong object type, any metadata drift, an
+inspection failure, or a table/version mismatch are non-zero stop gates without
+mutation.
 
 For nullable columns, the unquoted `NULL` marker that MariaDB exposes through
 WordPress `information_schema` results is normalized to an absent default. A
@@ -201,6 +206,11 @@ Prerequisites:
 - disposable MariaDB database with no Production connection or data;
 - the exact predecessor release or a reviewed fixture that creates the complete `2026-07-20-1` schema;
 - synthetic engagement rows only, including known IDs and an explicitly advanced `AUTO_INCREMENT`.
+
+When the confirmed historical predecessor is used, the fixture must reproduce
+its complete documented physical column order. The rehearsal must also include
+an arbitrary third full order and prove that `check` rejects it without a
+mutation; it must not treat column order as generally interchangeable.
 
 Run every command with an explicit scratch WordPress path and the runner from
 the exact worktree, for example:

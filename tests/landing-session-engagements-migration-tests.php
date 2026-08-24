@@ -289,6 +289,47 @@ function kiwi_test_landing_session_engagements_migration_table(): array
     ];
 }
 
+function kiwi_test_landing_session_engagements_historical_predecessor_column_order(): array
+{
+    return [
+        'id', 'created_at', 'updated_at', 'provider_key', 'service_key', 'flow_key',
+        'landing_key', 'session_token', 'page_loaded_at', 'first_cta_click_at', 'last_cta_click_at', 'cta_click_count',
+        'last_event_at', 'pid', 'click_id', 'tksource', 'tkzone',
+        'ua_ch_supported', 'ua_ch_mobile', 'ua_ch_platform', 'ua_ch_platform_version', 'ua_ch_model', 'ua_ch_brands', 'ua_ch_full_version_list', 'user_agent',
+        'first_cta1_click_at', 'last_cta1_click_at', 'cta1_click_count',
+        'first_cta2_click_at', 'last_cta2_click_at', 'cta2_click_count',
+        'first_cta3_click_at', 'last_cta3_click_at', 'cta3_click_count',
+        'is_soft_flag', 'soft_flag_reason', 'soft_flag_rule_key', 'soft_flag_evaluated_at',
+    ];
+}
+
+function kiwi_test_landing_session_engagements_reorder_columns(array $table, array $column_order): array
+{
+    $by_name = [];
+    foreach ((array) ($table['columns'] ?? []) as $column) {
+        $by_name[(string) ($column['COLUMN_NAME'] ?? '')] = $column;
+    }
+
+    $reordered = [];
+    foreach ($column_order as $position => $column_name) {
+        if (!isset($by_name[$column_name])) {
+            throw new RuntimeException('The requested synthetic column order references a missing column.');
+        }
+
+        $column = $by_name[$column_name];
+        $column['ORDINAL_POSITION'] = $position + 1;
+        $reordered[] = $column;
+    }
+
+    if (count($reordered) !== count($by_name)) {
+        throw new RuntimeException('The requested synthetic column order is not complete.');
+    }
+
+    $table['columns'] = $reordered;
+
+    return $table;
+}
+
 function kiwi_test_landing_session_engagements_migration_state(string $state): Kiwi_Test_Landing_Session_Engagements_Migration_Wpdb
 {
     $wpdb = new Kiwi_Test_Landing_Session_Engagements_Migration_Wpdb();
@@ -338,6 +379,63 @@ kiwi_run_test('Kiwi landing-session engagement migration check is read-only for 
             return preg_match('/\b(?:GET_LOCK|RELEASE_LOCK|RENAME|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/i', $query) === 1;
         })), 'Expected check to execute read-only inspection queries only.');
     }
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi landing-session engagement migration accepts only the confirmed historical predecessor order', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('pending');
+    $source = $wpdb->prefix . Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_TABLE_SUFFIX;
+    $target = $wpdb->prefix . Kiwi_Database_Table_Names::LANDING_SESSION_ENGAGEMENTS;
+    $historical_order = kiwi_test_landing_session_engagements_historical_predecessor_column_order();
+    $wpdb->objects[$source] = kiwi_test_landing_session_engagements_reorder_columns(
+        $wpdb->objects[$source],
+        $historical_order
+    );
+
+    $check = (new Kiwi_Landing_Session_Engagements_Migration_Service())->check();
+    kiwi_assert_same(true, $check['success'], 'Expected the confirmed complete historical predecessor order to pass read-only check.');
+    kiwi_assert_same('pending', $check['state'], 'Expected the historical predecessor order to remain pending.');
+    kiwi_assert_same(false, $check['mutated'], 'Expected the historical predecessor check to remain read-only.');
+
+    $service = new Kiwi_Landing_Session_Engagements_Migration_Service();
+    $apply = $service->apply();
+    kiwi_assert_same(true, $apply['success'], 'Expected apply to accept the confirmed historical predecessor order.');
+    kiwi_assert_same('applied', $apply['state'], 'Expected apply to publish the applied state for the historical predecessor order.');
+    kiwi_assert_same($historical_order, array_column($wpdb->objects[$target]['columns'], 'COLUMN_NAME'), 'Expected the atomic rename to preserve the historical physical column order.');
+
+    $rollback = $service->rollback();
+    $rollback_no_op = $service->rollback();
+    kiwi_assert_same(true, $rollback['success'], 'Expected rollback to accept the preserved historical order.');
+    kiwi_assert_same('pending', $rollback['state'], 'Expected rollback to restore the predecessor state.');
+    kiwi_assert_same($historical_order, array_column($wpdb->objects[$source]['columns'], 'COLUMN_NAME'), 'Expected rollback to preserve the historical physical column order.');
+    kiwi_assert_same(true, $rollback_no_op['success'], 'Expected repeated rollback to remain successful for the historical order.');
+    kiwi_assert_same(true, $rollback_no_op['no_op'], 'Expected repeated rollback to remain a no-op for the historical order.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi landing-session engagement migration rejects an unapproved complete column order', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = kiwi_test_landing_session_engagements_migration_state('pending');
+    $source = $wpdb->prefix . Kiwi_Landing_Session_Engagements_Migration_Service::SOURCE_TABLE_SUFFIX;
+    $unapproved_order = array_column($wpdb->objects[$source]['columns'], 'COLUMN_NAME');
+    [$unapproved_order[6], $unapproved_order[7]] = [$unapproved_order[7], $unapproved_order[6]];
+    $wpdb->objects[$source] = kiwi_test_landing_session_engagements_reorder_columns(
+        $wpdb->objects[$source],
+        $unapproved_order
+    );
+
+    $result = (new Kiwi_Landing_Session_Engagements_Migration_Service())->check();
+
+    kiwi_assert_same(false, $result['success'], 'Expected an unapproved complete column order to fail closed.');
+    kiwi_assert_same('schema_mismatch', $result['state'], 'Expected an unapproved complete column order to expose schema_mismatch.');
+    kiwi_assert_same(false, $result['mutated'], 'Expected an unapproved complete column order not to mutate the database.');
 
     $wpdb = $previous_wpdb;
 });

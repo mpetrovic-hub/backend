@@ -17,6 +17,23 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
     public const SOURCE_TABLE_SUFFIX = 'kiwi_premium_sms_landing_engagements';
 
     private const LOCK_PREFIX = 'kiwi_backend_database_apply_';
+    /**
+     * The complete physical order of the confirmed 2026-07-20-1 predecessor.
+     *
+     * This narrow compatibility rule exists only because production's fully
+     * verified predecessor was created before the canonical contract order was
+     * established. It does not accept arbitrary reordered schemas.
+     */
+    private const HISTORICAL_SOURCE_COLUMN_ORDER = [
+        'id', 'created_at', 'updated_at', 'provider_key', 'service_key', 'flow_key',
+        'landing_key', 'session_token', 'page_loaded_at', 'first_cta_click_at', 'last_cta_click_at', 'cta_click_count',
+        'last_event_at', 'pid', 'click_id', 'tksource', 'tkzone',
+        'ua_ch_supported', 'ua_ch_mobile', 'ua_ch_platform', 'ua_ch_platform_version', 'ua_ch_model', 'ua_ch_brands', 'ua_ch_full_version_list', 'user_agent',
+        'first_cta1_click_at', 'last_cta1_click_at', 'cta1_click_count',
+        'first_cta2_click_at', 'last_cta2_click_at', 'cta2_click_count',
+        'first_cta3_click_at', 'last_cta3_click_at', 'cta3_click_count',
+        'is_soft_flag', 'soft_flag_reason', 'soft_flag_rule_key', 'soft_flag_evaluated_at',
+    ];
     private const MANAGED_VIEW_SUFFIXES = [
         'kiwi_v_load_to_cta_by_tksource_tkzone',
         'kiwi_v_one_for_all',
@@ -406,7 +423,7 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
         $expected_column_metadata = (array) ($definition['column_metadata'] ?? []);
         $expected_index_metadata = (array) ($definition['index_metadata'] ?? []);
 
-        if ($actual_columns !== $expected_columns) {
+        if (!$this->is_supported_column_order($actual_columns, $expected_columns)) {
             return 'The landing-session engagement column contract does not match exactly.';
         }
 
@@ -421,29 +438,29 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
         }
 
         $actual_column_metadata = [];
-        foreach ((array) ($snapshot['columns'] ?? []) as $position => $row) {
+        foreach ((array) ($snapshot['columns'] ?? []) as $row) {
             $name = (string) ($row['COLUMN_NAME'] ?? '');
             $actual_column_metadata[$name] = [
                 'type' => $this->normalize_column_type((string) ($row['COLUMN_TYPE'] ?? '')),
                 'nullable' => strtoupper((string) ($row['IS_NULLABLE'] ?? '')) === 'YES',
                 'default' => $this->normalize_column_default($row['COLUMN_DEFAULT'] ?? null),
                 'extra' => $this->normalize_column_extra((string) ($row['EXTRA'] ?? '')),
-                'ordinal_position' => (int) ($row['ORDINAL_POSITION'] ?? 0),
             ];
         }
+        ksort($actual_column_metadata, SORT_STRING);
 
         $normalized_expected_columns = [];
-        foreach ($expected_column_metadata as $position => $metadata) {
-            $name = is_string($position) ? $position : '';
+        foreach ($expected_column_metadata as $name => $metadata) {
+            $name = is_string($name) ? $name : '';
             $metadata = is_array($metadata) ? $metadata : [];
             $normalized_expected_columns[$name] = [
                 'type' => $this->normalize_column_type((string) ($metadata['type'] ?? '')),
                 'nullable' => !empty($metadata['nullable']),
                 'default' => $this->normalize_column_default($metadata['default'] ?? null),
                 'extra' => $this->normalize_column_extra((string) ($metadata['extra'] ?? '')),
-                'ordinal_position' => count($normalized_expected_columns) + 1,
             ];
         }
+        ksort($normalized_expected_columns, SORT_STRING);
 
         if ($actual_column_metadata !== $normalized_expected_columns) {
             return 'The complete landing-session engagement column metadata does not match exactly.';
@@ -473,6 +490,12 @@ final class Kiwi_Landing_Session_Engagements_Migration_Service
         }
 
         return '';
+    }
+
+    private function is_supported_column_order(array $actual_columns, array $canonical_columns): bool
+    {
+        return $actual_columns === $canonical_columns
+            || $actual_columns === self::HISTORICAL_SOURCE_COLUMN_ORDER;
     }
 
     private function normalize_column_type(string $type): string
