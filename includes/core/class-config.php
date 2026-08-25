@@ -668,7 +668,7 @@ class Kiwi_Config
             'landing_handoff_events' => [
                 'enabled' => false,
                 'dry_run' => true,
-                'retention_days' => 14,
+                'retention_days' => 21,
             ],
             'sms_body_variant_assignments' => [
                 'enabled' => false,

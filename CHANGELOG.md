@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-08-25:
+- [DB Retention Cleanup] Registered `landing_handoff_events` as a second normalized retention source with a default-off, dry-run, 21-day policy and no landing-summary coverage gate. The daily scheduler and bounded worker now dispatch source-keyed jobs in stable registry order while preserving argumentless landing-session worker compatibility; Handoff cleanup reuses the shared frozen-scope, SQLite receipt, corruption-gate, lock, cursor, and archive-before-delete contract.
+
 2026-08-24:
 - [Database Deployments] Corrected the Issue #96 landing-session engagement rename preflight to accept the one verified complete historical `2026-07-20-1` physical column order alongside the canonical contract order. Column metadata remains strict per name, index metadata remains strict, rename snapshots continue to preserve physical order, and arbitrary third orders fail closed. Added regression coverage and clarified the required fresh rehearsal fixture.
 

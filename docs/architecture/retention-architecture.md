@@ -10,6 +10,13 @@ Retention uses one configured SQLite archive root and generation file, with a se
 
 A future retention source must provide a normalized registry contract, a stable primary key, a deterministic archive mapping, source-specific coverage tests, and crash/regression evidence. Aggregator-, country-, flow-, or table-specific behavior must not leak into the shared lock, health, receipt, or delete gates.
 
+The registered runtime sources are deliberately different only at their source boundary:
+
+- `landing_page_sessions` retains 14 complete days by default and requires the existing Main/TK-zone summary coverage gate.
+- `landing_handoff_events` retains 21 complete days by default and has `coverage_gate_required=false`. It neither reads landing sessions nor treats the landing summaries as deletion evidence.
+
+Both sources are disabled and dry-run by default, use a minimum explicit retention age of seven days, and share the same frozen-scope, receipt, lock, corruption, cursor, archive, and delete contracts below.
+
 ## Archive-before-delete contract
 
 For every source and every cleanup chunk:
