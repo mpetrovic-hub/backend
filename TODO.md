@@ -265,3 +265,7 @@ Diese Folgearbeit ist bewusst nicht Bestandteil von Issue `#110`. Die Benachrich
 - Keine Retention-spezifische Direktmail aus dem Archiv-Health-Runner.
 - Keine E-Mail mit vollständigen Rohfehlern, Archivdaten, Credentials oder Secrets.
 - Keine Umsetzung innerhalb von Issue `#110`.
+
+## 14: Indizes neu bewerten und evtl. entfernen
+
+- `wp_kiwi_landing_handoff_events` -- `created_landing_session_event`: plausibler Kandidat für späteres Entfernen, aber nicht als Nebenwirkung von #73. Erst auf Staging mit Summary-Laufzeit und allen Handoff-Abfragen prüfen.
