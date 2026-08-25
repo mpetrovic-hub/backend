@@ -372,22 +372,40 @@ class Kiwi_Plugin
 
     public function run_retention_cleanup_scheduler_daily(): array
     {
-        return $this->run_retention_cleanup('cron');
+        $results = [];
+        $success = true;
+
+        foreach ($this->build_retention_source_registry()->get_source_keys() as $source_key) {
+            $results[$source_key] = $this->run_retention_cleanup_source($source_key, 'cron');
+            $success = $success && !empty($results[$source_key]['success']);
+        }
+
+        return [
+            'success' => $success,
+            'status' => $success ? 'completed' : 'failed',
+            'source_results' => $results,
+        ];
     }
 
-    public function run_retention_cleanup_worker(): array
+    public function run_retention_cleanup_worker(string $source_key = ''): array
     {
-        $result = $this->build_retention_cleanup_service()->run_worker(
-            Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS
-        );
+        $source_key = trim($source_key);
+        if ($source_key === '') {
+            $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
+        }
+
+        $result = $this->build_retention_cleanup_service()->run_worker($source_key);
 
         if (!empty($result['schedule_worker']) || !empty($result['reschedule_worker'])) {
-            $this->schedule_retention_cleanup_worker((int) ($result['reschedule_delay_seconds'] ?? 0));
+            $this->schedule_retention_cleanup_worker(
+                (int) ($result['reschedule_delay_seconds'] ?? 0),
+                $source_key
+            );
         }
 
         $message = !empty($result['success'])
-            ? 'Worker finished for landing_page_sessions with status ' . (string) ($result['status'] ?? 'unknown') . ' and phase ' . (string) ($result['worker_phase'] ?? 'unknown') . '.'
-            : 'Worker failed for landing_page_sessions: ' . (string) ($result['error_message'] ?? 'failed without error detail');
+            ? 'Worker finished for ' . $source_key . ' with status ' . (string) ($result['status'] ?? 'unknown') . ' and phase ' . (string) ($result['worker_phase'] ?? 'unknown') . '.'
+            : 'Worker failed for ' . $source_key . ': ' . (string) ($result['error_message'] ?? 'failed without error detail');
 
         $this->log_retention_cleanup($message);
 
@@ -396,18 +414,26 @@ class Kiwi_Plugin
 
     public function run_retention_cleanup(string $triggered_by = 'manual'): array
     {
-        $result = $this->build_retention_cleanup_service()->run_source(
+        return $this->run_retention_cleanup_source(
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
             $triggered_by
         );
+    }
+
+    private function run_retention_cleanup_source(string $source_key, string $triggered_by): array
+    {
+        $result = $this->build_retention_cleanup_service()->run_source($source_key, $triggered_by);
 
         if (!empty($result['schedule_worker']) || !empty($result['reschedule_worker'])) {
-            $this->schedule_retention_cleanup_worker((int) ($result['reschedule_delay_seconds'] ?? 0));
+            $this->schedule_retention_cleanup_worker(
+                (int) ($result['reschedule_delay_seconds'] ?? 0),
+                $source_key
+            );
         }
 
         $message = !empty($result['success'])
-            ? 'Cleanup scheduler finished for landing_page_sessions with status ' . (string) ($result['status'] ?? 'unknown') . '.'
-            : 'Cleanup scheduler failed for landing_page_sessions: ' . (string) ($result['error_message'] ?? 'failed without error detail');
+            ? 'Cleanup scheduler finished for ' . $source_key . ' with status ' . (string) ($result['status'] ?? 'unknown') . '.'
+            : 'Cleanup scheduler failed for ' . $source_key . ': ' . (string) ($result['error_message'] ?? 'failed without error detail');
 
         $this->log_retention_cleanup($message);
 
@@ -1163,6 +1189,11 @@ TEXT;
         return new Kiwi_Retention_Cleanup_Service();
     }
 
+    protected function build_retention_source_registry(): Kiwi_Retention_Source_Registry
+    {
+        return new Kiwi_Retention_Source_Registry();
+    }
+
     protected function build_operational_event_cleanup_service(): Kiwi_Operational_Event_Cleanup_Service
     {
         return new Kiwi_Operational_Event_Cleanup_Service();
@@ -1186,21 +1217,33 @@ TEXT;
         );
     }
 
-    protected function schedule_retention_cleanup_worker(int $delay_seconds = 0): bool
+    protected function schedule_retention_cleanup_worker(int $delay_seconds = 0, string $source_key = ''): bool
     {
         if (!function_exists('wp_schedule_single_event')) {
             return false;
         }
 
-        if (function_exists('wp_next_scheduled')
-            && wp_next_scheduled(self::RETENTION_CLEANUP_WORKER_HOOK) !== false
-        ) {
-            return false;
+        $source_key = trim($source_key);
+        if ($source_key === '') {
+            $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
+        }
+        $hook_args = [$source_key];
+
+        if (function_exists('wp_next_scheduled')) {
+            if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS
+                && wp_next_scheduled(self::RETENTION_CLEANUP_WORKER_HOOK) !== false
+            ) {
+                return false;
+            }
+            if (wp_next_scheduled(self::RETENTION_CLEANUP_WORKER_HOOK, $hook_args) !== false) {
+                return false;
+            }
         }
 
         return (bool) wp_schedule_single_event(
             time() + max(0, $delay_seconds),
-            self::RETENTION_CLEANUP_WORKER_HOOK
+            self::RETENTION_CLEANUP_WORKER_HOOK,
+            $hook_args
         );
     }
 

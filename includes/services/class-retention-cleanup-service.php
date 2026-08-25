@@ -206,19 +206,31 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
-            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'coverage_gate_running'])) {
+            $coverage_gate_required = ($source['coverage_gate_required'] ?? true) !== false;
+            $coverage_phase = $coverage_gate_required
+                ? 'coverage_gate_running'
+                : 'coverage_gate_not_required';
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => $coverage_phase])) {
                 return $this->finish_run($run_db_id, [
                     'success' => false,
                     'run_id' => $run_id,
                     'status' => 'failed',
                     'error_code' => 'run_audit_update_failed',
-                    'error_message' => 'Retention cleanup could not persist the coverage-gate heartbeat.',
+                    'error_message' => 'Retention cleanup could not persist the coverage-policy heartbeat.',
                 ]);
             }
 
-            $gate_results = $this->coverage_gate->check_landing_page_sessions($source, $cutoff_value);
+            $gate_results = $coverage_gate_required
+                ? $this->coverage_gate->check_landing_page_sessions($source, $cutoff_value)
+                : [
+                    'status' => 'not_required',
+                    'requested_cutoff_value' => $cutoff_value,
+                    'effective_cutoff_value' => $cutoff_value,
+                ];
             $gate_status = (string) ($gate_results['status'] ?? 'failed');
-            $effective_cutoff_value = $this->resolve_effective_cutoff_value($gate_results, $cutoff_value);
+            $effective_cutoff_value = $coverage_gate_required
+                ? $this->resolve_effective_cutoff_value($gate_results, $cutoff_value)
+                : $cutoff_value;
             $effective_cutoff_for_readout = $effective_cutoff_value !== '' ? $effective_cutoff_value : $cutoff_value;
             $effective_eligible_rows = $effective_cutoff_for_readout === $cutoff_value
                 ? $eligible_rows
@@ -272,7 +284,9 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
-            if (!$this->gate_status_allows_cleanup($gate_status) || $effective_cutoff_value === '') {
+            if ($coverage_gate_required
+                && (!$this->gate_status_allows_cleanup($gate_status) || $effective_cutoff_value === '')
+            ) {
                 $effective_cutoff_value = $cutoff_value;
                 $effective_eligible_rows = $eligible_rows;
                 if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_before_running'])) {
