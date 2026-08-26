@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-08-26:
+- [Operational Events] Added source-correlated `retention_cleanup_skipped` incidents for real, durably audited `coverage_gate_failed` Session cleanup runs. Events carry bounded diagnostics already produced by the gate, repeat per later affected run, and resolve once after a real persisted completion; disabled, lock-active, Dry-Run, and no-gate Handoff paths remain excluded.
+
 2026-08-25:
 - [DB Retention Cleanup] Registered `landing_handoff_events` as a second normalized retention source with a default-off, dry-run, 21-day policy and no landing-summary coverage gate. The daily scheduler and bounded worker now dispatch source-keyed jobs in stable registry order while preserving argumentless landing-session worker compatibility; Handoff cleanup reuses the shared frozen-scope, SQLite receipt, corruption-gate, lock, cursor, and archive-before-delete contract.
 

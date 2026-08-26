@@ -34,6 +34,10 @@ The gate intentionally does not run the expensive dimension-level deep compare f
 
 Audit details are stored on `wp_kiwi_retention_cleanup_runs.gate_results_json`, including coverage mode, requested/effective cutoffs, verified date, candidate dates, deep-checked dates, totals-only dates, skipped deep dates, deep-compare reasons, blocked dates, warning dates, and compact per-summary details.
 
+After a real Session run has durably finalized as `skipped` with `error_code=coverage_gate_failed`, Retention writes a best-effort Operational Incident `retention_cleanup_skipped`. The incident correlates by `retention_cleanup_skip_<source_key>`, references the audit run, and summarizes only existing gate output: stable reason/source, gate status, available cutoffs, first blocked date/cause, verified-through date, and at most three blocking error codes. It does not run another coverage or production query. A later new skip run is `repeated`; the first later real, non-Dry-Run `completed`/`completed_noop` audit closes the open incident once. Event persistence failure never weakens or reclassifies the fail-closed skip.
+
+Disabled Retention, lock-active invocations, Dry-Runs, and `landing_handoff_events` do not create this error incident. Handoff's explicit `coverage_gate_required=false` policy cannot synthesize `coverage_gate_failed`.
+
 ## Scheduler and worker
 
 The daily retention cron is only a scheduler. The active recurring hook is `kiwi_retention_cleanup_scheduler_daily`; the legacy unbounded `kiwi_retention_cleanup_daily` hook is cleared during normal scheduling. Each daily pass enumerates `landing_page_sessions` and then `landing_handoff_events` in stable registry order. Every single-event `kiwi_retention_cleanup_worker` job carries its source key so pending jobs are deduplicated per source. An older argumentless worker invocation remains compatible and processes `landing_page_sessions` only.
@@ -232,9 +236,10 @@ When validating retention behavior:
 3. After a scheduler run, confirm at most one source-keyed `kiwi_retention_cleanup_worker` event is pending for each source that has work.
 4. Confirm `wp_kiwi_retention_cleanup_runs` shows `pending` or `partial` worker state with frozen `target_max_primary_key`.
 5. Confirm Sessions use the effective cutoff returned by their coverage gate and Handoffs use the full requested 21-day cutoff with `gate_status=not_required`.
-6. Confirm archive evidence exists before MySQL delete.
-7. Confirm every MySQL delete is preceded by a persisted exact SQLite receipt and that receipt/delete cursors match after completion.
-8. Confirm receipt-safe archive/delete phases remain resumable while non-resumable stale runs are marked `failed`.
-9. Run both explicit archive-health `diagnose` modes, then verify the single external `check` invocation and one-line JSON/process-exit monitoring.
-10. Confirm every non-definitive scheduled check raises or repeats one availability Incident unless a one-shot `archive_lock_active` freshness probe proves that specific lock evidence stale; only a completed non-`ok` PRAGMA sets the corruption block, and no archive is replaced automatically.
-11. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.
+6. For a finalized Session `coverage_gate_failed` run, confirm one matching `retention_cleanup_skipped` raised/repeated event references the audit run and contains bounded gate diagnostics; never trigger a failure deliberately in production.
+7. Confirm archive evidence exists before MySQL delete.
+8. Confirm every MySQL delete is preceded by a persisted exact SQLite receipt and that receipt/delete cursors match after completion.
+9. Confirm receipt-safe archive/delete phases remain resumable while non-resumable stale runs are marked `failed`.
+10. Run both explicit archive-health `diagnose` modes, then verify the single external `check` invocation and one-line JSON/process-exit monitoring.
+11. Confirm every non-definitive scheduled check raises or repeats one availability Incident unless a one-shot `archive_lock_active` freshness probe proves that specific lock evidence stale; only a completed non-`ok` PRAGMA sets the corruption block, and no archive is replaced automatically.
+12. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.

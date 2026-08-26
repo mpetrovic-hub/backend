@@ -66,6 +66,10 @@ Retention stale detection writes `event_type=retention_cleanup_timeout`, `area=r
 
 A recovery requires a real non-dry retention run with a persisted final audit state and `completed`/`completed_noop`. Disabled, skipped, pending, partial, rescheduled, scheduler-start, and dry-run results do not resolve the incident.
 
+A real Session cleanup that finalizes as `skipped` with `error_code=coverage_gate_failed` also writes `event_type=retention_cleanup_skipped`, `area=retention`, and `severity=error`. Its correlation is `retention_cleanup_skip_<source_key>` and remains separate from `retention_<source_key>` timeout incidents. The event references the finalized cleanup run and includes `reason_code`, `source_key`, gate status, valid cutoffs when available, the first blocked date/cause, verified-through date, and at most three blocking error codes. These values come from the already computed gate result; the producer performs no extra production query for message enrichment.
+
+The first confirmed gate skip is `raised`; later new run IDs for the same source are `repeated`. A real persisted `completed`/`completed_noop` run writes the one `resolved` transition if that skip correlation is open. Event persistence is best effort and never changes a safe Retention skip into a technical cleanup failure. Failed final audit persistence creates no skip incident. Disabled, lock-active, dry-run, and `coverage_gate_required=false` Handoff paths create no skip error event.
+
 ## Smoke validation
 
 1. Write a test failure with a unique correlation and idempotency key through `Kiwi_Operational_Event_Service`.
@@ -74,5 +78,6 @@ A recovery requires a real non-dry retention run with a persisted final audit st
 4. Confirm `get_open_incidents()` no longer returns the correlation.
 5. Include a long raw error and structured credential-like keys; confirm limits and `[redacted]` values while an allowed test MSISDN remains.
 6. Insert an old disposable test row and run the cleanup service; confirm only rows older than the cutoff are removed.
+7. In a safe test environment, simulate two finalized Session `coverage_gate_failed` runs and one qualified success; confirm `raised`, `repeated`, and one `resolved` under the same skip correlation. Confirm disabled, lock-active, Dry-Run, and Handoff paths write no skip error event.
 
 Do not use real credentials, tokens, raw subscriber data, or production-impacting retention changes in a smoke test.

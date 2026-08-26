@@ -1690,6 +1690,22 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
 }
 
+class Kiwi_Test_Final_Gate_Skip_Audit_Failure_Repository extends Kiwi_Test_Retention_Cleanup_Run_Repository
+{
+    public function update_run(int $id, array $data): bool
+    {
+        if (($data['status'] ?? '') === 'skipped'
+            && ($data['error_code'] ?? '') === 'coverage_gate_failed'
+        ) {
+            $this->updates[] = ['id' => $id, 'data' => $data];
+
+            return false;
+        }
+
+        return parent::update_run($id, $data);
+    }
+}
+
 class Kiwi_Test_Retention_Table_Growth_Snapshot_Repository extends Kiwi_Retention_Table_Growth_Snapshot_Repository
 {
     public $snapshots = [];
@@ -13599,6 +13615,280 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks active deletes for non-acce
     kiwi_assert_same([], $archive->calls, 'Expected failed coverage gate not to archive rows.');
     kiwi_assert_same(['count'], $service->events, 'Expected failed coverage gate not to delete rows.');
 
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service records coverage-gate skip lifecycle with compact diagnostics', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $gate = new Kiwi_Test_Retention_Coverage_Gate([
+        'status' => 'failed',
+        'requested_cutoff_value' => '2026-03-18 00:00:00',
+        'effective_cutoff_value' => '',
+        'verified_until_date' => '2026-03-15',
+        'blocked_dates' => ['2026-03-16', '2026-03-17'],
+        'blocking_errors' => [
+            'main_summary_query_failed',
+            'tkzone_summary_query_failed',
+            'third_gate_error',
+            'fourth_gate_error',
+        ],
+        'main_summary' => [
+            'details' => [[
+                'metric_date' => '2026-03-16',
+                'blockers' => [[
+                    'metric' => 'page_loaded_sessions',
+                    'type' => 'hard_metric_diff',
+                ]],
+            ]],
+        ],
+        'tkzone_summary' => ['details' => []],
+    ]);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate,
+        new Kiwi_Operational_Event_Service($events)
+    );
+    $service->eligible_rows = 5;
+
+    $first = $service->run_source('landing_page_sessions', 'manual');
+    $second = $service->run_source('landing_page_sessions', 'manual');
+    $failure_rows = array_values($events->rows);
+    $first_context = json_decode((string) ($failure_rows[0]['context_json'] ?? ''), true);
+
+    kiwi_assert_same('skipped', $first['status'] ?? '', 'Expected the first gate failure to remain a safe skip.');
+    kiwi_assert_same('skipped', $second['status'] ?? '', 'Expected the repeated gate failure to remain a safe skip.');
+    kiwi_assert_same(['raised', 'repeated'], array_column($failure_rows, 'lifecycle_action'), 'Expected first and later source skips to share one incident lifecycle.');
+    kiwi_assert_same(['retention_cleanup_skipped', 'retention_cleanup_skipped'], array_column($failure_rows, 'event_type'), 'Expected the normalized skip event type.');
+    kiwi_assert_same(['retention_cleanup_skip_landing_page_sessions', 'retention_cleanup_skip_landing_page_sessions'], array_column($failure_rows, 'correlation_key'), 'Expected one stable skip correlation per retention source.');
+    kiwi_assert_same('retention_cleanup_run', $failure_rows[0]['reference_type'] ?? '', 'Expected the skip event to reference its audit run.');
+    kiwi_assert_same($first['run_id'] ?? '', $failure_rows[0]['reference_id'] ?? '', 'Expected the first skip event reference to match its audit run ID.');
+    kiwi_assert_same('retention_coverage_gate_failed_' . ($first['run_id'] ?? ''), $failure_rows[0]['idempotency_key'] ?? '', 'Expected skip idempotency to be scoped to the audit run.');
+    kiwi_assert_same('coverage_gate_failed', $first_context['reason_code'] ?? '', 'Expected a stable structured reason code.');
+    kiwi_assert_same('landing_page_sessions', $first_context['source_key'] ?? '', 'Expected source identity in compact diagnostics.');
+    kiwi_assert_same('2026-03-16', $first_context['first_blocked_date'] ?? '', 'Expected the first blocked date from existing gate output.');
+    kiwi_assert_same('hard_metric_diff:page_loaded_sessions', $first_context['first_blocking_cause'] ?? '', 'Expected the first date-specific blocker to win over fallback errors.');
+    kiwi_assert_same(3, count($first_context['blocking_errors'] ?? []), 'Expected blocking errors to be bounded to three codes.');
+    kiwi_assert_contains('2026-03-16', $failure_rows[0]['message'] ?? '', 'Expected the readable message to name the first blocked date.');
+    kiwi_assert_contains('hard_metric_diff:page_loaded_sessions', $failure_rows[0]['message'] ?? '', 'Expected the readable message to name the first blocking cause.');
+
+    $gate->result = [
+        'status' => 'passed',
+        'requested_cutoff_value' => '2026-03-18 00:00:00',
+        'effective_cutoff_value' => '2026-03-18 00:00:00',
+    ];
+    $service->eligible_rows = 0;
+    $recovery = $service->run_source('landing_page_sessions', 'cron');
+    $service->run_source('landing_page_sessions', 'cron');
+    $lifecycle_rows = array_values($events->rows);
+
+    kiwi_assert_same('completed_noop', $recovery['worker_phase'] ?? '', 'Expected a real completed-noop run to qualify as recovery.');
+    kiwi_assert_same(['raised', 'repeated', 'resolved'], array_column($lifecycle_rows, 'lifecycle_action'), 'Expected one recovery and no routine success event after resolution.');
+    kiwi_assert_same('retention_cleanup_skipped', $lifecycle_rows[2]['event_type'] ?? '', 'Expected recovery to retain the skip event type.');
+    kiwi_assert_same($recovery['run_id'] ?? '', $lifecycle_rows[2]['reference_id'] ?? '', 'Expected recovery to reference the successful audit run.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves a skip incident after completed archive and delete work', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 14],
+        ],
+    ];
+
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $event_service->record_failure([
+        'area' => 'retention',
+        'severity' => 'error',
+        'event_type' => 'retention_cleanup_skipped',
+        'correlation_key' => 'retention_cleanup_skip_landing_page_sessions',
+        'idempotency_key' => 'retention_coverage_gate_failed_prior-run',
+        'reference_type' => 'retention_cleanup_run',
+        'reference_id' => 'prior-run',
+        'message' => 'Earlier coverage-gate skip.',
+    ]);
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 1,
+        'archive_inserted_rows' => 1,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [1],
+        'last_primary_key' => 1,
+        'has_more' => false,
+        'quick_check' => 'ok',
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate([
+            'status' => 'passed',
+            'effective_cutoff_value' => '2026-03-18 00:00:00',
+        ]),
+        $event_service
+    );
+    $service->eligible_rows = 1;
+    $service->target_max_primary_key = 1;
+    $service->delete_result = ['deleted_rows' => 1, 'delete_batches' => 1];
+
+    $scheduled = $service->run_source('landing_page_sessions', 'cron');
+    $completed = $service->run_worker('landing_page_sessions');
+    $event_rows = array_values($events->rows);
+
+    kiwi_assert_same('pending', $scheduled['status'] ?? '', 'Expected a real row to enter the archive worker.');
+    kiwi_assert_same('completed', $completed['status'] ?? '', 'Expected verified archive/delete work to qualify for recovery.');
+    kiwi_assert_same(['raised', 'resolved'], array_column($event_rows, 'lifecycle_action'), 'Expected completed worker recovery to resolve the open skip incident once.');
+    kiwi_assert_same($completed['run_id'] ?? '', $event_rows[1]['reference_id'] ?? '', 'Expected completed recovery to reference the successful run.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service requires final skip audit persistence before incident logging', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 14],
+        ],
+    ];
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Final_Gate_Skip_Audit_Failure_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed', 'blocking_errors' => ['synthetic_gate_error']]),
+        new Kiwi_Operational_Event_Service($events)
+    );
+    $service->eligible_rows = 1;
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same(false, $result['success'] ?? true, 'Expected failed final audit persistence to be surfaced.');
+    kiwi_assert_same('run_audit_update_failed', $result['error_code'] ?? '', 'Expected the audit persistence failure to remain authoritative.');
+    kiwi_assert_same([], $events->rows, 'Expected no confirmed skip incident without a persisted final audit.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service keeps a safe skip successful when event persistence fails', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 14],
+        ],
+    ];
+    $events = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $events->fail_next_insert = true;
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed', 'blocking_errors' => ['synthetic_gate_error']]),
+        new Kiwi_Operational_Event_Service($events)
+    );
+    $service->eligible_rows = 1;
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same(true, $result['success'] ?? false, 'Expected event persistence to remain best effort.');
+    kiwi_assert_same('skipped', $result['status'] ?? '', 'Expected the fail-closed retention skip to remain successful.');
+    kiwi_assert_same('coverage_gate_failed', $result['error_code'] ?? '', 'Expected the safe skip reason to remain unchanged.');
+    kiwi_assert_same([], $events->rows, 'Expected the synthetic event persistence failure not to create a row.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service excludes disabled dry-run and lock skips from error incidents', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed', 'blocking_errors' => ['synthetic_gate_error']]);
+
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => false, 'dry_run' => true, 'retention_days' => 14],
+        ],
+    ];
+    $disabled = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(), new Kiwi_Retention_Source_Registry(), new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(), new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate, $event_service
+    );
+    $disabled->run_source('landing_page_sessions', 'manual');
+
+    $GLOBALS['kiwi_test_options']['kiwi_retention_settings']['landing_page_sessions'] = [
+        'enabled' => true, 'dry_run' => true, 'retention_days' => 14,
+    ];
+    $dry_run = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(), new Kiwi_Retention_Source_Registry(), new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(), new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate, $event_service
+    );
+    $dry_run->run_source('landing_page_sessions', 'manual');
+
+    $GLOBALS['kiwi_test_options']['kiwi_retention_settings']['landing_page_sessions'] = [
+        'enabled' => true, 'dry_run' => false, 'retention_days' => 14,
+    ];
+    $GLOBALS['kiwi_test_transients']['kiwi_retention_cleanup_lock_landing_page_sessions'] = '1';
+    $locked = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(), new Kiwi_Retention_Source_Registry(), new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(), new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate, $event_service
+    );
+    $locked->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same([], $events->rows, 'Expected harmless skip paths not to create coverage-gate error incidents.');
+
+    $GLOBALS['kiwi_test_transients'] = [];
     $wpdb = $previous_wpdb;
 });
 
