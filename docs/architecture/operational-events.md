@@ -60,6 +60,12 @@ The first producer is retention cleanup:
 - all stale runs for the same retention source share a correlation;
 - the specific audit run is referenced as `retention_cleanup_run`;
 - only a real non-dry-run `completed`/`completed_noop` result whose final audit update persisted can resolve the incident.
+- each real `coverage_gate_failed` safety skip writes one idempotent `retention_cleanup_skipped` event only after its final `skipped` audit state persisted;
+- coverage-gate skip incidents correlate separately as `retention_cleanup_skip_<source_key>` and carry only compact diagnostics already returned by the gate;
+- the first skip raises the incident, later source runs repeat it, and a real persisted `completed`/`completed_noop` run resolves it once;
+- disabled, lock-active, dry-run, and sources whose coverage policy is `not_required` do not produce this error incident.
+
+The timeout and coverage-gate skip correlations are intentionally independent. A success may resolve both open incidents, but neither failure type changes the lifecycle or identity of the other.
 
 ## Data safety
 
