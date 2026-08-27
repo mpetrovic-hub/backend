@@ -105,9 +105,16 @@ function delete_transient($key): bool
     return true;
 }
 
-function wp_next_scheduled($hook)
+function kiwi_test_cron_event_key($hook, array $args = []): string
 {
-    return $GLOBALS['kiwi_test_next_scheduled'][(string) $hook] ?? false;
+    return (string) $hook . (empty($args) ? '' : '|' . md5(serialize($args)));
+}
+
+function wp_next_scheduled($hook, $args = [])
+{
+    $args = is_array($args) ? $args : [];
+
+    return $GLOBALS['kiwi_test_next_scheduled'][kiwi_test_cron_event_key($hook, $args)] ?? false;
 }
 
 function wp_schedule_event($timestamp, $recurrence, $hook): bool
@@ -123,15 +130,17 @@ function wp_schedule_event($timestamp, $recurrence, $hook): bool
     return true;
 }
 
-function wp_schedule_single_event($timestamp, $hook): bool
+function wp_schedule_single_event($timestamp, $hook, $args = []): bool
 {
+    $args = is_array($args) ? $args : [];
     $event = [
         'timestamp' => (int) $timestamp,
         'recurrence' => 'single',
         'hook' => (string) $hook,
+        'args' => $args,
     ];
     $GLOBALS['kiwi_test_cron_events'][] = $event;
-    $GLOBALS['kiwi_test_next_scheduled'][(string) $hook] = (int) $timestamp;
+    $GLOBALS['kiwi_test_next_scheduled'][kiwi_test_cron_event_key($hook, $args)] = (int) $timestamp;
 
     return true;
 }
@@ -1681,6 +1690,22 @@ class Kiwi_Test_Retention_Cleanup_Run_Repository extends Kiwi_Retention_Cleanup_
 
 }
 
+class Kiwi_Test_Final_Gate_Skip_Audit_Failure_Repository extends Kiwi_Test_Retention_Cleanup_Run_Repository
+{
+    public function update_run(int $id, array $data): bool
+    {
+        if (($data['status'] ?? '') === 'skipped'
+            && ($data['error_code'] ?? '') === 'coverage_gate_failed'
+        ) {
+            $this->updates[] = ['id' => $id, 'data' => $data];
+
+            return false;
+        }
+
+        return parent::update_run($id, $data);
+    }
+}
+
 class Kiwi_Test_Retention_Table_Growth_Snapshot_Repository extends Kiwi_Retention_Table_Growth_Snapshot_Repository
 {
     public $snapshots = [];
@@ -2036,6 +2061,46 @@ class Kiwi_Test_Retention_Coverage_Gate extends Kiwi_Retention_Coverage_Gate
     }
 }
 
+class Kiwi_Test_Retention_Cleanup_Dispatch_Service extends Kiwi_Retention_Cleanup_Service
+{
+    public $run_source_calls = [];
+    public $run_worker_calls = [];
+    public $source_results = [];
+    public $worker_results = [];
+
+    public function __construct()
+    {
+    }
+
+    public function run_source(string $source_key, string $triggered_by = 'cron'): array
+    {
+        $this->run_source_calls[] = [
+            'source_key' => $source_key,
+            'triggered_by' => $triggered_by,
+        ];
+
+        return $this->source_results[$source_key] ?? [
+            'success' => true,
+            'status' => 'pending',
+            'schedule_worker' => true,
+            'reschedule_delay_seconds' => 0,
+        ];
+    }
+
+    public function run_worker(string $source_key): array
+    {
+        $this->run_worker_calls[] = $source_key;
+
+        return $this->worker_results[$source_key] ?? [
+            'success' => true,
+            'status' => 'partial',
+            'worker_phase' => 'archive_partial',
+            'schedule_worker' => true,
+            'reschedule_delay_seconds' => 60,
+        ];
+    }
+}
+
 class Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator
     extends Kiwi_Retention_Corruption_Safety_Gate_Coordinator
 {
@@ -2054,6 +2119,33 @@ class Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator
                 ? 'archive_corruption_write_blocked'
                 : ($blocked === null ? 'archive_gate_path_invalid' : 'corruption_gate_clear'),
             'write_blocked' => $blocked === true,
+            'incident_open' => false,
+            'incident_action' => 'none',
+        ];
+    }
+}
+
+class Kiwi_Test_Sequenced_Retention_Corruption_Safety_Gate_Coordinator
+    extends Kiwi_Retention_Corruption_Safety_Gate_Coordinator
+{
+    public $inspection_count = 0;
+    public $block_on_inspection = 0;
+
+    public function __construct()
+    {
+    }
+
+    public function inspect(string $archive_path, bool $reconcile = false): array
+    {
+        $this->inspection_count++;
+        $blocked = $this->inspection_count === $this->block_on_inspection;
+
+        return [
+            'allowed' => !$blocked,
+            'reason_code' => $blocked
+                ? 'archive_corruption_write_blocked'
+                : 'corruption_gate_clear',
+            'write_blocked' => $blocked,
             'incident_open' => false,
             'incident_action' => 'none',
         ];
@@ -12046,6 +12138,94 @@ kiwi_run_test('Kiwi_Config exposes final retention defaults for landing page ses
     kiwi_assert_same(300, $config->get_retention_worker_lock_ttl_seconds(), 'Expected worker lock TTL to default to 300 seconds.');
     kiwi_assert_true(isset($all_settings['landing_session_engagements']), 'Expected the shared engagement retention key to be generic.');
     kiwi_assert_same(false, isset($all_settings['premium_sms_landing_engagements']), 'Expected the old Premium-SMS-specific retention key to be removed.');
+    kiwi_assert_same(
+        ['enabled' => false, 'dry_run' => true, 'retention_days' => 21],
+        $config->get_retention_source_settings('landing_handoff_events'),
+        'Expected handoff retention to stay default-off and dry-run with twenty-one complete days.'
+    );
+});
+
+kiwi_run_test('Kiwi_Retention_Source_Registry exposes stable session and handoff contracts', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $registry = new Kiwi_Retention_Source_Registry();
+    $sessions = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS);
+    $handoffs = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS);
+
+    kiwi_assert_same(
+        [
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
+        ],
+        $registry->get_source_keys(),
+        'Expected registered retention sources to keep their stable scheduler order.'
+    );
+    kiwi_assert_same(true, $sessions['coverage_gate_required'] ?? null, 'Expected landing sessions to remain coverage-gated.');
+    kiwi_assert_same(false, $handoffs['coverage_gate_required'] ?? null, 'Expected handoff retention to opt out of summary coverage.');
+    kiwi_assert_same('wp_kiwi_landing_handoff_events', $handoffs['source_table'] ?? '', 'Expected the strict handoff source table.');
+    kiwi_assert_same('id', $handoffs['primary_key'] ?? '', 'Expected the handoff primary key.');
+    kiwi_assert_same('created_at', $handoffs['cutoff_column'] ?? '', 'Expected the handoff cutoff column.');
+    kiwi_assert_same(21, $handoffs['retention_days_default'] ?? 0, 'Expected the handoff twenty-one-day default.');
+    kiwi_assert_same(7, $handoffs['retention_days_min'] ?? 0, 'Expected the handoff seven-day minimum.');
+    kiwi_assert_same(
+        [
+            'id' => 'INTEGER',
+            'created_at' => 'TEXT',
+            'landing_key' => 'TEXT',
+            'service_key' => 'TEXT',
+            'provider_key' => 'TEXT',
+            'flow_key' => 'TEXT',
+            'pid' => 'TEXT',
+            'click_id' => 'TEXT',
+            'tksource' => 'TEXT',
+            'tkzone' => 'TEXT',
+            'session_token' => 'TEXT',
+            'handoff_id' => 'TEXT',
+            'event_type' => 'TEXT',
+            'href_scheme' => 'TEXT',
+            'sms_recipient' => 'TEXT',
+            'sms_body_present' => 'INTEGER',
+            'sms_body_has_transaction' => 'INTEGER',
+            'elapsed_ms' => 'INTEGER',
+            'visibility_state' => 'TEXT',
+            'ua_ch_supported' => 'INTEGER',
+            'ua_ch_mobile' => 'INTEGER',
+            'ua_ch_platform' => 'TEXT',
+            'ua_ch_platform_version' => 'TEXT',
+            'ua_ch_model' => 'TEXT',
+            'ua_ch_brands' => 'TEXT',
+            'ua_ch_full_version_list' => 'TEXT',
+            'user_agent' => 'TEXT',
+            'raw_context' => 'TEXT',
+        ],
+        $handoffs['archive_columns'] ?? [],
+        'Expected every current handoff source column to have an exact archive mapping.'
+    );
+    $repository_source = file_get_contents(
+        __DIR__ . '/../includes/repositories/class-landing-handoff-event-repository.php'
+    );
+    $schema_match = [];
+    $schema_columns = [];
+    if (is_string($repository_source)
+        && preg_match('/CREATE TABLE\s+\{\$table_name\}\s*\((.*?)\s+PRIMARY KEY \(id\),/s', $repository_source, $schema_match) === 1
+    ) {
+        $column_matches = [];
+        preg_match_all(
+            '/^\s*([a-z][a-z0-9_]*)\s+(?:BIGINT|DATETIME|VARCHAR|TINYINT|INT|TEXT|LONGTEXT)\b/m',
+            (string) ($schema_match[1] ?? ''),
+            $column_matches
+        );
+        $schema_columns = $column_matches[1] ?? [];
+    }
+    kiwi_assert_same(
+        $schema_columns,
+        array_keys($handoffs['archive_columns'] ?? []),
+        'Expected the handoff archive mapping to stay complete and ordered with the repository schema.'
+    );
+
+    $wpdb = $previous_wpdb;
 });
 
 kiwi_run_test('Kiwi_Config exposes safe landing-session raw-context compaction defaults and clamps age', function (): void {
@@ -12353,6 +12533,56 @@ kiwi_run_test('Kiwi_Plugin schedules the retention cleanup scheduler daily cron 
     kiwi_assert_same('daily', $GLOBALS['kiwi_test_cron_events'][0]['recurrence'] ?? '', 'Expected retention cleanup to use a daily cron recurrence.');
 });
 
+kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worker hooks in registry order', function (): void {
+    $GLOBALS['kiwi_test_cron_events'] = [];
+    $GLOBALS['kiwi_test_next_scheduled'] = [];
+    $service = new Kiwi_Test_Retention_Cleanup_Dispatch_Service();
+    $plugin = new Kiwi_Test_Plugin_Retention_Cleanup($service);
+    $reflection = new ReflectionClass(Kiwi_Plugin::class);
+    $worker_hook = (string) $reflection->getConstant('RETENTION_CLEANUP_WORKER_HOOK');
+
+    $first = $plugin->run_retention_cleanup_scheduler_daily();
+    $plugin->run_retention_cleanup_scheduler_daily();
+    $plugin->run_retention_cleanup_worker();
+    $plugin->run_retention_cleanup_worker(Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS);
+
+    kiwi_assert_same(
+        [
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
+        ],
+        array_keys($first['source_results'] ?? []),
+        'Expected scheduler results in stable registry order.'
+    );
+    kiwi_assert_same(
+        [
+            ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
+            ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
+            ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
+            ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
+        ],
+        $service->run_source_calls,
+        'Expected every daily scheduler pass to dispatch each registered source in order.'
+    );
+    kiwi_assert_same(
+        ['landing_page_sessions', 'landing_handoff_events'],
+        $service->run_worker_calls,
+        'Expected an argumentless worker to remain compatible with landing sessions and an explicit handoff worker to stay isolated.'
+    );
+    $worker_events = array_values(array_filter(
+        $GLOBALS['kiwi_test_cron_events'],
+        static function (array $event) use ($worker_hook): bool {
+            return ($event['hook'] ?? '') === $worker_hook;
+        }
+    ));
+    kiwi_assert_same(2, count($worker_events), 'Expected source-key deduplication to keep exactly one pending worker per source.');
+    kiwi_assert_same(
+        [['landing_page_sessions'], ['landing_handoff_events']],
+        array_column($worker_events, 'args'),
+        'Expected every worker event to carry its source key.'
+    );
+});
+
 kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service fails closed after archive finalization errors', function (): void {
     $service = new Kiwi_Test_Retention_Sqlite_Archive_Failure_Service();
     $result = $service->apply_archive_failure_for_test(
@@ -12442,6 +12672,75 @@ kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service writes archived rows and ba
 
         $ids = $service->fetch_archived_primary_key_batch($source, $archive_db_path, 'archive-test-batch', 0, 10);
         kiwi_assert_same([101, 103], $ids, 'Expected archived primary keys to be readable in source order.');
+    } finally {
+        $pdo = null;
+        $wpdb = $previous_wpdb;
+        kiwi_remove_directory($archive_root);
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Sqlite_Archive_Service keeps handoff cutoff and table boundaries strict', function (): void {
+    if (!class_exists('PDO') || !in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        return;
+    }
+
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Wpdb_Retention_Sqlite_Archive();
+    $wpdb->rows = [
+        ['id' => 301, 'created_at' => '2026-03-10 23:59:59', 'landing_key' => 'lp-old', 'session_token' => 'session-old'],
+        ['id' => 302, 'created_at' => '2026-03-11 00:00:00', 'landing_key' => 'lp-edge', 'session_token' => 'session-edge'],
+        ['id' => 303, 'created_at' => '2026-03-11 00:00:01', 'landing_key' => 'lp-new', 'session_token' => 'session-new'],
+    ];
+    $archive_root = kiwi_create_temp_directory('kiwi_handoff_retention_archive_test');
+    $service = new Kiwi_Retention_Sqlite_Archive_Service(new Kiwi_Test_Retention_Sqlite_Archive_Config($archive_root));
+    $source = (new Kiwi_Retention_Source_Registry())->get('landing_handoff_events');
+    $pdo = null;
+
+    try {
+        $result = $service->archive_eligible_rows($source, '2026-03-11 00:00:00', 'handoff-archive-test', 1);
+        $archive_db_path = (string) ($result['archive_db_path'] ?? '');
+        $queries = array_column($wpdb->prepared_statements, 'query');
+
+        kiwi_assert_same(true, $result['success'] ?? false, 'Expected handoff SQLite archive to succeed.');
+        kiwi_assert_same(1, $result['archived_rows'] ?? 0, 'Expected only the handoff row strictly before the cutoff.');
+        kiwi_assert_same(
+            'deferred_to_external_health_runner',
+            $result['archive_integrity_check'] ?? '',
+            'Expected handoff archive-wide health checks to stay outside runtime.'
+        );
+        kiwi_assert_true(
+            count(array_filter($queries, static function (string $query): bool {
+                return strpos($query, 'FROM wp_kiwi_landing_handoff_events') !== false;
+            })) > 0,
+            'Expected handoff archive reads to stay inside the handoff source table.'
+        );
+        kiwi_assert_same(
+            0,
+            count(array_filter($queries, static function (string $query): bool {
+                return strpos($query, 'wp_kiwi_landing_page_sessions') !== false;
+            })),
+            'Expected handoff archive reads never to touch landing sessions.'
+        );
+
+        $pdo = new PDO('sqlite:' . $archive_db_path);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $archive_table = '"' . str_replace('"', '""', (string) ($source['source_table'] ?? '')) . '"';
+        $column_rows = $pdo->query('PRAGMA table_info(' . $archive_table . ')')->fetchAll(PDO::FETCH_ASSOC);
+        kiwi_assert_same(
+            array_merge(
+                ['_archive_batch_id', '_archived_at', '_source_pk'],
+                array_keys($source['archive_columns'] ?? [])
+            ),
+            array_column($column_rows, 'name'),
+            'Expected the handoff archive table to contain exactly the shared evidence and full source mapping.'
+        );
+        kiwi_assert_same(
+            [301],
+            $service->fetch_archived_primary_key_batch($source, $archive_db_path, 'handoff-archive-test', 0, 10),
+            'Expected the handoff receipt to contain only the strict pre-cutoff row.'
+        );
     } finally {
         $pdo = null;
         $wpdb = $previous_wpdb;
@@ -12877,6 +13176,10 @@ kiwi_run_test('Kiwi_Retention_Coverage_Gate requires current TK-zone PID-set cov
 });
 
 kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when open-run lookup errors', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $runs->open_run_lookup_failure = true;
     $service = new Kiwi_Test_Retention_Cleanup_Service(
@@ -12894,6 +13197,234 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service fails closed when open-run lookup 
     kiwi_assert_same('open_run_lookup_failed', $scheduler['error_code'] ?? '', 'Expected scheduler lookup failure to stop new work.');
     kiwi_assert_same('open_run_lookup_failed', $worker['error_code'] ?? '', 'Expected worker lookup failure to stop archive work.');
     kiwi_assert_same([], $runs->rows, 'Expected no overlapping cleanup run after an ambiguous lookup.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service dry-runs handoff retention without a coverage-gate call', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_handoff_events' => [
+                'enabled' => true,
+                'dry_run' => true,
+                'retention_days' => 1,
+            ],
+        ],
+    ];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 7;
+
+    $result = $service->run_source('landing_handoff_events', 'manual');
+    $run_row = $runs->rows[1] ?? [];
+
+    kiwi_assert_same(true, $result['success'] ?? false, 'Expected handoff dry-run to succeed.');
+    kiwi_assert_same('success', $result['status'] ?? '', 'Expected handoff dry-run to finish without worker work.');
+    kiwi_assert_same('not_required', $result['gate_status'] ?? '', 'Expected an explicit no-coverage policy result.');
+    kiwi_assert_same([], $gate->calls, 'Expected zero landing-session coverage-gate calls for handoff retention.');
+    kiwi_assert_same('2026-03-25 00:00:00', $result['cutoff_value'] ?? '', 'Expected the seven-day minimum to preserve complete calendar days.');
+    kiwi_assert_same(7, $run_row['retention_days_effective'] ?? 0, 'Expected explicit handoff retention below seven days to clamp to seven.');
+    kiwi_assert_same('wp_kiwi_landing_handoff_events', $run_row['source_table'] ?? '', 'Expected the handoff audit to retain its strict source table.');
+    kiwi_assert_same([], $archive->calls, 'Expected handoff dry-run not to use the SQLite archive.');
+    kiwi_assert_same([], $archive->chunk_calls, 'Expected handoff dry-run not to archive a worker chunk.');
+    kiwi_assert_same([], $service->deleted_primary_keys, 'Expected handoff dry-run not to delete MySQL rows.');
+    kiwi_assert_same(['before_cleanup', 'after_cleanup'], array_column($snapshots->snapshots, 'snapshot_phase'), 'Expected handoff dry-run to preserve scope snapshots.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service resumes receipt-backed handoff chunks without touching sessions', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_handoff_events' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 21,
+            ],
+        ],
+    ];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $snapshots = new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->chunks = [
+        [
+            'success' => true,
+            'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+            'archived_rows' => 2,
+            'archive_inserted_rows' => 2,
+            'archive_duplicate_rows' => 0,
+            'archived_primary_keys' => [10, 11],
+            'last_primary_key' => 11,
+            'has_more' => true,
+        ],
+        [
+            'success' => true,
+            'archive_db_path' => '/tmp/kiwi_retention_archive_2027.sqlite',
+            'archived_rows' => 2,
+            'archive_inserted_rows' => 2,
+            'archive_duplicate_rows' => 0,
+            'archived_primary_keys' => [12, 13],
+            'last_primary_key' => 13,
+            'has_more' => false,
+        ],
+    ];
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed']);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        $snapshots,
+        $archive,
+        $gate
+    );
+    $service->eligible_rows = 4;
+    $service->target_max_primary_key = 13;
+    $service->delete_result = ['deleted_rows' => 2, 'delete_batches' => 1];
+
+    try {
+        $scheduled = $service->run_source('landing_handoff_events', 'cron');
+        $first_worker = $service->run_worker('landing_handoff_events');
+        $second_worker = $service->run_worker('landing_handoff_events');
+
+        kiwi_assert_same('pending', $scheduled['status'] ?? '', 'Expected handoff scheduler to create bounded worker state.');
+        kiwi_assert_same('partial', $first_worker['status'] ?? '', 'Expected first handoff chunk to remain resumable.');
+        kiwi_assert_same('completed', $second_worker['status'] ?? '', 'Expected second handoff chunk to complete.');
+        kiwi_assert_same([], $gate->calls, 'Expected no coverage-gate call across handoff scheduler and workers.');
+        kiwi_assert_same([10, 11, 12, 13], $service->deleted_primary_keys, 'Expected only receipt-backed handoff IDs to be deleted across resumes.');
+        kiwi_assert_same(
+            ['wp_kiwi_landing_handoff_events', 'wp_kiwi_landing_handoff_events'],
+            array_map(static function (array $call): string {
+                return (string) ($call['source']['source_table'] ?? '');
+            }, $archive->chunk_calls),
+            'Expected every archived chunk to stay inside the handoff table.'
+        );
+        kiwi_assert_same(11, $archive->chunk_calls[1]['last_primary_key'] ?? 0, 'Expected the second handoff worker to resume at the persisted archive cursor.');
+        kiwi_assert_same(
+            sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite',
+            $archive->chunk_calls[1]['archive_db_path'] ?? '',
+            'Expected handoff resume to reuse the frozen archive generation.'
+        );
+        kiwi_assert_same(13, $runs->rows[1]['archive_last_primary_key'] ?? 0, 'Expected final handoff archive cursor persistence.');
+        kiwi_assert_same(13, $runs->rows[1]['delete_last_primary_key'] ?? 0, 'Expected final handoff delete cursor persistence.');
+    } finally {
+        @unlink(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite.lock');
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service isolates the handoff worker lock by source key', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_handoff_events' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 21],
+        ],
+    ];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed'])
+    );
+    $service->eligible_rows = 2;
+    $service->target_max_primary_key = 2;
+    $service->run_source('landing_handoff_events', 'cron');
+    $GLOBALS['kiwi_test_transients']['kiwi_retention_cleanup_worker_lock_landing_handoff_events'] = '1';
+
+    $result = $service->run_worker('landing_handoff_events');
+
+    kiwi_assert_same('lock_skipped', $result['worker_phase'] ?? '', 'Expected the handoff-specific worker lock to defer only that source.');
+    kiwi_assert_same([], $archive->chunk_calls, 'Expected the locked handoff worker not to archive.');
+    kiwi_assert_same('1', $GLOBALS['kiwi_test_transients']['kiwi_retention_cleanup_worker_lock_landing_handoff_events'] ?? '', 'Expected the handoff lock to remain owned by its current worker.');
+    kiwi_assert_same(false, isset($GLOBALS['kiwi_test_transients']['kiwi_retention_cleanup_worker_lock_landing_page_sessions']), 'Expected no landing-session worker lock leakage.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks a handoff delete when corruption appears after receipt commit', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_handoff_events' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 21],
+        ],
+    ];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 2,
+        'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [21, 22],
+        'last_primary_key' => 22,
+        'has_more' => false,
+    ];
+    $corruption_gate = new Kiwi_Test_Sequenced_Retention_Corruption_Safety_Gate_Coordinator();
+    $corruption_gate->block_on_inspection = 3;
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed']),
+        null,
+        null,
+        $corruption_gate
+    );
+    $service->eligible_rows = 2;
+    $service->target_max_primary_key = 22;
+    $service->delete_result = ['deleted_rows' => 2, 'delete_batches' => 1];
+
+    try {
+        $service->run_source('landing_handoff_events', 'cron');
+        $result = $service->run_worker('landing_handoff_events');
+
+        kiwi_assert_same(3, $corruption_gate->inspection_count, 'Expected the final corruption inspection immediately before the handoff delete.');
+        kiwi_assert_same(1, count($archive->chunk_calls), 'Expected the handoff receipt to commit before the synthetic corruption block.');
+        kiwi_assert_same([], $service->deleted_primary_keys, 'Expected corruption after receipt commit to block every handoff MySQL delete.');
+        kiwi_assert_same('archive_corruption_write_blocked', $result['error_code'] ?? '', 'Expected the shared corruption reason code.');
+        kiwi_assert_same('archive_corruption_blocked', $runs->rows[1]['worker_phase'] ?? '', 'Expected the handoff run to remain safely resumable behind the corruption gate.');
+    } finally {
+        @unlink(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite.lock');
+        $wpdb = $previous_wpdb;
+    }
 });
 
 kiwi_run_test('Kiwi_Retention_Cleanup_Service records disabled landing-page-session runs without archive or delete', function (): void {
@@ -13084,6 +13615,280 @@ kiwi_run_test('Kiwi_Retention_Cleanup_Service blocks active deletes for non-acce
     kiwi_assert_same([], $archive->calls, 'Expected failed coverage gate not to archive rows.');
     kiwi_assert_same(['count'], $service->events, 'Expected failed coverage gate not to delete rows.');
 
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service records coverage-gate skip lifecycle with compact diagnostics', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => [
+                'enabled' => true,
+                'dry_run' => false,
+                'retention_days' => 14,
+            ],
+        ],
+    ];
+
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $gate = new Kiwi_Test_Retention_Coverage_Gate([
+        'status' => 'failed',
+        'requested_cutoff_value' => '2026-03-18 00:00:00',
+        'effective_cutoff_value' => '',
+        'verified_until_date' => '2026-03-15',
+        'blocked_dates' => ['2026-03-16', '2026-03-17'],
+        'blocking_errors' => [
+            'main_summary_query_failed',
+            'tkzone_summary_query_failed',
+            'third_gate_error',
+            'fourth_gate_error',
+        ],
+        'main_summary' => [
+            'details' => [[
+                'metric_date' => '2026-03-16',
+                'blockers' => [[
+                    'metric' => 'page_loaded_sessions',
+                    'type' => 'hard_metric_diff',
+                ]],
+            ]],
+        ],
+        'tkzone_summary' => ['details' => []],
+    ]);
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate,
+        new Kiwi_Operational_Event_Service($events)
+    );
+    $service->eligible_rows = 5;
+
+    $first = $service->run_source('landing_page_sessions', 'manual');
+    $second = $service->run_source('landing_page_sessions', 'manual');
+    $failure_rows = array_values($events->rows);
+    $first_context = json_decode((string) ($failure_rows[0]['context_json'] ?? ''), true);
+
+    kiwi_assert_same('skipped', $first['status'] ?? '', 'Expected the first gate failure to remain a safe skip.');
+    kiwi_assert_same('skipped', $second['status'] ?? '', 'Expected the repeated gate failure to remain a safe skip.');
+    kiwi_assert_same(['raised', 'repeated'], array_column($failure_rows, 'lifecycle_action'), 'Expected first and later source skips to share one incident lifecycle.');
+    kiwi_assert_same(['retention_cleanup_skipped', 'retention_cleanup_skipped'], array_column($failure_rows, 'event_type'), 'Expected the normalized skip event type.');
+    kiwi_assert_same(['retention_cleanup_skip_landing_page_sessions', 'retention_cleanup_skip_landing_page_sessions'], array_column($failure_rows, 'correlation_key'), 'Expected one stable skip correlation per retention source.');
+    kiwi_assert_same('retention_cleanup_run', $failure_rows[0]['reference_type'] ?? '', 'Expected the skip event to reference its audit run.');
+    kiwi_assert_same($first['run_id'] ?? '', $failure_rows[0]['reference_id'] ?? '', 'Expected the first skip event reference to match its audit run ID.');
+    kiwi_assert_same('retention_coverage_gate_failed_' . ($first['run_id'] ?? ''), $failure_rows[0]['idempotency_key'] ?? '', 'Expected skip idempotency to be scoped to the audit run.');
+    kiwi_assert_same('coverage_gate_failed', $first_context['reason_code'] ?? '', 'Expected a stable structured reason code.');
+    kiwi_assert_same('landing_page_sessions', $first_context['source_key'] ?? '', 'Expected source identity in compact diagnostics.');
+    kiwi_assert_same('2026-03-16', $first_context['first_blocked_date'] ?? '', 'Expected the first blocked date from existing gate output.');
+    kiwi_assert_same('hard_metric_diff:page_loaded_sessions', $first_context['first_blocking_cause'] ?? '', 'Expected the first date-specific blocker to win over fallback errors.');
+    kiwi_assert_same(3, count($first_context['blocking_errors'] ?? []), 'Expected blocking errors to be bounded to three codes.');
+    kiwi_assert_contains('2026-03-16', $failure_rows[0]['message'] ?? '', 'Expected the readable message to name the first blocked date.');
+    kiwi_assert_contains('hard_metric_diff:page_loaded_sessions', $failure_rows[0]['message'] ?? '', 'Expected the readable message to name the first blocking cause.');
+
+    $gate->result = [
+        'status' => 'passed',
+        'requested_cutoff_value' => '2026-03-18 00:00:00',
+        'effective_cutoff_value' => '2026-03-18 00:00:00',
+    ];
+    $service->eligible_rows = 0;
+    $recovery = $service->run_source('landing_page_sessions', 'cron');
+    $service->run_source('landing_page_sessions', 'cron');
+    $lifecycle_rows = array_values($events->rows);
+
+    kiwi_assert_same('completed_noop', $recovery['worker_phase'] ?? '', 'Expected a real completed-noop run to qualify as recovery.');
+    kiwi_assert_same(['raised', 'repeated', 'resolved'], array_column($lifecycle_rows, 'lifecycle_action'), 'Expected one recovery and no routine success event after resolution.');
+    kiwi_assert_same('retention_cleanup_skipped', $lifecycle_rows[2]['event_type'] ?? '', 'Expected recovery to retain the skip event type.');
+    kiwi_assert_same($recovery['run_id'] ?? '', $lifecycle_rows[2]['reference_id'] ?? '', 'Expected recovery to reference the successful audit run.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service resolves a skip incident after completed archive and delete work', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 14],
+        ],
+    ];
+
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $event_service->record_failure([
+        'area' => 'retention',
+        'severity' => 'error',
+        'event_type' => 'retention_cleanup_skipped',
+        'correlation_key' => 'retention_cleanup_skip_landing_page_sessions',
+        'idempotency_key' => 'retention_coverage_gate_failed_prior-run',
+        'reference_type' => 'retention_cleanup_run',
+        'reference_id' => 'prior-run',
+        'message' => 'Earlier coverage-gate skip.',
+    ]);
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->chunks[] = [
+        'success' => true,
+        'archive_db_path' => '/tmp/kiwi_retention_archive_2026.sqlite',
+        'archived_rows' => 1,
+        'archive_inserted_rows' => 1,
+        'archive_duplicate_rows' => 0,
+        'archived_primary_keys' => [1],
+        'last_primary_key' => 1,
+        'has_more' => false,
+        'quick_check' => 'ok',
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        $archive,
+        new Kiwi_Test_Retention_Coverage_Gate([
+            'status' => 'passed',
+            'effective_cutoff_value' => '2026-03-18 00:00:00',
+        ]),
+        $event_service
+    );
+    $service->eligible_rows = 1;
+    $service->target_max_primary_key = 1;
+    $service->delete_result = ['deleted_rows' => 1, 'delete_batches' => 1];
+
+    $scheduled = $service->run_source('landing_page_sessions', 'cron');
+    $completed = $service->run_worker('landing_page_sessions');
+    $event_rows = array_values($events->rows);
+
+    kiwi_assert_same('pending', $scheduled['status'] ?? '', 'Expected a real row to enter the archive worker.');
+    kiwi_assert_same('completed', $completed['status'] ?? '', 'Expected verified archive/delete work to qualify for recovery.');
+    kiwi_assert_same(['raised', 'resolved'], array_column($event_rows, 'lifecycle_action'), 'Expected completed worker recovery to resolve the open skip incident once.');
+    kiwi_assert_same($completed['run_id'] ?? '', $event_rows[1]['reference_id'] ?? '', 'Expected completed recovery to reference the successful run.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service requires final skip audit persistence before incident logging', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 14],
+        ],
+    ];
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Final_Gate_Skip_Audit_Failure_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed', 'blocking_errors' => ['synthetic_gate_error']]),
+        new Kiwi_Operational_Event_Service($events)
+    );
+    $service->eligible_rows = 1;
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same(false, $result['success'] ?? true, 'Expected failed final audit persistence to be surfaced.');
+    kiwi_assert_same('run_audit_update_failed', $result['error_code'] ?? '', 'Expected the audit persistence failure to remain authoritative.');
+    kiwi_assert_same([], $events->rows, 'Expected no confirmed skip incident without a persisted final audit.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service keeps a safe skip successful when event persistence fails', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 14],
+        ],
+    ];
+    $events = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $events->fail_next_insert = true;
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(),
+        new Kiwi_Retention_Source_Registry(),
+        new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(),
+        new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed', 'blocking_errors' => ['synthetic_gate_error']]),
+        new Kiwi_Operational_Event_Service($events)
+    );
+    $service->eligible_rows = 1;
+
+    $result = $service->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same(true, $result['success'] ?? false, 'Expected event persistence to remain best effort.');
+    kiwi_assert_same('skipped', $result['status'] ?? '', 'Expected the fail-closed retention skip to remain successful.');
+    kiwi_assert_same('coverage_gate_failed', $result['error_code'] ?? '', 'Expected the safe skip reason to remain unchanged.');
+    kiwi_assert_same([], $events->rows, 'Expected the synthetic event persistence failure not to create a row.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi_Retention_Cleanup_Service excludes disabled dry-run and lock skips from error incidents', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $events = new Kiwi_Test_Operational_Event_Repository();
+    $event_service = new Kiwi_Operational_Event_Service($events);
+    $gate = new Kiwi_Test_Retention_Coverage_Gate(['status' => 'failed', 'blocking_errors' => ['synthetic_gate_error']]);
+
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_deleted_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = [
+        'kiwi_retention_settings' => [
+            'landing_page_sessions' => ['enabled' => false, 'dry_run' => true, 'retention_days' => 14],
+        ],
+    ];
+    $disabled = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(), new Kiwi_Retention_Source_Registry(), new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(), new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate, $event_service
+    );
+    $disabled->run_source('landing_page_sessions', 'manual');
+
+    $GLOBALS['kiwi_test_options']['kiwi_retention_settings']['landing_page_sessions'] = [
+        'enabled' => true, 'dry_run' => true, 'retention_days' => 14,
+    ];
+    $dry_run = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(), new Kiwi_Retention_Source_Registry(), new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(), new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate, $event_service
+    );
+    $dry_run->run_source('landing_page_sessions', 'manual');
+
+    $GLOBALS['kiwi_test_options']['kiwi_retention_settings']['landing_page_sessions'] = [
+        'enabled' => true, 'dry_run' => false, 'retention_days' => 14,
+    ];
+    $GLOBALS['kiwi_test_transients']['kiwi_retention_cleanup_lock_landing_page_sessions'] = '1';
+    $locked = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(), new Kiwi_Retention_Source_Registry(), new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(), new Kiwi_Test_Retention_Sqlite_Archive_Service(),
+        $gate, $event_service
+    );
+    $locked->run_source('landing_page_sessions', 'manual');
+
+    kiwi_assert_same([], $events->rows, 'Expected harmless skip paths not to create coverage-gate error incidents.');
+
+    $GLOBALS['kiwi_test_transients'] = [];
     $wpdb = $previous_wpdb;
 });
 

@@ -206,19 +206,31 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
-            if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'coverage_gate_running'])) {
+            $coverage_gate_required = ($source['coverage_gate_required'] ?? true) !== false;
+            $coverage_phase = $coverage_gate_required
+                ? 'coverage_gate_running'
+                : 'coverage_gate_not_required';
+            if (!$this->update_run_progress($run_db_id, ['worker_phase' => $coverage_phase])) {
                 return $this->finish_run($run_db_id, [
                     'success' => false,
                     'run_id' => $run_id,
                     'status' => 'failed',
                     'error_code' => 'run_audit_update_failed',
-                    'error_message' => 'Retention cleanup could not persist the coverage-gate heartbeat.',
+                    'error_message' => 'Retention cleanup could not persist the coverage-policy heartbeat.',
                 ]);
             }
 
-            $gate_results = $this->coverage_gate->check_landing_page_sessions($source, $cutoff_value);
+            $gate_results = $coverage_gate_required
+                ? $this->coverage_gate->check_landing_page_sessions($source, $cutoff_value)
+                : [
+                    'status' => 'not_required',
+                    'requested_cutoff_value' => $cutoff_value,
+                    'effective_cutoff_value' => $cutoff_value,
+                ];
             $gate_status = (string) ($gate_results['status'] ?? 'failed');
-            $effective_cutoff_value = $this->resolve_effective_cutoff_value($gate_results, $cutoff_value);
+            $effective_cutoff_value = $coverage_gate_required
+                ? $this->resolve_effective_cutoff_value($gate_results, $cutoff_value)
+                : $cutoff_value;
             $effective_cutoff_for_readout = $effective_cutoff_value !== '' ? $effective_cutoff_value : $cutoff_value;
             $effective_eligible_rows = $effective_cutoff_for_readout === $cutoff_value
                 ? $eligible_rows
@@ -272,7 +284,9 @@ class Kiwi_Retention_Cleanup_Service
                 ]);
             }
 
-            if (!$this->gate_status_allows_cleanup($gate_status) || $effective_cutoff_value === '') {
+            if ($coverage_gate_required
+                && (!$this->gate_status_allows_cleanup($gate_status) || $effective_cutoff_value === '')
+            ) {
                 $effective_cutoff_value = $cutoff_value;
                 $effective_eligible_rows = $eligible_rows;
                 if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_before_running'])) {
@@ -311,7 +325,7 @@ class Kiwi_Retention_Cleanup_Service
                     return $this->finish_run($run_db_id, $this->snapshot_after_failure($run_id));
                 }
 
-                return $this->finish_run($run_db_id, [
+                return $this->finish_coverage_gate_skip($run_db_id, [
                     'success' => true,
                     'run_id' => $run_id,
                     'status' => 'skipped',
@@ -321,7 +335,7 @@ class Kiwi_Retention_Cleanup_Service
                     'eligible_rows' => $effective_eligible_rows,
                     'error_code' => 'coverage_gate_failed',
                     'error_message' => 'Retention cleanup skipped because summary coverage gate failed.',
-                ]);
+                ], $source_key, $gate_results);
             }
 
             if (!$this->update_run_progress($run_db_id, ['worker_phase' => 'snapshot_before_running'])) {
@@ -1360,8 +1374,190 @@ class Kiwi_Retention_Cleanup_Service
                 'audit_id' => $run_db_id,
             ],
         ]);
+        $source = $this->source_registry->get($source_key);
+        if (is_array($source) && ($source['coverage_gate_required'] ?? true) !== false) {
+            $this->operational_event_service->record_recovery([
+                'area' => 'retention',
+                'severity' => 'info',
+                'event_type' => 'retention_cleanup_skipped',
+                'correlation_key' => 'retention_cleanup_skip_' . $source_key,
+                'reference_type' => 'retention_cleanup_run',
+                'reference_id' => $run_id,
+                'message' => 'Retention cleanup completed successfully after an earlier coverage-gate skip.',
+                'context' => [
+                    'source_key' => $source_key,
+                    'worker_phase' => (string) ($result['worker_phase'] ?? ''),
+                    'audit_id' => $run_db_id,
+                ],
+            ]);
+        }
 
         return $result;
+    }
+
+    private function finish_coverage_gate_skip(
+        int $run_db_id,
+        array $result,
+        string $source_key,
+        array $gate_results
+    ): array {
+        $result = $this->finish_run($run_db_id, $result);
+
+        if (empty($result['success'])
+            || ($result['audit_persisted'] ?? true) === false
+            || (string) ($result['status'] ?? '') !== 'skipped'
+            || (string) ($result['error_code'] ?? '') !== 'coverage_gate_failed'
+        ) {
+            return $result;
+        }
+
+        $run_id = (string) ($result['run_id'] ?? '');
+        $diagnostics = $this->build_coverage_gate_incident_diagnostics($source_key, $gate_results);
+        $message = 'Retention cleanup skipped because the summary coverage gate failed.';
+        if (!empty($diagnostics['first_blocked_date'])) {
+            $message .= ' First blocked date: ' . $diagnostics['first_blocked_date'] . '.';
+        }
+        if (!empty($diagnostics['first_blocking_cause'])) {
+            $message .= ' First blocking cause: ' . $diagnostics['first_blocking_cause'] . '.';
+        }
+
+        $this->operational_event_service->record_failure([
+            'area' => 'retention',
+            'severity' => 'error',
+            'event_type' => 'retention_cleanup_skipped',
+            'correlation_key' => 'retention_cleanup_skip_' . $source_key,
+            'idempotency_key' => $run_id === '' ? '' : 'retention_coverage_gate_failed_' . $run_id,
+            'reference_type' => 'retention_cleanup_run',
+            'reference_id' => $run_id,
+            'message' => $message,
+            'raw_error_text' => 'coverage_gate_failed',
+            'context' => array_merge($diagnostics, ['audit_id' => $run_db_id]),
+        ]);
+
+        return $result;
+    }
+
+    private function build_coverage_gate_incident_diagnostics(string $source_key, array $gate_results): array
+    {
+        $first_blocked_date = $this->first_gate_date((array) ($gate_results['blocked_dates'] ?? []));
+        $blocking_errors = array_slice($this->normalize_gate_codes(
+            (array) ($gate_results['blocking_errors'] ?? [])
+        ), 0, 3);
+        $first_blocking_cause = $this->find_first_gate_blocking_cause($gate_results, $first_blocked_date);
+        if ($first_blocking_cause === '' && !empty($blocking_errors)) {
+            $first_blocking_cause = (string) $blocking_errors[0];
+        }
+
+        $diagnostics = [
+            'reason_code' => 'coverage_gate_failed',
+            'source_key' => $source_key,
+            'gate_status' => $this->normalize_gate_code((string) ($gate_results['status'] ?? 'failed')),
+        ];
+        $requested_cutoff = (string) ($gate_results['requested_cutoff_value'] ?? '');
+        if ($this->is_valid_cutoff_value($requested_cutoff)) {
+            $diagnostics['requested_cutoff_value'] = $requested_cutoff;
+        }
+        if ($first_blocked_date !== '') {
+            $diagnostics['first_blocked_date'] = $first_blocked_date;
+        }
+        if ($first_blocking_cause !== '') {
+            $diagnostics['first_blocking_cause'] = $first_blocking_cause;
+        }
+        $verified_until_date = $this->normalize_gate_date((string) ($gate_results['verified_until_date'] ?? ''));
+        if ($verified_until_date !== '') {
+            $diagnostics['verified_until_date'] = $verified_until_date;
+        }
+        if (!empty($blocking_errors)) {
+            $diagnostics['blocking_errors'] = $blocking_errors;
+        }
+        $effective_cutoff = (string) ($gate_results['effective_cutoff_value'] ?? '');
+        if ($this->is_valid_cutoff_value($effective_cutoff)) {
+            $diagnostics['effective_cutoff_value'] = $effective_cutoff;
+        }
+
+        return $diagnostics;
+    }
+
+    private function find_first_gate_blocking_cause(array $gate_results, string $first_blocked_date): string
+    {
+        if ($first_blocked_date === '') {
+            return '';
+        }
+
+        foreach (['main_summary', 'tkzone_summary'] as $summary_key) {
+            $summary = (array) ($gate_results[$summary_key] ?? []);
+            foreach ((array) ($summary['details'] ?? []) as $detail) {
+                if (!is_array($detail)
+                    || (string) ($detail['metric_date'] ?? '') !== $first_blocked_date
+                ) {
+                    continue;
+                }
+
+                $detail_error = $this->normalize_gate_code((string) ($detail['error_code'] ?? ''));
+                if ($detail_error !== '') {
+                    return $detail_error;
+                }
+                foreach ((array) ($detail['blockers'] ?? []) as $blocker) {
+                    if (!is_array($blocker)) {
+                        continue;
+                    }
+                    $error_code = $this->normalize_gate_code((string) ($blocker['error_code'] ?? ''));
+                    if ($error_code !== '') {
+                        return $error_code;
+                    }
+                    $type = $this->normalize_gate_code((string) ($blocker['type'] ?? ''));
+                    $metric = $this->normalize_gate_code((string) ($blocker['metric'] ?? ''));
+                    if ($type !== '' && $metric !== '') {
+                        return $type . ':' . $metric;
+                    }
+                    if ($type !== '' || $metric !== '') {
+                        return $type !== '' ? $type : $metric;
+                    }
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function first_gate_date(array $dates): string
+    {
+        foreach ($dates as $date) {
+            $date = $this->normalize_gate_date((string) $date);
+            if ($date !== '') {
+                return $date;
+            }
+        }
+
+        return '';
+    }
+
+    private function normalize_gate_date(string $date): string
+    {
+        $date = trim($date);
+
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1 ? $date : '';
+    }
+
+    private function normalize_gate_codes(array $codes): array
+    {
+        $normalized = [];
+        foreach ($codes as $code) {
+            $code = $this->normalize_gate_code((string) $code);
+            if ($code !== '') {
+                $normalized[] = $code;
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    private function normalize_gate_code(string $code): string
+    {
+        $code = strtolower(trim($code));
+        $code = preg_replace('/[^a-z0-9_.:-]+/', '_', $code);
+
+        return substr(trim((string) $code, '_'), 0, 100);
     }
 
     private function capture_snapshot(

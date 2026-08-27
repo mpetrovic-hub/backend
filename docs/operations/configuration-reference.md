@@ -89,6 +89,13 @@ Postback placeholder behavior:
 
 ## Retention worker
 
+Registered source defaults are stored in the `kiwi_retention_settings` option:
+
+- `landing_page_sessions`: `enabled=false`, `dry_run=true`, `retention_days=14`, minimum `7`; Main/TK-zone summary coverage is required.
+- `landing_handoff_events`: `enabled=false`, `dry_run=true`, `retention_days=21`, minimum `7`; analytics summary coverage is deliberately not required.
+
+Saved per-source settings are not overwritten when defaults change. Every source still uses the shared bounded archive-before-delete worker and must be dry-run validated before separate Production activation.
+
 - `KIWI_RETENTION_ARCHIVE_ROOT`
   - protected filesystem root for SQLite retention archives, per-generation locks, and corruption write-block sentinels
   - keep outside public content and writable only by the deployment account
@@ -98,7 +105,7 @@ Postback placeholder behavior:
   - accepted range: `30` to `3600`
   - a timeout is inconclusive and never evidence of corruption
 - `KIWI_RETENTION_WORKER_ROW_LIMIT`
-  - maximum landing-page-session archive rows per worker invocation
+  - maximum source rows archived per worker invocation
   - default: `50000`
   - minimum: `1`
 - `KIWI_RETENTION_WORKER_TIME_LIMIT_SECONDS`

@@ -2,11 +2,11 @@
 
 ## Read when
 
-- Work touches raw landing-session cleanup, retention coverage checks, SQLite archive/delete, retention WP-Cron, or landing-session raw-context compaction.
+- Work touches raw landing-session or landing-handoff cleanup, retention coverage policy, SQLite archive/delete, retention WP-Cron, or landing-session raw-context compaction.
 
 ## Source of truth for
 
-- Landing raw retention coverage gate behavior.
+- Landing raw retention coverage-policy behavior.
 - Archive/delete worker behavior.
 - Raw-context compaction behavior.
 
@@ -16,9 +16,11 @@
 - Config constant list: see `configuration-reference.md`.
 - Temporary dated DB audit plans.
 
-## Landing raw retention coverage gate
+## Landing raw retention coverage policy
 
 The `landing_page_sessions` retention cleanup uses a fail-closed coverage gate before archive/delete work starts. The gate checks raw candidate days chronologically and compares date-bounded light totals against the durable Main and TK-zone daily summaries instead of rebuilding the full historical summary contract in one query.
+
+`landing_handoff_events` deliberately has no analytics coverage gate. Its `coverage_gate_required=false` registry policy passes the complete requested cutoff directly into the shared retention flow. Handoff cleanup never queries `wp_kiwi_landing_page_sessions` or either landing summary and never emits a synthetic `coverage_gate_failed` outcome. This is a source policy only; it does not weaken the shared archive-before-delete safety contract.
 
 Gate statuses:
 
@@ -32,14 +34,18 @@ The gate intentionally does not run the expensive dimension-level deep compare f
 
 Audit details are stored on `wp_kiwi_retention_cleanup_runs.gate_results_json`, including coverage mode, requested/effective cutoffs, verified date, candidate dates, deep-checked dates, totals-only dates, skipped deep dates, deep-compare reasons, blocked dates, warning dates, and compact per-summary details.
 
+After a real Session run has durably finalized as `skipped` with `error_code=coverage_gate_failed`, Retention writes a best-effort Operational Incident `retention_cleanup_skipped`. The incident correlates by `retention_cleanup_skip_<source_key>`, references the audit run, and summarizes only existing gate output: stable reason/source, gate status, available cutoffs, first blocked date/cause, verified-through date, and at most three blocking error codes. It does not run another coverage or production query. A later new skip run is `repeated`; the first later real, non-Dry-Run `completed`/`completed_noop` audit closes the open incident once. Event persistence failure never weakens or reclassifies the fail-closed skip.
+
+Disabled Retention, lock-active invocations, Dry-Runs, and `landing_handoff_events` do not create this error incident. Handoff's explicit `coverage_gate_required=false` policy cannot synthesize `coverage_gate_failed`.
+
 ## Scheduler and worker
 
-The daily retention cron is only a scheduler. The active recurring hook is `kiwi_retention_cleanup_scheduler_daily`; the legacy unbounded `kiwi_retention_cleanup_daily` hook is cleared during normal scheduling.
+The daily retention cron is only a scheduler. The active recurring hook is `kiwi_retention_cleanup_scheduler_daily`; the legacy unbounded `kiwi_retention_cleanup_daily` hook is cleared during normal scheduling. Each daily pass enumerates `landing_page_sessions` and then `landing_handoff_events` in stable registry order. Every single-event `kiwi_retention_cleanup_worker` job carries its source key so pending jobs are deduplicated per source. An older argumentless worker invocation remains compatible and processes `landing_page_sessions` only.
 
 The scheduler:
 
 1. Marks non-resumable unfinished runs with an `updated_at` heartbeat older than 30 minutes as `failed` with `error_code=cron_timeout_suspected` before looking for an active run. Receipt-safe archive/delete phases remain open so a later worker can reconcile them from persisted SQLite evidence. An existing failed `worker_phase` is retained; an empty phase becomes `stale_unknown`. Each run newly transitioned by this call also writes an idempotent shared operational event; see `operational-events-runbook.md`.
-2. Runs the coverage gate.
+2. Applies the source coverage policy: the Session source runs its gate, while Handoff records `not_required` and keeps the requested cutoff.
 3. Captures the `before_cleanup` growth snapshot.
 4. Freezes `target_max_primary_key` for rows with `created_at < cutoff_value`.
 5. Writes a pending run to `wp_kiwi_retention_cleanup_runs`.
@@ -59,9 +65,9 @@ Worker state is stored on `wp_kiwi_retention_cleanup_runs` with:
 - `worker_last_started_at`
 - `worker_last_finished_at`
 
-Runs use `pending`, `running`, `partial`, `blocked`, `completed`, or `failed` statuses. If a scheduler run sees an existing open worker run for `landing_page_sessions`, it does not create a second cleanup run; it reschedules the worker and records that the active run was rescheduled. An open-run lookup error fails closed and never means that a new run may be created. A `blocked` receipt run remains unfinished and owns its frozen source scope. Normal scheduler and worker invocations may idempotently retry a missing central Receipt Incident, but they never repeat the receipt repair or resume archive/delete work; only the bounded repository-owned recovery path may make the run resumable again.
+Runs use `pending`, `running`, `partial`, `blocked`, `completed`, or `failed` statuses. If a scheduler run sees an existing open worker run for the same source, it does not create a second cleanup run; it reschedules that source's worker and records that the active run was rescheduled. An open-run lookup error fails closed and never means that a new run may be created. A `blocked` receipt run remains unfinished and owns its frozen source scope. Normal scheduler and worker invocations may idempotently retry a missing central Receipt Incident, but they never repeat the receipt repair or resume archive/delete work; only the bounded repository-owned recovery path may make the run resumable again.
 
-The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases are `coverage_gate_running`, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases include `archive_running`, `archive_corruption_blocked`, `receipt_repair_running`, `receipt_blocked`, `receipt_verified`, `delete_running`, `archive_partial`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
+The audit heartbeat writes only at job boundaries, never per archived or deleted row. Scheduler phases include `coverage_gate_running` for Sessions, `coverage_gate_not_required` for Handoffs, `snapshot_before_running`, `target_key_freezing`, and `archive_pending`. Worker phases include `archive_running`, `archive_corruption_blocked`, `receipt_repair_running`, `receipt_blocked`, `receipt_verified`, `delete_running`, `archive_partial`, `snapshot_after_running`, `finalizing`, `completed`, and `failed`.
 
 ## Archive/delete safety contract
 
@@ -227,12 +233,13 @@ When validating retention behavior:
 
 1. Confirm WP-Cron has scheduled `kiwi_retention_cleanup_scheduler_daily`.
 2. Confirm legacy `kiwi_retention_cleanup_daily` is not scheduled.
-3. After a gated scheduler run, confirm `kiwi_retention_cleanup_worker` is scheduled as a single event.
+3. After a scheduler run, confirm at most one source-keyed `kiwi_retention_cleanup_worker` event is pending for each source that has work.
 4. Confirm `wp_kiwi_retention_cleanup_runs` shows `pending` or `partial` worker state with frozen `target_max_primary_key`.
-5. Confirm cleanup uses the effective cutoff returned by the coverage gate.
-6. Confirm archive evidence exists before MySQL delete.
-7. Confirm every MySQL delete is preceded by a persisted exact SQLite receipt and that receipt/delete cursors match after completion.
-8. Confirm receipt-safe archive/delete phases remain resumable while non-resumable stale runs are marked `failed`.
-9. Run both explicit archive-health `diagnose` modes, then verify the single external `check` invocation and one-line JSON/process-exit monitoring.
-10. Confirm every non-definitive scheduled check raises or repeats one availability Incident unless a one-shot `archive_lock_active` freshness probe proves that specific lock evidence stale; only a completed non-`ok` PRAGMA sets the corruption block, and no archive is replaced automatically.
-11. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.
+5. Confirm Sessions use the effective cutoff returned by their coverage gate and Handoffs use the full requested 21-day cutoff with `gate_status=not_required`.
+6. For a finalized Session `coverage_gate_failed` run, confirm one matching `retention_cleanup_skipped` raised/repeated event references the audit run and contains bounded gate diagnostics; never trigger a failure deliberately in production.
+7. Confirm archive evidence exists before MySQL delete.
+8. Confirm every MySQL delete is preceded by a persisted exact SQLite receipt and that receipt/delete cursors match after completion.
+9. Confirm receipt-safe archive/delete phases remain resumable while non-resumable stale runs are marked `failed`.
+10. Run both explicit archive-health `diagnose` modes, then verify the single external `check` invocation and one-line JSON/process-exit monitoring.
+11. Confirm every non-definitive scheduled check raises or repeats one availability Incident unless a one-shot `archive_lock_active` freshness probe proves that specific lock evidence stale; only a completed non-`ok` PRAGMA sets the corruption block, and no archive is replaced automatically.
+12. For compaction, dry-run first and compare eligible rows plus before/after byte estimates before enabling active mutation.
