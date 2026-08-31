@@ -16,6 +16,7 @@ class Kiwi_Nth_Fr_One_Off_Service
     private $premium_sms_fraud_monitor_service;
     private $sms_body_variant_service;
     private $completed_sale_cooldown_service;
+    private $operational_event_service;
 
     public function __construct(
         Kiwi_Config $config,
@@ -27,7 +28,8 @@ class Kiwi_Nth_Fr_One_Off_Service
         ?Kiwi_Conversion_Attribution_Resolver $conversion_attribution_resolver = null,
         ?Kiwi_Premium_Sms_Fraud_Monitor_Service $premium_sms_fraud_monitor_service = null,
         ?Kiwi_Sms_Body_Variant_Service $sms_body_variant_service = null,
-        ?Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service $completed_sale_cooldown_service = null
+        ?Kiwi_Premium_Sms_Completed_Sale_Cooldown_Service $completed_sale_cooldown_service = null,
+        ?Kiwi_Operational_Event_Service $operational_event_service = null
     ) {
         $this->config = $config;
         $this->normalizer = $normalizer;
@@ -39,6 +41,7 @@ class Kiwi_Nth_Fr_One_Off_Service
         $this->premium_sms_fraud_monitor_service = $premium_sms_fraud_monitor_service;
         $this->sms_body_variant_service = $sms_body_variant_service;
         $this->completed_sale_cooldown_service = $completed_sale_cooldown_service;
+        $this->operational_event_service = $operational_event_service;
     }
 
     public function handle_inbound_mo(string $service_key, array $payload): array
@@ -271,6 +274,7 @@ class Kiwi_Nth_Fr_One_Off_Service
             'aggregator_status_code' => (string) ($submit_event['aggregator_status_code'] ?? ''),
             'aggregator_status_text' => (string) ($submit_event['aggregator_status_text'] ?? ''),
         ]);
+        $this->record_submit_operational_transition($service_key, $submit_event, $submit_response);
 
         $transaction_after_submit = $this->flow_transaction_repository->get_by_id($transaction_id);
         $transaction_after_submit = is_array($transaction_after_submit) ? $transaction_after_submit : $transaction;
@@ -391,6 +395,67 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         return 'pending';
+    }
+
+    private function record_submit_operational_transition(
+        string $service_key,
+        array $submit_event,
+        array $submit_response
+    ): void {
+        if (!$this->operational_event_service instanceof Kiwi_Operational_Event_Service) {
+            return;
+        }
+
+        $status = (string) ($submit_event['status'] ?? '');
+        if (!in_array($status, ['mt_submit_failed', 'mt_submitted'], true)
+            || ($status === 'mt_submitted' && empty($submit_event['is_success']))
+        ) {
+            return;
+        }
+
+        $flow_reference = trim((string) ($submit_event['external_request_id'] ?? ''));
+        $result_code = trim((string) ($submit_event['aggregator_status_code'] ?? ''));
+        $result_text = trim((string) ($submit_event['aggregator_status_text'] ?? ''));
+        $http_status = (int) ($submit_response['status_code'] ?? 0);
+        $correlation_key = 'nth_submit_' . hash('sha256', $service_key);
+        $event = [
+            'area' => 'aggregator',
+            'event_type' => 'nth_submit_failed',
+            'correlation_key' => $correlation_key,
+            'reference_type' => 'nth_flow',
+            'reference_id' => $flow_reference,
+            'occurred_at' => (string) ($submit_event['occurred_at'] ?? ''),
+            'context' => [
+                'service_key' => $service_key,
+                'result_code' => $result_code,
+                'result_text' => $result_text,
+                'flow_reference' => $flow_reference,
+                'http_status' => $http_status,
+            ],
+        ];
+
+        try {
+            if (!empty($submit_event['is_success'])) {
+                $event['severity'] = 'info';
+                $event['message'] = 'NTH submitMessage was accepted after an earlier failure.';
+                $this->operational_event_service->record_recovery_action($event);
+
+                return;
+            }
+
+            $idempotency_reference = $flow_reference !== ''
+                ? $flow_reference
+                : (string) ($submit_event['dedupe_key'] ?? '');
+            $event['severity'] = 'error';
+            $event['idempotency_key'] = 'nth_submit_failure_' . hash(
+                'sha256',
+                $service_key . '|' . $idempotency_reference
+            );
+            $event['message'] = 'NTH submitMessage was not accepted for service ' . $service_key . '.';
+            $this->operational_event_service->record_failure_action($event);
+        } catch (Throwable $error) {
+            // Operational diagnostics are best effort and must not alter the submit outcome.
+        }
     }
 
     private function build_notification_fraud_outcome(array $transaction, array $normalized_event, ?array $sale): array

@@ -3224,7 +3224,31 @@ class Kiwi_Test_Nth_Client extends Kiwi_Nth_Client
             ];
         }
 
+        if (isset($response['body']) && is_string($response['body'])) {
+            $response['body'] = strtr($response['body'], [
+                '{{flow_reference}}' => (string) ($transaction['flow_reference'] ?? ''),
+                '{{session_id}}' => (string) ($transaction['session_id'] ?? ''),
+            ]);
+        }
+
         return $response;
+    }
+}
+
+class Kiwi_Test_Throwing_Operational_Event_Service extends Kiwi_Operational_Event_Service
+{
+    public function __construct()
+    {
+    }
+
+    public function record_failure_action(array $event): string
+    {
+        throw new RuntimeException('Operational event test failure.');
+    }
+
+    public function record_recovery_action(array $event): string
+    {
+        throw new RuntimeException('Operational event test failure.');
     }
 }
 
@@ -8574,6 +8598,92 @@ kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer maps intermediate and failure num
     kiwi_assert_true(empty($failed['is_success']), 'Expected messageStatus=-21 to be unsuccessful.');
 });
 
+kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer accepts only NTH resultCode 100 for submitMessage', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $transaction = [
+        'flow_reference' => 'txn_submit_success_1',
+        'session_id' => 'session-submit-success-1',
+        'subscriber_reference' => 'enc-submit-success-1',
+        'shortcode' => '84072',
+        'keyword' => 'JPLAY',
+    ];
+
+    $success = $normalizer->normalize_submit_response('nth_fr_one_off_jplay', $transaction, [
+        'status_code' => 200,
+        'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-submit-success-1</messageId><messageRef>nth-echoed-ref-1</messageRef><sessionId>session-submit-success-1</sessionId></res>',
+    ]);
+    $failure = $normalizer->normalize_submit_response('nth_fr_one_off_jplay', $transaction, [
+        'status_code' => 200,
+        'body' => '<res><resultCode>400</resultCode><resultText>Authorization failed</resultText><messageRef>txn_submit_success_1</messageRef></res>',
+    ]);
+
+    kiwi_assert_same('mt_submitted', $success['status'] ?? '', 'Expected HTTP 200 plus resultCode=100 to be accepted.');
+    kiwi_assert_true(!empty($success['is_success']), 'Expected resultCode=100 to be successful.');
+    kiwi_assert_true(empty($success['is_terminal']), 'Expected an accepted submit to wait for its delivery report.');
+    kiwi_assert_same('100', $success['aggregator_status_code'] ?? '', 'Expected the NTH result code to remain inspectable.');
+    kiwi_assert_same('OK', $success['aggregator_status_text'] ?? '', 'Expected the NTH result text to remain inspectable.');
+    kiwi_assert_same('msg-submit-success-1', $success['external_message_id'] ?? '', 'Expected messageId correlation to remain available.');
+    kiwi_assert_same('txn_submit_success_1', $success['external_request_id'] ?? '', 'Expected the submitted flow reference to remain the canonical internal correlation.');
+    kiwi_assert_same('nth-echoed-ref-1', $success['message_ref'] ?? '', 'Expected the response messageRef to remain available separately.');
+    kiwi_assert_same('session-submit-success-1', $success['session_id'] ?? '', 'Expected sessionId correlation to remain available.');
+
+    kiwi_assert_same('mt_submit_failed', $failure['status'] ?? '', 'Expected HTTP 200 plus resultCode=400 to fail.');
+    kiwi_assert_true(!empty($failure['is_terminal']), 'Expected a rejected submit to be terminal.');
+    kiwi_assert_true(empty($failure['is_success']), 'Expected resultCode=400 not to be successful.');
+    kiwi_assert_same('400', $failure['aggregator_status_code'] ?? '', 'Expected the rejected result code to be stored.');
+    kiwi_assert_same('Authorization failed', $failure['aggregator_status_text'] ?? '', 'Expected the rejected result text to be stored.');
+});
+
+kiwi_run_test('Kiwi_Nth_Premium_Sms_Normalizer fails closed for incomplete submitMessage responses', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $transaction = [
+        'flow_reference' => 'txn_submit_incomplete_1',
+        'session_id' => 'session-submit-incomplete-1',
+    ];
+    $cases = [
+        ['body' => '', 'status_code' => 200, 'reason' => 'empty_response'],
+        ['body' => '<res><resultCode>', 'status_code' => 200, 'reason' => 'unreadable_xml'],
+        ['body' => '<res><resultText>Missing code</resultText></res>', 'status_code' => 200, 'reason' => 'missing_result_code'],
+        ['body' => '<res><resultCode>100</resultCode><resultText>OK</resultText></res>', 'status_code' => 503, 'reason' => 'http_transport_failed'],
+    ];
+
+    foreach ($cases as $case) {
+        $normalized = $normalizer->normalize_submit_response('nth_fr_one_off_jplay', $transaction, $case);
+        kiwi_assert_same('mt_submit_failed', $normalized['status'] ?? '', 'Expected incomplete or non-2xx submit responses to fail closed.');
+        kiwi_assert_true(!empty($normalized['is_terminal']), 'Expected incomplete or non-2xx submit responses to be terminal.');
+        kiwi_assert_true(empty($normalized['is_success']), 'Expected incomplete or non-2xx submit responses not to be successful.');
+        kiwi_assert_same($case['reason'], $normalized['normalization_error'] ?? '', 'Expected a bounded internal diagnostic reason.');
+    }
+});
+
 kiwi_run_test('Kiwi_Nth_Client rejects submit requests with missing required routing data before transport', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -9654,7 +9764,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service avoids duplicate MT submission for du
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -9725,7 +9835,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks parallel MT while an earlier b
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-pending-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-pending-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -9774,6 +9884,169 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks parallel MT while an earlier b
     kiwi_assert_same(1, (int) ($fraud_repository->rows[1]['billing_transaction_id'] ?? 0), 'Expected ignored MO fraud row to reference the pending transaction.');
 });
 
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service persists rejected submits and tracks their operational incident lifecycle', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => [
+                    '20801' => '20801',
+                ],
+            ],
+        ]
+    );
+    $normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<res><resultCode>400</resultCode><resultText>Authorization failed</resultText><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
+            'request' => ['password' => 'must-not-reach-operational-events'],
+            'error' => '',
+        ],
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<res><resultCode>401</resultCode><resultText>Request rejected</resultText><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
+            'request' => [],
+            'error' => '',
+        ],
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-operational-recovery-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $event_repository = new Kiwi_Test_Nth_Event_Repository();
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $sales_recorder = new Kiwi_Test_Shared_Sales_Recorder();
+    $operational_repository = new Kiwi_Test_Operational_Event_Repository();
+    $operational_service = new Kiwi_Operational_Event_Service($operational_repository);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        $normalizer,
+        $client,
+        $event_repository,
+        $transaction_repository,
+        $sales_recorder,
+        null,
+        null,
+        null,
+        null,
+        $operational_service
+    );
+
+    $results = [];
+    foreach (['failure-1', 'failure-2', 'recovery-1'] as $suffix) {
+        $results[] = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+            'Encrypted_MSISDN' => 'enc-operational-lifecycle-1',
+            'Business_Number' => '84072',
+            'Message' => 'JPLAY',
+            'NWC' => '20801',
+            'Operator' => 'Orange',
+            'session_id' => 'session-operational-' . $suffix,
+        ]);
+    }
+
+    kiwi_assert_true(!$results[0]['success'], 'Expected resultCode=400 to surface as a failed service result.');
+    kiwi_assert_true(!$results[1]['success'], 'Expected a second rejected submit to remain failed.');
+    kiwi_assert_true($results[2]['success'], 'Expected resultCode=100 to restore the normal success pipeline.');
+    kiwi_assert_same(3, count($client->calls), 'Expected terminal submit failures not to create a false pending block for later MOs.');
+    kiwi_assert_same('mt_submit_failed', $transaction_repository->rows[1]['current_status'] ?? '', 'Expected the first rejected submit to be persisted as failed.');
+    kiwi_assert_same(1, (int) ($transaction_repository->rows[1]['is_terminal'] ?? 0), 'Expected the first rejected submit transaction to be terminal.');
+    kiwi_assert_same('400', $transaction_repository->rows[1]['meta_json']['submit_event']['aggregator_status_code'] ?? '', 'Expected rejected result code in the transaction snapshot.');
+    kiwi_assert_same('Authorization failed', $transaction_repository->rows[1]['meta_json']['submit_event']['aggregator_status_text'] ?? '', 'Expected rejected result text in the transaction snapshot.');
+    kiwi_assert_same('mt_submit_failed', $transaction_repository->rows[2]['current_status'] ?? '', 'Expected the second rejected submit to be terminal instead of pending.');
+    kiwi_assert_same('mt_submitted', $transaction_repository->rows[3]['current_status'] ?? '', 'Expected the later accepted submit to remain pending for delivery reporting.');
+    kiwi_assert_same(0, count($sales_recorder->calls), 'Expected submit responses alone not to create a sale or postback consequence.');
+
+    $operational_rows = array_values($operational_repository->rows);
+    kiwi_assert_same(3, count($operational_rows), 'Expected one raised, one repeated, and one resolved operational event.');
+    kiwi_assert_same(['raised', 'repeated', 'resolved'], array_column($operational_rows, 'lifecycle_action'), 'Expected one service-correlated incident lifecycle.');
+    kiwi_assert_same(1, count(array_unique(array_column($operational_rows, 'correlation_key'))), 'Expected all transitions to share one service-level correlation.');
+    $failure_context = json_decode((string) ($operational_rows[0]['context_json'] ?? ''), true);
+    kiwi_assert_same(
+        ['service_key', 'result_code', 'result_text', 'flow_reference', 'http_status'],
+        array_keys(is_array($failure_context) ? $failure_context : []),
+        'Expected Operational Event context to contain only approved diagnostics.'
+    );
+    kiwi_assert_true(
+        strpos((string) ($operational_rows[0]['context_json'] ?? ''), 'must-not-reach-operational-events') === false,
+        'Expected request credentials and full payloads not to reach Operational Events.'
+    );
+    kiwi_assert_true(
+        strpos((string) ($operational_rows[0]['context_json'] ?? ''), 'session-operational-') === false,
+        'Expected session identifiers not to reach Operational Events.'
+    );
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service keeps accepted submits successful when Operational Event persistence fails', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => ['20801' => '20801'],
+            ],
+        ]
+    );
+    $client = new Kiwi_Test_Nth_Client([
+        [
+            'success' => true,
+            'status_code' => 200,
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-best-effort-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
+            'request' => [],
+            'error' => '',
+        ],
+    ]);
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        new Kiwi_Nth_Premium_Sms_Normalizer($config),
+        $client,
+        new Kiwi_Test_Nth_Event_Repository(),
+        new Kiwi_Test_Nth_Flow_Transaction_Repository(),
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        null,
+        null,
+        null,
+        new Kiwi_Test_Throwing_Operational_Event_Service()
+    );
+
+    $result = $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-best-effort-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-best-effort-1',
+    ]);
+
+    kiwi_assert_true($result['success'], 'Expected Operational Event failure not to turn an accepted NTH submit into a business failure.');
+    kiwi_assert_same('mt_submitted', $result['message'] ?? '', 'Expected the accepted submit status to remain intact.');
+});
+
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service allows retry after terminal failed delivery report', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -9801,14 +10074,14 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service allows retry after terminal failed de
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-failed-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-failed-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-retry-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-retry-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -9969,7 +10242,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service allows completed sale retry when cool
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-cooldown-disabled-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-cooldown-disabled-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10029,7 +10302,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service updates fraud outcome on successful t
             [
                 'success' => true,
                 'status_code' => 200,
-                'body' => '<response><message_id>msg-delivered-outcome-1</message_id><status>submitted</status></response>',
+                'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-delivered-outcome-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
                 'request' => [],
                 'error' => '',
             ],
@@ -10091,7 +10364,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service captures fraud signal once for dedupe
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-fraud-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-fraud-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10163,7 +10436,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service blocks MT submission when fraud monit
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-should-not-send</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-should-not-send</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10331,7 +10604,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-mo-bind</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-mo-bind</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10454,7 +10727,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service resolves assigned visible SMS body to
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-visible-token</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-visible-token</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10514,7 +10787,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service prefers MO sessionId over request_id 
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-session-priority</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-session-priority</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10580,7 +10853,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service uses txn-rooted flow references when 
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-fallback-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-fallback-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10641,7 +10914,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service records a shared sale only on success
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10745,7 +11018,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service can expose clear-sale event to sales 
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-sales-drift-1</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-sales-drift-1</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],
@@ -10822,7 +11095,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service retries attribution postback on dupli
         [
             'success' => true,
             'status_code' => 200,
-            'body' => '<response><message_id>msg-2</message_id><status>submitted</status></response>',
+            'body' => '<res><resultCode>100</resultCode><resultText>OK</resultText><messageId>msg-2</messageId><messageRef>{{flow_reference}}</messageRef><sessionId>{{session_id}}</sessionId></res>',
             'request' => [],
             'error' => '',
         ],

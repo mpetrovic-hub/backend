@@ -856,6 +856,8 @@ TEXT;
         $nth_normalizer = new Kiwi_Nth_Premium_Sms_Normalizer($config);
         $nth_event_repository = new Kiwi_Nth_Event_Repository();
         $nth_flow_transaction_repository = new Kiwi_Nth_Flow_Transaction_Repository();
+        $operational_event_repository = new Kiwi_Operational_Event_Repository();
+        $operational_event_service = new Kiwi_Operational_Event_Service($operational_event_repository);
         $sales_repository = new Kiwi_Sales_Repository();
         $sales_recorder = new Kiwi_Shared_Sales_Recorder($sales_repository);
         $click_attribution_repository = new Kiwi_Click_Attribution_Repository();
@@ -913,7 +915,8 @@ TEXT;
             $conversion_attribution_resolver,
             $premium_sms_fraud_monitor_service,
             $sms_body_variant_service,
-            $completed_sale_cooldown_service
+            $completed_sale_cooldown_service,
+            $operational_event_service
         );
 
         return [
@@ -922,6 +925,8 @@ TEXT;
             'nth_normalizer' => $nth_normalizer,
             'nth_event_repository' => $nth_event_repository,
             'nth_flow_transaction_repository' => $nth_flow_transaction_repository,
+            'operational_event_repository' => $operational_event_repository,
+            'operational_event_service' => $operational_event_service,
             'sales_recorder' => $sales_recorder,
             'sales_repository' => $sales_repository,
             'click_attribution_repository' => $click_attribution_repository,
