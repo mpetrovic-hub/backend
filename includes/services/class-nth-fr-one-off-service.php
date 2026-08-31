@@ -253,7 +253,11 @@ class Kiwi_Nth_Fr_One_Off_Service
 
         $submit_response = $this->client->submit_message($service_key, $submit_transaction);
 
-        $submit_event = $this->normalizer->normalize_submit_response($service_key, $transaction, $submit_response);
+        $submit_event = $this->normalizer->normalize_submit_response(
+            $service_key,
+            $submit_transaction,
+            $submit_response
+        );
         $submit_event_record = $this->event_repository->insert_if_new($submit_event);
 
         $this->flow_transaction_repository->update($transaction_id, [
@@ -438,7 +442,23 @@ class Kiwi_Nth_Fr_One_Off_Service
             if (!empty($submit_event['is_success'])) {
                 $event['severity'] = 'info';
                 $event['message'] = 'NTH submitMessage was accepted after an earlier failure.';
-                $this->operational_event_service->record_recovery_action($event);
+                $recovery_occurred_at = trim((string) ($event['occurred_at'] ?? ''));
+                $this->operational_event_service->record_recovery_action_if(
+                    $event,
+                    static function (?array $latest) use ($recovery_occurred_at): bool {
+                        if (!is_array($latest)) {
+                            return true;
+                        }
+
+                        $latest_occurred_at = trim((string) ($latest['occurred_at'] ?? ''));
+                        if ($latest_occurred_at === '') {
+                            return true;
+                        }
+
+                        return $recovery_occurred_at !== ''
+                            && strcmp($recovery_occurred_at, $latest_occurred_at) >= 0;
+                    }
+                );
 
                 return;
             }

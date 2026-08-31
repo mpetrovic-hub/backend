@@ -1495,6 +1495,29 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
     }
 }
 
+class Kiwi_Test_Chronological_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
+{
+    public function find_latest_by_correlation_key(string $correlation_key): ?array
+    {
+        $matches = array_values(array_filter($this->rows, static function (array $row) use ($correlation_key): bool {
+            return ($row['correlation_key'] ?? '') === $correlation_key;
+        }));
+        usort($matches, static function (array $left, array $right): int {
+            $occurred_compare = strcmp(
+                (string) ($left['occurred_at'] ?? ''),
+                (string) ($right['occurred_at'] ?? '')
+            );
+            if ($occurred_compare !== 0) {
+                return $occurred_compare;
+            }
+
+            return (int) ($left['id'] ?? 0) <=> (int) ($right['id'] ?? 0);
+        });
+
+        return empty($matches) ? null : $matches[count($matches) - 1];
+    }
+}
+
 class Kiwi_Test_One_Failure_Operational_Event_Repository extends Kiwi_Test_Operational_Event_Repository
 {
     public $fail_next_insert = false;
@@ -9990,6 +10013,115 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service persists rejected submits and tracks 
         strpos((string) ($operational_rows[0]['context_json'] ?? ''), 'session-operational-') === false,
         'Expected session identifiers not to reach Operational Events.'
     );
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service preserves submitted session fallback when rejection omits sessionId', function (): void {
+    $config = new Kiwi_Test_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [
+            'nth_fr_one_off_jplay' => [
+                'country' => 'FR',
+                'flow' => 'one-off',
+                'shortcode' => '84072',
+                'keyword' => 'JPLAY',
+                'price' => 450,
+                'currency' => 'EUR',
+                'operator_nwc_map' => ['20801' => '20801'],
+            ],
+        ]
+    );
+    $transaction_repository = new Kiwi_Test_Nth_Flow_Transaction_Repository();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        new Kiwi_Nth_Premium_Sms_Normalizer($config),
+        new Kiwi_Test_Nth_Client([
+            [
+                'success' => true,
+                'status_code' => 200,
+                'body' => '<res><resultCode>400</resultCode><resultText>Authorization failed</resultText><messageRef>{{flow_reference}}</messageRef></res>',
+                'request' => [],
+                'error' => '',
+            ],
+        ]),
+        new Kiwi_Test_Nth_Event_Repository(),
+        $transaction_repository,
+        new Kiwi_Test_Shared_Sales_Recorder()
+    );
+
+    $service->handle_inbound_mo('nth_fr_one_off_jplay', [
+        'Encrypted_MSISDN' => 'enc-session-fallback-1',
+        'Business_Number' => '84072',
+        'Message' => 'JPLAY',
+        'NWC' => '20801',
+        'Operator' => 'Orange',
+        'session_id' => 'session-submit-fallback-1',
+    ]);
+
+    kiwi_assert_same(
+        'session-submit-fallback-1',
+        $transaction_repository->rows[1]['meta_json']['submit_event']['session_id'] ?? '',
+        'Expected the submitted session ID to remain in the normalized event when NTH omits it.'
+    );
+});
+
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service rejects stale success before resolving newer submit incident', function (): void {
+    $config = new Kiwi_Test_Config();
+    $operational_repository = new Kiwi_Test_Chronological_Operational_Event_Repository();
+    $service = new Kiwi_Nth_Fr_One_Off_Service(
+        $config,
+        new Kiwi_Nth_Premium_Sms_Normalizer($config),
+        new Kiwi_Test_Nth_Client([]),
+        new Kiwi_Test_Nth_Event_Repository(),
+        new Kiwi_Test_Nth_Flow_Transaction_Repository(),
+        new Kiwi_Test_Shared_Sales_Recorder(),
+        null,
+        null,
+        null,
+        null,
+        new Kiwi_Operational_Event_Service($operational_repository)
+    );
+    $record_transition = new ReflectionMethod(
+        Kiwi_Nth_Fr_One_Off_Service::class,
+        'record_submit_operational_transition'
+    );
+    $failure = [
+        'status' => 'mt_submit_failed',
+        'is_success' => false,
+        'external_request_id' => 'flow-newer-failure',
+        'aggregator_status_code' => '400',
+        'aggregator_status_text' => 'Request rejected',
+        'occurred_at' => '2026-04-01 12:00:02',
+        'dedupe_key' => 'failure-newer-1',
+    ];
+    $stale_success = [
+        'status' => 'mt_submitted',
+        'is_success' => true,
+        'external_request_id' => 'flow-older-success',
+        'aggregator_status_code' => '100',
+        'aggregator_status_text' => 'OK',
+        'occurred_at' => '2026-04-01 12:00:01',
+        'dedupe_key' => 'success-older-1',
+    ];
+    $later_success = array_merge($stale_success, [
+        'external_request_id' => 'flow-later-success',
+        'occurred_at' => '2026-04-01 12:00:03',
+        'dedupe_key' => 'success-later-1',
+    ]);
+
+    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $failure, ['status_code' => 200]);
+    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $stale_success, ['status_code' => 200]);
+    kiwi_assert_same(1, count($operational_repository->rows), 'Expected an older accepted submit not to resolve a newer failure.');
+
+    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $later_success, ['status_code' => 200]);
+    $latest = $operational_repository->find_latest_by_correlation_key(
+        (string) array_values($operational_repository->rows)[0]['correlation_key']
+    );
+    kiwi_assert_same(2, count($operational_repository->rows), 'Expected the first later accepted submit to append one resolution.');
+    kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the later accepted submit to close the incident.');
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service keeps accepted submits successful when Operational Event persistence fails', function (): void {

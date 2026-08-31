@@ -76,7 +76,7 @@ NTH `submitMessage` rejections use `event_type=nth_submit_failed`, `area=aggrega
 
 - `raised`: first failed submit after no open incident;
 - `repeated`: another distinct failed flow for the same service;
-- `resolved`: the first later submit accepted with HTTP `2xx` and readable XML `resultCode=100`;
+- `resolved`: the first submit accepted with HTTP `2xx` and readable XML `resultCode=100` whose event time is not older than the open failure; an out-of-order older success is ignored;
 - no row: routine accepted submit while no incident is open.
 
 The compact context contains only `service_key`, `result_code`, `result_text`, `flow_reference`, and `http_status`. It intentionally excludes subscriber references, session IDs, credentials, headers, and full request/response payloads. Credential-like result text may be centrally masked.
