@@ -67,6 +67,16 @@ The first producer is retention cleanup:
 
 The timeout and coverage-gate skip correlations are intentionally independent. A success may resolve both open incidents, but neither failure type changes the lifecycle or identity of the other.
 
+The NTH `submitMessage` producer is an Aggregator-boundary producer:
+
+- every normalized `mt_submit_failed` writes `event_type=nth_submit_failed`, `area=aggregator`, and `severity=error`;
+- all failures for one NTH `service_key` share a stable service-level correlation, while the individual flow reference supplies the idempotency identity;
+- lifecycle transitions follow the order in which submit results are recorded locally: the first processed failure is `raised`, later distinct processed failures are `repeated`, and the first subsequently processed HTTP `2xx` response with readable XML `resultCode=100` writes `resolved`;
+- the Operational Event receives its occurrence time when that transition is recorded. Request, flow, and session timestamps do not reorder or suppress the shared service-level lifecycle;
+- routine accepted submits write no event when no incident is open;
+- context is limited to service key, result code/text, flow reference, and HTTP status. Request payloads, credentials, subscriber references, and session IDs are excluded;
+- event persistence is best effort and never changes the NTH business result or triggers another submit.
+
 ## Data safety
 
 Credential-like keys are masked centrally before size checks and persistence. This includes authorization/authentication values, API keys, access tokens, generic tokens, client secrets, passwords, secrets, digests, signatures, HMACs, nonces, OTPs/PINs, private/signing/encryption keys, key material, complete PEM private-key blocks, cookie headers, and session-cookie/session-ID fields. Structured sensitive values become `[redacted]`; raw text that cannot be safely isolated becomes `[credential content removed]`.

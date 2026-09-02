@@ -216,6 +216,7 @@ class Kiwi_Nth_Premium_Sms_Normalizer
         $xml = trim((string) ($response['body'] ?? $response['xml'] ?? ''));
         $http_status = (int) ($response['status_code'] ?? 0);
         $xml_object = null;
+        $normalization_error = '';
 
         if ($xml !== '') {
             libxml_use_internal_errors(true);
@@ -223,10 +224,23 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             if ($xml_object === false) {
                 libxml_clear_errors();
                 $xml_object = null;
+                $normalization_error = 'unreadable_xml';
             }
+        } else {
+            $normalization_error = 'empty_response';
         }
 
-        $external_request_id = trim((string) ($transaction['flow_reference'] ?? ''));
+        $response_message_ref = $xml_object instanceof SimpleXMLElement
+            ? $this->first_xml_value($xml_object, [
+                'message_ref',
+                'messageRef',
+                'reference',
+            ])
+            : '';
+        $transaction_flow_reference = trim((string) ($transaction['flow_reference'] ?? ''));
+        $external_request_id = $transaction_flow_reference !== ''
+            ? $transaction_flow_reference
+            : $response_message_ref;
         $external_message_id = $xml_object instanceof SimpleXMLElement
             ? $this->first_xml_value($xml_object, [
                 'message_id',
@@ -242,32 +256,37 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             $external_message_id = trim((string) ($transaction['external_message_id'] ?? ''));
         }
 
-        $raw_status = $xml_object instanceof SimpleXMLElement
+        $result_code = $xml_object instanceof SimpleXMLElement
             ? $this->first_xml_value($xml_object, [
-                'status',
-                'state',
-                'result',
-                'code',
-                'delivery_status',
+                'result_code',
+                'resultCode',
             ])
             : '';
-        $raw_status_text = $xml_object instanceof SimpleXMLElement
+        $result_text = $xml_object instanceof SimpleXMLElement
             ? $this->first_xml_value($xml_object, [
-                'status_text',
-                'statusText',
-                'message',
-                'description',
-                'error',
+                'result_text',
+                'resultText',
+            ])
+            : '';
+        $session_id = $xml_object instanceof SimpleXMLElement
+            ? $this->first_xml_value($xml_object, [
+                'session_id',
+                'sessionId',
             ])
             : '';
 
-        if ($raw_status === '' && $http_status >= 200 && $http_status < 300) {
-            $raw_status = 'submitted';
-        } elseif ($raw_status === '') {
-            $raw_status = 'failed';
+        if ($session_id === '') {
+            $session_id = trim((string) ($transaction['session_id'] ?? ''));
+        }
+        if ($normalization_error === '' && $result_code === '') {
+            $normalization_error = 'missing_result_code';
+        }
+        if ($http_status < 200 || $http_status >= 300) {
+            $normalization_error = 'http_transport_failed';
         }
 
-        $normalized_status = $this->normalize_submit_status($raw_status, $http_status);
+        $result_text = $this->limit_text($result_text, 500);
+        $normalized_status = $this->normalize_submit_status($result_code, $http_status, $xml_object !== null);
 
         $normalized = [
             'provider' => 'nth',
@@ -280,6 +299,8 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'external_request_id' => $external_request_id,
             'external_message_id' => $external_message_id,
             'external_report_id' => '',
+            'message_ref' => $response_message_ref !== '' ? $response_message_ref : $external_request_id,
+            'session_id' => $session_id,
             'subscriber_reference' => trim((string) ($transaction['subscriber_reference'] ?? '')),
             'shortcode' => trim((string) ($transaction['shortcode'] ?? ($service['shortcode'] ?? ''))),
             'keyword' => trim((string) ($transaction['keyword'] ?? ($service['keyword'] ?? ''))),
@@ -287,8 +308,9 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'operator_code' => trim((string) ($transaction['operator_code'] ?? '')),
             'operator_name' => trim((string) ($transaction['operator_name'] ?? '')),
             'status' => $normalized_status['status'],
-            'aggregator_status_code' => $raw_status,
-            'aggregator_status_text' => $raw_status_text,
+            'aggregator_status_code' => $result_code,
+            'aggregator_status_text' => $result_text,
+            'normalization_error' => $normalization_error,
             'is_terminal' => $normalized_status['is_terminal'],
             'is_success' => $normalized_status['is_success'],
             'occurred_at' => $this->current_time_mysql(),
@@ -303,6 +325,7 @@ class Kiwi_Nth_Premium_Sms_Normalizer
                 $external_request_id,
                 $external_message_id,
                 (string) $http_status,
+                $result_code,
                 $normalized['status'],
             ])
         );
@@ -434,11 +457,9 @@ class Kiwi_Nth_Premium_Sms_Normalizer
         return null;
     }
 
-    private function normalize_submit_status(string $raw_status, int $http_status): array
+    private function normalize_submit_status(string $result_code, int $http_status, bool $has_valid_xml): array
     {
-        $value = strtolower(trim($raw_status));
-
-        if ($value === 'failed' || $http_status < 200 || $http_status >= 300) {
+        if ($http_status < 200 || $http_status >= 300 || !$has_valid_xml || trim($result_code) !== '100') {
             return [
                 'status' => 'mt_submit_failed',
                 'is_terminal' => true,
@@ -451,6 +472,16 @@ class Kiwi_Nth_Premium_Sms_Normalizer
             'is_terminal' => false,
             'is_success' => true,
         ];
+    }
+
+    private function limit_text(string $value, int $max_length): string
+    {
+        $value = trim($value);
+        if ($value === '' || strlen($value) <= $max_length) {
+            return $value;
+        }
+
+        return substr($value, 0, $max_length);
     }
 
     private function build_dedupe_key(array $normalized): string

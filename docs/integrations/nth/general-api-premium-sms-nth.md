@@ -239,6 +239,14 @@ Observed response fields for successful MT submission:
 - `sessionId`
 - `operatorCode`
 
+Repository acceptance rule:
+
+- HTTP `2xx` confirms only that the NTH endpoint answered at the transport layer.
+- A `submitMessage` response is accepted only when its readable XML contains `resultCode=100`.
+- Any other result code, missing result code, empty response, or unreadable XML is normalized as terminal `mt_submit_failed` rather than a pending submit.
+- `resultCode`, `resultText`, `messageId`, `messageRef`, and `sessionId` remain available in the normalized submit event and transaction snapshot for diagnosis and correlation.
+- The FR one-off runtime does not automatically replay a rejected submit.
+
 Use this operation for:
 - MT charging
 - outbound premium SMS delivery
