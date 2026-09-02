@@ -76,8 +76,10 @@ NTH `submitMessage` rejections use `event_type=nth_submit_failed`, `area=aggrega
 
 - `raised`: first failed submit after no open incident;
 - `repeated`: another distinct failed flow for the same service;
-- `resolved`: the first submit accepted with HTTP `2xx` and readable XML `resultCode=100` whose event time is not older than the open failure; an out-of-order older success is ignored;
+- `resolved`: the first submit accepted with HTTP `2xx` and readable XML `resultCode=100` that is processed after the open failure;
 - no row: routine accepted submit while no incident is open.
+
+For this producer, local processing order is authoritative. Request, flow, and session timestamps do not retroactively reorder the service-level incident. For example, if a routine success is processed first, a delayed failure second, and another success third, the failure writes `raised` and the final success writes `resolved`.
 
 The compact context contains only `service_key`, `result_code`, `result_text`, `flow_reference`, and `http_status`. It intentionally excludes subscriber references, session IDs, credentials, headers, and full request/response payloads. Credential-like result text may be centrally masked.
 
@@ -92,6 +94,6 @@ Before any historical false-pending correction, follow the read-only candidate a
 5. Include a long raw error and structured credential-like keys; confirm limits and `[redacted]` values while an allowed test MSISDN remains.
 6. Insert an old disposable test row and run the cleanup service; confirm only rows older than the cutoff are removed.
 7. In a safe test environment, simulate two finalized Session `coverage_gate_failed` runs and one qualified success; confirm `raised`, `repeated`, and one `resolved` under the same skip correlation. Confirm disabled, lock-active, Dry-Run, and Handoff paths write no skip error event.
-8. Simulate two NTH business rejections and one accepted `resultCode=100` response for the same service; confirm `raised`, `repeated`, then one `resolved`, with only the approved compact context and no false pending transaction after either rejection.
+8. Simulate two NTH business rejections and one accepted `resultCode=100` response for the same service; confirm `raised`, `repeated`, then one `resolved`, with only the approved compact context and no false pending transaction after either rejection. Also process a routine success, a delayed failure, and another success in that order while supplying deliberately out-of-order flow timestamps; confirm `raised`, then `resolved`, according to local processing order.
 
 Do not use real credentials, tokens, raw subscriber data, or production-impacting retention changes in a smoke test.

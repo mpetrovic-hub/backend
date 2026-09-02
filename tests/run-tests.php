@@ -10068,7 +10068,7 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service preserves submitted session fallback 
     );
 });
 
-kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service rejects stale success before resolving newer submit incident', function (): void {
+kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service follows local processing order for submit incident transitions', function (): void {
     $config = new Kiwi_Test_Config();
     $operational_repository = new Kiwi_Test_Chronological_Operational_Event_Repository();
     $service = new Kiwi_Nth_Fr_One_Off_Service(
@@ -10088,40 +10088,51 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service rejects stale success before resolvin
         Kiwi_Nth_Fr_One_Off_Service::class,
         'record_submit_operational_transition'
     );
-    $failure = [
-        'status' => 'mt_submit_failed',
-        'is_success' => false,
-        'external_request_id' => 'flow-newer-failure',
-        'aggregator_status_code' => '400',
-        'aggregator_status_text' => 'Request rejected',
-        'occurred_at' => '2026-04-01 12:00:02',
-        'dedupe_key' => 'failure-newer-1',
-    ];
-    $stale_success = [
+    $routine_success = [
         'status' => 'mt_submitted',
         'is_success' => true,
-        'external_request_id' => 'flow-older-success',
+        'external_request_id' => 'flow-success-b',
         'aggregator_status_code' => '100',
         'aggregator_status_text' => 'OK',
-        'occurred_at' => '2026-04-01 12:00:01',
-        'dedupe_key' => 'success-older-1',
+        'occurred_at' => '2026-04-01 10:01:00',
+        'dedupe_key' => 'success-b-1',
     ];
-    $later_success = array_merge($stale_success, [
-        'external_request_id' => 'flow-later-success',
-        'occurred_at' => '2026-04-01 12:00:03',
-        'dedupe_key' => 'success-later-1',
-    ]);
+    $delayed_failure = [
+        'status' => 'mt_submit_failed',
+        'is_success' => false,
+        'external_request_id' => 'flow-failure-a',
+        'aggregator_status_code' => '400',
+        'aggregator_status_text' => 'Request rejected',
+        'occurred_at' => '2026-04-01 10:00:00',
+        'dedupe_key' => 'failure-a-1',
+    ];
+    $recovery_success = [
+        'status' => 'mt_submitted',
+        'is_success' => true,
+        'external_request_id' => 'flow-success-c',
+        'aggregator_status_code' => '100',
+        'aggregator_status_text' => 'OK',
+        'occurred_at' => '2026-04-01 09:59:00',
+        'dedupe_key' => 'success-c-1',
+    ];
 
-    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $failure, ['status_code' => 200]);
-    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $stale_success, ['status_code' => 200]);
-    kiwi_assert_same(1, count($operational_repository->rows), 'Expected an older accepted submit not to resolve a newer failure.');
+    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $routine_success, ['status_code' => 200]);
+    kiwi_assert_same(0, count($operational_repository->rows), 'Expected a routine success without an open incident to write no event.');
+    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $delayed_failure, ['status_code' => 200]);
+    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $recovery_success, ['status_code' => 200]);
 
-    $record_transition->invoke($service, 'nth_fr_one_off_jplay', $later_success, ['status_code' => 200]);
-    $latest = $operational_repository->find_latest_by_correlation_key(
-        (string) array_values($operational_repository->rows)[0]['correlation_key']
+    $operational_rows = array_values($operational_repository->rows);
+    kiwi_assert_same(2, count($operational_rows), 'Expected the delayed failure and next processed success to write two transitions.');
+    kiwi_assert_same(['raised', 'resolved'], array_column($operational_rows, 'lifecycle_action'), 'Expected local processing order to control the lifecycle.');
+    kiwi_assert_same(
+        ['2026-04-01 12:00:00', '2026-04-01 12:00:00'],
+        array_column($operational_rows, 'occurred_at'),
+        'Expected Operational Event times to be assigned when transitions are recorded.'
     );
-    kiwi_assert_same(2, count($operational_repository->rows), 'Expected the first later accepted submit to append one resolution.');
-    kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the later accepted submit to close the incident.');
+    $latest = $operational_repository->find_latest_by_correlation_key(
+        (string) ($operational_rows[0]['correlation_key'] ?? '')
+    );
+    kiwi_assert_same('resolved', $latest['lifecycle_action'] ?? '', 'Expected the final processed success to close the incident.');
 });
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service keeps accepted submits successful when Operational Event persistence fails', function (): void {

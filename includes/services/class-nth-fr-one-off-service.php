@@ -428,7 +428,6 @@ class Kiwi_Nth_Fr_One_Off_Service
             'correlation_key' => $correlation_key,
             'reference_type' => 'nth_flow',
             'reference_id' => $flow_reference,
-            'occurred_at' => (string) ($submit_event['occurred_at'] ?? ''),
             'context' => [
                 'service_key' => $service_key,
                 'result_code' => $result_code,
@@ -442,23 +441,7 @@ class Kiwi_Nth_Fr_One_Off_Service
             if (!empty($submit_event['is_success'])) {
                 $event['severity'] = 'info';
                 $event['message'] = 'NTH submitMessage was accepted after an earlier failure.';
-                $recovery_occurred_at = trim((string) ($event['occurred_at'] ?? ''));
-                $this->operational_event_service->record_recovery_action_if(
-                    $event,
-                    static function (?array $latest) use ($recovery_occurred_at): bool {
-                        if (!is_array($latest)) {
-                            return true;
-                        }
-
-                        $latest_occurred_at = trim((string) ($latest['occurred_at'] ?? ''));
-                        if ($latest_occurred_at === '') {
-                            return true;
-                        }
-
-                        return $recovery_occurred_at !== ''
-                            && strcmp($recovery_occurred_at, $latest_occurred_at) >= 0;
-                    }
-                );
+                $this->operational_event_service->record_recovery_action($event);
 
                 return;
             }

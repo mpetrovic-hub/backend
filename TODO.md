@@ -173,6 +173,19 @@ In manchen response-Fällen wird von nth keine operator-info im payload übergeb
 - Keine neue Tabelle
 - Keine Änderungen an der Flow-Logik, NTH-Integration oder irgendeiner anderen User-Flow/Billing Integration
 
+### Separate Folgearbeit nach Issue #109
+
+Die feinere Auswertung der NTH-`submitMessage`-Ergebnisse wird ausdrücklich nicht in Issue `#109` erweitert. Issue `#109` bleibt auf die korrekte Behandlung abgelehnter Submits als fehlgeschlagene statt fälschlich wartende Vorgänge begrenzt.
+
+In einer separaten Planung ist zu klären:
+
+- wie `resultCode` und `resultText` strukturiert und effizient auswertbar in den bestehenden NTH-Events bereitgestellt werden;
+- wie Häufigkeiten und Fehlerquoten je Service und Zeitraum ausgewertet werden können;
+- welche `resultCode`-/`resultText`-Kombinationen erwartbare Business-Ablehnungen, Integrations-/Konfigurationsfehler oder Aggregator-Störungen darstellen;
+- ob und ab welchen Bedingungen einzelne Ergebnisse oder auffällige Fehlerquoten einen eigenen Operational Incident auslösen sollen.
+
+Keine dieser Analyse-, Klassifizierungs- oder Schwellenwertentscheidungen soll als Nebenwirkung von Issue `#109` implementiert werden.
+
 
 
 ## 5: GitHub Actions PHP-Testworkflow fuer `backend` Repo einrichten
