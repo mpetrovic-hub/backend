@@ -275,6 +275,28 @@ class Kiwi_Test_Database_Deployment_Wpdb
             }, (array) ($this->objects[$object_name]['columns'] ?? []));
         }
 
+        if (strpos($query, 'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM information_schema.COLUMNS') === 0) {
+            if ($object_name === $this->column_inspection_error_for) {
+                $this->last_error = 'information_schema access denied; password=must-not-leak; MSISDN=436641234567';
+
+                return [];
+            }
+
+            $rows = [];
+
+            foreach ((array) ($this->objects[$object_name]['column_metadata'] ?? []) as $column_name => $metadata) {
+                $rows[] = [
+                    'COLUMN_NAME' => $column_name,
+                    'COLUMN_TYPE' => (string) ($metadata['type'] ?? ''),
+                    'IS_NULLABLE' => !empty($metadata['nullable']) ? 'YES' : 'NO',
+                    'COLUMN_DEFAULT' => $metadata['default'] ?? null,
+                    'EXTRA' => (string) ($metadata['extra'] ?? ''),
+                ];
+            }
+
+            return $rows;
+        }
+
         if (strpos($query, 'SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS') === 0) {
             return array_map(static function (string $index): array {
                 return ['INDEX_NAME' => $index];
@@ -568,6 +590,78 @@ kiwi_run_test('Kiwi database status rejects forbidden legacy indexes', function 
     kiwi_assert_same(false, $result['ready'], 'Expected a forbidden legacy index to fail green status.');
     kiwi_assert_same(1, count($legacy_drift), 'Expected exact legacy-index drift evidence.');
     kiwi_assert_same('legacy_index', $legacy_drift[0]['index'] ?? '', 'Expected drift to identify the forbidden index.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database status rejects a nullable allocation version column', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = [
+        'kiwi_test_assignments' => [
+            'columns' => ['allocation_version'],
+            'indexes' => [],
+            'column_metadata' => [
+                'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
+            ],
+        ],
+    ];
+    $wpdb->objects['abc_kiwi_test_assignments'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['allocation_version'],
+        'indexes' => [],
+        'column_metadata' => [
+            'allocation_version' => ['type' => 'varchar(50)', 'nullable' => true, 'default' => null, 'extra' => ''],
+        ],
+    ];
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION,
+    ];
+    $result = (new Kiwi_Test_Database_Deployment_Service([], $contract))->status();
+    $definition_drift = array_values(array_filter($result['drift'], static function (array $drift): bool {
+        return ($drift['kind'] ?? '') === 'column_definition_mismatch';
+    }));
+
+    kiwi_assert_same(false, $result['ready'], 'Expected nullable allocation_version to fail green status.');
+    kiwi_assert_same('allocation_version', $definition_drift[0]['column'] ?? '', 'Expected drift to identify the nullable allocation-version column.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database status rejects a non-legacy allocation version default', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = [
+        'kiwi_test_summary' => [
+            'columns' => ['allocation_version'],
+            'indexes' => [],
+            'column_metadata' => [
+                'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
+            ],
+        ],
+    ];
+    $wpdb->objects['abc_kiwi_test_summary'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['allocation_version'],
+        'indexes' => [],
+        'column_metadata' => [
+            'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => '', 'extra' => ''],
+        ],
+    ];
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION,
+    ];
+    $result = (new Kiwi_Test_Database_Deployment_Service([], $contract))->status();
+    $definition_drift = array_values(array_filter($result['drift'], static function (array $drift): bool {
+        return ($drift['kind'] ?? '') === 'column_definition_mismatch';
+    }));
+
+    kiwi_assert_same(false, $result['ready'], 'Expected a blank allocation_version default to fail green status.');
+    kiwi_assert_same('allocation_version', $definition_drift[0]['column'] ?? '', 'Expected drift to identify the wrongly defaulted allocation-version column.');
 
     $wpdb = $previous_wpdb;
 });
@@ -939,6 +1033,17 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
     kiwi_assert_true(
         in_array('allocation_version', $contract['kiwi_sms_body_variant_summary']['columns'] ?? [], true),
         'Expected SMS body summary rows to expose allocation_version as a deployment postcondition.'
+    );
+    $allocation_version_metadata = ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''];
+    kiwi_assert_same(
+        $allocation_version_metadata,
+        $contract['kiwi_sms_body_variant_assignments']['column_metadata']['allocation_version'] ?? [],
+        'Expected assignment allocation_version to require the canonical non-null legacy default.'
+    );
+    kiwi_assert_same(
+        $allocation_version_metadata,
+        $contract['kiwi_sms_body_variant_summary']['column_metadata']['allocation_version'] ?? [],
+        'Expected summary allocation_version to require the canonical non-null legacy default.'
     );
     kiwi_assert_true(
         in_array('variant_summary_version', $contract['kiwi_sms_body_variant_summary']['indexes'] ?? [], true),

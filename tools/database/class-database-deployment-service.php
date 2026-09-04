@@ -388,9 +388,13 @@ class Kiwi_Database_Deployment_Service
                 continue;
             }
 
+            $expected_column_metadata = (array) ($definition['column_metadata'] ?? []);
+            $column_select = empty($expected_column_metadata)
+                ? 'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s'
+                : 'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s';
             $column_rows = $wpdb->get_results(
                 $wpdb->prepare(
-                    'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+                    $column_select,
                     $object_name
                 ),
                 ARRAY_A
@@ -422,6 +426,31 @@ class Kiwi_Database_Deployment_Service
                         'kind' => 'legacy_column',
                         'object' => $object_name,
                         'column' => $column,
+                    ];
+                }
+            }
+
+            if (!empty($expected_column_metadata)) {
+                $actual_column_metadata = $this->collect_column_metadata($column_rows);
+
+                foreach ($expected_column_metadata as $column_name => $expected_metadata) {
+                    if (!in_array($column_name, $columns, true)) {
+                        continue;
+                    }
+
+                    $expected_metadata = $this->normalize_column_metadata((array) $expected_metadata);
+                    $actual_metadata = $actual_column_metadata[$column_name] ?? null;
+
+                    if ($actual_metadata === $expected_metadata) {
+                        continue;
+                    }
+
+                    $drift[] = [
+                        'kind' => 'column_definition_mismatch',
+                        'object' => $object_name,
+                        'column' => $column_name,
+                        'expected' => $expected_metadata,
+                        'actual' => $actual_metadata,
                     ];
                 }
             }
@@ -661,6 +690,80 @@ class Kiwi_Database_Deployment_Service
         }
 
         return $metadata;
+    }
+
+    private function collect_column_metadata($rows): array
+    {
+        $metadata = [];
+
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $column_name = trim((string) ($row['COLUMN_NAME'] ?? ''));
+
+            if ($column_name === '') {
+                continue;
+            }
+
+            $metadata[$column_name] = $this->normalize_column_metadata([
+                'type' => (string) ($row['COLUMN_TYPE'] ?? ''),
+                'nullable' => strtoupper(trim((string) ($row['IS_NULLABLE'] ?? ''))) === 'YES',
+                'default' => $row['COLUMN_DEFAULT'] ?? null,
+                'extra' => (string) ($row['EXTRA'] ?? ''),
+            ]);
+        }
+
+        return $metadata;
+    }
+
+    private function normalize_column_metadata(array $metadata): array
+    {
+        return [
+            'type' => $this->normalize_column_type((string) ($metadata['type'] ?? '')),
+            'nullable' => !empty($metadata['nullable']),
+            'default' => $this->normalize_column_default($metadata['default'] ?? null),
+            'extra' => $this->normalize_column_extra((string) ($metadata['extra'] ?? '')),
+        ];
+    }
+
+    private function normalize_column_type(string $type): string
+    {
+        $type = strtolower(trim((string) preg_replace('/\s+/', ' ', $type)));
+        $type = (string) preg_replace('/\b(bigint|int|integer|smallint|mediumint)\([0-9]+\)/', '$1', $type);
+        $type = (string) preg_replace('/\bdatetime\(0\)/', 'datetime', $type);
+
+        return trim((string) preg_replace('/\s+/', ' ', $type));
+    }
+
+    private function normalize_column_default($default): ?string
+    {
+        if ($default === null) {
+            return null;
+        }
+
+        $default = trim((string) $default);
+
+        if (strcasecmp($default, 'NULL') === 0) {
+            return null;
+        }
+
+        if (strlen($default) >= 2 && $default[0] === "'" && substr($default, -1) === "'") {
+            return str_replace("''", "'", substr($default, 1, -1));
+        }
+
+        return $default;
+    }
+
+    private function normalize_column_extra(string $extra): string
+    {
+        $tokens = preg_split('/\s+/', strtolower(trim($extra))) ?: [];
+        $tokens = array_values(array_filter($tokens, static function (string $token): bool {
+            return $token !== '' && $token !== 'default_generated';
+        }));
+
+        return implode(' ', $tokens);
     }
 
     private function failure_result(string $phase, string $error_code, string $error_message): array
