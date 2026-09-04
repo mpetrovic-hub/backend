@@ -537,8 +537,9 @@ class Kiwi_Database_Deployment_Service
             }
 
             $expected_index_metadata = (array) ($definition['index_metadata'] ?? []);
+            $legacy_index_definitions = (array) ($definition['legacy_index_definitions'] ?? []);
 
-            if (empty($expected_index_metadata)) {
+            if (empty($expected_index_metadata) && empty($legacy_index_definitions)) {
                 continue;
             }
 
@@ -561,6 +562,39 @@ class Kiwi_Database_Deployment_Service
             }
 
             $actual_index_metadata = $this->collect_index_metadata($index_metadata_rows);
+
+            foreach ($legacy_index_definitions as $legacy_definition) {
+                $legacy_definition = (array) $legacy_definition;
+                $legacy_unique = array_key_exists('unique', $legacy_definition)
+                    ? (bool) $legacy_definition['unique']
+                    : null;
+                $legacy_columns = array_key_exists('columns', $legacy_definition)
+                    ? array_values(array_map('strval', (array) $legacy_definition['columns']))
+                    : null;
+                $legacy_sub_parts = array_key_exists('sub_parts', $legacy_definition)
+                    ? array_values(array_map(static function ($value): ?int {
+                        return $value === null ? null : (int) $value;
+                    }, (array) $legacy_definition['sub_parts']))
+                    : null;
+                $legacy_type = array_key_exists('type', $legacy_definition)
+                    ? strtoupper(trim((string) $legacy_definition['type']))
+                    : null;
+
+                foreach ($actual_index_metadata as $index_name => $actual_metadata) {
+                    if (($legacy_unique === null || ($actual_metadata['unique'] ?? null) === $legacy_unique)
+                        && ($legacy_columns === null || ($actual_metadata['columns'] ?? []) === $legacy_columns)
+                        && ($legacy_sub_parts === null || ($actual_metadata['sub_parts'] ?? []) === $legacy_sub_parts)
+                        && ($legacy_type === null || ($actual_metadata['type'] ?? '') === $legacy_type)
+                    ) {
+                        $drift[] = [
+                            'kind' => 'legacy_index_definition',
+                            'object' => $object_name,
+                            'index' => $index_name,
+                            'actual' => $actual_metadata,
+                        ];
+                    }
+                }
+            }
 
             foreach ($expected_index_metadata as $index_name => $expected_metadata) {
                 if (!in_array($index_name, $indexes, true)) {

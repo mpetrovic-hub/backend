@@ -15,6 +15,12 @@ class Kiwi_Sms_Body_Variant_Repository
         'seed',
         'allocation_version',
     ];
+    private const LEGACY_SUMMARY_UNIQUE_COLUMNS = [
+        'landing_key',
+        'service_key',
+        'variant_key',
+        'seed',
+    ];
     private const SUMMARY_UNIQUE_SUB_PARTS = [null, null, null, null, null];
     private const SUMMARY_UNIQUE_TYPE = 'BTREE';
     private const TRANSACTIONAL_ENGINE = 'InnoDB';
@@ -566,8 +572,74 @@ class Kiwi_Sms_Body_Variant_Repository
             return false;
         }
 
+        $provider_key = $this->sanitize_key((string) ($assignment['provider_key'] ?? ''), 50);
+        $flow_key = $this->sanitize_key((string) ($assignment['flow_key'] ?? ''), 50);
         $now = $this->current_time_mysql();
         $table_name = $this->get_summary_table_name();
+        $upsert_result = $wpdb->query(
+            $wpdb->prepare(
+                "INSERT INTO {$table_name} (
+                    created_at,
+                    updated_at,
+                    landing_key,
+                    service_key,
+                    provider_key,
+                    flow_key,
+                    variant_key,
+                    seed,
+                    assignments,
+                    cta1,
+                    handoff_attempted,
+                    handoff_hidden,
+                    handoff_no_hide,
+                    handoff_returned,
+                    conv,
+                    cta1_cr,
+                    handoff_hidden_cr,
+                    conv_cr,
+                    conv_per_cta1_cr,
+                    conv_per_hidden_cr
+                ) VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                )
+                ON DUPLICATE KEY UPDATE
+                    updated_at = VALUES(updated_at),
+                    provider_key = IF(provider_key = '', VALUES(provider_key), provider_key),
+                    flow_key = IF(flow_key = '', VALUES(flow_key), flow_key)",
+                $now,
+                $now,
+                $landing_key,
+                $service_key,
+                $provider_key,
+                $flow_key,
+                $variant_key,
+                $seed
+            )
+        );
+
+        if ($upsert_result === false) {
+            return false;
+        }
+
         $increment_result = $wpdb->query(
             $wpdb->prepare(
                 "UPDATE {$table_name}
@@ -734,19 +806,76 @@ class Kiwi_Sms_Body_Variant_Repository
             throw new RuntimeException('The versioned SMS body summary unique index was not created as required.');
         }
 
-        $legacy_index = $this->read_index_definition($summary_table, self::LEGACY_SUMMARY_UNIQUE_INDEX);
+        $candidate_names = array_values(array_unique(array_merge(
+            [self::LEGACY_SUMMARY_UNIQUE_INDEX],
+            $this->read_unique_index_names($summary_table)
+        )));
 
-        if (($legacy_index['present'] ?? false) !== true) {
-            return;
+        foreach ($candidate_names as $index_name) {
+            if ($index_name === self::SUMMARY_UNIQUE_INDEX) {
+                continue;
+            }
+
+            $index = $this->read_index_definition($summary_table, $index_name);
+            $is_legacy_identity = ($index['unique'] ?? false) === true
+                && ($index['columns'] ?? []) === self::LEGACY_SUMMARY_UNIQUE_COLUMNS;
+
+            if (($index['present'] ?? false) !== true
+                || ($index_name !== self::LEGACY_SUMMARY_UNIQUE_INDEX && !$is_legacy_identity)
+            ) {
+                continue;
+            }
+
+            $result = $wpdb->query(
+                "ALTER TABLE {$summary_table} DROP INDEX " . $this->quote_index_name($index_name)
+            );
+
+            if ($result === false) {
+                throw new RuntimeException('A legacy SMS body summary unique index could not be removed.');
+            }
+        }
+    }
+
+    private function read_unique_index_names(string $table_name): array
+    {
+        global $wpdb;
+
+        if (!is_object($wpdb) || !method_exists($wpdb, 'get_results') || !method_exists($wpdb, 'prepare')) {
+            throw new RuntimeException('Database index inspection is unavailable.');
         }
 
-        $result = $wpdb->query(
-            "ALTER TABLE {$summary_table} DROP INDEX " . self::LEGACY_SUMMARY_UNIQUE_INDEX
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                'SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND NON_UNIQUE = 0',
+                $table_name
+            ),
+            ARRAY_A
         );
 
-        if ($result === false) {
-            throw new RuntimeException('The legacy SMS body summary unique index could not be removed.');
+        if (!is_array($rows)) {
+            throw new RuntimeException('Database unique-index inspection failed.');
         }
+
+        $names = [];
+
+        foreach ($rows as $row) {
+            $index_name = is_array($row) ? trim((string) ($row['INDEX_NAME'] ?? '')) : '';
+
+            if ($index_name !== '') {
+                $names[] = $index_name;
+            }
+        }
+
+        return array_values(array_unique($names));
+    }
+
+    private function quote_index_name(string $index_name): string
+    {
+        if (preg_match('/^[A-Za-z0-9_]+$/', $index_name) === 1) {
+            return $index_name;
+        }
+
+        return '`' . str_replace('`', '``', $index_name) . '`';
     }
 
     private function read_index_definition(string $table_name, string $index_name): array

@@ -146,6 +146,12 @@ return [
         'columns' => ['id', 'created_at', 'updated_at', 'landing_key', 'service_key', 'provider_key', 'flow_key', 'variant_key', 'seed', 'allocation_version', 'assignments', 'cta1', 'handoff_attempted', 'handoff_hidden', 'handoff_no_hide', 'handoff_returned', 'conv', 'cta1_cr', 'handoff_hidden_cr', 'conv_cr', 'conv_per_cta1_cr', 'conv_per_hidden_cr'],
         'indexes' => ['PRIMARY', 'variant_summary_version', 'landing_key', 'service_key', 'provider_key', 'flow_key', 'variant_key', 'seed', 'allocation_version', 'updated_at'],
         'legacy_indexes' => ['variant_summary'],
+        'legacy_index_definitions' => [
+            [
+                'unique' => true,
+                'columns' => ['landing_key', 'service_key', 'variant_key', 'seed'],
+            ],
+        ],
         'column_metadata' => [
             'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
         ],

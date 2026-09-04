@@ -4637,12 +4637,13 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                 return false;
             }
 
+            $has_allocation_version = stripos($query, 'allocation_version') !== false;
             $row_id = $this->find_summary_row_id(
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
                 (string) ($args[6] ?? ''),
                 (string) ($args[7] ?? ''),
-                (string) ($args[8] ?? '')
+                $has_allocation_version ? (string) ($args[8] ?? '') : null
             );
 
             if ($row_id === null) {
@@ -4657,7 +4658,6 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                     'flow_key' => (string) ($args[5] ?? ''),
                     'variant_key' => (string) ($args[6] ?? ''),
                     'seed' => (string) ($args[7] ?? ''),
-                    'allocation_version' => (string) ($args[8] ?? ''),
                     'assignments' => 0,
                     'cta1' => 0,
                     'handoff_attempted' => 0,
@@ -4671,6 +4671,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                     'conv_per_cta1_cr' => 0.0,
                     'conv_per_hidden_cr' => 0.0,
                 ];
+
+                if ($has_allocation_version) {
+                    $this->tables[$summary_table][$row_id]['allocation_version'] = (string) ($args[8] ?? '');
+                }
             } else {
                 $this->tables[$summary_table][$row_id]['updated_at'] = (string) ($args[1] ?? '');
             }
@@ -8226,6 +8230,50 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository records events against the legac
     }
 });
 
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recreates a missing legacy summary before recording an event', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $wpdb->versioned_schema = false;
+    $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+    $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+    $wpdb->tables[$assignment_table][1] = [
+        'id' => 1,
+        'created_at' => '2026-09-04 15:00:00',
+        'updated_at' => '2026-09-04 15:00:00',
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'session_token' => 'sess-legacy-missing-summary',
+        'transaction_id' => 'txn_legacy_missing_summary_12345678',
+        'visible_token' => 'BonusJeuxlegacy_missing_summary_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'conv_recorded_at' => null,
+    ];
+
+    try {
+        $recorded = (new Kiwi_Sms_Body_Variant_Repository())->mark_event_by_transaction_id(
+            'txn_legacy_missing_summary_12345678',
+            'conv'
+        );
+        $summary = array_values($wpdb->tables[$summary_table] ?? [])[0] ?? [];
+
+        kiwi_assert_same(true, $recorded, 'Expected a pre-version event to repair a missing summary row inside its transaction.');
+        kiwi_assert_true(trim((string) ($wpdb->tables[$assignment_table][1]['conv_recorded_at'] ?? '')) !== '', 'Expected the legacy assignment marker to commit only with the repaired summary counter.');
+        kiwi_assert_same(1, (int) ($summary['conv'] ?? 0), 'Expected the recreated legacy summary to retain the event metric.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recalculates summary rates from persisted counters', function (): void {
     global $wpdb;
 
@@ -8662,6 +8710,90 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository converts existing SMS tables to 
             'ALTER TABLE abc_kiwi_sms_body_variant_assignments ENGINE=InnoDB',
             'ALTER TABLE abc_kiwi_sms_body_variant_summary ENGINE=InnoDB',
         ], $engine_queries, 'Expected the external schema step to convert both existing SMS variant tables to transactional storage.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository removes a renamed legacy summary identity', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $index_name = (string) (($statement['args'] ?? [])[1] ?? '');
+
+            if ($index_name === 'variant_summary_version') {
+                return array_map(static function (string $column, int $offset): array {
+                    return [
+                        'INDEX_NAME' => 'variant_summary_version',
+                        'NON_UNIQUE' => '0',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                        'SUB_PART' => null,
+                        'INDEX_TYPE' => 'BTREE',
+                    ];
+                }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
+            }
+
+            if ($index_name === 'legacy_summary_copy') {
+                return array_map(static function (string $column, int $offset): array {
+                    return [
+                        'INDEX_NAME' => 'legacy_summary_copy',
+                        'NON_UNIQUE' => '0',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                        'SUB_PART' => null,
+                        'INDEX_TYPE' => 'BTREE',
+                    ];
+                }, ['landing_key', 'service_key', 'variant_key', 'seed'], array_keys(range(0, 3)));
+            }
+
+            if ($index_name === '') {
+                return [
+                    ['INDEX_NAME' => 'variant_summary_version'],
+                    ['INDEX_NAME' => 'legacy_summary_copy'],
+                ];
+            }
+
+            return [];
+        }
+
+        public function query($statement)
+        {
+            $this->queries[] = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+
+            return 1;
+        }
+    };
+
+    try {
+        (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+
+        kiwi_assert_contains('ALTER TABLE abc_kiwi_sms_body_variant_summary DROP INDEX legacy_summary_copy', implode("\n", $wpdb->queries), 'Expected a renamed copy of the legacy four-column unique identity to be removed after replacement verification.');
     } finally {
         $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
         $wpdb = $previous_wpdb;
