@@ -17,6 +17,7 @@ class Kiwi_Sms_Body_Variant_Repository
     ];
     private const SUMMARY_UNIQUE_SUB_PARTS = [null, null, null, null, null];
     private const SUMMARY_UNIQUE_TYPE = 'BTREE';
+    private const TRANSACTIONAL_ENGINE = 'InnoDB';
 
     private function get_assignments_table_name(): string
     {
@@ -82,7 +83,7 @@ class Kiwi_Sms_Body_Variant_Repository
             KEY seed (seed),
             KEY allocation_version (allocation_version),
             KEY created_at (created_at)
-        ) {$charset_collate};";
+        ) ENGINE=InnoDB {$charset_collate};";
 
         $summary_sql = "CREATE TABLE {$summary_table} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -117,7 +118,7 @@ class Kiwi_Sms_Body_Variant_Repository
             KEY seed (seed),
             KEY allocation_version (allocation_version),
             KEY updated_at (updated_at)
-        ) {$charset_collate};";
+        ) ENGINE=InnoDB {$charset_collate};";
 
         if (!function_exists('dbDelta')) {
             require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -125,6 +126,8 @@ class Kiwi_Sms_Body_Variant_Repository
 
         dbDelta($assignments_sql);
         dbDelta($summary_sql);
+        $this->ensure_transactional_table($assignments_table);
+        $this->ensure_transactional_table($summary_table);
         $this->finalize_versioned_summary_index($summary_table);
     }
 
@@ -662,6 +665,59 @@ class Kiwi_Sms_Body_Variant_Repository
             'cta_phrase',
             'download_phrase',
         ], true);
+    }
+
+    private function ensure_transactional_table(string $table_name): void
+    {
+        global $wpdb;
+
+        if (!is_object($wpdb)
+            || !method_exists($wpdb, 'get_var')
+            || !method_exists($wpdb, 'prepare')
+            || !method_exists($wpdb, 'query')
+        ) {
+            throw new RuntimeException('Database table engine management is unavailable.');
+        }
+
+        if (strcasecmp($this->read_table_engine($table_name), self::TRANSACTIONAL_ENGINE) === 0) {
+            return;
+        }
+
+        $result = $wpdb->query(
+            "ALTER TABLE {$table_name} ENGINE=" . self::TRANSACTIONAL_ENGINE
+        );
+
+        if ($result === false
+            || strcasecmp($this->read_table_engine($table_name), self::TRANSACTIONAL_ENGINE) !== 0
+        ) {
+            throw new RuntimeException('The SMS body variant table could not be converted to transactional storage.');
+        }
+    }
+
+    private function read_table_engine(string $table_name): string
+    {
+        global $wpdb;
+
+        if (property_exists($wpdb, 'last_error')) {
+            $wpdb->last_error = '';
+        }
+
+        $engine = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+                $table_name
+            )
+        );
+
+        if ($engine === null
+            || $engine === false
+            || trim((string) $engine) === ''
+            || trim((string) ($wpdb->last_error ?? '')) !== ''
+        ) {
+            throw new RuntimeException('The SMS body variant table engine could not be verified.');
+        }
+
+        return trim((string) $engine);
     }
 
     private function finalize_versioned_summary_index(string $summary_table): void

@@ -8326,6 +8326,57 @@ kiwi_run_test('Kiwi_Config keeps SMS body variant writes disabled by default', f
     kiwi_assert_same(false, $config->is_sms_body_variant_experiment_enabled(), 'Expected schema-dependent SMS variant writes to require explicit enablement.');
 });
 
+kiwi_run_test('Kiwi_Sms_Body_Variant_Service serves stored assignments while enrollment is disabled', function (): void {
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $repository->insert_if_new([
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-stored-disabled',
+        'transaction_id' => 'txn_stored_disabled_12345678',
+        'visible_token' => 'BonusJeuxstored_disabled_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'allocation_version' => 'fr_sms_v2',
+        'sms_body' => 'JPLAY BonusJeuxstored_disabled_12345678',
+    ]);
+    $service = new Kiwi_Sms_Body_Variant_Service(
+        new Kiwi_Test_Sms_Body_Variant_Disabled_Config(),
+        $repository
+    );
+    $landing = [
+        'key' => 'lp5-fr',
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $nth_service = [
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+
+    $stored = $service->build_variant_body('JPLAY', '84072', $landing, $nth_service, [
+        'transaction_id' => 'txn_stored_disabled_12345678',
+        'session_ref' => 'sess-stored-disabled',
+    ]);
+    $new = $service->build_variant_body('JPLAY', '84072', $landing, $nth_service, [
+        'transaction_id' => 'txn_new_disabled_87654321',
+        'session_ref' => 'sess-new-disabled',
+    ]);
+
+    kiwi_assert_same('JPLAY BonusJeuxstored_disabled_12345678', (string) ($stored['body'] ?? ''), 'Expected a returning session to keep its stored variant body while enrollment is paused.');
+    kiwi_assert_same('fr_sms_v2', (string) ($stored['assignment']['allocation_version'] ?? ''), 'Expected the stored assignment identity to remain intact.');
+    kiwi_assert_same(null, $new, 'Expected disabled enrollment not to create an assignment for a new transaction.');
+    kiwi_assert_same(1, count($repository->assignments), 'Expected disabled enrollment to reuse only the existing assignment.');
+});
+
 kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocation and renders every SMS form', function (): void {
     $config = new Kiwi_Test_Config();
     $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
@@ -8477,6 +8528,11 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository schema versions assignments and 
             return ['query' => (string) $query, 'args' => $args];
         }
 
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
+        }
+
         public function get_results($statement, $output = null): array
         {
             $args = (array) ($statement['args'] ?? []);
@@ -8522,8 +8578,90 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository schema versions assignments and 
 
         kiwi_assert_same(2, count($GLOBALS['kiwi_test_dbdelta_queries']), 'Expected assignment and summary schema statements.');
         kiwi_assert_same(2, substr_count($sql, "allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy'"), 'Expected both tables to default historical rows to legacy.');
+        kiwi_assert_same(2, substr_count($sql, 'ENGINE=InnoDB'), 'Expected both SMS variant tables to declare transactional storage.');
         kiwi_assert_contains('UNIQUE KEY variant_summary_version (landing_key, service_key, variant_key, seed, allocation_version)', $sql, 'Expected summary uniqueness to include allocation_version.');
         kiwi_assert_contains('ALTER TABLE abc_kiwi_sms_body_variant_summary DROP INDEX variant_summary', implode("\n", $wpdb->queries), 'Expected the old narrower unique index to be removed only after the versioned index is verified.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository converts existing SMS tables to InnoDB before finalizing indexes', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+        public $engines = [
+            'abc_kiwi_sms_body_variant_assignments' => 'MyISAM',
+            'abc_kiwi_sms_body_variant_summary' => 'MyISAM',
+        ];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement)
+        {
+            $table_name = (string) (($statement['args'] ?? [])[0] ?? '');
+
+            return $this->engines[$table_name] ?? null;
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $index_name = (string) (($statement['args'] ?? [])[1] ?? '');
+
+            if ($index_name !== 'variant_summary_version') {
+                return [];
+            }
+
+            return array_map(static function (string $column, int $offset): array {
+                return [
+                    'INDEX_NAME' => 'variant_summary_version',
+                    'NON_UNIQUE' => '0',
+                    'SEQ_IN_INDEX' => (string) ($offset + 1),
+                    'COLUMN_NAME' => $column,
+                    'SUB_PART' => null,
+                    'INDEX_TYPE' => 'BTREE',
+                ];
+            }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $this->queries[] = $query;
+
+            if (preg_match('/^ALTER TABLE ([A-Za-z0-9_]+) ENGINE=InnoDB$/', $query, $matches) === 1) {
+                $this->engines[$matches[1]] = 'InnoDB';
+            }
+
+            return 1;
+        }
+    };
+
+    try {
+        (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+        $engine_queries = array_values(array_filter($wpdb->queries, static function (string $query): bool {
+            return strpos($query, ' ENGINE=InnoDB') !== false;
+        }));
+
+        kiwi_assert_same([
+            'ALTER TABLE abc_kiwi_sms_body_variant_assignments ENGINE=InnoDB',
+            'ALTER TABLE abc_kiwi_sms_body_variant_summary ENGINE=InnoDB',
+        ], $engine_queries, 'Expected the external schema step to convert both existing SMS variant tables to transactional storage.');
     } finally {
         $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
         $wpdb = $previous_wpdb;
@@ -8549,6 +8687,11 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository preserves the legacy index when 
         public function prepare($query, ...$args)
         {
             return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
         }
 
         public function get_results($statement, $output = null): array
@@ -8620,6 +8763,11 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository rejects a prefix-truncated repla
         public function prepare($query, ...$args)
         {
             return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
         }
 
         public function get_results($statement, $output = null): array

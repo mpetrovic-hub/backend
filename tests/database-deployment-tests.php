@@ -225,6 +225,7 @@ class Kiwi_Test_Database_Deployment_Wpdb
     {
         [$query, $args] = $this->unpack($statement);
         $this->queries[] = $query;
+        $object_name = (string) ($args[0] ?? '');
 
         if (strpos($query, 'SELECT GET_LOCK(') === 0) {
             if (!$this->lock_available || $this->lock_held) {
@@ -243,8 +244,6 @@ class Kiwi_Test_Database_Deployment_Wpdb
         }
 
         if (strpos($query, 'SELECT TABLE_TYPE FROM information_schema.TABLES') === 0) {
-            $object_name = (string) ($args[0] ?? '');
-
             if ($object_name === $this->table_inspection_error_for) {
                 $this->last_error = 'information_schema table access denied; password=must-not-leak; MSISDN=436641234567';
 
@@ -252,6 +251,10 @@ class Kiwi_Test_Database_Deployment_Wpdb
             }
 
             return $this->objects[$object_name]['type'] ?? null;
+        }
+
+        if (strpos($query, 'SELECT ENGINE FROM information_schema.TABLES') === 0) {
+            return $this->objects[$object_name]['engine'] ?? null;
         }
 
         return null;
@@ -494,6 +497,39 @@ kiwi_run_test('Kiwi database status reports missing tables, columns, and indexes
 
     kiwi_assert_true(in_array('missing_column', $kinds, true), 'Expected a missing column to block status.');
     kiwi_assert_true(in_array('missing_index', $kinds, true), 'Expected a missing index to block status.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database status rejects a non-transactional required table engine', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = [
+        'kiwi_test_table' => [
+            'engine' => 'InnoDB',
+            'columns' => ['id'],
+            'indexes' => ['PRIMARY'],
+        ],
+    ];
+    $wpdb->objects['abc_kiwi_test_table'] = [
+        'type' => 'BASE TABLE',
+        'engine' => 'MyISAM',
+        'columns' => ['id'],
+        'indexes' => ['PRIMARY'],
+    ];
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION,
+    ];
+    $result = (new Kiwi_Test_Database_Deployment_Service([], $contract))->status();
+    $engine_drift = array_values(array_filter($result['drift'], static function (array $drift): bool {
+        return ($drift['kind'] ?? '') === 'table_engine_mismatch';
+    }));
+
+    kiwi_assert_same(false, $result['ready'], 'Expected a non-transactional table engine to fail green status.');
+    kiwi_assert_same('InnoDB', $engine_drift[0]['expected'] ?? '', 'Expected drift to report the required transactional engine.');
+    kiwi_assert_same('MyISAM', $engine_drift[0]['actual'] ?? '', 'Expected drift to report the observed non-transactional engine.');
 
     $wpdb = $previous_wpdb;
 });
@@ -1084,6 +1120,8 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
         in_array('allocation_version', $contract['kiwi_sms_body_variant_summary']['columns'] ?? [], true),
         'Expected SMS body summary rows to expose allocation_version as a deployment postcondition.'
     );
+    kiwi_assert_same('InnoDB', $contract['kiwi_sms_body_variant_assignments']['engine'] ?? '', 'Expected SMS body assignments to require transactional storage.');
+    kiwi_assert_same('InnoDB', $contract['kiwi_sms_body_variant_summary']['engine'] ?? '', 'Expected SMS body summaries to require transactional storage.');
     $allocation_version_metadata = ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''];
     kiwi_assert_same(
         $allocation_version_metadata,

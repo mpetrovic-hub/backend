@@ -43,7 +43,7 @@ class Kiwi_Sms_Body_Variant_Service
     ): ?array {
         $transaction_id = $this->sanitize_token((string) (($attribution['transaction_id'] ?? '')), 120);
 
-        if ($transaction_id === '' || !$this->is_enabled_for_landing($landing_page, $service)) {
+        if ($transaction_id === '' || !$this->matches_allocation_context($landing_page, $service)) {
             return null;
         }
 
@@ -65,6 +65,10 @@ class Kiwi_Sms_Body_Variant_Service
                     'assignment' => $existing,
                 ];
             }
+        }
+
+        if (!$this->is_enrollment_enabled_for_landing($landing_page, $service)) {
+            return null;
         }
 
         $allocation = $this->resolve_allocation($transaction_id);
@@ -171,12 +175,23 @@ class Kiwi_Sms_Body_Variant_Service
         return self::ALLOCATION_VERSION;
     }
 
-    private function is_enabled_for_landing(array $landing_page, array $service): bool
+    private function is_enrollment_enabled_for_landing(array $landing_page, array $service): bool
     {
         if (!$this->config->is_sms_body_variant_experiment_enabled()) {
             return false;
         }
 
+        if (!$this->matches_allocation_context($landing_page, $service)) {
+            return false;
+        }
+
+        $country = strtoupper(trim((string) ($landing_page['country'] ?? ($service['country'] ?? ''))));
+
+        return in_array($country, $this->config->get_sms_body_variant_experiment_countries(), true);
+    }
+
+    private function matches_allocation_context(array $landing_page, array $service): bool
+    {
         $country = strtoupper(trim((string) ($landing_page['country'] ?? ($service['country'] ?? ''))));
         $provider = strtolower(trim((string) ($landing_page['provider'] ?? ($service['provider'] ?? ''))));
         $flow = strtolower(trim((string) ($landing_page['flow'] ?? ($service['flow'] ?? ''))));
@@ -190,7 +205,7 @@ class Kiwi_Sms_Body_Variant_Service
             return false;
         }
 
-        return in_array($country, $this->config->get_sms_body_variant_experiment_countries(), true);
+        return true;
     }
 
     private function resolve_allocation(string $transaction_id): array

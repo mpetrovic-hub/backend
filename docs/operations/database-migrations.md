@@ -84,7 +84,7 @@ The generic runner never drops legacy columns, rebuilds active data through a te
 
 ### FR SMS allocation-version schema
 
-Schema target `2026-09-04-1` adds `allocation_version` with default `legacy` to `wp_kiwi_sms_body_variant_assignments` and `wp_kiwi_sms_body_variant_summary`. It also creates the version-aware unique index `variant_summary_version` across `landing_key`, `service_key`, `variant_key`, `seed`, and `allocation_version`.
+Schema target `2026-09-04-1` adds `allocation_version` with default `legacy` to `wp_kiwi_sms_body_variant_assignments` and `wp_kiwi_sms_body_variant_summary`. It also requires both tables to use transactional InnoDB storage and creates the version-aware unique index `variant_summary_version` across `landing_key`, `service_key`, `variant_key`, `seed`, and `allocation_version`.
 
 During `apply`, the repository verifies that the new unique index exists with the complete ordered identity before removing the narrower legacy `variant_summary` index. Existing rows therefore remain grouped as `legacy`, and the old constraint is not removed unless its replacement is already valid.
 
@@ -190,10 +190,10 @@ Deployment Codex/Operator must:
 6. Obtain explicit User/Operator approval, then run migration `apply` once.
 7. Require exit `0`, `state=applied`, `mutated=true`, version `2026-07-23-1`, and an unchanged row/ID/`AUTO_INCREMENT`/column/index snapshot.
 8. With the current reviewed release available and dependent features still disabled, run generic `kiwi database status`; after the historical rename it may correctly report later additive drift or a version mismatch.
-9. Obtain separate authorization for generic `kiwi database apply` when the current release has later additive schema work.
+9. Obtain separate authorization for generic `kiwi database apply` when the current release has later additive schema work. For target `2026-09-04-1`, this may also convert the two SMS-body variant tables to the required transactional InnoDB engine.
 10. Run generic `kiwi database status` again; require exit `0`, `ready=true`, the current deployment artifact target (currently `2026-09-04-1`), and no drift.
 11. Smoke-test the engagement write/read path, Main and TK-zone summaries, Device Model Harvest, the landing-session Retention Coverage Gate, managed views, Sales Attribution, and relevant Premium-SMS fraud/MO reads.
-12. Keep maintenance active on any non-zero result or unproven postcondition. Use approved `rollback` only before new writes, and restore the matching predecessor code as part of the same controlled recovery.
+12. Keep maintenance active on any non-zero result or unproven postcondition. Before step 9 and before new target-code writes, the approved landing-session `rollback` may be used only while its exact `2026-07-23-1` preconditions still hold, with matching predecessor code restored in the same controlled recovery. After generic `apply` advances the schema, do not invoke that historical rollback artifact; restore the confirmed pre-cutover database backup together with matching predecessor code through the approved Hostinger recovery procedure, then rerun the predecessor checks before allowing writers.
 13. Resume controlled jobs/smokes first, then public traffic, and monitor briefly.
 
 The database lock does not replace maintenance. The artifact creates no backup,

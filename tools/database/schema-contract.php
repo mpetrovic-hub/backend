@@ -134,6 +134,7 @@ return [
         'legacy_columns' => ['android_version'],
     ],
     'kiwi_sms_body_variant_assignments' => [
+        'engine' => 'InnoDB',
         'columns' => ['id', 'created_at', 'updated_at', 'landing_key', 'service_key', 'provider_key', 'flow_key', 'country', 'keyword', 'shortcode', 'pid', 'click_id', 'session_token', 'transaction_id', 'visible_token', 'variant_key', 'seed', 'allocation_version', 'sms_body', 'cta1_recorded_at', 'handoff_attempted_at', 'handoff_hidden_at', 'handoff_no_hide_at', 'handoff_returned_at', 'conv_recorded_at', 'raw_context'],
         'indexes' => ['PRIMARY', 'transaction_id', 'visible_token', 'landing_session', 'landing_key', 'service_key', 'provider_key', 'flow_key', 'country', 'pid', 'click_id', 'variant_key', 'seed', 'allocation_version', 'created_at'],
         'column_metadata' => [
@@ -141,6 +142,7 @@ return [
         ],
     ],
     'kiwi_sms_body_variant_summary' => [
+        'engine' => 'InnoDB',
         'columns' => ['id', 'created_at', 'updated_at', 'landing_key', 'service_key', 'provider_key', 'flow_key', 'variant_key', 'seed', 'allocation_version', 'assignments', 'cta1', 'handoff_attempted', 'handoff_hidden', 'handoff_no_hide', 'handoff_returned', 'conv', 'cta1_cr', 'handoff_hidden_cr', 'conv_cr', 'conv_per_cta1_cr', 'conv_per_hidden_cr'],
         'indexes' => ['PRIMARY', 'variant_summary_version', 'landing_key', 'service_key', 'provider_key', 'flow_key', 'variant_key', 'seed', 'allocation_version', 'updated_at'],
         'legacy_indexes' => ['variant_summary'],

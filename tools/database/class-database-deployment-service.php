@@ -388,6 +388,45 @@ class Kiwi_Database_Deployment_Service
                 continue;
             }
 
+            $expected_engine_label = $expected_type === 'BASE TABLE'
+                ? trim((string) ($definition['engine'] ?? ''))
+                : '';
+            $expected_engine = strtoupper($expected_engine_label);
+
+            if ($expected_engine !== '') {
+                $this->reset_database_error();
+                $actual_engine = $wpdb->get_var(
+                    $wpdb->prepare(
+                        'SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+                        $object_name
+                    )
+                );
+
+                if ($this->get_database_error() !== ''
+                    || $actual_engine === null
+                    || $actual_engine === false
+                    || trim((string) $actual_engine) === ''
+                ) {
+                    $drift[] = [
+                        'kind' => 'inspection_error',
+                        'object' => $object_name,
+                        'detail' => $this->get_database_error() !== ''
+                            ? $this->sanitize_error($this->get_database_error())
+                            : 'Table engine inspection returned no result.',
+                    ];
+                    continue;
+                }
+
+                if (strtoupper(trim((string) $actual_engine)) !== $expected_engine) {
+                    $drift[] = [
+                        'kind' => 'table_engine_mismatch',
+                        'object' => $object_name,
+                        'expected' => $expected_engine_label,
+                        'actual' => trim((string) $actual_engine),
+                    ];
+                }
+            }
+
             $expected_column_metadata = (array) ($definition['column_metadata'] ?? []);
             $column_select = empty($expected_column_metadata)
                 ? 'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s'
