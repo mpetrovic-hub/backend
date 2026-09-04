@@ -398,10 +398,6 @@ class Kiwi_Landing_Kpi_Rest_Routes
 
     private function mark_sms_body_variant_event(string $landing_key, string $event_key, array $params): bool
     {
-        if (!$this->config->is_sms_body_variant_experiment_enabled()) {
-            return false;
-        }
-
         if (!$this->sms_body_variant_repository instanceof Kiwi_Sms_Body_Variant_Repository) {
             return false;
         }

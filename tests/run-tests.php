@@ -6596,19 +6596,37 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant con
     kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected SMS body variant conversion counter to increment once across duplicate confirmed callbacks.');
 });
 
-kiwi_run_test('Kiwi_Conversion_Attribution_Resolver suppresses SMS body variant conversion while disabled', function (): void {
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver keeps recording existing SMS body variant conversions while enrollment is disabled', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config());
     $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
     $config = new Kiwi_Test_Sms_Body_Variant_Disabled_Config();
+    $new_assignment = (new Kiwi_Sms_Body_Variant_Service($config, $variant_repository))->build_variant_body(
+        'JPLAY',
+        '84072',
+        [
+            'key' => 'lp2-fr',
+            'country' => 'FR',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        [
+            'country' => 'FR',
+            'provider' => 'nth',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        [
+            'transaction_id' => 'txn_new_disabled_assignment',
+            'session_ref' => 'sess-new-disabled-assignment',
+        ]
+    );
     $resolver = new Kiwi_Conversion_Attribution_Resolver(
         $repository,
         $dispatcher,
         null,
         null,
-        $variant_repository,
-        null,
-        $config
+        $variant_repository
     );
     $capture = $repository->upsert_capture([
         'tracking_token' => 'TOKVARCONVDISABLED',
@@ -6643,7 +6661,8 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver suppresses SMS body variant 
     ]);
     $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
 
-    kiwi_assert_same(0, (int) ($variant_summary['conv'] ?? 0), 'Expected disabled experiment to leave historical variant conversion metrics untouched.');
+    kiwi_assert_same(null, $new_assignment, 'Expected disabled enrollment not to create a new assignment.');
+    kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected disabled enrollment not to discard a conversion for an existing assignment.');
 });
 
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends custom_field1 from persisted sales operator_name', function (): void {
@@ -8661,7 +8680,7 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes updates SMS body variant metrics alo
     kiwi_assert_same(1, (int) ($variant_summary['handoff_hidden'] ?? 0), 'Expected variant handoff hidden metric to increment.');
 });
 
-kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes suppresses SMS body variant metrics while disabled', function (): void {
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes keeps recording existing SMS body variant metrics while enrollment is disabled', function (): void {
     $config = new Kiwi_Test_Sms_Body_Variant_Disabled_Config(
         100,
         0,
@@ -8709,9 +8728,9 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes suppresses SMS body variant metrics 
     ]));
     $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
 
-    kiwi_assert_true(!($response->data['sms_body_variant_recorded'] ?? false), 'Expected disabled experiment not to report an SMS body variant metric write.');
+    kiwi_assert_true(($response->data['sms_body_variant_recorded'] ?? false), 'Expected disabled enrollment not to discard an event for an existing assignment.');
     kiwi_assert_same(1, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected global KPI tracking to remain active while the experiment is disabled.');
-    kiwi_assert_same(0, (int) ($variant_summary['cta1'] ?? 0), 'Expected disabled experiment to leave historical variant CTA1 metrics untouched.');
+    kiwi_assert_same(1, (int) ($variant_summary['cta1'] ?? 0), 'Expected disabled enrollment to preserve the existing assignment CTA1 metric.');
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing summary rows with percentage rates', function (): void {

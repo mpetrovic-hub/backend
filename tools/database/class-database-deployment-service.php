@@ -458,6 +458,16 @@ class Kiwi_Database_Deployment_Service
                 }
             }
 
+            foreach ((array) ($definition['legacy_indexes'] ?? []) as $index) {
+                if (in_array($index, $indexes, true)) {
+                    $drift[] = [
+                        'kind' => 'legacy_index',
+                        'object' => $object_name,
+                        'index' => $index,
+                    ];
+                }
+            }
+
             $expected_index_metadata = (array) ($definition['index_metadata'] ?? []);
 
             if (empty($expected_index_metadata)) {

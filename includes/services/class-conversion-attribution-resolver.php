@@ -12,7 +12,6 @@ class Kiwi_Conversion_Attribution_Resolver
     private $sales_repository;
     private $sms_body_variant_repository;
     private $sales_snapshot_builder;
-    private $config;
 
     public function __construct(
         Kiwi_Click_Attribution_Repository $repository,
@@ -20,8 +19,7 @@ class Kiwi_Conversion_Attribution_Resolver
         ?Kiwi_Landing_Kpi_Service $landing_kpi_service = null,
         ?Kiwi_Sales_Repository $sales_repository = null,
         ?Kiwi_Sms_Body_Variant_Repository $sms_body_variant_repository = null,
-        ?Kiwi_Sales_Attribution_Snapshot_Builder $sales_snapshot_builder = null,
-        ?Kiwi_Config $config = null
+        ?Kiwi_Sales_Attribution_Snapshot_Builder $sales_snapshot_builder = null
     ) {
         $this->repository = $repository;
         $this->dispatcher = $dispatcher;
@@ -29,7 +27,6 @@ class Kiwi_Conversion_Attribution_Resolver
         $this->sales_repository = $sales_repository;
         $this->sms_body_variant_repository = $sms_body_variant_repository;
         $this->sales_snapshot_builder = $sales_snapshot_builder;
-        $this->config = $config;
     }
 
     public function attach_provider_references(array $binding): ?array
@@ -295,10 +292,7 @@ class Kiwi_Conversion_Attribution_Resolver
             return;
         }
 
-        if (
-            $this->sms_body_variant_repository instanceof Kiwi_Sms_Body_Variant_Repository
-            && (!$this->config instanceof Kiwi_Config || $this->config->is_sms_body_variant_experiment_enabled())
-        ) {
+        if ($this->sms_body_variant_repository instanceof Kiwi_Sms_Body_Variant_Repository) {
             $this->sms_body_variant_repository->mark_event_by_transaction_id(
                 (string) ($attribution_row['transaction_id'] ?? ''),
                 'conv'

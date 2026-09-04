@@ -60,7 +60,7 @@ Postback placeholder behavior:
 ## Landing telemetry, SMS variants, and analytics
 
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED`
-  - enables the SMS-body variant experiment
+  - enables enrollment of new SMS-body variant assignments; events for existing assignments remain measurable when enrollment is stopped
   - default: `false`; enable only after the reviewed schema release passes external `status` / authorized `apply` / green `status`
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
   - country allowlist for the experiment
