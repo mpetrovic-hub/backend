@@ -303,7 +303,7 @@ class Kiwi_Test_Database_Deployment_Wpdb
             }, (array) ($this->objects[$object_name]['indexes'] ?? []));
         }
 
-        if (strpos($query, 'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS') === 0) {
+        if (strpos($query, 'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART, INDEX_TYPE FROM information_schema.STATISTICS') === 0) {
             $rows = [];
 
             foreach ((array) ($this->objects[$object_name]['index_metadata'] ?? []) as $index_name => $metadata) {
@@ -313,6 +313,10 @@ class Kiwi_Test_Database_Deployment_Wpdb
                         'NON_UNIQUE' => !empty($metadata['unique']) ? '0' : '1',
                         'SEQ_IN_INDEX' => (string) ($offset + 1),
                         'COLUMN_NAME' => $column,
+                        'SUB_PART' => array_key_exists($offset, (array) ($metadata['sub_parts'] ?? []))
+                            ? $metadata['sub_parts'][$offset]
+                            : null,
+                        'INDEX_TYPE' => (string) ($metadata['type'] ?? 'BTREE'),
                     ];
                 }
             }
@@ -542,6 +546,52 @@ kiwi_run_test('Kiwi database status verifies ordered index columns and uniquenes
     kiwi_assert_same(false, $drifted['ready'], 'Expected a same-name index with the wrong definition to fail status.');
     kiwi_assert_same(1, count($definition_drift), 'Expected exact index-definition drift evidence.');
     kiwi_assert_same('required_index', $definition_drift[0]['index'] ?? '', 'Expected drift to identify the malformed index.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database status rejects prefix-truncated required indexes', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = [
+        'kiwi_test_table' => [
+            'columns' => ['id', 'required_column'],
+            'indexes' => ['PRIMARY', 'required_index'],
+            'index_metadata' => [
+                'required_index' => [
+                    'unique' => true,
+                    'columns' => ['id', 'required_column'],
+                    'sub_parts' => [null, null],
+                    'type' => 'BTREE',
+                ],
+            ],
+        ],
+    ];
+    $wpdb->objects['abc_kiwi_test_table'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['id', 'required_column'],
+        'indexes' => ['PRIMARY', 'required_index'],
+        'index_metadata' => [
+            'required_index' => [
+                'unique' => true,
+                'columns' => ['id', 'required_column'],
+                'sub_parts' => [1, null],
+                'type' => 'BTREE',
+            ],
+        ],
+    ];
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION,
+    ];
+    $result = (new Kiwi_Test_Database_Deployment_Service([], $contract))->status();
+    $definition_drift = array_values(array_filter($result['drift'], static function (array $drift): bool {
+        return ($drift['kind'] ?? '') === 'index_definition_mismatch';
+    }));
+
+    kiwi_assert_same(false, $result['ready'], 'Expected a prefix-truncated required index to fail green status.');
+    kiwi_assert_same('required_index', $definition_drift[0]['index'] ?? '', 'Expected drift to identify the prefix-truncated index.');
 
     $wpdb = $previous_wpdb;
 });
@@ -1058,6 +1108,8 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
         [
             'unique' => true,
             'columns' => ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'],
+            'sub_parts' => [null, null, null, null, null],
+            'type' => 'BTREE',
         ],
         $contract['kiwi_sms_body_variant_summary']['index_metadata']['variant_summary_version'] ?? [],
         'Expected status to verify the complete ordered version-aware summary identity.'

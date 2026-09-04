@@ -4467,6 +4467,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
 {
     public $prefix = 'wp_';
     public $tables = [];
+    public $queries = [];
+    public $fail_next_summary_query = false;
+    public $versioned_schema = true;
+    private $transaction_snapshot = null;
 
     public function prepare($query, ...$args)
     {
@@ -4482,6 +4486,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
 
     public function insert(string $table, array $data, array $formats = [])
     {
+        if (!$this->versioned_schema) {
+            unset($data['allocation_version']);
+        }
+
         if (!isset($this->tables[$table])) {
             $this->tables[$table] = [];
         }
@@ -4571,6 +4579,32 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
         $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
+        $this->queries[] = $query;
+
+        if ($query === 'START TRANSACTION') {
+            $this->transaction_snapshot = $this->tables;
+
+            return 1;
+        }
+
+        if ($query === 'ROLLBACK') {
+            if (is_array($this->transaction_snapshot)) {
+                $this->tables = $this->transaction_snapshot;
+            }
+            $this->transaction_snapshot = null;
+
+            return 1;
+        }
+
+        if ($query === 'COMMIT') {
+            $this->transaction_snapshot = null;
+
+            return 1;
+        }
+
+        if (!$this->versioned_schema && stripos($query, 'allocation_version') !== false) {
+            return false;
+        }
 
         if (stripos($query, "UPDATE {$assignment_table}") !== false
             && preg_match('/SET\s+updated_at\s*=\s*%s,\s*([a-z0-9_]+)\s*=\s*%s/i', $query, $matches) === 1
@@ -4597,6 +4631,12 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         }
 
         if (stripos($query, "INSERT INTO {$summary_table}") !== false) {
+            if ($this->fail_next_summary_query) {
+                $this->fail_next_summary_query = false;
+
+                return false;
+            }
+
             $row_id = $this->find_summary_row_id(
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
@@ -4640,12 +4680,13 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
 
         if (preg_match('/SET\s+updated_at\s*=\s*%s,\s*([a-z0-9_]+)\s*=\s*\1\s*\+\s*1/i', $query, $matches) === 1) {
             $counter = (string) ($matches[1] ?? '');
+            $has_allocation_version = strpos($query, 'allocation_version = %s') !== false;
             $row_id = $this->find_summary_row_id(
                 (string) ($args[1] ?? ''),
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
                 (string) ($args[4] ?? ''),
-                (string) ($args[5] ?? '')
+                $has_allocation_version ? (string) ($args[5] ?? '') : null
             );
 
             if ($row_id === null || !array_key_exists($counter, $this->tables[$summary_table][$row_id])) {
@@ -4659,12 +4700,13 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         }
 
         if (strpos($query, 'cta1_cr = CASE WHEN assignments > 0') !== false) {
+            $has_allocation_version = strpos($query, 'allocation_version = %s') !== false;
             $row_id = $this->find_summary_row_id(
                 (string) ($args[1] ?? ''),
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
                 (string) ($args[4] ?? ''),
-                (string) ($args[5] ?? '')
+                $has_allocation_version ? (string) ($args[5] ?? '') : null
             );
 
             if ($row_id === null) {
@@ -4685,7 +4727,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         string $service_key,
         string $variant_key,
         string $seed,
-        string $allocation_version
+        ?string $allocation_version
     ): ?int
     {
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
@@ -4695,7 +4737,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                 && (string) ($row['service_key'] ?? '') === $service_key
                 && (string) ($row['variant_key'] ?? '') === $variant_key
                 && (string) ($row['seed'] ?? '') === $seed
-                && (string) ($row['allocation_version'] ?? '') === $allocation_version
+                && ($allocation_version === null || (string) ($row['allocation_version'] ?? '') === $allocation_version)
             ) {
                 return (int) $id;
             }
@@ -8078,6 +8120,112 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository keeps legacy and versioned summa
     }
 });
 
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository rolls back an event marker when its summary write fails', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $repository->insert_if_new([
+            'landing_key' => 'lp5-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider_key' => 'nth',
+            'flow_key' => 'nth-fr-one-off',
+            'country' => 'FR',
+            'keyword' => 'JPLAY',
+            'shortcode' => '84072',
+            'session_token' => 'sess-atomic-retry',
+            'transaction_id' => 'txn_atomic_retry_12345678',
+            'visible_token' => 'BonusJeuxatomic_retry_12345678',
+            'variant_key' => 'cta_phrase',
+            'seed' => 'BonusJeux',
+            'allocation_version' => 'fr_sms_v2',
+            'sms_body' => 'JPLAY BonusJeuxatomic_retry_12345678',
+        ]);
+        $wpdb->fail_next_summary_query = true;
+
+        $failed = $repository->mark_event_by_transaction_id('txn_atomic_retry_12345678', 'cta1');
+        $after_failure = $repository->find_by_transaction_id('txn_atomic_retry_12345678');
+        $retried = $repository->mark_event_by_transaction_id('txn_atomic_retry_12345678', 'cta1');
+        $summary = $repository->get_summary_rows(['allocation_version' => 'fr_sms_v2'])[0] ?? [];
+
+        kiwi_assert_same(false, $failed, 'Expected the injected summary failure to fail the first event attempt.');
+        kiwi_assert_same('', (string) ($after_failure['cta1_recorded_at'] ?? ''), 'Expected a failed summary write not to commit the idempotency marker.');
+        kiwi_assert_same(true, $retried, 'Expected the event to remain retryable after the summary failure.');
+        kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected the successful retry to increment the summary exactly once.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository records events against the legacy pre-version schema', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $wpdb->versioned_schema = false;
+    $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+    $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+    $wpdb->tables[$assignment_table][1] = [
+        'id' => 1,
+        'created_at' => '2026-09-04 15:00:00',
+        'updated_at' => '2026-09-04 15:00:00',
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'session_token' => 'sess-legacy-schema',
+        'transaction_id' => 'txn_legacy_schema_12345678',
+        'visible_token' => 'BonusJeuxlegacy_schema_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'cta1_recorded_at' => null,
+    ];
+    $wpdb->tables[$summary_table][1] = [
+        'id' => 1,
+        'created_at' => '2026-09-04 15:00:00',
+        'updated_at' => '2026-09-04 15:00:00',
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'assignments' => 1,
+        'cta1' => 0,
+        'handoff_attempted' => 0,
+        'handoff_hidden' => 0,
+        'handoff_no_hide' => 0,
+        'handoff_returned' => 0,
+        'conv' => 0,
+    ];
+
+    try {
+        $recorded = (new Kiwi_Sms_Body_Variant_Repository())->mark_event_by_transaction_id(
+            'txn_legacy_schema_12345678',
+            'cta1'
+        );
+
+        kiwi_assert_same(true, $recorded, 'Expected a pre-version assignment event to remain writable during the controlled rollout.');
+        kiwi_assert_true(trim((string) ($wpdb->tables[$assignment_table][1]['cta1_recorded_at'] ?? '')) !== '', 'Expected the legacy assignment marker to commit with its summary increment.');
+        kiwi_assert_same(1, (int) ($wpdb->tables[$summary_table][1]['cta1'] ?? 0), 'Expected the legacy summary counter to increment without version-qualified SQL.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recalculates summary rates from persisted counters', function (): void {
     global $wpdb;
 
@@ -8341,6 +8489,8 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository schema versions assignments and 
                         'NON_UNIQUE' => '0',
                         'SEQ_IN_INDEX' => (string) ($offset + 1),
                         'COLUMN_NAME' => $column,
+                        'SUB_PART' => null,
+                        'INDEX_TYPE' => 'BTREE',
                     ];
                 }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
             }
@@ -8445,6 +8595,83 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository preserves the legacy index when 
 
         kiwi_assert_same(true, $blocked, 'Expected an incomplete replacement unique index to fail the external schema step.');
         kiwi_assert_same([], $wpdb->queries, 'Expected the legacy summary index to remain untouched after replacement verification fails.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository rejects a prefix-truncated replacement index', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $index_name = (string) (($statement['args'] ?? [])[1] ?? '');
+
+            if ($index_name === 'variant_summary_version') {
+                return array_map(static function (string $column, int $offset): array {
+                    return [
+                        'INDEX_NAME' => 'variant_summary_version',
+                        'NON_UNIQUE' => '0',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                        'SUB_PART' => $offset === 0 ? '1' : null,
+                        'INDEX_TYPE' => 'BTREE',
+                    ];
+                }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
+            }
+
+            if ($index_name === 'variant_summary') {
+                return [[
+                    'INDEX_NAME' => 'variant_summary',
+                    'NON_UNIQUE' => '0',
+                    'SEQ_IN_INDEX' => '1',
+                    'COLUMN_NAME' => 'landing_key',
+                    'SUB_PART' => null,
+                    'INDEX_TYPE' => 'BTREE',
+                ]];
+            }
+
+            return [];
+        }
+
+        public function query($statement)
+        {
+            $this->queries[] = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+
+            return 1;
+        }
+    };
+
+    try {
+        $blocked = false;
+
+        try {
+            (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+        } catch (RuntimeException $error) {
+            $blocked = true;
+        }
+
+        kiwi_assert_same(true, $blocked, 'Expected a prefix-truncated replacement unique index to fail the external schema step.');
+        kiwi_assert_same([], $wpdb->queries, 'Expected the valid legacy index not to be dropped after prefix verification fails.');
     } finally {
         $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
         $wpdb = $previous_wpdb;

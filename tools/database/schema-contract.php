@@ -151,6 +151,8 @@ return [
             'variant_summary_version' => [
                 'unique' => true,
                 'columns' => ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'],
+                'sub_parts' => [null, null, null, null, null],
+                'type' => 'BTREE',
             ],
         ],
     ],

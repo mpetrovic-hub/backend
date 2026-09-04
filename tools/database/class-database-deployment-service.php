@@ -506,7 +506,7 @@ class Kiwi_Database_Deployment_Service
             $this->reset_database_error();
             $index_metadata_rows = $wpdb->get_results(
                 $wpdb->prepare(
-                    'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+                    'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART, INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s ORDER BY INDEX_NAME, SEQ_IN_INDEX',
                     $object_name
                 ),
                 ARRAY_A
@@ -530,10 +530,20 @@ class Kiwi_Database_Deployment_Service
 
                 $expected_unique = (bool) ($expected_metadata['unique'] ?? false);
                 $expected_columns = array_values(array_map('strval', (array) ($expected_metadata['columns'] ?? [])));
+                $expected_sub_parts = array_key_exists('sub_parts', $expected_metadata)
+                    ? array_values(array_map(static function ($value): ?int {
+                        return $value === null ? null : (int) $value;
+                    }, (array) $expected_metadata['sub_parts']))
+                    : null;
+                $expected_type = array_key_exists('type', $expected_metadata)
+                    ? strtoupper(trim((string) $expected_metadata['type']))
+                    : null;
                 $actual_metadata = (array) ($actual_index_metadata[$index_name] ?? []);
 
                 if (($actual_metadata['unique'] ?? null) === $expected_unique
                     && ($actual_metadata['columns'] ?? []) === $expected_columns
+                    && ($expected_sub_parts === null || ($actual_metadata['sub_parts'] ?? []) === $expected_sub_parts)
+                    && ($expected_type === null || ($actual_metadata['type'] ?? '') === $expected_type)
                 ) {
                     continue;
                 }
@@ -545,10 +555,14 @@ class Kiwi_Database_Deployment_Service
                     'expected' => [
                         'unique' => $expected_unique,
                         'columns' => $expected_columns,
+                        'sub_parts' => $expected_sub_parts,
+                        'type' => $expected_type,
                     ],
                     'actual' => [
                         'unique' => $actual_metadata['unique'] ?? null,
                         'columns' => $actual_metadata['columns'] ?? [],
+                        'sub_parts' => $actual_metadata['sub_parts'] ?? [],
+                        'type' => $actual_metadata['type'] ?? '',
                     ],
                 ];
             }
@@ -678,15 +692,22 @@ class Kiwi_Database_Deployment_Service
                 $metadata[$index_name] = [
                     'unique' => (int) ($row['NON_UNIQUE'] ?? 1) === 0,
                     'columns' => [],
+                    'sub_parts' => [],
+                    'type' => strtoupper(trim((string) ($row['INDEX_TYPE'] ?? ''))),
                 ];
             }
 
             $metadata[$index_name]['columns'][$sequence] = $column_name;
+            $metadata[$index_name]['sub_parts'][$sequence] = ($row['SUB_PART'] ?? null) === null
+                ? null
+                : (int) $row['SUB_PART'];
         }
 
         foreach ($metadata as $index_name => $definition) {
             ksort($definition['columns'], SORT_NUMERIC);
+            ksort($definition['sub_parts'], SORT_NUMERIC);
             $metadata[$index_name]['columns'] = array_values($definition['columns']);
+            $metadata[$index_name]['sub_parts'] = array_values($definition['sub_parts']);
         }
 
         return $metadata;
