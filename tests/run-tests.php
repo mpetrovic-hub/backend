@@ -698,6 +698,11 @@ class Kiwi_Test_Config extends Kiwi_Config
         return $this->hlr_batch_limit;
     }
 
+    public function is_sms_body_variant_experiment_enabled(): bool
+    {
+        return true;
+    }
+
     public function get_hlr_request_delay_ms(): int
     {
         return $this->hlr_request_delay_ms;
@@ -789,6 +794,14 @@ class Kiwi_Test_Config extends Kiwi_Config
     public function get_premium_sms_fraud_mo_min_seconds_after_load(): int
     {
         return max(0, (int) $this->premium_sms_fraud_mo_min_seconds_after_load);
+    }
+}
+
+class Kiwi_Test_Sms_Body_Variant_Disabled_Config extends Kiwi_Test_Config
+{
+    public function is_sms_body_variant_experiment_enabled(): bool
+    {
+        return false;
     }
 }
 
@@ -4161,6 +4174,7 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
             'visible_token' => $visible_token,
             'variant_key' => $variant_key,
             'seed' => (string) ($assignment['seed'] ?? ''),
+            'allocation_version' => (string) ($assignment['allocation_version'] ?? 'legacy'),
             'sms_body' => (string) ($assignment['sms_body'] ?? ''),
             'cta1_recorded_at' => '',
             'handoff_attempted_at' => '',
@@ -4271,7 +4285,17 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
 
     public function get_summary_rows(array $filters = []): array
     {
-        return array_values($this->summary);
+        return array_values(array_filter($this->summary, static function (array $row) use ($filters): bool {
+            foreach (['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'] as $field) {
+                $expected = trim((string) ($filters[$field] ?? ''));
+
+                if ($expected !== '' && (string) ($row[$field] ?? '') !== $expected) {
+                    return false;
+                }
+            }
+
+            return true;
+        }));
     }
 
     private function increment_summary(array $assignment, string $counter): void
@@ -4281,6 +4305,7 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
             (string) ($assignment['service_key'] ?? ''),
             (string) ($assignment['variant_key'] ?? ''),
             (string) ($assignment['seed'] ?? ''),
+            (string) ($assignment['allocation_version'] ?? 'legacy'),
         ]);
 
         if (!isset($this->summary[$key])) {
@@ -4291,6 +4316,7 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
                 'flow_key' => (string) ($assignment['flow_key'] ?? ''),
                 'variant_key' => (string) ($assignment['variant_key'] ?? ''),
                 'seed' => (string) ($assignment['seed'] ?? ''),
+                'allocation_version' => (string) ($assignment['allocation_version'] ?? 'legacy'),
                 'assignments' => 0,
                 'cta1' => 0,
                 'handoff_attempted' => 0,
@@ -4441,6 +4467,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
 {
     public $prefix = 'wp_';
     public $tables = [];
+    public $queries = [];
+    public $fail_next_summary_query = false;
+    public $versioned_schema = true;
+    private $transaction_snapshot = null;
 
     public function prepare($query, ...$args)
     {
@@ -4456,6 +4486,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
 
     public function insert(string $table, array $data, array $formats = [])
     {
+        if (!$this->versioned_schema) {
+            unset($data['allocation_version']);
+        }
+
         if (!isset($this->tables[$table])) {
             $this->tables[$table] = [];
         }
@@ -4519,8 +4553,24 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
     public function get_results($statement, $output = null): array
     {
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $rows = array_values($this->tables[$summary_table] ?? []);
+        $argument_index = 0;
 
-        return array_values($this->tables[$summary_table] ?? []);
+        foreach (['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'] as $field) {
+            if (strpos($query, $field . ' = %s') === false) {
+                continue;
+            }
+
+            $expected = (string) ($args[$argument_index] ?? '');
+            $argument_index++;
+            $rows = array_values(array_filter($rows, static function (array $row) use ($field, $expected): bool {
+                return (string) ($row[$field] ?? '') === $expected;
+            }));
+        }
+
+        return $rows;
     }
 
     public function query($statement)
@@ -4529,6 +4579,32 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
         $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
+        $this->queries[] = $query;
+
+        if ($query === 'START TRANSACTION') {
+            $this->transaction_snapshot = $this->tables;
+
+            return 1;
+        }
+
+        if ($query === 'ROLLBACK') {
+            if (is_array($this->transaction_snapshot)) {
+                $this->tables = $this->transaction_snapshot;
+            }
+            $this->transaction_snapshot = null;
+
+            return 1;
+        }
+
+        if ($query === 'COMMIT') {
+            $this->transaction_snapshot = null;
+
+            return 1;
+        }
+
+        if (!$this->versioned_schema && stripos($query, 'allocation_version') !== false) {
+            return false;
+        }
 
         if (stripos($query, "UPDATE {$assignment_table}") !== false
             && preg_match('/SET\s+updated_at\s*=\s*%s,\s*([a-z0-9_]+)\s*=\s*%s/i', $query, $matches) === 1
@@ -4555,11 +4631,19 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         }
 
         if (stripos($query, "INSERT INTO {$summary_table}") !== false) {
+            if ($this->fail_next_summary_query) {
+                $this->fail_next_summary_query = false;
+
+                return false;
+            }
+
+            $has_allocation_version = stripos($query, 'allocation_version') !== false;
             $row_id = $this->find_summary_row_id(
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
                 (string) ($args[6] ?? ''),
-                (string) ($args[7] ?? '')
+                (string) ($args[7] ?? ''),
+                $has_allocation_version ? (string) ($args[8] ?? '') : null
             );
 
             if ($row_id === null) {
@@ -4587,6 +4671,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                     'conv_per_cta1_cr' => 0.0,
                     'conv_per_hidden_cr' => 0.0,
                 ];
+
+                if ($has_allocation_version) {
+                    $this->tables[$summary_table][$row_id]['allocation_version'] = (string) ($args[8] ?? '');
+                }
             } else {
                 $this->tables[$summary_table][$row_id]['updated_at'] = (string) ($args[1] ?? '');
             }
@@ -4596,11 +4684,13 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
 
         if (preg_match('/SET\s+updated_at\s*=\s*%s,\s*([a-z0-9_]+)\s*=\s*\1\s*\+\s*1/i', $query, $matches) === 1) {
             $counter = (string) ($matches[1] ?? '');
+            $has_allocation_version = strpos($query, 'allocation_version = %s') !== false;
             $row_id = $this->find_summary_row_id(
                 (string) ($args[1] ?? ''),
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
-                (string) ($args[4] ?? '')
+                (string) ($args[4] ?? ''),
+                $has_allocation_version ? (string) ($args[5] ?? '') : null
             );
 
             if ($row_id === null || !array_key_exists($counter, $this->tables[$summary_table][$row_id])) {
@@ -4614,11 +4704,13 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         }
 
         if (strpos($query, 'cta1_cr = CASE WHEN assignments > 0') !== false) {
+            $has_allocation_version = strpos($query, 'allocation_version = %s') !== false;
             $row_id = $this->find_summary_row_id(
                 (string) ($args[1] ?? ''),
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
-                (string) ($args[4] ?? '')
+                (string) ($args[4] ?? ''),
+                $has_allocation_version ? (string) ($args[5] ?? '') : null
             );
 
             if ($row_id === null) {
@@ -4634,7 +4726,13 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         return false;
     }
 
-    private function find_summary_row_id(string $landing_key, string $service_key, string $variant_key, string $seed): ?int
+    private function find_summary_row_id(
+        string $landing_key,
+        string $service_key,
+        string $variant_key,
+        string $seed,
+        ?string $allocation_version
+    ): ?int
     {
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
 
@@ -4643,6 +4741,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                 && (string) ($row['service_key'] ?? '') === $service_key
                 && (string) ($row['variant_key'] ?? '') === $variant_key
                 && (string) ($row['seed'] ?? '') === $seed
+                && ($allocation_version === null || (string) ($row['allocation_version'] ?? '') === $allocation_version)
             ) {
                 return (int) $id;
             }
@@ -6543,6 +6642,75 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant con
     kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected SMS body variant conversion counter to increment once across duplicate confirmed callbacks.');
 });
 
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver keeps recording existing SMS body variant conversions while enrollment is disabled', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config());
+    $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $config = new Kiwi_Test_Sms_Body_Variant_Disabled_Config();
+    $new_assignment = (new Kiwi_Sms_Body_Variant_Service($config, $variant_repository))->build_variant_body(
+        'JPLAY',
+        '84072',
+        [
+            'key' => 'lp2-fr',
+            'country' => 'FR',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        [
+            'country' => 'FR',
+            'provider' => 'nth',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        [
+            'transaction_id' => 'txn_new_disabled_assignment',
+            'session_ref' => 'sess-new-disabled-assignment',
+        ]
+    );
+    $resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $repository,
+        $dispatcher,
+        null,
+        null,
+        $variant_repository
+    );
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKVARCONVDISABLED',
+        'transaction_id' => 'txn_variant_conv_disabled',
+        'click_id' => 'aff:variant:disabled',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
+        'flow_key' => 'nth-fr-one-off',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+    $variant_repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-variant-conv-disabled',
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+        'visible_token' => 'variant_conv_disabled',
+        'variant_key' => 'as_is',
+        'sms_body' => 'JPLAY variant_conv_disabled',
+    ]);
+
+    $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+    ]);
+    $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
+
+    kiwi_assert_same(null, $new_assignment, 'Expected disabled enrollment not to create a new assignment.');
+    kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected disabled enrollment not to discard a conversion for an existing assignment.');
+});
+
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends custom_field1 from persisted sales operator_name', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $sales_repository = new Kiwi_Test_Sales_Repository();
@@ -7899,6 +8067,213 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository stores assignments and summary i
     kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected CTA1 summary counter to be idempotent per assignment.');
 });
 
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository keeps legacy and versioned summary counters separate', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $base = [
+            'landing_key' => 'lp5-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider_key' => 'nth',
+            'flow_key' => 'nth-fr-one-off',
+            'country' => 'FR',
+            'keyword' => 'JPLAY',
+            'shortcode' => '84072',
+            'variant_key' => 'cta_phrase',
+            'seed' => 'BonusJeux',
+        ];
+
+        $legacy = $repository->insert_if_new(array_merge($base, [
+            'session_token' => 'sess-legacy-version',
+            'transaction_id' => 'txn_legacy_version_12345678',
+            'visible_token' => 'BonusJeuxlegacy_version_12345678',
+            'sms_body' => 'JPLAY BonusJeuxlegacy_version_12345678',
+        ]));
+        $versioned = $repository->insert_if_new(array_merge($base, [
+            'session_token' => 'sess-fr-sms-v2',
+            'transaction_id' => 'txn_fr_sms_v2_12345678',
+            'visible_token' => 'BonusJeuxfr_sms_v2_12345678',
+            'allocation_version' => 'fr_sms_v2',
+            'sms_body' => 'JPLAY BonusJeuxfr_sms_v2_12345678',
+        ]));
+
+        $repository->mark_event_by_transaction_id('txn_legacy_version_12345678', 'sms_handoff_attempted');
+        $repository->mark_event_by_transaction_id('txn_legacy_version_12345678', 'conv');
+        $repository->mark_event_by_transaction_id('txn_fr_sms_v2_12345678', 'sms_handoff_attempted');
+
+        $legacy_summary = $repository->get_summary_rows(['allocation_version' => 'legacy'])[0] ?? [];
+        $versioned_summary = $repository->get_summary_rows(['allocation_version' => 'fr_sms_v2'])[0] ?? [];
+
+        kiwi_assert_true(($legacy['inserted'] ?? false), 'Expected an assignment without an explicit version to remain legacy.');
+        kiwi_assert_true(($versioned['inserted'] ?? false), 'Expected a fr_sms_v2 assignment to insert separately.');
+        kiwi_assert_same(2, count($repository->get_summary_rows()), 'Expected one summary row per allocation version for identical variant dimensions.');
+        kiwi_assert_same(1, (int) ($legacy_summary['conv'] ?? 0), 'Expected a late legacy conversion to increment only the legacy summary.');
+        kiwi_assert_same(0, (int) ($versioned_summary['conv'] ?? 0), 'Expected the fr_sms_v2 summary to exclude the late legacy conversion.');
+        kiwi_assert_same(1, (int) ($versioned_summary['handoff_attempted'] ?? 0), 'Expected current-version events to stay in the current-version summary.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository rolls back an event marker when its summary write fails', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $repository->insert_if_new([
+            'landing_key' => 'lp5-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider_key' => 'nth',
+            'flow_key' => 'nth-fr-one-off',
+            'country' => 'FR',
+            'keyword' => 'JPLAY',
+            'shortcode' => '84072',
+            'session_token' => 'sess-atomic-retry',
+            'transaction_id' => 'txn_atomic_retry_12345678',
+            'visible_token' => 'BonusJeuxatomic_retry_12345678',
+            'variant_key' => 'cta_phrase',
+            'seed' => 'BonusJeux',
+            'allocation_version' => 'fr_sms_v2',
+            'sms_body' => 'JPLAY BonusJeuxatomic_retry_12345678',
+        ]);
+        $wpdb->fail_next_summary_query = true;
+
+        $failed = $repository->mark_event_by_transaction_id('txn_atomic_retry_12345678', 'cta1');
+        $after_failure = $repository->find_by_transaction_id('txn_atomic_retry_12345678');
+        $retried = $repository->mark_event_by_transaction_id('txn_atomic_retry_12345678', 'cta1');
+        $summary = $repository->get_summary_rows(['allocation_version' => 'fr_sms_v2'])[0] ?? [];
+
+        kiwi_assert_same(false, $failed, 'Expected the injected summary failure to fail the first event attempt.');
+        kiwi_assert_same('', (string) ($after_failure['cta1_recorded_at'] ?? ''), 'Expected a failed summary write not to commit the idempotency marker.');
+        kiwi_assert_same(true, $retried, 'Expected the event to remain retryable after the summary failure.');
+        kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected the successful retry to increment the summary exactly once.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository records events against the legacy pre-version schema', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $wpdb->versioned_schema = false;
+    $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+    $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+    $wpdb->tables[$assignment_table][1] = [
+        'id' => 1,
+        'created_at' => '2026-09-04 15:00:00',
+        'updated_at' => '2026-09-04 15:00:00',
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'session_token' => 'sess-legacy-schema',
+        'transaction_id' => 'txn_legacy_schema_12345678',
+        'visible_token' => 'BonusJeuxlegacy_schema_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'cta1_recorded_at' => null,
+    ];
+    $wpdb->tables[$summary_table][1] = [
+        'id' => 1,
+        'created_at' => '2026-09-04 15:00:00',
+        'updated_at' => '2026-09-04 15:00:00',
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'assignments' => 1,
+        'cta1' => 0,
+        'handoff_attempted' => 0,
+        'handoff_hidden' => 0,
+        'handoff_no_hide' => 0,
+        'handoff_returned' => 0,
+        'conv' => 0,
+    ];
+
+    try {
+        $recorded = (new Kiwi_Sms_Body_Variant_Repository())->mark_event_by_transaction_id(
+            'txn_legacy_schema_12345678',
+            'cta1'
+        );
+
+        kiwi_assert_same(true, $recorded, 'Expected a pre-version assignment event to remain writable during the controlled rollout.');
+        kiwi_assert_true(trim((string) ($wpdb->tables[$assignment_table][1]['cta1_recorded_at'] ?? '')) !== '', 'Expected the legacy assignment marker to commit with its summary increment.');
+        kiwi_assert_same(1, (int) ($wpdb->tables[$summary_table][1]['cta1'] ?? 0), 'Expected the legacy summary counter to increment without version-qualified SQL.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recreates a missing legacy summary before recording an event', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $wpdb->versioned_schema = false;
+    $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+    $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+    $wpdb->tables[$assignment_table][1] = [
+        'id' => 1,
+        'created_at' => '2026-09-04 15:00:00',
+        'updated_at' => '2026-09-04 15:00:00',
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'session_token' => 'sess-legacy-missing-summary',
+        'transaction_id' => 'txn_legacy_missing_summary_12345678',
+        'visible_token' => 'BonusJeuxlegacy_missing_summary_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'conv_recorded_at' => null,
+    ];
+
+    try {
+        $recorded = (new Kiwi_Sms_Body_Variant_Repository())->mark_event_by_transaction_id(
+            'txn_legacy_missing_summary_12345678',
+            'conv'
+        );
+        $summary = array_values($wpdb->tables[$summary_table] ?? [])[0] ?? [];
+
+        kiwi_assert_same(true, $recorded, 'Expected a pre-version event to repair a missing summary row inside its transaction.');
+        kiwi_assert_true(trim((string) ($wpdb->tables[$assignment_table][1]['conv_recorded_at'] ?? '')) !== '', 'Expected the legacy assignment marker to commit only with the repaired summary counter.');
+        kiwi_assert_same(1, (int) ($summary['conv'] ?? 0), 'Expected the recreated legacy summary to retain the event metric.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recalculates summary rates from persisted counters', function (): void {
     global $wpdb;
 
@@ -7983,12 +8358,604 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', f
 
     kiwi_assert_same('txn_abcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'as_is_txn_prefix'), 'Expected as-is variant to keep txn_ prefix.');
     kiwi_assert_same('abcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'bare_id'), 'Expected bare variant to remove txn_ prefix.');
-    kiwi_assert_same('ArcadeHeroabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'game_word', 'ArcadeHero'), 'Expected game-word variant to prepend deterministic seed.');
-    kiwi_assert_same('ActiverJeuxabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'cta_phrase', 'ActiverJeux'), 'Expected CTA phrase variant to prepend deterministic seed.');
-    kiwi_assert_true(in_array($variant_key, ['as_is_txn_prefix', 'bare_id', 'game_word', 'cta_phrase'], true), 'Expected service to assign one of the four configured variants.');
-    kiwi_assert_true($variant_key === 'game_word' || $variant_key === 'cta_phrase' || $seed === '', 'Expected non-speaking variants to have no seed.');
+    kiwi_assert_same('TopJeuxabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'game_word', 'TopJeux'), 'Expected game-word variant to prepend its configured seed.');
+    kiwi_assert_same('BonusJeuxabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'cta_phrase', 'BonusJeux'), 'Expected CTA phrase variant to prepend its configured seed.');
+    kiwi_assert_same('AccederMaintenantabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'download_phrase', 'AccederMaintenant'), 'Expected download phrase variant to use the safe seeded-token form.');
+    kiwi_assert_true(in_array($variant_key, ['as_is_txn_prefix', 'game_word', 'cta_phrase', 'download_phrase'], true), 'Expected service to assign one of the active weighted variant types.');
+    kiwi_assert_true($variant_key !== 'as_is_txn_prefix' || $seed === '', 'Expected the fixed control variant to have no seed.');
+    kiwi_assert_same('fr_sms_v2', (string) ($first['assignment']['allocation_version'] ?? ''), 'Expected new assignments to record the active allocation version.');
     kiwi_assert_same((string) ($first['body'] ?? ''), (string) ($second['body'] ?? ''), 'Expected repeated body resolution for one transaction to stay stable.');
     kiwi_assert_same(1, count($repository->assignments), 'Expected service to create one idempotent assignment.');
+});
+
+kiwi_run_test('Kiwi_Config keeps SMS body variant writes disabled by default', function (): void {
+    $config = new Kiwi_Config();
+
+    kiwi_assert_same(false, $config->is_sms_body_variant_experiment_enabled(), 'Expected schema-dependent SMS variant writes to require explicit enablement.');
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Service serves stored assignments while enrollment is disabled', function (): void {
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $repository->insert_if_new([
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-stored-disabled',
+        'transaction_id' => 'txn_stored_disabled_12345678',
+        'visible_token' => 'BonusJeuxstored_disabled_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'allocation_version' => 'fr_sms_v2',
+        'sms_body' => 'JPLAY BonusJeuxstored_disabled_12345678',
+    ]);
+    $service = new Kiwi_Sms_Body_Variant_Service(
+        new Kiwi_Test_Sms_Body_Variant_Disabled_Config(),
+        $repository
+    );
+    $landing = [
+        'key' => 'lp5-fr',
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $nth_service = [
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+
+    $stored = $service->build_variant_body('JPLAY', '84072', $landing, $nth_service, [
+        'transaction_id' => 'txn_stored_disabled_12345678',
+        'session_ref' => 'sess-stored-disabled',
+    ]);
+    $new = $service->build_variant_body('JPLAY', '84072', $landing, $nth_service, [
+        'transaction_id' => 'txn_new_disabled_87654321',
+        'session_ref' => 'sess-new-disabled',
+    ]);
+
+    kiwi_assert_same('JPLAY BonusJeuxstored_disabled_12345678', (string) ($stored['body'] ?? ''), 'Expected a returning session to keep its stored variant body while enrollment is paused.');
+    kiwi_assert_same('fr_sms_v2', (string) ($stored['assignment']['allocation_version'] ?? ''), 'Expected the stored assignment identity to remain intact.');
+    kiwi_assert_same(null, $new, 'Expected disabled enrollment not to create an assignment for a new transaction.');
+    kiwi_assert_same(1, count($repository->assignments), 'Expected disabled enrollment to reuse only the existing assignment.');
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocation and renders every SMS form', function (): void {
+    $config = new Kiwi_Test_Config();
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+    $expected = [
+        ['variant_key' => 'as_is_txn_prefix', 'seed' => '', 'weight' => 10],
+        ['variant_key' => 'cta_phrase', 'seed' => 'BonusJeux', 'weight' => 20],
+        ['variant_key' => 'game_word', 'seed' => 'TopJeux', 'weight' => 20],
+        ['variant_key' => 'cta_phrase', 'seed' => 'JouerPlus', 'weight' => 20],
+        ['variant_key' => 'cta_phrase', 'seed' => 'AccederJeux', 'weight' => 8],
+        ['variant_key' => 'game_word', 'seed' => 'JeuxMax', 'weight' => 8],
+        ['variant_key' => 'download_phrase', 'seed' => 'AccederMaintenant', 'weight' => 8],
+        ['variant_key' => 'game_word', 'seed' => 'GameQuest', 'weight' => 6],
+    ];
+    $landing = [
+        'key' => 'lp5-fr',
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $nth_service = [
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $observed = [];
+    $bucket_counts = [];
+    $seen_buckets = [];
+
+    for ($index = 0; $index < 5000 && count($seen_buckets) < 100; $index++) {
+        $transaction_id = 'txn_allocation_bucket_' . $index . '_12345678';
+        $bucket = (int) (hexdec(substr(hash('sha256', 'fr_sms_v2|' . $transaction_id), 0, 8)) % 100);
+
+        if (isset($seen_buckets[$bucket])) {
+            continue;
+        }
+
+        $seen_buckets[$bucket] = true;
+        $result = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, [
+            'transaction_id' => $transaction_id,
+            'session_ref' => 'sess-allocation-' . $index,
+        ]);
+        $assignment = (array) ($result['assignment'] ?? []);
+        $identity = (string) ($assignment['variant_key'] ?? '') . '|' . (string) ($assignment['seed'] ?? '');
+        $observed[$identity] = (string) ($result['body'] ?? '');
+        $bucket_counts[$identity] = (int) ($bucket_counts[$identity] ?? 0) + 1;
+    }
+
+    $expected_bucket_counts = [];
+
+    foreach ($expected as $allocation) {
+        $expected_bucket_counts[$allocation['variant_key'] . '|' . $allocation['seed']] = $allocation['weight'];
+    }
+
+    ksort($bucket_counts, SORT_STRING);
+    ksort($expected_bucket_counts, SORT_STRING);
+
+    kiwi_assert_same('fr_sms_v2', $service->get_allocation_version(), 'Expected the weighted allocation to have a stable reporting version.');
+    kiwi_assert_same($expected, $service->get_active_allocation(), 'Expected exactly the approved eight active variants and weights.');
+    kiwi_assert_same(100, array_sum(array_column($service->get_active_allocation(), 'weight')), 'Expected active allocation weights to total 100 percent.');
+    kiwi_assert_same(['TopJeux', 'JeuxMax', 'GameQuest'], $service->get_game_seeds(), 'Expected only approved game-word seeds to stay active.');
+    kiwi_assert_same(['BonusJeux', 'JouerPlus', 'AccederJeux'], $service->get_cta_seeds(), 'Expected only approved CTA-phrase seeds to stay active.');
+    kiwi_assert_same(false, in_array('bare_id', array_column($service->get_active_allocation(), 'variant_key'), true), 'Expected bare_id to receive no new traffic.');
+    kiwi_assert_same(100, count($seen_buckets), 'Expected the test sample to cover every stable 0-99 allocation bucket.');
+    kiwi_assert_same($expected_bucket_counts, $bucket_counts, 'Expected the stable 0-99 buckets to implement the exact approved weights.');
+    kiwi_assert_same(count($expected), count($observed), 'Expected stable hashing to make every configured SMS form reachable.');
+
+    foreach ($expected as $allocation) {
+        $identity = $allocation['variant_key'] . '|' . $allocation['seed'];
+        kiwi_assert_true(isset($observed[$identity]), 'Expected generated traffic to reach ' . $identity . '.');
+        kiwi_assert_contains('JPLAY ', $observed[$identity], 'Expected every active assignment to use the normalized JPLAY SMS body.');
+
+        if ($allocation['variant_key'] === 'as_is_txn_prefix') {
+            kiwi_assert_contains('JPLAY txn_', $observed[$identity], 'Expected the fixed control to retain the txn_ prefix.');
+        } else {
+            kiwi_assert_contains('JPLAY ' . $allocation['seed'], $observed[$identity], 'Expected the visible token to start with its configured seed.');
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Service restricts fr_sms_v2 to the FR NTH One-off integration', function (): void {
+    $config = new class extends Kiwi_Test_Config {
+        public function get_sms_body_variant_experiment_countries(): array
+        {
+            return ['FR', 'DE'];
+        }
+    };
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+    $service_definition = [
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $valid_landing = [
+        'key' => 'lp5-fr',
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $contexts = [
+        'non-FR country' => array_merge($valid_landing, ['country' => 'DE']),
+        'different Aggregator' => array_merge($valid_landing, ['provider' => 'dimoco']),
+        'different flow' => array_merge($valid_landing, ['flow' => 'click-flow']),
+        'different service' => array_merge($valid_landing, ['service_key' => 'another_nth_service']),
+    ];
+
+    foreach ($contexts as $name => $landing) {
+        $result = $service->build_variant_body('Jplay*', '84072', $landing, $service_definition, [
+            'transaction_id' => 'txn_scope_' . preg_replace('/[^a-z]/', '_', strtolower($name)) . '_12345678',
+            'session_ref' => 'sess-scope-' . md5($name),
+        ]);
+
+        kiwi_assert_same(null, $result, 'Expected fr_sms_v2 to reject ' . $name . '.');
+    }
+
+    $accepted = $service->build_variant_body('Jplay*', '84072', $valid_landing, $service_definition, [
+        'transaction_id' => 'txn_scope_valid_12345678',
+        'session_ref' => 'sess-scope-valid',
+    ]);
+
+    kiwi_assert_true(is_array($accepted), 'Expected the exact FR NTH One-off context to remain eligible.');
+    kiwi_assert_same('fr_sms_v2', (string) ($accepted['assignment']['allocation_version'] ?? ''), 'Expected the eligible context to use fr_sms_v2.');
+    kiwi_assert_same(1, count($repository->assignments), 'Expected rejected integration contexts not to create assignments.');
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository schema versions assignments and summary identity safely', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $args = (array) ($statement['args'] ?? []);
+            $index_name = (string) ($args[1] ?? '');
+
+            if ($index_name === 'variant_summary_version') {
+                return array_map(static function (string $column, int $offset): array {
+                    return [
+                        'INDEX_NAME' => 'variant_summary_version',
+                        'NON_UNIQUE' => '0',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                        'SUB_PART' => null,
+                        'INDEX_TYPE' => 'BTREE',
+                    ];
+                }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
+            }
+
+            if ($index_name === 'variant_summary') {
+                return [[
+                    'INDEX_NAME' => 'variant_summary',
+                    'NON_UNIQUE' => '0',
+                    'SEQ_IN_INDEX' => '1',
+                    'COLUMN_NAME' => 'landing_key',
+                ]];
+            }
+
+            return [];
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $this->queries[] = $query;
+
+            return 1;
+        }
+    };
+
+    try {
+        (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+        $sql = implode("\n", $GLOBALS['kiwi_test_dbdelta_queries']);
+
+        kiwi_assert_same(2, count($GLOBALS['kiwi_test_dbdelta_queries']), 'Expected assignment and summary schema statements.');
+        kiwi_assert_same(2, substr_count($sql, "allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy'"), 'Expected both tables to default historical rows to legacy.');
+        kiwi_assert_same(2, substr_count($sql, 'ENGINE=InnoDB'), 'Expected both SMS variant tables to declare transactional storage.');
+        kiwi_assert_contains('UNIQUE KEY variant_summary_version (landing_key, service_key, variant_key, seed, allocation_version)', $sql, 'Expected summary uniqueness to include allocation_version.');
+        kiwi_assert_contains('ALTER TABLE abc_kiwi_sms_body_variant_summary DROP INDEX variant_summary', implode("\n", $wpdb->queries), 'Expected the old narrower unique index to be removed only after the versioned index is verified.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository converts existing SMS tables to InnoDB before finalizing indexes', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+        public $engines = [
+            'abc_kiwi_sms_body_variant_assignments' => 'MyISAM',
+            'abc_kiwi_sms_body_variant_summary' => 'MyISAM',
+        ];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement)
+        {
+            $table_name = (string) (($statement['args'] ?? [])[0] ?? '');
+
+            return $this->engines[$table_name] ?? null;
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $index_name = (string) (($statement['args'] ?? [])[1] ?? '');
+
+            if ($index_name !== 'variant_summary_version') {
+                return [];
+            }
+
+            return array_map(static function (string $column, int $offset): array {
+                return [
+                    'INDEX_NAME' => 'variant_summary_version',
+                    'NON_UNIQUE' => '0',
+                    'SEQ_IN_INDEX' => (string) ($offset + 1),
+                    'COLUMN_NAME' => $column,
+                    'SUB_PART' => null,
+                    'INDEX_TYPE' => 'BTREE',
+                ];
+            }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
+        }
+
+        public function query($statement)
+        {
+            $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+            $this->queries[] = $query;
+
+            if (preg_match('/^ALTER TABLE ([A-Za-z0-9_]+) ENGINE=InnoDB$/', $query, $matches) === 1) {
+                $this->engines[$matches[1]] = 'InnoDB';
+            }
+
+            return 1;
+        }
+    };
+
+    try {
+        (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+        $engine_queries = array_values(array_filter($wpdb->queries, static function (string $query): bool {
+            return strpos($query, ' ENGINE=InnoDB') !== false;
+        }));
+
+        kiwi_assert_same([
+            'ALTER TABLE abc_kiwi_sms_body_variant_assignments ENGINE=InnoDB',
+            'ALTER TABLE abc_kiwi_sms_body_variant_summary ENGINE=InnoDB',
+        ], $engine_queries, 'Expected the external schema step to convert both existing SMS variant tables to transactional storage.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository removes a renamed legacy summary identity', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $index_name = (string) (($statement['args'] ?? [])[1] ?? '');
+
+            if ($index_name === 'variant_summary_version') {
+                return array_map(static function (string $column, int $offset): array {
+                    return [
+                        'INDEX_NAME' => 'variant_summary_version',
+                        'NON_UNIQUE' => '0',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                        'SUB_PART' => null,
+                        'INDEX_TYPE' => 'BTREE',
+                    ];
+                }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
+            }
+
+            if ($index_name === 'legacy_summary_copy') {
+                return array_map(static function (string $column, int $offset): array {
+                    return [
+                        'INDEX_NAME' => 'legacy_summary_copy',
+                        'NON_UNIQUE' => '0',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                        'SUB_PART' => null,
+                        'INDEX_TYPE' => 'BTREE',
+                    ];
+                }, ['landing_key', 'service_key', 'variant_key', 'seed'], array_keys(range(0, 3)));
+            }
+
+            if ($index_name === '') {
+                return [
+                    ['INDEX_NAME' => 'variant_summary_version'],
+                    ['INDEX_NAME' => 'legacy_summary_copy'],
+                ];
+            }
+
+            return [];
+        }
+
+        public function query($statement)
+        {
+            $this->queries[] = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+
+            return 1;
+        }
+    };
+
+    try {
+        (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+
+        kiwi_assert_contains('ALTER TABLE abc_kiwi_sms_body_variant_summary DROP INDEX legacy_summary_copy', implode("\n", $wpdb->queries), 'Expected a renamed copy of the legacy four-column unique identity to be removed after replacement verification.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository preserves the legacy index when its replacement is invalid', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $index_name = (string) (($statement['args'] ?? [])[1] ?? '');
+
+            if ($index_name === 'variant_summary_version') {
+                return [[
+                    'INDEX_NAME' => 'variant_summary_version',
+                    'NON_UNIQUE' => '0',
+                    'SEQ_IN_INDEX' => '1',
+                    'COLUMN_NAME' => 'landing_key',
+                ]];
+            }
+
+            if ($index_name === 'variant_summary') {
+                return [[
+                    'INDEX_NAME' => 'variant_summary',
+                    'NON_UNIQUE' => '0',
+                    'SEQ_IN_INDEX' => '1',
+                    'COLUMN_NAME' => 'landing_key',
+                ]];
+            }
+
+            return [];
+        }
+
+        public function query($statement)
+        {
+            $this->queries[] = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+
+            return 1;
+        }
+    };
+
+    try {
+        $blocked = false;
+
+        try {
+            (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+        } catch (RuntimeException $error) {
+            $blocked = true;
+        }
+
+        kiwi_assert_same(true, $blocked, 'Expected an incomplete replacement unique index to fail the external schema step.');
+        kiwi_assert_same([], $wpdb->queries, 'Expected the legacy summary index to remain untouched after replacement verification fails.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository rejects a prefix-truncated replacement index', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $previous_queries = $GLOBALS['kiwi_test_dbdelta_queries'];
+    $GLOBALS['kiwi_test_dbdelta_queries'] = [];
+    $wpdb = new class {
+        public $prefix = 'abc_';
+        public $last_error = '';
+        public $queries = [];
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARSET=utf8mb4';
+        }
+
+        public function prepare($query, ...$args)
+        {
+            return ['query' => (string) $query, 'args' => $args];
+        }
+
+        public function get_var($statement): string
+        {
+            return 'InnoDB';
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            $index_name = (string) (($statement['args'] ?? [])[1] ?? '');
+
+            if ($index_name === 'variant_summary_version') {
+                return array_map(static function (string $column, int $offset): array {
+                    return [
+                        'INDEX_NAME' => 'variant_summary_version',
+                        'NON_UNIQUE' => '0',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                        'SUB_PART' => $offset === 0 ? '1' : null,
+                        'INDEX_TYPE' => 'BTREE',
+                    ];
+                }, ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'], array_keys(range(0, 4)));
+            }
+
+            if ($index_name === 'variant_summary') {
+                return [[
+                    'INDEX_NAME' => 'variant_summary',
+                    'NON_UNIQUE' => '0',
+                    'SEQ_IN_INDEX' => '1',
+                    'COLUMN_NAME' => 'landing_key',
+                    'SUB_PART' => null,
+                    'INDEX_TYPE' => 'BTREE',
+                ]];
+            }
+
+            return [];
+        }
+
+        public function query($statement)
+        {
+            $this->queries[] = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+
+            return 1;
+        }
+    };
+
+    try {
+        $blocked = false;
+
+        try {
+            (new Kiwi_Sms_Body_Variant_Repository())->create_table();
+        } catch (RuntimeException $error) {
+            $blocked = true;
+        }
+
+        kiwi_assert_same(true, $blocked, 'Expected a prefix-truncated replacement unique index to fail the external schema step.');
+        kiwi_assert_same([], $wpdb->queries, 'Expected the valid legacy index not to be dropped after prefix verification fails.');
+    } finally {
+        $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
+        $wpdb = $previous_wpdb;
+    }
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without changing KPI counters', function (): void {
@@ -8218,6 +9185,59 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes updates SMS body variant metrics alo
     kiwi_assert_same(2, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected global KPI CTA1 counter to remain unchanged in behavior.');
     kiwi_assert_same(1, (int) ($variant_summary['cta1'] ?? 0), 'Expected variant CTA1 metric to be idempotent per assignment.');
     kiwi_assert_same(1, (int) ($variant_summary['handoff_hidden'] ?? 0), 'Expected variant handoff hidden metric to increment.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes keeps recording existing SMS body variant metrics while enrollment is disabled', function (): void {
+    $config = new Kiwi_Test_Sms_Body_Variant_Disabled_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $variant_repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-variant-rest-disabled',
+        'transaction_id' => 'txn_variant_rest_disabled',
+        'visible_token' => 'variant_rest_disabled',
+        'variant_key' => 'as_is',
+        'sms_body' => 'JPLAY variant_rest_disabled',
+    ]);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes(
+        $config,
+        new Kiwi_Landing_Kpi_Service($config, $summary_repository),
+        null,
+        null,
+        null,
+        $variant_repository
+    );
+
+    $response = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-variant-rest-disabled',
+        'step' => 'cta1',
+    ]));
+    $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
+
+    kiwi_assert_true(($response->data['sms_body_variant_recorded'] ?? false), 'Expected disabled enrollment not to discard an event for an existing assignment.');
+    kiwi_assert_same(1, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected global KPI tracking to remain active while the experiment is disabled.');
+    kiwi_assert_same(1, (int) ($variant_summary['cta1'] ?? 0), 'Expected disabled enrollment to preserve the existing assignment CTA1 metric.');
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing summary rows with percentage rates', function (): void {

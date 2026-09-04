@@ -82,6 +82,14 @@ The generic runner never drops legacy columns, rebuilds active data through a te
 4. Require a green post-apply `status`.
 5. Deploy or enable the dependent application behavior.
 
+### FR SMS allocation-version schema
+
+Schema target `2026-09-04-1` adds `allocation_version` with default `legacy` to `wp_kiwi_sms_body_variant_assignments` and `wp_kiwi_sms_body_variant_summary`. It also requires both tables to use transactional InnoDB storage and creates the version-aware unique index `variant_summary_version` across `landing_key`, `service_key`, `variant_key`, `seed`, and `allocation_version`.
+
+During `apply`, the repository verifies that the new unique index exists with the complete ordered identity before removing every unique index that enforces the narrower four-column legacy identity, including renamed copies. Existing rows therefore remain grouped as `legacy`, and an old constraint is not removed unless its replacement is already valid. Post-apply `status` also rejects that legacy identity by definition rather than relying only on its historical `variant_summary` name.
+
+Keep `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED=false` while making the reviewed release available. Run `status`, obtain authorization for `apply`, and require a green post-apply `status` at target `2026-09-04-1` before enabling `fr_sms_v2`. Do not add the columns or change the index with direct Production SQL.
+
 ### Destructive change
 
 1. Deploy compatible application code that no longer requires the old object.
@@ -181,10 +189,12 @@ Deployment Codex/Operator must:
 5. Run migration `check`; require exit `0`, `state=pending`, version `2026-07-20-1`, the expected schema, and a plausible non-empty snapshot unless the User explicitly accepts loss of historical engagement/soft-flag data.
 6. Obtain explicit User/Operator approval, then run migration `apply` once.
 7. Require exit `0`, `state=applied`, `mutated=true`, version `2026-07-23-1`, and an unchanged row/ID/`AUTO_INCREMENT`/column/index snapshot.
-8. Run generic `kiwi database status`; require exit `0`, `ready=true`, target version `2026-07-23-1`, and no drift.
-9. Smoke-test the engagement write/read path, Main and TK-zone summaries, Device Model Harvest, the landing-session Retention Coverage Gate, managed views, Sales Attribution, and relevant Premium-SMS fraud/MO reads.
-10. Keep maintenance active on any non-zero result or unproven postcondition. Use approved `rollback` only before new writes, and restore the matching predecessor code as part of the same controlled recovery.
-11. Resume controlled jobs/smokes first, then public traffic, and monitor briefly.
+8. With the current reviewed release available and dependent features still disabled, run generic `kiwi database status`; after the historical rename it may correctly report later additive drift or a version mismatch.
+9. Obtain separate authorization for generic `kiwi database apply` when the current release has later additive schema work. For target `2026-09-04-1`, this may also convert the two SMS-body variant tables to the required transactional InnoDB engine.
+10. Run generic `kiwi database status` again; require exit `0`, `ready=true`, the current deployment artifact target (currently `2026-09-04-1`), and no drift.
+11. Smoke-test the engagement write/read path, Main and TK-zone summaries, Device Model Harvest, the landing-session Retention Coverage Gate, managed views, Sales Attribution, and relevant Premium-SMS fraud/MO reads.
+12. Keep maintenance active on any non-zero result or unproven postcondition. Before step 9 and before new target-code writes, the approved landing-session `rollback` may be used only while its exact `2026-07-23-1` preconditions still hold, with matching predecessor code restored in the same controlled recovery. After generic `apply` advances the schema, do not invoke that historical rollback artifact; restore the confirmed pre-cutover database backup together with matching predecessor code through the approved Hostinger recovery procedure, then rerun the predecessor checks before allowing writers.
+13. Resume controlled jobs/smokes first, then public traffic, and monitor briefly.
 
 The database lock does not replace maintenance. The artifact creates no backup,
 does not manage traffic/jobs, does not accept data loss, and does not write

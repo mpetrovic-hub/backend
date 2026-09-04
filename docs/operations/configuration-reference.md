@@ -60,11 +60,12 @@ Postback placeholder behavior:
 ## Landing telemetry, SMS variants, and analytics
 
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED`
-  - enables the SMS-body variant experiment
-  - default: `true`
+  - enables enrollment of new SMS-body variant assignments; existing assignments keep their stored SMS body and their events remain measurable when enrollment is stopped
+  - default: `false`; enable only after the reviewed schema release passes external `status` / authorized `apply` / green `status`
 - `KIWI_SMS_BODY_VARIANT_EXPERIMENT_COUNTRIES`
   - country allowlist for the experiment
   - default: `['FR']`
+  - `fr_sms_v2` additionally requires the exact FR NTH One-off integration context; adding another country to this allowlist does not apply French words there
 - `KIWI_LANDING_UA_TRACKING_MODE`
   - values: `disabled`, `onclick`, `onload`
   - default: `onload`

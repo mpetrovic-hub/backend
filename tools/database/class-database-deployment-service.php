@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Database_Deployment_Service
 {
     public const SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    public const TARGET_SCHEMA_VERSION = '2026-07-23-1';
+    public const TARGET_SCHEMA_VERSION = '2026-09-04-1';
 
     private const LOCK_PREFIX = 'kiwi_backend_database_apply_';
 
@@ -388,9 +388,52 @@ class Kiwi_Database_Deployment_Service
                 continue;
             }
 
+            $expected_engine_label = $expected_type === 'BASE TABLE'
+                ? trim((string) ($definition['engine'] ?? ''))
+                : '';
+            $expected_engine = strtoupper($expected_engine_label);
+
+            if ($expected_engine !== '') {
+                $this->reset_database_error();
+                $actual_engine = $wpdb->get_var(
+                    $wpdb->prepare(
+                        'SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+                        $object_name
+                    )
+                );
+
+                if ($this->get_database_error() !== ''
+                    || $actual_engine === null
+                    || $actual_engine === false
+                    || trim((string) $actual_engine) === ''
+                ) {
+                    $drift[] = [
+                        'kind' => 'inspection_error',
+                        'object' => $object_name,
+                        'detail' => $this->get_database_error() !== ''
+                            ? $this->sanitize_error($this->get_database_error())
+                            : 'Table engine inspection returned no result.',
+                    ];
+                    continue;
+                }
+
+                if (strtoupper(trim((string) $actual_engine)) !== $expected_engine) {
+                    $drift[] = [
+                        'kind' => 'table_engine_mismatch',
+                        'object' => $object_name,
+                        'expected' => $expected_engine_label,
+                        'actual' => trim((string) $actual_engine),
+                    ];
+                }
+            }
+
+            $expected_column_metadata = (array) ($definition['column_metadata'] ?? []);
+            $column_select = empty($expected_column_metadata)
+                ? 'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s'
+                : 'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s';
             $column_rows = $wpdb->get_results(
                 $wpdb->prepare(
-                    'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+                    $column_select,
                     $object_name
                 ),
                 ARRAY_A
@@ -426,6 +469,31 @@ class Kiwi_Database_Deployment_Service
                 }
             }
 
+            if (!empty($expected_column_metadata)) {
+                $actual_column_metadata = $this->collect_column_metadata($column_rows);
+
+                foreach ($expected_column_metadata as $column_name => $expected_metadata) {
+                    if (!in_array($column_name, $columns, true)) {
+                        continue;
+                    }
+
+                    $expected_metadata = $this->normalize_column_metadata((array) $expected_metadata);
+                    $actual_metadata = $actual_column_metadata[$column_name] ?? null;
+
+                    if ($actual_metadata === $expected_metadata) {
+                        continue;
+                    }
+
+                    $drift[] = [
+                        'kind' => 'column_definition_mismatch',
+                        'object' => $object_name,
+                        'column' => $column_name,
+                        'expected' => $expected_metadata,
+                        'actual' => $actual_metadata,
+                    ];
+                }
+            }
+
             if ($expected_type !== 'BASE TABLE') {
                 continue;
             }
@@ -456,6 +524,120 @@ class Kiwi_Database_Deployment_Service
                         'index' => $index,
                     ];
                 }
+            }
+
+            foreach ((array) ($definition['legacy_indexes'] ?? []) as $index) {
+                if (in_array($index, $indexes, true)) {
+                    $drift[] = [
+                        'kind' => 'legacy_index',
+                        'object' => $object_name,
+                        'index' => $index,
+                    ];
+                }
+            }
+
+            $expected_index_metadata = (array) ($definition['index_metadata'] ?? []);
+            $legacy_index_definitions = (array) ($definition['legacy_index_definitions'] ?? []);
+
+            if (empty($expected_index_metadata) && empty($legacy_index_definitions)) {
+                continue;
+            }
+
+            $this->reset_database_error();
+            $index_metadata_rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART, INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+                    $object_name
+                ),
+                ARRAY_A
+            );
+
+            if ($this->get_database_error() !== '') {
+                $drift[] = [
+                    'kind' => 'inspection_error',
+                    'object' => $object_name,
+                    'detail' => $this->sanitize_error($this->get_database_error()),
+                ];
+                continue;
+            }
+
+            $actual_index_metadata = $this->collect_index_metadata($index_metadata_rows);
+
+            foreach ($legacy_index_definitions as $legacy_definition) {
+                $legacy_definition = (array) $legacy_definition;
+                $legacy_unique = array_key_exists('unique', $legacy_definition)
+                    ? (bool) $legacy_definition['unique']
+                    : null;
+                $legacy_columns = array_key_exists('columns', $legacy_definition)
+                    ? array_values(array_map('strval', (array) $legacy_definition['columns']))
+                    : null;
+                $legacy_sub_parts = array_key_exists('sub_parts', $legacy_definition)
+                    ? array_values(array_map(static function ($value): ?int {
+                        return $value === null ? null : (int) $value;
+                    }, (array) $legacy_definition['sub_parts']))
+                    : null;
+                $legacy_type = array_key_exists('type', $legacy_definition)
+                    ? strtoupper(trim((string) $legacy_definition['type']))
+                    : null;
+
+                foreach ($actual_index_metadata as $index_name => $actual_metadata) {
+                    if (($legacy_unique === null || ($actual_metadata['unique'] ?? null) === $legacy_unique)
+                        && ($legacy_columns === null || ($actual_metadata['columns'] ?? []) === $legacy_columns)
+                        && ($legacy_sub_parts === null || ($actual_metadata['sub_parts'] ?? []) === $legacy_sub_parts)
+                        && ($legacy_type === null || ($actual_metadata['type'] ?? '') === $legacy_type)
+                    ) {
+                        $drift[] = [
+                            'kind' => 'legacy_index_definition',
+                            'object' => $object_name,
+                            'index' => $index_name,
+                            'actual' => $actual_metadata,
+                        ];
+                    }
+                }
+            }
+
+            foreach ($expected_index_metadata as $index_name => $expected_metadata) {
+                if (!in_array($index_name, $indexes, true)) {
+                    continue;
+                }
+
+                $expected_unique = (bool) ($expected_metadata['unique'] ?? false);
+                $expected_columns = array_values(array_map('strval', (array) ($expected_metadata['columns'] ?? [])));
+                $expected_sub_parts = array_key_exists('sub_parts', $expected_metadata)
+                    ? array_values(array_map(static function ($value): ?int {
+                        return $value === null ? null : (int) $value;
+                    }, (array) $expected_metadata['sub_parts']))
+                    : null;
+                $expected_type = array_key_exists('type', $expected_metadata)
+                    ? strtoupper(trim((string) $expected_metadata['type']))
+                    : null;
+                $actual_metadata = (array) ($actual_index_metadata[$index_name] ?? []);
+
+                if (($actual_metadata['unique'] ?? null) === $expected_unique
+                    && ($actual_metadata['columns'] ?? []) === $expected_columns
+                    && ($expected_sub_parts === null || ($actual_metadata['sub_parts'] ?? []) === $expected_sub_parts)
+                    && ($expected_type === null || ($actual_metadata['type'] ?? '') === $expected_type)
+                ) {
+                    continue;
+                }
+
+                $drift[] = [
+                    'kind' => 'index_definition_mismatch',
+                    'object' => $object_name,
+                    'index' => $index_name,
+                    'expected' => [
+                        'unique' => $expected_unique,
+                        'columns' => $expected_columns,
+                        'sub_parts' => $expected_sub_parts,
+                        'type' => $expected_type,
+                    ],
+                    'actual' => [
+                        'unique' => $actual_metadata['unique'] ?? null,
+                        'columns' => $actual_metadata['columns'] ?? [],
+                        'sub_parts' => $actual_metadata['sub_parts'] ?? [],
+                        'type' => $actual_metadata['type'] ?? '',
+                    ],
+                ];
             }
         }
 
@@ -560,6 +742,122 @@ class Kiwi_Database_Deployment_Service
         }
 
         return array_values(array_unique($values));
+    }
+
+    private function collect_index_metadata($rows): array
+    {
+        $metadata = [];
+
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $index_name = trim((string) ($row['INDEX_NAME'] ?? ''));
+            $column_name = trim((string) ($row['COLUMN_NAME'] ?? ''));
+            $sequence = (int) ($row['SEQ_IN_INDEX'] ?? 0);
+
+            if ($index_name === '' || $column_name === '' || $sequence < 1) {
+                continue;
+            }
+
+            if (!isset($metadata[$index_name])) {
+                $metadata[$index_name] = [
+                    'unique' => (int) ($row['NON_UNIQUE'] ?? 1) === 0,
+                    'columns' => [],
+                    'sub_parts' => [],
+                    'type' => strtoupper(trim((string) ($row['INDEX_TYPE'] ?? ''))),
+                ];
+            }
+
+            $metadata[$index_name]['columns'][$sequence] = $column_name;
+            $metadata[$index_name]['sub_parts'][$sequence] = ($row['SUB_PART'] ?? null) === null
+                ? null
+                : (int) $row['SUB_PART'];
+        }
+
+        foreach ($metadata as $index_name => $definition) {
+            ksort($definition['columns'], SORT_NUMERIC);
+            ksort($definition['sub_parts'], SORT_NUMERIC);
+            $metadata[$index_name]['columns'] = array_values($definition['columns']);
+            $metadata[$index_name]['sub_parts'] = array_values($definition['sub_parts']);
+        }
+
+        return $metadata;
+    }
+
+    private function collect_column_metadata($rows): array
+    {
+        $metadata = [];
+
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $column_name = trim((string) ($row['COLUMN_NAME'] ?? ''));
+
+            if ($column_name === '') {
+                continue;
+            }
+
+            $metadata[$column_name] = $this->normalize_column_metadata([
+                'type' => (string) ($row['COLUMN_TYPE'] ?? ''),
+                'nullable' => strtoupper(trim((string) ($row['IS_NULLABLE'] ?? ''))) === 'YES',
+                'default' => $row['COLUMN_DEFAULT'] ?? null,
+                'extra' => (string) ($row['EXTRA'] ?? ''),
+            ]);
+        }
+
+        return $metadata;
+    }
+
+    private function normalize_column_metadata(array $metadata): array
+    {
+        return [
+            'type' => $this->normalize_column_type((string) ($metadata['type'] ?? '')),
+            'nullable' => !empty($metadata['nullable']),
+            'default' => $this->normalize_column_default($metadata['default'] ?? null),
+            'extra' => $this->normalize_column_extra((string) ($metadata['extra'] ?? '')),
+        ];
+    }
+
+    private function normalize_column_type(string $type): string
+    {
+        $type = strtolower(trim((string) preg_replace('/\s+/', ' ', $type)));
+        $type = (string) preg_replace('/\b(bigint|int|integer|smallint|mediumint)\([0-9]+\)/', '$1', $type);
+        $type = (string) preg_replace('/\bdatetime\(0\)/', 'datetime', $type);
+
+        return trim((string) preg_replace('/\s+/', ' ', $type));
+    }
+
+    private function normalize_column_default($default): ?string
+    {
+        if ($default === null) {
+            return null;
+        }
+
+        $default = trim((string) $default);
+
+        if (strcasecmp($default, 'NULL') === 0) {
+            return null;
+        }
+
+        if (strlen($default) >= 2 && $default[0] === "'" && substr($default, -1) === "'") {
+            return str_replace("''", "'", substr($default, 1, -1));
+        }
+
+        return $default;
+    }
+
+    private function normalize_column_extra(string $extra): string
+    {
+        $tokens = preg_split('/\s+/', strtolower(trim($extra))) ?: [];
+        $tokens = array_values(array_filter($tokens, static function (string $token): bool {
+            return $token !== '' && $token !== 'default_generated';
+        }));
+
+        return implode(' ', $tokens);
     }
 
     private function failure_result(string $phase, string $error_code, string $error_message): array
