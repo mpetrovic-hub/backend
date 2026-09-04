@@ -903,7 +903,8 @@ TEXT;
             $landing_kpi_service,
             $sales_repository,
             $sms_body_variant_repository,
-            $sales_snapshot_builder
+            $sales_snapshot_builder,
+            $config
         );
         $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
             $config,

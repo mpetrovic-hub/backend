@@ -281,6 +281,23 @@ class Kiwi_Test_Database_Deployment_Wpdb
             }, (array) ($this->objects[$object_name]['indexes'] ?? []));
         }
 
+        if (strpos($query, 'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS') === 0) {
+            $rows = [];
+
+            foreach ((array) ($this->objects[$object_name]['index_metadata'] ?? []) as $index_name => $metadata) {
+                foreach (array_values((array) ($metadata['columns'] ?? [])) as $offset => $column) {
+                    $rows[] = [
+                        'INDEX_NAME' => $index_name,
+                        'NON_UNIQUE' => !empty($metadata['unique']) ? '0' : '1',
+                        'SEQ_IN_INDEX' => (string) ($offset + 1),
+                        'COLUMN_NAME' => $column,
+                    ];
+                }
+            }
+
+            return $rows;
+        }
+
         if (strpos($query, 'SELECT model_key, brand FROM ') === 0) {
             $seed_columns = (array) ($this->objects['abc_kiwi_device_model_brand_map']['columns'] ?? []);
             $required_seed_columns_missing = !in_array('model_key', $seed_columns, true)
@@ -451,6 +468,58 @@ kiwi_run_test('Kiwi database status reports missing tables, columns, and indexes
 
     kiwi_assert_true(in_array('missing_column', $kinds, true), 'Expected a missing column to block status.');
     kiwi_assert_true(in_array('missing_index', $kinds, true), 'Expected a missing index to block status.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database status verifies ordered index columns and uniqueness', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = [
+        'kiwi_test_table' => [
+            'columns' => ['id', 'required_column'],
+            'indexes' => ['PRIMARY', 'required_index'],
+            'index_metadata' => [
+                'required_index' => [
+                    'unique' => true,
+                    'columns' => ['id', 'required_column'],
+                ],
+            ],
+        ],
+    ];
+    $wpdb->objects['abc_kiwi_test_table'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['id', 'required_column'],
+        'indexes' => ['PRIMARY', 'required_index'],
+        'index_metadata' => [
+            'required_index' => [
+                'unique' => true,
+                'columns' => ['id', 'required_column'],
+            ],
+        ],
+    ];
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION,
+    ];
+    $service = new Kiwi_Test_Database_Deployment_Service([], $contract);
+
+    $matching = $service->status();
+    kiwi_assert_same(true, $matching['ready'], 'Expected a complete ordered unique-index definition to pass status.');
+
+    $wpdb->objects['abc_kiwi_test_table']['index_metadata']['required_index'] = [
+        'unique' => false,
+        'columns' => ['required_column', 'id'],
+    ];
+    $drifted = $service->status();
+    $definition_drift = array_values(array_filter($drifted['drift'], static function (array $drift): bool {
+        return ($drift['kind'] ?? '') === 'index_definition_mismatch';
+    }));
+
+    kiwi_assert_same(false, $drifted['ready'], 'Expected a same-name index with the wrong definition to fail status.');
+    kiwi_assert_same(1, count($definition_drift), 'Expected exact index-definition drift evidence.');
+    kiwi_assert_same('required_index', $definition_drift[0]['index'] ?? '', 'Expected drift to identify the malformed index.');
 
     $wpdb = $previous_wpdb;
 });
@@ -831,6 +900,14 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
         false,
         in_array('variant_summary', $contract['kiwi_sms_body_variant_summary']['indexes'] ?? [], true),
         'Expected the narrower legacy summary unique index to leave the canonical contract.'
+    );
+    kiwi_assert_same(
+        [
+            'unique' => true,
+            'columns' => ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'],
+        ],
+        $contract['kiwi_sms_body_variant_summary']['index_metadata']['variant_summary_version'] ?? [],
+        'Expected status to verify the complete ordered version-aware summary identity.'
     );
     kiwi_assert_true(new Kiwi_Database_Deployment_Service() instanceof Kiwi_Database_Deployment_Service, 'Expected every canonical repository step to construct outside normal runtime.');
 });

@@ -7,6 +7,12 @@ if (!defined('ABSPATH')) {
 class Kiwi_Sms_Body_Variant_Service
 {
     private const ALLOCATION_VERSION = 'fr_sms_v2';
+    private const ALLOCATION_CONTEXT = [
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
 
     private const ACTIVE_ALLOCATION = [
         ['variant_key' => 'as_is_txn_prefix', 'seed' => '', 'weight' => 10],
@@ -172,8 +178,15 @@ class Kiwi_Sms_Body_Variant_Service
         }
 
         $country = strtoupper(trim((string) ($landing_page['country'] ?? ($service['country'] ?? ''))));
+        $provider = strtolower(trim((string) ($landing_page['provider'] ?? ($service['provider'] ?? ''))));
+        $flow = strtolower(trim((string) ($landing_page['flow'] ?? ($service['flow'] ?? ''))));
+        $service_key = strtolower(trim((string) ($landing_page['service_key'] ?? ($service['service_key'] ?? ''))));
 
-        if ($country === '') {
+        if ($country !== self::ALLOCATION_CONTEXT['country']
+            || $provider !== self::ALLOCATION_CONTEXT['provider']
+            || $flow !== self::ALLOCATION_CONTEXT['flow']
+            || $service_key !== self::ALLOCATION_CONTEXT['service_key']
+        ) {
             return false;
         }
 

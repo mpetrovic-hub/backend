@@ -189,10 +189,12 @@ Deployment Codex/Operator must:
 5. Run migration `check`; require exit `0`, `state=pending`, version `2026-07-20-1`, the expected schema, and a plausible non-empty snapshot unless the User explicitly accepts loss of historical engagement/soft-flag data.
 6. Obtain explicit User/Operator approval, then run migration `apply` once.
 7. Require exit `0`, `state=applied`, `mutated=true`, version `2026-07-23-1`, and an unchanged row/ID/`AUTO_INCREMENT`/column/index snapshot.
-8. Run generic `kiwi database status`; require exit `0`, `ready=true`, target version `2026-07-23-1`, and no drift.
-9. Smoke-test the engagement write/read path, Main and TK-zone summaries, Device Model Harvest, the landing-session Retention Coverage Gate, managed views, Sales Attribution, and relevant Premium-SMS fraud/MO reads.
-10. Keep maintenance active on any non-zero result or unproven postcondition. Use approved `rollback` only before new writes, and restore the matching predecessor code as part of the same controlled recovery.
-11. Resume controlled jobs/smokes first, then public traffic, and monitor briefly.
+8. With the current reviewed release available and dependent features still disabled, run generic `kiwi database status`; after the historical rename it may correctly report later additive drift or a version mismatch.
+9. Obtain separate authorization for generic `kiwi database apply` when the current release has later additive schema work.
+10. Run generic `kiwi database status` again; require exit `0`, `ready=true`, the current deployment artifact target (currently `2026-09-04-1`), and no drift.
+11. Smoke-test the engagement write/read path, Main and TK-zone summaries, Device Model Harvest, the landing-session Retention Coverage Gate, managed views, Sales Attribution, and relevant Premium-SMS fraud/MO reads.
+12. Keep maintenance active on any non-zero result or unproven postcondition. Use approved `rollback` only before new writes, and restore the matching predecessor code as part of the same controlled recovery.
+13. Resume controlled jobs/smokes first, then public traffic, and monitor briefly.
 
 The database lock does not replace maintenance. The artifact creates no backup,
 does not manage traffic/jobs, does not accept data loss, and does not write

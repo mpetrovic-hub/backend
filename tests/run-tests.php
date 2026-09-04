@@ -698,6 +698,11 @@ class Kiwi_Test_Config extends Kiwi_Config
         return $this->hlr_batch_limit;
     }
 
+    public function is_sms_body_variant_experiment_enabled(): bool
+    {
+        return true;
+    }
+
     public function get_hlr_request_delay_ms(): int
     {
         return $this->hlr_request_delay_ms;
@@ -789,6 +794,14 @@ class Kiwi_Test_Config extends Kiwi_Config
     public function get_premium_sms_fraud_mo_min_seconds_after_load(): int
     {
         return max(0, (int) $this->premium_sms_fraud_mo_min_seconds_after_load);
+    }
+}
+
+class Kiwi_Test_Sms_Body_Variant_Disabled_Config extends Kiwi_Test_Config
+{
+    public function is_sms_body_variant_experiment_enabled(): bool
+    {
+        return false;
     }
 }
 
@@ -6583,6 +6596,56 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant con
     kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected SMS body variant conversion counter to increment once across duplicate confirmed callbacks.');
 });
 
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver suppresses SMS body variant conversion while disabled', function (): void {
+    $repository = new Kiwi_Test_Click_Attribution_Repository();
+    $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config());
+    $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $config = new Kiwi_Test_Sms_Body_Variant_Disabled_Config();
+    $resolver = new Kiwi_Conversion_Attribution_Resolver(
+        $repository,
+        $dispatcher,
+        null,
+        null,
+        $variant_repository,
+        null,
+        $config
+    );
+    $capture = $repository->upsert_capture([
+        'tracking_token' => 'TOKVARCONVDISABLED',
+        'transaction_id' => 'txn_variant_conv_disabled',
+        'click_id' => 'aff:variant:disabled',
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'landing_page_key' => 'lp2-fr',
+        'flow_key' => 'nth-fr-one-off',
+        'expires_at' => '2026-04-05 12:00:00',
+    ]);
+    $variant_repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-variant-conv-disabled',
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+        'visible_token' => 'variant_conv_disabled',
+        'variant_key' => 'as_is',
+        'sms_body' => 'JPLAY variant_conv_disabled',
+    ]);
+
+    $resolver->handle_confirmed_conversion([
+        'provider_key' => 'nth',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'confirmed' => true,
+        'transaction_id' => (string) ($capture['transaction_id'] ?? ''),
+    ]);
+    $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
+
+    kiwi_assert_same(0, (int) ($variant_summary['conv'] ?? 0), 'Expected disabled experiment to leave historical variant conversion metrics untouched.');
+});
+
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends custom_field1 from persisted sales operator_name', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $sales_repository = new Kiwi_Test_Sales_Repository();
@@ -8090,6 +8153,12 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', f
     kiwi_assert_same(1, count($repository->assignments), 'Expected service to create one idempotent assignment.');
 });
 
+kiwi_run_test('Kiwi_Config keeps SMS body variant writes disabled by default', function (): void {
+    $config = new Kiwi_Config();
+
+    kiwi_assert_same(false, $config->is_sms_body_variant_experiment_enabled(), 'Expected schema-dependent SMS variant writes to require explicit enablement.');
+});
+
 kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocation and renders every SMS form', function (): void {
     $config = new Kiwi_Test_Config();
     $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
@@ -8170,6 +8239,54 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocat
             kiwi_assert_contains('JPLAY ' . $allocation['seed'], $observed[$identity], 'Expected the visible token to start with its configured seed.');
         }
     }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Service restricts fr_sms_v2 to the FR NTH One-off integration', function (): void {
+    $config = new class extends Kiwi_Test_Config {
+        public function get_sms_body_variant_experiment_countries(): array
+        {
+            return ['FR', 'DE'];
+        }
+    };
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+    $service_definition = [
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $valid_landing = [
+        'key' => 'lp5-fr',
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ];
+    $contexts = [
+        'non-FR country' => array_merge($valid_landing, ['country' => 'DE']),
+        'different Aggregator' => array_merge($valid_landing, ['provider' => 'dimoco']),
+        'different flow' => array_merge($valid_landing, ['flow' => 'click-flow']),
+        'different service' => array_merge($valid_landing, ['service_key' => 'another_nth_service']),
+    ];
+
+    foreach ($contexts as $name => $landing) {
+        $result = $service->build_variant_body('Jplay*', '84072', $landing, $service_definition, [
+            'transaction_id' => 'txn_scope_' . preg_replace('/[^a-z]/', '_', strtolower($name)) . '_12345678',
+            'session_ref' => 'sess-scope-' . md5($name),
+        ]);
+
+        kiwi_assert_same(null, $result, 'Expected fr_sms_v2 to reject ' . $name . '.');
+    }
+
+    $accepted = $service->build_variant_body('Jplay*', '84072', $valid_landing, $service_definition, [
+        'transaction_id' => 'txn_scope_valid_12345678',
+        'session_ref' => 'sess-scope-valid',
+    ]);
+
+    kiwi_assert_true(is_array($accepted), 'Expected the exact FR NTH One-off context to remain eligible.');
+    kiwi_assert_same('fr_sms_v2', (string) ($accepted['assignment']['allocation_version'] ?? ''), 'Expected the eligible context to use fr_sms_v2.');
+    kiwi_assert_same(1, count($repository->assignments), 'Expected rejected integration contexts not to create assignments.');
 });
 
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository schema versions assignments and summary identity safely', function (): void {
@@ -8542,6 +8659,59 @@ kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes updates SMS body variant metrics alo
     kiwi_assert_same(2, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected global KPI CTA1 counter to remain unchanged in behavior.');
     kiwi_assert_same(1, (int) ($variant_summary['cta1'] ?? 0), 'Expected variant CTA1 metric to be idempotent per assignment.');
     kiwi_assert_same(1, (int) ($variant_summary['handoff_hidden'] ?? 0), 'Expected variant handoff hidden metric to increment.');
+});
+
+kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes suppresses SMS body variant metrics while disabled', function (): void {
+    $config = new Kiwi_Test_Sms_Body_Variant_Disabled_Config(
+        100,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [
+            'lp2-fr' => [
+                'service_key' => 'nth_fr_one_off_jplay',
+                'provider' => 'nth',
+                'flow' => 'nth-fr-one-off',
+            ],
+        ]
+    );
+    $summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
+    $variant_repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $variant_repository->insert_if_new([
+        'landing_key' => 'lp2-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-variant-rest-disabled',
+        'transaction_id' => 'txn_variant_rest_disabled',
+        'visible_token' => 'variant_rest_disabled',
+        'variant_key' => 'as_is',
+        'sms_body' => 'JPLAY variant_rest_disabled',
+    ]);
+    $routes = new Kiwi_Landing_Kpi_Rest_Routes(
+        $config,
+        new Kiwi_Landing_Kpi_Service($config, $summary_repository),
+        null,
+        null,
+        null,
+        $variant_repository
+    );
+
+    $response = $routes->handle_event(new WP_REST_Request([], [
+        'landing_key' => 'lp2-fr',
+        'session_token' => 'sess-variant-rest-disabled',
+        'step' => 'cta1',
+    ]));
+    $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
+
+    kiwi_assert_true(!($response->data['sms_body_variant_recorded'] ?? false), 'Expected disabled experiment not to report an SMS body variant metric write.');
+    kiwi_assert_same(1, (int) ($summary_repository->rows['lp2-fr']['cta1'] ?? 0), 'Expected global KPI tracking to remain active while the experiment is disabled.');
+    kiwi_assert_same(0, (int) ($variant_summary['cta1'] ?? 0), 'Expected disabled experiment to leave historical variant CTA1 metrics untouched.');
 });
 
 kiwi_run_test('Kiwi_Landing_Kpi_Service builds per-landing summary rows with percentage rates', function (): void {

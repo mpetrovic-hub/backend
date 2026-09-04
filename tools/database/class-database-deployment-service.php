@@ -457,6 +457,62 @@ class Kiwi_Database_Deployment_Service
                     ];
                 }
             }
+
+            $expected_index_metadata = (array) ($definition['index_metadata'] ?? []);
+
+            if (empty($expected_index_metadata)) {
+                continue;
+            }
+
+            $this->reset_database_error();
+            $index_metadata_rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+                    $object_name
+                ),
+                ARRAY_A
+            );
+
+            if ($this->get_database_error() !== '') {
+                $drift[] = [
+                    'kind' => 'inspection_error',
+                    'object' => $object_name,
+                    'detail' => $this->sanitize_error($this->get_database_error()),
+                ];
+                continue;
+            }
+
+            $actual_index_metadata = $this->collect_index_metadata($index_metadata_rows);
+
+            foreach ($expected_index_metadata as $index_name => $expected_metadata) {
+                if (!in_array($index_name, $indexes, true)) {
+                    continue;
+                }
+
+                $expected_unique = (bool) ($expected_metadata['unique'] ?? false);
+                $expected_columns = array_values(array_map('strval', (array) ($expected_metadata['columns'] ?? [])));
+                $actual_metadata = (array) ($actual_index_metadata[$index_name] ?? []);
+
+                if (($actual_metadata['unique'] ?? null) === $expected_unique
+                    && ($actual_metadata['columns'] ?? []) === $expected_columns
+                ) {
+                    continue;
+                }
+
+                $drift[] = [
+                    'kind' => 'index_definition_mismatch',
+                    'object' => $object_name,
+                    'index' => $index_name,
+                    'expected' => [
+                        'unique' => $expected_unique,
+                        'columns' => $expected_columns,
+                    ],
+                    'actual' => [
+                        'unique' => $actual_metadata['unique'] ?? null,
+                        'columns' => $actual_metadata['columns'] ?? [],
+                    ],
+                ];
+            }
         }
 
         return ['drift' => $drift];
@@ -560,6 +616,41 @@ class Kiwi_Database_Deployment_Service
         }
 
         return array_values(array_unique($values));
+    }
+
+    private function collect_index_metadata($rows): array
+    {
+        $metadata = [];
+
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $index_name = trim((string) ($row['INDEX_NAME'] ?? ''));
+            $column_name = trim((string) ($row['COLUMN_NAME'] ?? ''));
+            $sequence = (int) ($row['SEQ_IN_INDEX'] ?? 0);
+
+            if ($index_name === '' || $column_name === '' || $sequence < 1) {
+                continue;
+            }
+
+            if (!isset($metadata[$index_name])) {
+                $metadata[$index_name] = [
+                    'unique' => (int) ($row['NON_UNIQUE'] ?? 1) === 0,
+                    'columns' => [],
+                ];
+            }
+
+            $metadata[$index_name]['columns'][$sequence] = $column_name;
+        }
+
+        foreach ($metadata as $index_name => $definition) {
+            ksort($definition['columns'], SORT_NUMERIC);
+            $metadata[$index_name]['columns'] = array_values($definition['columns']);
+        }
+
+        return $metadata;
     }
 
     private function failure_result(string $phase, string $error_code, string $error_message): array
