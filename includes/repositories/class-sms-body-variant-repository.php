@@ -6,6 +6,16 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Sms_Body_Variant_Repository
 {
+    private const SUMMARY_UNIQUE_INDEX = 'variant_summary_version';
+    private const LEGACY_SUMMARY_UNIQUE_INDEX = 'variant_summary';
+    private const SUMMARY_UNIQUE_COLUMNS = [
+        'landing_key',
+        'service_key',
+        'variant_key',
+        'seed',
+        'allocation_version',
+    ];
+
     private function get_assignments_table_name(): string
     {
         global $wpdb;
@@ -46,6 +56,7 @@ class Kiwi_Sms_Body_Variant_Repository
             visible_token VARCHAR(140) NOT NULL DEFAULT '',
             variant_key VARCHAR(50) NOT NULL DEFAULT '',
             seed VARCHAR(50) NOT NULL DEFAULT '',
+            allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy',
             sms_body VARCHAR(255) NOT NULL DEFAULT '',
             cta1_recorded_at DATETIME NULL,
             handoff_attempted_at DATETIME NULL,
@@ -67,6 +78,7 @@ class Kiwi_Sms_Body_Variant_Repository
             KEY click_id (click_id),
             KEY variant_key (variant_key),
             KEY seed (seed),
+            KEY allocation_version (allocation_version),
             KEY created_at (created_at)
         ) {$charset_collate};";
 
@@ -80,6 +92,7 @@ class Kiwi_Sms_Body_Variant_Repository
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             variant_key VARCHAR(50) NOT NULL DEFAULT '',
             seed VARCHAR(50) NOT NULL DEFAULT '',
+            allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy',
             assignments INT UNSIGNED NOT NULL DEFAULT 0,
             cta1 INT UNSIGNED NOT NULL DEFAULT 0,
             handoff_attempted INT UNSIGNED NOT NULL DEFAULT 0,
@@ -93,19 +106,24 @@ class Kiwi_Sms_Body_Variant_Repository
             conv_per_cta1_cr DECIMAL(7,2) NOT NULL DEFAULT 0,
             conv_per_hidden_cr DECIMAL(7,2) NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
-            UNIQUE KEY variant_summary (landing_key, service_key, variant_key, seed),
+            UNIQUE KEY variant_summary_version (landing_key, service_key, variant_key, seed, allocation_version),
             KEY landing_key (landing_key),
             KEY service_key (service_key),
             KEY provider_key (provider_key),
             KEY flow_key (flow_key),
             KEY variant_key (variant_key),
             KEY seed (seed),
+            KEY allocation_version (allocation_version),
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
+
         dbDelta($assignments_sql);
         dbDelta($summary_sql);
+        $this->finalize_versioned_summary_index($summary_table);
     }
 
     public function insert_if_new(array $assignment): array
@@ -113,6 +131,7 @@ class Kiwi_Sms_Body_Variant_Repository
         $transaction_id = $this->sanitize_token((string) ($assignment['transaction_id'] ?? ''), 120);
         $visible_token = $this->sanitize_token((string) ($assignment['visible_token'] ?? ''), 140);
         $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $allocation_version = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
 
         if ($transaction_id === '' || $visible_token === '' || !$this->is_supported_variant_key($variant_key)) {
             return [
@@ -152,10 +171,12 @@ class Kiwi_Sms_Body_Variant_Repository
                 'visible_token' => $visible_token,
                 'variant_key' => $variant_key,
                 'seed' => $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50),
+                'allocation_version' => $allocation_version,
                 'sms_body' => $this->sanitize_sms_body((string) ($assignment['sms_body'] ?? '')),
                 'raw_context' => isset($assignment['raw_context']) ? wp_json_encode($assignment['raw_context']) : '',
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -324,7 +345,7 @@ class Kiwi_Sms_Body_Variant_Repository
         $where = [];
         $params = [];
 
-        foreach (['landing_key', 'service_key', 'variant_key', 'seed'] as $field) {
+        foreach (['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'] as $field) {
             $value = $this->sanitize_key((string) ($filters[$field] ?? ''), 100);
 
             if ($value === '') {
@@ -341,7 +362,7 @@ class Kiwi_Sms_Body_Variant_Repository
             $sql .= ' WHERE ' . implode(' AND ', $where);
         }
 
-        $sql .= ' ORDER BY landing_key ASC, service_key ASC, variant_key ASC, seed ASC';
+        $sql .= ' ORDER BY landing_key ASC, service_key ASC, allocation_version ASC, variant_key ASC, seed ASC';
 
         $rows = !empty($params)
             ? $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A)
@@ -364,6 +385,7 @@ class Kiwi_Sms_Body_Variant_Repository
         $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
         $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
         $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+        $allocation_version = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
 
         if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
             return false;
@@ -385,6 +407,7 @@ class Kiwi_Sms_Body_Variant_Repository
                     flow_key,
                     variant_key,
                     seed,
+                    allocation_version,
                     assignments,
                     cta1,
                     handoff_attempted,
@@ -398,6 +421,7 @@ class Kiwi_Sms_Body_Variant_Repository
                     conv_per_cta1_cr,
                     conv_per_hidden_cr
                 ) VALUES (
+                    %s,
                     %s,
                     %s,
                     %s,
@@ -430,7 +454,8 @@ class Kiwi_Sms_Body_Variant_Repository
                 $provider_key,
                 $flow_key,
                 $variant_key,
-                $seed
+                $seed,
+                $allocation_version
             )
         );
 
@@ -446,12 +471,14 @@ class Kiwi_Sms_Body_Variant_Repository
                  WHERE landing_key = %s
                    AND service_key = %s
                    AND variant_key = %s
-                   AND seed = %s",
+                   AND seed = %s
+                   AND allocation_version = %s",
                 $now,
                 $landing_key,
                 $service_key,
                 $variant_key,
-                $seed
+                $seed,
+                $allocation_version
             )
         );
 
@@ -471,12 +498,14 @@ class Kiwi_Sms_Body_Variant_Repository
                  WHERE landing_key = %s
                    AND service_key = %s
                    AND variant_key = %s
-                   AND seed = %s",
+                   AND seed = %s
+                   AND allocation_version = %s",
                 $now,
                 $landing_key,
                 $service_key,
                 $variant_key,
-                $seed
+                $seed,
+                $allocation_version
             )
         );
 
@@ -533,7 +562,75 @@ class Kiwi_Sms_Body_Variant_Repository
             'bare_id',
             'game_word',
             'cta_phrase',
+            'download_phrase',
         ], true);
+    }
+
+    private function finalize_versioned_summary_index(string $summary_table): void
+    {
+        global $wpdb;
+
+        $versioned_index = $this->read_index_definition($summary_table, self::SUMMARY_UNIQUE_INDEX);
+
+        if (($versioned_index['columns'] ?? []) !== self::SUMMARY_UNIQUE_COLUMNS
+            || ($versioned_index['unique'] ?? false) !== true
+        ) {
+            throw new RuntimeException('The versioned SMS body summary unique index was not created as required.');
+        }
+
+        $legacy_index = $this->read_index_definition($summary_table, self::LEGACY_SUMMARY_UNIQUE_INDEX);
+
+        if (($legacy_index['present'] ?? false) !== true) {
+            return;
+        }
+
+        $result = $wpdb->query(
+            "ALTER TABLE {$summary_table} DROP INDEX " . self::LEGACY_SUMMARY_UNIQUE_INDEX
+        );
+
+        if ($result === false) {
+            throw new RuntimeException('The legacy SMS body summary unique index could not be removed.');
+        }
+    }
+
+    private function read_index_definition(string $table_name, string $index_name): array
+    {
+        global $wpdb;
+
+        if (!is_object($wpdb) || !method_exists($wpdb, 'get_results') || !method_exists($wpdb, 'prepare')) {
+            throw new RuntimeException('Database index inspection is unavailable.');
+        }
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s ORDER BY SEQ_IN_INDEX ASC',
+                $table_name,
+                $index_name
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            throw new RuntimeException('Database index inspection failed.');
+        }
+
+        return [
+            'present' => !empty($rows),
+            'unique' => !empty($rows) && (int) ($rows[0]['NON_UNIQUE'] ?? 1) === 0,
+            'columns' => array_values(array_map(
+                static function (array $row): string {
+                    return (string) ($row['COLUMN_NAME'] ?? '');
+                },
+                $rows
+            )),
+        ];
+    }
+
+    private function sanitize_allocation_version(string $allocation_version): string
+    {
+        $allocation_version = $this->sanitize_key($allocation_version, 50);
+
+        return $allocation_version !== '' ? $allocation_version : 'legacy';
     }
 
     private function sanitize_key(string $value, int $max_length): string

@@ -6,33 +6,17 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Sms_Body_Variant_Service
 {
-    private const VARIANTS = [
-        'as_is_txn_prefix',
-        'bare_id',
-        'game_word',
-        'cta_phrase',
-    ];
+    private const ALLOCATION_VERSION = 'fr_sms_v2';
 
-    private const GAME_SEEDS = [
-        'ArcadeHero',
-        'PuzzleRush',
-        'GameQuest',
-        'PlayHero',
-        'FunArcade',
-        'MegaJeux',
-        'TopJeux',
-        'BonusPlay',
-    ];
-
-    private const CTA_SEEDS = [
-        'ActiverJeux',
-        'ValiderJeux',
-        'RecevoirJeux',
-        'JouerPlus',
-        'TopJeuxNow',
-        'PlayNow',
-        'BonusJeux',
-        'GoJeux',
+    private const ACTIVE_ALLOCATION = [
+        ['variant_key' => 'as_is_txn_prefix', 'seed' => '', 'weight' => 10],
+        ['variant_key' => 'cta_phrase', 'seed' => 'BonusJeux', 'weight' => 20],
+        ['variant_key' => 'game_word', 'seed' => 'TopJeux', 'weight' => 20],
+        ['variant_key' => 'cta_phrase', 'seed' => 'JouerPlus', 'weight' => 20],
+        ['variant_key' => 'cta_phrase', 'seed' => 'AccederJeux', 'weight' => 8],
+        ['variant_key' => 'game_word', 'seed' => 'JeuxMax', 'weight' => 8],
+        ['variant_key' => 'download_phrase', 'seed' => 'AccederMaintenant', 'weight' => 8],
+        ['variant_key' => 'game_word', 'seed' => 'GameQuest', 'weight' => 6],
     ];
 
     private $config;
@@ -77,8 +61,9 @@ class Kiwi_Sms_Body_Variant_Service
             }
         }
 
-        $variant_key = $this->resolve_variant_key($transaction_id);
-        $seed = $this->resolve_seed($transaction_id, $variant_key);
+        $allocation = $this->resolve_allocation($transaction_id);
+        $variant_key = (string) ($allocation['variant_key'] ?? '');
+        $seed = (string) ($allocation['seed'] ?? '');
         $visible_token = $this->build_visible_token($transaction_id, $variant_key, $seed);
         $body = $keyword . ' ' . $visible_token;
         $result = $this->repository->insert_if_new([
@@ -96,6 +81,7 @@ class Kiwi_Sms_Body_Variant_Service
             'visible_token' => $visible_token,
             'variant_key' => $variant_key,
             'seed' => $seed,
+            'allocation_version' => self::ALLOCATION_VERSION,
             'sms_body' => $body,
             'raw_context' => [
                 'source' => 'primary_cta',
@@ -131,9 +117,9 @@ class Kiwi_Sms_Body_Variant_Service
 
     public function resolve_variant_key(string $transaction_id): string
     {
-        $index = $this->stable_index($transaction_id, count(self::VARIANTS), 'variant');
+        $allocation = $this->resolve_allocation($transaction_id);
 
-        return self::VARIANTS[$index] ?? self::VARIANTS[0];
+        return (string) ($allocation['variant_key'] ?? 'as_is_txn_prefix');
     }
 
     public function build_visible_token(string $transaction_id, string $variant_key, string $seed = ''): string
@@ -150,7 +136,7 @@ class Kiwi_Sms_Body_Variant_Service
             return $bare_id;
         }
 
-        if ($variant_key === 'game_word' || $variant_key === 'cta_phrase') {
+        if (in_array($variant_key, ['game_word', 'cta_phrase', 'download_phrase'], true)) {
             $seed = $this->sanitize_token($seed, 50);
 
             return $seed . $bare_id;
@@ -161,12 +147,22 @@ class Kiwi_Sms_Body_Variant_Service
 
     public function get_game_seeds(): array
     {
-        return self::GAME_SEEDS;
+        return $this->get_seeds_for_variant_key('game_word');
     }
 
     public function get_cta_seeds(): array
     {
-        return self::CTA_SEEDS;
+        return $this->get_seeds_for_variant_key('cta_phrase');
+    }
+
+    public function get_active_allocation(): array
+    {
+        return self::ACTIVE_ALLOCATION;
+    }
+
+    public function get_allocation_version(): string
+    {
+        return self::ALLOCATION_VERSION;
     }
 
     private function is_enabled_for_landing(array $landing_page, array $service): bool
@@ -184,21 +180,39 @@ class Kiwi_Sms_Body_Variant_Service
         return in_array($country, $this->config->get_sms_body_variant_experiment_countries(), true);
     }
 
-    private function resolve_seed(string $transaction_id, string $variant_key): string
+    private function resolve_allocation(string $transaction_id): array
     {
-        if ($variant_key === 'game_word') {
-            $index = $this->stable_index($transaction_id, count(self::GAME_SEEDS), 'game');
+        $bucket = $this->stable_index($transaction_id, 100, self::ALLOCATION_VERSION);
+        $upper_bound = 0;
 
-            return self::GAME_SEEDS[$index] ?? self::GAME_SEEDS[0];
+        foreach (self::ACTIVE_ALLOCATION as $allocation) {
+            $upper_bound += max(0, (int) ($allocation['weight'] ?? 0));
+
+            if ($bucket < $upper_bound) {
+                return $allocation;
+            }
         }
 
-        if ($variant_key === 'cta_phrase') {
-            $index = $this->stable_index($transaction_id, count(self::CTA_SEEDS), 'cta');
+        return self::ACTIVE_ALLOCATION[0];
+    }
 
-            return self::CTA_SEEDS[$index] ?? self::CTA_SEEDS[0];
+    private function get_seeds_for_variant_key(string $variant_key): array
+    {
+        $seeds = [];
+
+        foreach (self::ACTIVE_ALLOCATION as $allocation) {
+            if (($allocation['variant_key'] ?? '') !== $variant_key) {
+                continue;
+            }
+
+            $seed = (string) ($allocation['seed'] ?? '');
+
+            if ($seed !== '') {
+                $seeds[] = $seed;
+            }
         }
 
-        return '';
+        return $seeds;
     }
 
     private function stable_index(string $transaction_id, int $bucket_count, string $salt): int

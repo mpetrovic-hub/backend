@@ -651,7 +651,7 @@ kiwi_run_test('Kiwi database apply blocks newer and unknown schema versions', fu
 
     $previous_wpdb = $wpdb ?? null;
 
-    foreach (['2026-07-24-1', 'future-release'] as $installed_version) {
+    foreach (['2026-09-05-1', 'future-release'] as $installed_version) {
         $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
         $contract = kiwi_test_database_contract()['kiwi_test_table'];
         $wpdb->objects['abc_kiwi_test_table'] = [
@@ -815,6 +815,23 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
     sort($actual_objects, SORT_STRING);
 
     kiwi_assert_same($expected_objects, $actual_objects, 'Expected the external status contract to cover every canonical table and view.');
+    kiwi_assert_true(
+        in_array('allocation_version', $contract['kiwi_sms_body_variant_assignments']['columns'] ?? [], true),
+        'Expected SMS body assignments to expose allocation_version as a deployment postcondition.'
+    );
+    kiwi_assert_true(
+        in_array('allocation_version', $contract['kiwi_sms_body_variant_summary']['columns'] ?? [], true),
+        'Expected SMS body summary rows to expose allocation_version as a deployment postcondition.'
+    );
+    kiwi_assert_true(
+        in_array('variant_summary_version', $contract['kiwi_sms_body_variant_summary']['indexes'] ?? [], true),
+        'Expected the deployment contract to require the version-aware summary unique index.'
+    );
+    kiwi_assert_same(
+        false,
+        in_array('variant_summary', $contract['kiwi_sms_body_variant_summary']['indexes'] ?? [], true),
+        'Expected the narrower legacy summary unique index to leave the canonical contract.'
+    );
     kiwi_assert_true(new Kiwi_Database_Deployment_Service() instanceof Kiwi_Database_Deployment_Service, 'Expected every canonical repository step to construct outside normal runtime.');
 });
 

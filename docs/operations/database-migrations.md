@@ -82,6 +82,14 @@ The generic runner never drops legacy columns, rebuilds active data through a te
 4. Require a green post-apply `status`.
 5. Deploy or enable the dependent application behavior.
 
+### FR SMS allocation-version schema
+
+Schema target `2026-09-04-1` adds `allocation_version` with default `legacy` to `wp_kiwi_sms_body_variant_assignments` and `wp_kiwi_sms_body_variant_summary`. It also creates the version-aware unique index `variant_summary_version` across `landing_key`, `service_key`, `variant_key`, `seed`, and `allocation_version`.
+
+During `apply`, the repository verifies that the new unique index exists with the complete ordered identity before removing the narrower legacy `variant_summary` index. Existing rows therefore remain grouped as `legacy`, and the old constraint is not removed unless its replacement is already valid.
+
+Keep `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED=false` while making the reviewed release available. Run `status`, obtain authorization for `apply`, and require a green post-apply `status` at target `2026-09-04-1` before enabling `fr_sms_v2`. Do not add the columns or change the index with direct Production SQL.
+
 ### Destructive change
 
 1. Deploy compatible application code that no longer requires the old object.

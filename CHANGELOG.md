@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-09-04:
+- [NTH FR One-off SMS Variants] Replaced the uniform technical variant pool with the fixed eight-entry `fr_sms_v2` weighted allocation, including the new `download_phrase` type and no new `bare_id` traffic. Assignment and long-lived summary rows now carry `allocation_version`, delayed historical events remain in `legacy`, and the external schema contract requires a version-aware summary identity for stable cohort reporting.
+
 2026-08-31:
 - [NTH Premium SMS] Treat `submitMessage` as accepted only for readable HTTP-2xx XML with `resultCode=100`; persist rejected result diagnostics as terminal `mt_submit_failed`, avoid false pending blocks, and track service-correlated NTH submit incidents through the shared Operational Event lifecycle without request credentials or subscriber/session data.
 

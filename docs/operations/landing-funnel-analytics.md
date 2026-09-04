@@ -98,6 +98,49 @@ The main summary UI/CSV does not emit sale ID lists, transaction ID lists, `tkzo
 - `wp_kiwi_v_load_to_cta_by_tksource_tkzone`: plugin-managed legacy/debug view for traffic-source funnel analysis, using `2026-05-12 20:00:00` as the default lower bound for reliable `tksource`/`tkzone` data.
 - `wp_kiwi_v_one_for_all`: plugin-managed analytics view for pivot/export work outside the shortcode UI.
 
+## FR NTH One-off SMS body allocation
+
+New assignments for the FR NTH One-off click-to-SMS integration use the fixed allocation version `fr_sms_v2`. The version applies to every French landing page on that existing integration, while the reporting cohort **FR Download now** is deliberately limited to `lp5-fr` and `lp6-fr`.
+
+The active allocation is:
+
+| Visible token | `variant_key` | `seed` | Weight |
+|---|---|---|---:|
+| `txn_<id>` | `as_is_txn_prefix` | empty | 10% |
+| `BonusJeux<id>` | `cta_phrase` | `BonusJeux` | 20% |
+| `TopJeux<id>` | `game_word` | `TopJeux` | 20% |
+| `JouerPlus<id>` | `cta_phrase` | `JouerPlus` | 20% |
+| `AccederJeux<id>` | `cta_phrase` | `AccederJeux` | 8% |
+| `JeuxMax<id>` | `game_word` | `JeuxMax` | 8% |
+| `AccederMaintenant<id>` | `download_phrase` | `AccederMaintenant` | 8% |
+| `GameQuest<id>` | `game_word` | `GameQuest` | 6% |
+
+`as_is_txn_prefix` is the only fixed control. `bare_id` and all other historical seeds remain readable on historical assignments but receive no new traffic. The weights are stable hash buckets, not a daily ranking. Replace a variant only after a fixed evaluation round and publish every changed allocation under a new `allocation_version`.
+
+Both assignment and summary rows carry `allocation_version`. Existing rows become `legacy` through the schema default. Summary identity is `landing_key + service_key + variant_key + seed + allocation_version`, so delayed events for a historical assignment continue to update `legacy` rather than `fr_sms_v2`.
+
+For a privacy-safe read-only evaluation of **FR Download now**, aggregate the long-lived summary rather than exporting assignment tokens or click IDs:
+
+```sql
+SELECT
+    allocation_version,
+    variant_key,
+    seed,
+    SUM(assignments) AS assignments,
+    SUM(handoff_attempted) AS handoff_attempted,
+    SUM(conv) AS conv,
+    ROUND((SUM(conv) / NULLIF(SUM(handoff_attempted), 0)) * 100, 2) AS cr_smsvar_pct,
+    ROUND((SUM(conv) / NULLIF(SUM(assignments), 0)) * 100, 2) AS conv_per_assignment_pct
+FROM wp_kiwi_sms_body_variant_summary
+WHERE landing_key IN ('lp5-fr', 'lp6-fr')
+GROUP BY allocation_version, variant_key, seed
+ORDER BY allocation_version, variant_key, seed;
+```
+
+The primary metric is `CR_smsvar = conv / handoff_attempted`; `conv / assignments` is the control metric. Compare both against `as_is_txn_prefix` only after the agreed fixed observation window. Do not include other landing pages in this cohort.
+
+The `allocation_version` columns and version-aware summary unique index are schema-first changes. Keep the SMS body experiment disabled while deploying the code, then use the external `kiwi database status` / authorized `apply` / green `status` process in `database-migrations.md` before enabling `fr_sms_v2`.
+
 ## Main daily summary
 
 `wp_kiwi_landing_funnel_daily_summary` is the persistent target model for daily landing-funnel analytics.

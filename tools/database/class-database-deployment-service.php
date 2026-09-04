@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Database_Deployment_Service
 {
     public const SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    public const TARGET_SCHEMA_VERSION = '2026-07-23-1';
+    public const TARGET_SCHEMA_VERSION = '2026-09-04-1';
 
     private const LOCK_PREFIX = 'kiwi_backend_database_apply_';
 
