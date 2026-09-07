@@ -164,6 +164,13 @@ class Kiwi_Sms_Body_Variant_Repository
 
         $now = $this->current_time_mysql();
 
+        if (!$this->are_variant_tables_transactional()) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
         if ($wpdb->query('START TRANSACTION') === false) {
             return [
                 'inserted' => false,
@@ -339,6 +346,10 @@ class Kiwi_Sms_Body_Variant_Repository
             return false;
         }
 
+        if (!$this->are_variant_tables_transactional()) {
+            return false;
+        }
+
         if ($wpdb->query('START TRANSACTION') === false) {
             return false;
         }
@@ -457,7 +468,15 @@ class Kiwi_Sms_Body_Variant_Repository
         $initial_assignments = 0;
 
         if ($counter !== 'assignments') {
-            $assignment_count = $this->count_assignments_for_summary_identity($assignment, true);
+            $summary_state = $this->read_summary_assignment_state_for_update($assignment, true);
+
+            if ($summary_state === null) {
+                return false;
+            }
+
+            $assignment_count = !empty($summary_state['found'])
+                ? 0
+                : $this->count_assignments_for_summary_identity($assignment, true);
 
             if ($assignment_count === null) {
                 return false;
@@ -609,7 +628,15 @@ class Kiwi_Sms_Body_Variant_Repository
         $initial_assignments = 0;
 
         if ($counter !== 'assignments') {
-            $assignment_count = $this->count_assignments_for_summary_identity($assignment, false);
+            $summary_state = $this->read_summary_assignment_state_for_update($assignment, false);
+
+            if ($summary_state === null) {
+                return false;
+            }
+
+            $assignment_count = !empty($summary_state['found'])
+                ? 0
+                : $this->count_assignments_for_summary_identity($assignment, false);
 
             if ($assignment_count === null) {
                 return false;
@@ -728,6 +755,53 @@ class Kiwi_Sms_Body_Variant_Repository
         return $rate_result !== false;
     }
 
+    private function read_summary_assignment_state_for_update(
+        array $assignment,
+        bool $include_allocation_version
+    ): ?array {
+        global $wpdb;
+
+        $landing_key = $this->sanitize_key((string) ($assignment['landing_key'] ?? ''), 100);
+        $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
+        $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+
+        if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
+            return null;
+        }
+
+        $sql = "SELECT assignments
+                FROM {$this->get_summary_table_name()}
+                WHERE landing_key = %s
+                  AND service_key = %s
+                  AND variant_key = %s
+                  AND seed = %s";
+        $params = [
+            $landing_key,
+            $service_key,
+            $variant_key,
+            $seed,
+        ];
+
+        if ($include_allocation_version) {
+            $sql .= ' AND allocation_version = %s';
+            $params[] = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
+        }
+
+        $sql .= ' LIMIT 1 FOR UPDATE';
+        $wpdb->last_error = '';
+        $assignments = $wpdb->get_var($wpdb->prepare($sql, ...$params));
+
+        if ($assignments === false || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            return null;
+        }
+
+        return [
+            'found' => $assignments !== null,
+            'assignments' => $assignments === null ? 0 : max(0, (int) $assignments),
+        ];
+    }
+
     private function count_assignments_for_summary_identity(
         array $assignment,
         bool $include_allocation_version
@@ -827,6 +901,22 @@ class Kiwi_Sms_Body_Variant_Repository
             'cta_phrase',
             'download_phrase',
         ], true);
+    }
+
+    private function are_variant_tables_transactional(): bool
+    {
+        try {
+            return strcasecmp(
+                $this->read_table_engine($this->get_assignments_table_name()),
+                self::TRANSACTIONAL_ENGINE
+            ) === 0
+                && strcasecmp(
+                    $this->read_table_engine($this->get_summary_table_name()),
+                    self::TRANSACTIONAL_ENGINE
+                ) === 0;
+        } catch (Throwable $error) {
+            return false;
+        }
     }
 
     private function ensure_transactional_table(string $table_name): void

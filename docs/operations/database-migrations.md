@@ -92,6 +92,8 @@ Both `status` and the `apply` preflight also require every existing `allocation_
 
 Keep `KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED=false` while making the reviewed release available. Run `status`, obtain authorization for `apply`, and require a green post-apply `status` at target `2026-09-04-1` before enabling `fr_sms_v2`. Do not add the columns or change the index with direct Production SQL.
 
+Quiesce landing and callback traffic, or keep the site in maintenance, for this `apply`. Until both SMS-variant tables are verified as InnoDB, the runtime repository fails closed for new assignment enrollment and event-counter writes; this also covers the temporary mixed-engine state while the two table conversions run. Once both engines are transactional, delayed events can again update existing assignments atomically even while enrollment remains disabled.
+
 ### Destructive change
 
 1. Deploy compatible application code that no longer requires the old object.

@@ -4471,6 +4471,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
     public $queries = [];
     public $fail_next_summary_query = false;
     public $versioned_schema = true;
+    public $table_engines = [];
     private $transaction_snapshot = null;
 
     public function prepare($query, ...$args)
@@ -4579,6 +4580,31 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
         $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
         $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
+        $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
+        $this->queries[] = $query;
+
+        if (strpos($query, 'SELECT ENGINE FROM information_schema.TABLES') === 0) {
+            $table_name = (string) ($args[0] ?? '');
+
+            return (string) ($this->table_engines[$table_name] ?? 'InnoDB');
+        }
+
+        if (stripos($query, 'SELECT assignments') !== false
+            && stripos($query, "FROM {$summary_table}") !== false
+        ) {
+            $has_allocation_version = strpos($query, 'allocation_version = %s') !== false;
+            $row_id = $this->find_summary_row_id(
+                (string) ($args[0] ?? ''),
+                (string) ($args[1] ?? ''),
+                (string) ($args[2] ?? ''),
+                (string) ($args[3] ?? ''),
+                $has_allocation_version ? (string) ($args[4] ?? '') : null
+            );
+
+            return $row_id === null
+                ? null
+                : (int) ($this->tables[$summary_table][$row_id]['assignments'] ?? 0);
+        }
 
         if (stripos($query, "SELECT COUNT(*)") === false
             || stripos($query, "FROM {$assignment_table}") === false
@@ -8315,6 +8341,74 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository records events against the legac
     }
 });
 
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository blocks enrollment and event writes until both tables are transactional', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+    $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+    $wpdb->table_engines = [
+        $assignment_table => 'InnoDB',
+        $summary_table => 'MyISAM',
+    ];
+    $wpdb->tables[$assignment_table][1] = [
+        'id' => 1,
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'session_token' => 'sess-engine-gate',
+        'transaction_id' => 'txn_engine_gate_12345678',
+        'visible_token' => 'BonusJeuxengine_gate_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'allocation_version' => 'fr_sms_v2',
+        'cta1_recorded_at' => null,
+    ];
+    $wpdb->tables[$summary_table][1] = [
+        'id' => 1,
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'allocation_version' => 'fr_sms_v2',
+        'assignments' => 1,
+        'cta1' => 0,
+    ];
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $event_recorded = $repository->mark_event_by_transaction_id('txn_engine_gate_12345678', 'cta1');
+        $new_assignment = $repository->insert_if_new([
+            'landing_key' => 'lp5-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'transaction_id' => 'txn_engine_gate_new_87654321',
+            'visible_token' => 'BonusJeuxengine_gate_new_87654321',
+            'variant_key' => 'cta_phrase',
+            'seed' => 'BonusJeux',
+            'allocation_version' => 'fr_sms_v2',
+            'sms_body' => 'JPLAY BonusJeuxengine_gate_new_87654321',
+        ]);
+
+        kiwi_assert_same(false, $event_recorded, 'Expected a mixed-engine rollout state to block event writes.');
+        kiwi_assert_same(false, $new_assignment['inserted'] ?? true, 'Expected a mixed-engine rollout state to block new enrollment.');
+        kiwi_assert_same('', (string) ($wpdb->tables[$assignment_table][1]['cta1_recorded_at'] ?? ''), 'Expected the blocked event not to publish its marker.');
+        kiwi_assert_same(0, (int) ($wpdb->tables[$summary_table][1]['cta1'] ?? 0), 'Expected the blocked event not to increment its summary.');
+        kiwi_assert_same(1, count($wpdb->tables[$assignment_table] ?? []), 'Expected the blocked enrollment not to add an assignment.');
+        kiwi_assert_same(false, in_array('START TRANSACTION', $wpdb->queries, true), 'Expected engine verification to fail before opening a write transaction.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recreates a missing legacy summary before recording an event', function (): void {
     global $wpdb;
 
@@ -8358,6 +8452,14 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recreates a missing legacy summa
         kiwi_assert_same(2, (int) ($summary['assignments'] ?? 0), 'Expected the recreated legacy summary to reconstruct its complete assignment population.');
         kiwi_assert_same(1, (int) ($summary['conv'] ?? 0), 'Expected the recreated legacy summary to retain the event metric.');
         kiwi_assert_same(50.0, (float) ($summary['conv_cr'] ?? 0), 'Expected the recreated legacy summary rate to use the reconstructed assignment population.');
+        $summary_lock_index = array_search(true, array_map(static function (string $query): bool {
+            return strpos($query, 'SELECT assignments') !== false && strpos($query, 'FOR UPDATE') !== false;
+        }, $wpdb->queries), true);
+        $assignment_count_index = array_search(true, array_map(static function (string $query): bool {
+            return strpos($query, 'SELECT COUNT(*)') !== false;
+        }, $wpdb->queries), true);
+        kiwi_assert_true($summary_lock_index !== false, 'Expected missing-summary recovery to lock the indexed summary identity.');
+        kiwi_assert_true($assignment_count_index !== false && $assignment_count_index > $summary_lock_index, 'Expected assignment reconstruction only after the missing summary identity is locked.');
     } finally {
         if ($had_wpdb) {
             $wpdb = $previous_wpdb;
@@ -8465,6 +8567,9 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recalculates summary rates from 
         kiwi_assert_same(100.0, (float) ($summary['conv_cr'] ?? 0), 'Expected conv_cr to be calculated from persisted counters without double-counting.');
         kiwi_assert_same(100.0, (float) ($summary['conv_per_cta1_cr'] ?? 0), 'Expected conv_per_cta1_cr to be calculated from persisted counters without double-counting.');
         kiwi_assert_same(100.0, (float) ($summary['conv_per_hidden_cr'] ?? 0), 'Expected conv_per_hidden_cr to be calculated from persisted counters without double-counting.');
+        kiwi_assert_same(0, count(array_filter($wpdb->queries, static function (string $query): bool {
+            return strpos($query, 'SELECT COUNT(*)') !== false;
+        })), 'Expected normal event recording not to recount the full assignment cohort when its summary exists.');
     } finally {
         if ($had_wpdb) {
             $wpdb = $previous_wpdb;
