@@ -511,7 +511,7 @@ class Kiwi_Database_Deployment_Service
 
                 $this->reset_database_error();
                 $invalid_count = $wpdb->get_var(
-                    "SELECT COUNT(*) FROM {$object_name} WHERE {$column_name} IS NULL OR TRIM({$column_name}) = ''"
+                    "SELECT COUNT(*) FROM {$object_name} WHERE {$column_name} IS NULL OR {$column_name} REGEXP '^[[:space:]]*$'"
                 );
 
                 if ($this->get_database_error() !== '' || $invalid_count === null || $invalid_count === false) {

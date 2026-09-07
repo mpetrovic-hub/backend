@@ -163,6 +163,14 @@ class Kiwi_Sms_Body_Variant_Repository
         global $wpdb;
 
         $now = $this->current_time_mysql();
+
+        if ($wpdb->query('START TRANSACTION') === false) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
         $result = $wpdb->insert(
             $this->get_assignments_table_name(),
             [
@@ -210,6 +218,8 @@ class Kiwi_Sms_Body_Variant_Repository
         );
 
         if ($result === false) {
+            $wpdb->query('ROLLBACK');
+
             return [
                 'inserted' => false,
                 'row' => $this->find_by_transaction_id($transaction_id),
@@ -218,8 +228,16 @@ class Kiwi_Sms_Body_Variant_Repository
 
         $row = $this->find_by_transaction_id($transaction_id);
 
-        if (is_array($row)) {
-            $this->increment_summary_counter($row, 'assignments');
+        if (!is_array($row)
+            || !$this->increment_summary_counter($row, 'assignments')
+            || $wpdb->query('COMMIT') === false
+        ) {
+            $wpdb->query('ROLLBACK');
+
+            return [
+                'inserted' => false,
+                'row' => $this->find_by_transaction_id($transaction_id),
+            ];
         }
 
         return [

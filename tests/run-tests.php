@@ -8101,6 +8101,57 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository stores assignments and summary i
     kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected CTA1 summary counter to be idempotent per assignment.');
 });
 
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository commits assignment enrollment with its summary increment atomically', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $wpdb->fail_next_summary_query = true;
+    $assignment = [
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-atomic-enrollment',
+        'transaction_id' => 'txn_atomic_enrollment_12345678',
+        'visible_token' => 'BonusJeuxatomic_enrollment_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'allocation_version' => 'fr_sms_v2',
+        'sms_body' => 'JPLAY BonusJeuxatomic_enrollment_12345678',
+    ];
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $failed = $repository->insert_if_new($assignment);
+        $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+        $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+
+        kiwi_assert_same(false, $failed['inserted'] ?? true, 'Expected a failed summary increment not to publish the assignment.');
+        kiwi_assert_same([], $wpdb->tables[$assignment_table] ?? [], 'Expected the assignment insert to roll back with its summary increment.');
+        kiwi_assert_same([], $wpdb->tables[$summary_table] ?? [], 'Expected failed enrollment not to leave a partial summary.');
+
+        $retried = $repository->insert_if_new($assignment);
+        $summary = array_values($wpdb->tables[$summary_table] ?? [])[0] ?? [];
+
+        kiwi_assert_same(true, $retried['inserted'] ?? false, 'Expected enrollment to remain retryable after the atomic rollback.');
+        kiwi_assert_same(1, count($wpdb->tables[$assignment_table] ?? []), 'Expected the successful retry to commit one assignment.');
+        kiwi_assert_same(1, (int) ($summary['assignments'] ?? 0), 'Expected the successful retry to commit its summary denominator once.');
+        kiwi_assert_contains('ROLLBACK', implode("\n", $wpdb->queries), 'Expected failed enrollment to roll back explicitly.');
+        kiwi_assert_contains('COMMIT', implode("\n", $wpdb->queries), 'Expected successful enrollment to commit explicitly.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
 kiwi_run_test('Kiwi_Sms_Body_Variant_Repository keeps legacy and versioned summary counters separate', function (): void {
     global $wpdb;
 

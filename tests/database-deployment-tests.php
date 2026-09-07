@@ -228,7 +228,7 @@ class Kiwi_Test_Database_Deployment_Wpdb
         $object_name = (string) ($args[0] ?? '');
 
         if (preg_match(
-            '/^SELECT COUNT\(\*\) FROM ([A-Za-z0-9_]+) WHERE ([A-Za-z0-9_]+) IS NULL OR TRIM\(\2\) = \'\'$/',
+            '/^SELECT COUNT\(\*\) FROM ([A-Za-z0-9_]+) WHERE ([A-Za-z0-9_]+) IS NULL OR \2 REGEXP/',
             $query,
             $matches
         ) === 1) {
@@ -851,6 +851,9 @@ kiwi_run_test('Kiwi database status rejects blank allocation version values', fu
     kiwi_assert_same(false, $result['ready'], 'Expected blank allocation_version values to fail green status.');
     kiwi_assert_same('allocation_version', $value_drift[0]['column'] ?? '', 'Expected drift to identify the invalid allocation-version values.');
     kiwi_assert_same(3, $value_drift[0]['count'] ?? 0, 'Expected drift to report the observed invalid-value count.');
+    kiwi_assert_same(1, count(array_filter($wpdb->queries, static function (string $query): bool {
+        return strpos($query, "REGEXP '^[[:space:]]*$'") !== false;
+    })), 'Expected the non-blank postcondition to detect tabs, newlines, and other whitespace-only values.');
 
     $wpdb = $previous_wpdb;
 });
