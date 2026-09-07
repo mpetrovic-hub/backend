@@ -4466,6 +4466,7 @@ class Kiwi_Test_Device_Model_Brand_Map_Repository extends Kiwi_Device_Model_Bran
 class Kiwi_Test_Wpdb_Sms_Body_Variant
 {
     public $prefix = 'wp_';
+    public $last_error = '';
     public $tables = [];
     public $queries = [];
     public $fail_next_summary_query = false;
@@ -4573,6 +4574,38 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         return $rows;
     }
 
+    public function get_var($statement)
+    {
+        $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
+        $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
+        $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
+
+        if (stripos($query, "SELECT COUNT(*)") === false
+            || stripos($query, "FROM {$assignment_table}") === false
+        ) {
+            return null;
+        }
+
+        $has_allocation_version = strpos($query, 'allocation_version = %s') !== false;
+        $count = 0;
+
+        foreach ($this->tables[$assignment_table] ?? [] as $row) {
+            if ((string) ($row['landing_key'] ?? '') !== (string) ($args[0] ?? '')
+                || (string) ($row['service_key'] ?? '') !== (string) ($args[1] ?? '')
+                || (string) ($row['variant_key'] ?? '') !== (string) ($args[2] ?? '')
+                || (string) ($row['seed'] ?? '') !== (string) ($args[3] ?? '')
+                || ($has_allocation_version
+                    && (string) ($row['allocation_version'] ?? '') !== (string) ($args[4] ?? ''))
+            ) {
+                continue;
+            }
+
+            $count++;
+        }
+
+        return $count;
+    }
+
     public function query($statement)
     {
         $query = is_array($statement) ? (string) ($statement['query'] ?? '') : (string) $statement;
@@ -4658,7 +4691,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                     'flow_key' => (string) ($args[5] ?? ''),
                     'variant_key' => (string) ($args[6] ?? ''),
                     'seed' => (string) ($args[7] ?? ''),
-                    'assignments' => 0,
+                    'assignments' => (int) ($args[$has_allocation_version ? 9 : 8] ?? 0),
                     'cta1' => 0,
                     'handoff_attempted' => 0,
                     'handoff_hidden' => 0,
@@ -6665,7 +6698,8 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver keeps recording existing SMS
         [
             'transaction_id' => 'txn_new_disabled_assignment',
             'session_ref' => 'sess-new-disabled-assignment',
-        ]
+        ],
+        (new Kiwi_Nth_Primary_Cta_Adapter())->get_sms_body_variant_allocation()
     );
     $resolver = new Kiwi_Conversion_Attribution_Resolver(
         $repository,
@@ -8254,6 +8288,12 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recreates a missing legacy summa
         'seed' => 'BonusJeux',
         'conv_recorded_at' => null,
     ];
+    $wpdb->tables[$assignment_table][2] = array_merge($wpdb->tables[$assignment_table][1], [
+        'id' => 2,
+        'session_token' => 'sess-legacy-missing-summary-2',
+        'transaction_id' => 'txn_legacy_missing_summary_87654321',
+        'visible_token' => 'BonusJeuxlegacy_missing_summary_87654321',
+    ]);
 
     try {
         $recorded = (new Kiwi_Sms_Body_Variant_Repository())->mark_event_by_transaction_id(
@@ -8264,7 +8304,64 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recreates a missing legacy summa
 
         kiwi_assert_same(true, $recorded, 'Expected a pre-version event to repair a missing summary row inside its transaction.');
         kiwi_assert_true(trim((string) ($wpdb->tables[$assignment_table][1]['conv_recorded_at'] ?? '')) !== '', 'Expected the legacy assignment marker to commit only with the repaired summary counter.');
+        kiwi_assert_same(2, (int) ($summary['assignments'] ?? 0), 'Expected the recreated legacy summary to reconstruct its complete assignment population.');
         kiwi_assert_same(1, (int) ($summary['conv'] ?? 0), 'Expected the recreated legacy summary to retain the event metric.');
+        kiwi_assert_same(50.0, (float) ($summary['conv_cr'] ?? 0), 'Expected the recreated legacy summary rate to use the reconstructed assignment population.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository reconstructs versioned assignments when repairing a missing summary', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $base = [
+            'landing_key' => 'lp5-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider_key' => 'nth',
+            'flow_key' => 'nth-fr-one-off',
+            'country' => 'FR',
+            'keyword' => 'JPLAY',
+            'shortcode' => '84072',
+            'variant_key' => 'cta_phrase',
+            'seed' => 'BonusJeux',
+            'allocation_version' => 'fr_sms_v2',
+        ];
+        $repository->insert_if_new(array_merge($base, [
+            'session_token' => 'sess-versioned-missing-summary-1',
+            'transaction_id' => 'txn_versioned_missing_summary_12345678',
+            'visible_token' => 'BonusJeuxversioned_missing_summary_12345678',
+            'sms_body' => 'JPLAY BonusJeuxversioned_missing_summary_12345678',
+        ]));
+        $repository->insert_if_new(array_merge($base, [
+            'session_token' => 'sess-versioned-missing-summary-2',
+            'transaction_id' => 'txn_versioned_missing_summary_87654321',
+            'visible_token' => 'BonusJeuxversioned_missing_summary_87654321',
+            'sms_body' => 'JPLAY BonusJeuxversioned_missing_summary_87654321',
+        ]));
+        $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+        $wpdb->tables[$summary_table] = [];
+
+        $recorded = $repository->mark_event_by_transaction_id(
+            'txn_versioned_missing_summary_12345678',
+            'conv'
+        );
+        $summary = array_values($wpdb->tables[$summary_table] ?? [])[0] ?? [];
+
+        kiwi_assert_same(true, $recorded, 'Expected a versioned event to repair a missing summary row inside its transaction.');
+        kiwi_assert_same(2, (int) ($summary['assignments'] ?? 0), 'Expected the recreated versioned summary to reconstruct only matching-version assignments.');
+        kiwi_assert_same(1, (int) ($summary['conv'] ?? 0), 'Expected the recreated versioned summary to retain the event metric.');
+        kiwi_assert_same(50.0, (float) ($summary['conv_cr'] ?? 0), 'Expected the recreated versioned summary rate to use the reconstructed assignment population.');
     } finally {
         if ($had_wpdb) {
             $wpdb = $previous_wpdb;
@@ -8330,6 +8427,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', f
     $config = new Kiwi_Test_Config();
     $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
     $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+    $allocation_contract = (new Kiwi_Nth_Primary_Cta_Adapter())->get_sms_body_variant_allocation();
 
     $landing = [
         'key' => 'lp2-fr',
@@ -8351,8 +8449,8 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', f
         'pid' => 'pid-variant',
     ];
 
-    $first = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution);
-    $second = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution);
+    $first = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution, $allocation_contract);
+    $second = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution, $allocation_contract);
     $variant_key = (string) ($first['assignment']['variant_key'] ?? '');
     $seed = (string) ($first['assignment']['seed'] ?? '');
 
@@ -8396,6 +8494,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service serves stored assignments while enr
         new Kiwi_Test_Sms_Body_Variant_Disabled_Config(),
         $repository
     );
+    $allocation_contract = (new Kiwi_Nth_Primary_Cta_Adapter())->get_sms_body_variant_allocation();
     $landing = [
         'key' => 'lp5-fr',
         'country' => 'FR',
@@ -8413,11 +8512,11 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service serves stored assignments while enr
     $stored = $service->build_variant_body('JPLAY', '84072', $landing, $nth_service, [
         'transaction_id' => 'txn_stored_disabled_12345678',
         'session_ref' => 'sess-stored-disabled',
-    ]);
+    ], $allocation_contract);
     $new = $service->build_variant_body('JPLAY', '84072', $landing, $nth_service, [
         'transaction_id' => 'txn_new_disabled_87654321',
         'session_ref' => 'sess-new-disabled',
-    ]);
+    ], $allocation_contract);
 
     kiwi_assert_same('JPLAY BonusJeuxstored_disabled_12345678', (string) ($stored['body'] ?? ''), 'Expected a returning session to keep its stored variant body while enrollment is paused.');
     kiwi_assert_same('fr_sms_v2', (string) ($stored['assignment']['allocation_version'] ?? ''), 'Expected the stored assignment identity to remain intact.');
@@ -8425,10 +8524,11 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service serves stored assignments while enr
     kiwi_assert_same(1, count($repository->assignments), 'Expected disabled enrollment to reuse only the existing assignment.');
 });
 
-kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocation and renders every SMS form', function (): void {
+kiwi_run_test('Kiwi_Nth_Primary_Cta_Adapter owns the exact fr_sms_v2 allocation and the generic service renders every SMS form', function (): void {
     $config = new Kiwi_Test_Config();
     $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
     $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+    $allocation_contract = (new Kiwi_Nth_Primary_Cta_Adapter())->get_sms_body_variant_allocation();
     $expected = [
         ['variant_key' => 'as_is_txn_prefix', 'seed' => '', 'weight' => 10],
         ['variant_key' => 'cta_phrase', 'seed' => 'BonusJeux', 'weight' => 20],
@@ -8455,6 +8555,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocat
     $observed = [];
     $bucket_counts = [];
     $seen_buckets = [];
+    $service_source = file_get_contents(__DIR__ . '/../includes/services/class-sms-body-variant-service.php');
 
     for ($index = 0; $index < 5000 && count($seen_buckets) < 100; $index++) {
         $transaction_id = 'txn_allocation_bucket_' . $index . '_12345678';
@@ -8468,7 +8569,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocat
         $result = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, [
             'transaction_id' => $transaction_id,
             'session_ref' => 'sess-allocation-' . $index,
-        ]);
+        ], $allocation_contract);
         $assignment = (array) ($result['assignment'] ?? []);
         $identity = (string) ($assignment['variant_key'] ?? '') . '|' . (string) ($assignment['seed'] ?? '');
         $observed[$identity] = (string) ($result['body'] ?? '');
@@ -8484,12 +8585,23 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service exposes the exact fr_sms_v2 allocat
     ksort($bucket_counts, SORT_STRING);
     ksort($expected_bucket_counts, SORT_STRING);
 
-    kiwi_assert_same('fr_sms_v2', $service->get_allocation_version(), 'Expected the weighted allocation to have a stable reporting version.');
-    kiwi_assert_same($expected, $service->get_active_allocation(), 'Expected exactly the approved eight active variants and weights.');
-    kiwi_assert_same(100, array_sum(array_column($service->get_active_allocation(), 'weight')), 'Expected active allocation weights to total 100 percent.');
-    kiwi_assert_same(['TopJeux', 'JeuxMax', 'GameQuest'], $service->get_game_seeds(), 'Expected only approved game-word seeds to stay active.');
-    kiwi_assert_same(['BonusJeux', 'JouerPlus', 'AccederJeux'], $service->get_cta_seeds(), 'Expected only approved CTA-phrase seeds to stay active.');
-    kiwi_assert_same(false, in_array('bare_id', array_column($service->get_active_allocation(), 'variant_key'), true), 'Expected bare_id to receive no new traffic.');
+    kiwi_assert_same([
+        'country' => 'FR',
+        'provider' => 'nth',
+        'flow' => 'nth-fr-one-off',
+        'service_key' => 'nth_fr_one_off_jplay',
+    ], $allocation_contract['context'] ?? [], 'Expected the NTH integration adapter to own the exact eligible context.');
+    kiwi_assert_same($expected, $allocation_contract['entries'] ?? [], 'Expected the NTH integration adapter to own the approved allocation entries.');
+    kiwi_assert_true(is_string($service_source), 'Expected the generic SMS body variant service source to be readable.');
+    kiwi_assert_same(false, strpos($service_source, 'fr_sms_v2'), 'Expected the generic SMS body variant service not to own the NTH allocation version.');
+    kiwi_assert_same(false, strpos($service_source, 'nth_fr_one_off_jplay'), 'Expected the generic SMS body variant service not to own the NTH service scope.');
+    kiwi_assert_same(false, strpos($service_source, 'BonusJeux'), 'Expected the generic SMS body variant service not to own NTH allocation seeds.');
+    kiwi_assert_same('fr_sms_v2', $service->get_allocation_version($allocation_contract), 'Expected the weighted allocation to have a stable reporting version.');
+    kiwi_assert_same($expected, $service->get_active_allocation($allocation_contract), 'Expected exactly the approved eight active variants and weights.');
+    kiwi_assert_same(100, array_sum(array_column($service->get_active_allocation($allocation_contract), 'weight')), 'Expected active allocation weights to total 100 percent.');
+    kiwi_assert_same(['TopJeux', 'JeuxMax', 'GameQuest'], $service->get_game_seeds($allocation_contract), 'Expected only approved game-word seeds to stay active.');
+    kiwi_assert_same(['BonusJeux', 'JouerPlus', 'AccederJeux'], $service->get_cta_seeds($allocation_contract), 'Expected only approved CTA-phrase seeds to stay active.');
+    kiwi_assert_same(false, in_array('bare_id', array_column($service->get_active_allocation($allocation_contract), 'variant_key'), true), 'Expected bare_id to receive no new traffic.');
     kiwi_assert_same(100, count($seen_buckets), 'Expected the test sample to cover every stable 0-99 allocation bucket.');
     kiwi_assert_same($expected_bucket_counts, $bucket_counts, 'Expected the stable 0-99 buckets to implement the exact approved weights.');
     kiwi_assert_same(count($expected), count($observed), 'Expected stable hashing to make every configured SMS form reachable.');
@@ -8516,6 +8628,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service restricts fr_sms_v2 to the FR NTH O
     };
     $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
     $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+    $allocation_contract = (new Kiwi_Nth_Primary_Cta_Adapter())->get_sms_body_variant_allocation();
     $service_definition = [
         'country' => 'FR',
         'provider' => 'nth',
@@ -8540,7 +8653,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service restricts fr_sms_v2 to the FR NTH O
         $result = $service->build_variant_body('Jplay*', '84072', $landing, $service_definition, [
             'transaction_id' => 'txn_scope_' . preg_replace('/[^a-z]/', '_', strtolower($name)) . '_12345678',
             'session_ref' => 'sess-scope-' . md5($name),
-        ]);
+        ], $allocation_contract);
 
         kiwi_assert_same(null, $result, 'Expected fr_sms_v2 to reject ' . $name . '.');
     }
@@ -8548,7 +8661,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service restricts fr_sms_v2 to the FR NTH O
     $accepted = $service->build_variant_body('Jplay*', '84072', $valid_landing, $service_definition, [
         'transaction_id' => 'txn_scope_valid_12345678',
         'session_ref' => 'sess-scope-valid',
-    ]);
+    ], $allocation_contract);
 
     kiwi_assert_true(is_array($accepted), 'Expected the exact FR NTH One-off context to remain eligible.');
     kiwi_assert_same('fr_sms_v2', (string) ($accepted['assignment']['allocation_version'] ?? ''), 'Expected the eligible context to use fr_sms_v2.');
@@ -8769,7 +8882,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository removes a renamed legacy summary
                         'SUB_PART' => null,
                         'INDEX_TYPE' => 'BTREE',
                     ];
-                }, ['landing_key', 'service_key', 'variant_key', 'seed'], array_keys(range(0, 3)));
+                }, ['seed', 'variant_key', 'service_key', 'landing_key'], array_keys(range(0, 3)));
             }
 
             if ($index_name === '') {
@@ -8793,7 +8906,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository removes a renamed legacy summary
     try {
         (new Kiwi_Sms_Body_Variant_Repository())->create_table();
 
-        kiwi_assert_contains('ALTER TABLE abc_kiwi_sms_body_variant_summary DROP INDEX legacy_summary_copy', implode("\n", $wpdb->queries), 'Expected a renamed copy of the legacy four-column unique identity to be removed after replacement verification.');
+        kiwi_assert_contains('ALTER TABLE abc_kiwi_sms_body_variant_summary DROP INDEX legacy_summary_copy', implode("\n", $wpdb->queries), 'Expected a reordered renamed copy of the legacy four-column unique identity to be removed after replacement verification.');
     } finally {
         $GLOBALS['kiwi_test_dbdelta_queries'] = $previous_queries;
         $wpdb = $previous_wpdb;

@@ -227,6 +227,17 @@ class Kiwi_Test_Database_Deployment_Wpdb
         $this->queries[] = $query;
         $object_name = (string) ($args[0] ?? '');
 
+        if (preg_match(
+            '/^SELECT COUNT\(\*\) FROM ([A-Za-z0-9_]+) WHERE ([A-Za-z0-9_]+) IS NULL OR TRIM\(\2\) = \'\'$/',
+            $query,
+            $matches
+        ) === 1) {
+            $object_name = (string) ($matches[1] ?? '');
+            $column_name = (string) ($matches[2] ?? '');
+
+            return (int) ($this->objects[$object_name]['invalid_value_counts'][$column_name] ?? 0);
+        }
+
         if (strpos($query, 'SELECT GET_LOCK(') === 0) {
             if (!$this->lock_available || $this->lock_held) {
                 return 0;
@@ -692,6 +703,7 @@ kiwi_run_test('Kiwi database status rejects a renamed legacy unique-index identi
             'legacy_index_definitions' => [[
                 'unique' => true,
                 'columns' => ['landing_key', 'service_key', 'variant_key', 'seed'],
+                'column_order' => 'any',
             ]],
             'index_metadata' => [
                 'variant_summary_version' => [
@@ -712,7 +724,7 @@ kiwi_run_test('Kiwi database status rejects a renamed legacy unique-index identi
             ],
             'legacy_summary_copy' => [
                 'unique' => true,
-                'columns' => ['landing_key', 'service_key', 'variant_key', 'seed'],
+                'columns' => ['seed', 'variant_key', 'service_key', 'landing_key'],
             ],
         ],
     ];
@@ -724,7 +736,7 @@ kiwi_run_test('Kiwi database status rejects a renamed legacy unique-index identi
         return ($drift['kind'] ?? '') === 'legacy_index_definition';
     }));
 
-    kiwi_assert_same(false, $result['ready'], 'Expected a renamed four-column legacy unique index to fail green status.');
+    kiwi_assert_same(false, $result['ready'], 'Expected a reordered renamed four-column legacy unique index to fail green status.');
     kiwi_assert_same('legacy_summary_copy', $legacy_drift[0]['index'] ?? '', 'Expected drift to identify the renamed legacy identity by its observed name.');
 
     $wpdb = $previous_wpdb;
@@ -798,6 +810,101 @@ kiwi_run_test('Kiwi database status rejects a non-legacy allocation version defa
 
     kiwi_assert_same(false, $result['ready'], 'Expected a blank allocation_version default to fail green status.');
     kiwi_assert_same('allocation_version', $definition_drift[0]['column'] ?? '', 'Expected drift to identify the wrongly defaulted allocation-version column.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database status rejects blank allocation version values', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = [
+        'kiwi_test_assignments' => [
+            'columns' => ['allocation_version'],
+            'indexes' => [],
+            'column_metadata' => [
+                'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
+            ],
+            'column_value_constraints' => [
+                'allocation_version' => ['non_blank' => true],
+            ],
+        ],
+    ];
+    $wpdb->objects['abc_kiwi_test_assignments'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['allocation_version'],
+        'indexes' => [],
+        'column_metadata' => [
+            'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
+        ],
+        'invalid_value_counts' => ['allocation_version' => 3],
+    ];
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION,
+    ];
+    $result = (new Kiwi_Test_Database_Deployment_Service([], $contract))->status();
+    $value_drift = array_values(array_filter($result['drift'], static function (array $drift): bool {
+        return ($drift['kind'] ?? '') === 'invalid_column_values';
+    }));
+
+    kiwi_assert_same(false, $result['ready'], 'Expected blank allocation_version values to fail green status.');
+    kiwi_assert_same('allocation_version', $value_drift[0]['column'] ?? '', 'Expected drift to identify the invalid allocation-version values.');
+    kiwi_assert_same(3, $value_drift[0]['count'] ?? 0, 'Expected drift to report the observed invalid-value count.');
+
+    $wpdb = $previous_wpdb;
+});
+
+kiwi_run_test('Kiwi database apply refuses blank allocation version values without mutation', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
+    $contract = [
+        'kiwi_test_assignments' => [
+            'columns' => ['allocation_version'],
+            'indexes' => [],
+            'column_metadata' => [
+                'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
+            ],
+            'column_value_constraints' => [
+                'allocation_version' => ['non_blank' => true],
+            ],
+        ],
+    ];
+    $wpdb->objects['abc_kiwi_test_assignments'] = [
+        'type' => 'BASE TABLE',
+        'columns' => ['allocation_version'],
+        'indexes' => [],
+        'column_metadata' => [
+            'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
+        ],
+        'invalid_value_counts' => ['allocation_version' => 2],
+    ];
+    $step = new Kiwi_Test_Database_Schema_Step(
+        $wpdb,
+        'abc_kiwi_test_assignments',
+        $contract['kiwi_test_assignments'],
+        'success'
+    );
+    $service = new Kiwi_Test_Database_Deployment_Service(
+        [[
+            'name' => 'test_assignments',
+            'repository' => $step,
+            'objects' => ['kiwi_test_assignments'],
+        ]],
+        $contract
+    );
+    $GLOBALS['kiwi_test_options'] = [
+        Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION => '2026-05-12-1',
+    ];
+
+    $result = $service->apply();
+
+    kiwi_assert_same('legacy_migration_required', $result['error_code'], 'Expected blank historical allocation values to require a reviewed migration artifact.');
+    kiwi_assert_same(0, $step->calls, 'Expected no schema command after invalid historical values are observed.');
+    kiwi_assert_same(false, $result['mutated'], 'Expected invalid historical values to block before database mutation.');
+    kiwi_assert_same(false, $wpdb->lock_held, 'Expected the external lock to be released after the blocked preflight.');
 
     $wpdb = $previous_wpdb;
 });
@@ -1183,6 +1290,16 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
         $contract['kiwi_sms_body_variant_summary']['column_metadata']['allocation_version'] ?? [],
         'Expected summary allocation_version to require the canonical non-null legacy default.'
     );
+    kiwi_assert_same(
+        ['allocation_version' => ['non_blank' => true]],
+        $contract['kiwi_sms_body_variant_assignments']['column_value_constraints'] ?? [],
+        'Expected assignment allocation_version values to remain non-blank.'
+    );
+    kiwi_assert_same(
+        ['allocation_version' => ['non_blank' => true]],
+        $contract['kiwi_sms_body_variant_summary']['column_value_constraints'] ?? [],
+        'Expected summary allocation_version values to remain non-blank.'
+    );
     kiwi_assert_true(
         in_array('variant_summary_version', $contract['kiwi_sms_body_variant_summary']['indexes'] ?? [], true),
         'Expected the deployment contract to require the version-aware summary unique index.'
@@ -1211,6 +1328,7 @@ kiwi_run_test('Kiwi database deployment contract covers every canonical reposito
         [[
             'unique' => true,
             'columns' => ['landing_key', 'service_key', 'variant_key', 'seed'],
+            'column_order' => 'any',
         ]],
         $contract['kiwi_sms_body_variant_summary']['legacy_index_definitions'] ?? [],
         'Expected status to reject renamed unique indexes with the legacy summary identity.'

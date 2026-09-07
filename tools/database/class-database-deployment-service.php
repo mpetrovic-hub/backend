@@ -126,7 +126,11 @@ class Kiwi_Database_Deployment_Service
             $legacy_drift = array_values(array_filter(
                 $preflight_drift,
                 static function (array $drift): bool {
-                    return in_array(($drift['kind'] ?? ''), ['legacy_column', 'legacy_table'], true);
+                    return in_array(
+                        ($drift['kind'] ?? ''),
+                        ['legacy_column', 'legacy_table', 'invalid_column_values'],
+                        true
+                    );
                 }
             ));
 
@@ -494,6 +498,44 @@ class Kiwi_Database_Deployment_Service
                 }
             }
 
+            foreach ((array) ($definition['column_value_constraints'] ?? []) as $column_name => $constraints) {
+                $column_name = trim((string) $column_name);
+                $constraints = (array) $constraints;
+
+                if (!in_array($column_name, $columns, true)
+                    || empty($constraints['non_blank'])
+                    || preg_match('/^[A-Za-z0-9_]+$/', $column_name) !== 1
+                ) {
+                    continue;
+                }
+
+                $this->reset_database_error();
+                $invalid_count = $wpdb->get_var(
+                    "SELECT COUNT(*) FROM {$object_name} WHERE {$column_name} IS NULL OR TRIM({$column_name}) = ''"
+                );
+
+                if ($this->get_database_error() !== '' || $invalid_count === null || $invalid_count === false) {
+                    $drift[] = [
+                        'kind' => 'inspection_error',
+                        'object' => $object_name,
+                        'detail' => $this->get_database_error() !== ''
+                            ? $this->sanitize_error($this->get_database_error())
+                            : 'Column value inspection returned no result.',
+                    ];
+                    continue;
+                }
+
+                if ((int) $invalid_count > 0) {
+                    $drift[] = [
+                        'kind' => 'invalid_column_values',
+                        'object' => $object_name,
+                        'column' => $column_name,
+                        'rule' => 'non_blank',
+                        'count' => (int) $invalid_count,
+                    ];
+                }
+            }
+
             if ($expected_type !== 'BASE TABLE') {
                 continue;
             }
@@ -571,6 +613,7 @@ class Kiwi_Database_Deployment_Service
                 $legacy_columns = array_key_exists('columns', $legacy_definition)
                     ? array_values(array_map('strval', (array) $legacy_definition['columns']))
                     : null;
+                $legacy_column_order = strtolower(trim((string) ($legacy_definition['column_order'] ?? 'exact')));
                 $legacy_sub_parts = array_key_exists('sub_parts', $legacy_definition)
                     ? array_values(array_map(static function ($value): ?int {
                         return $value === null ? null : (int) $value;
@@ -581,8 +624,14 @@ class Kiwi_Database_Deployment_Service
                     : null;
 
                 foreach ($actual_index_metadata as $index_name => $actual_metadata) {
+                    $actual_columns = (array) ($actual_metadata['columns'] ?? []);
+                    $legacy_columns_match = $legacy_columns === null
+                        || ($legacy_column_order === 'any'
+                            ? $this->has_same_values($actual_columns, $legacy_columns)
+                            : $actual_columns === $legacy_columns);
+
                     if (($legacy_unique === null || ($actual_metadata['unique'] ?? null) === $legacy_unique)
-                        && ($legacy_columns === null || ($actual_metadata['columns'] ?? []) === $legacy_columns)
+                        && $legacy_columns_match
                         && ($legacy_sub_parts === null || ($actual_metadata['sub_parts'] ?? []) === $legacy_sub_parts)
                         && ($legacy_type === null || ($actual_metadata['type'] ?? '') === $legacy_type)
                     ) {
@@ -642,6 +691,18 @@ class Kiwi_Database_Deployment_Service
         }
 
         return ['drift' => $drift];
+    }
+
+    private function has_same_values(array $actual, array $expected): bool
+    {
+        if (count($actual) !== count($expected)) {
+            return false;
+        }
+
+        sort($actual, SORT_STRING);
+        sort($expected, SORT_STRING);
+
+        return $actual === $expected;
     }
 
     private function inspect_seed_drift(array $contract_drift = []): array

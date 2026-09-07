@@ -419,6 +419,7 @@ Outbound affiliate postbacks are handled by shared attribution capability after 
 - only confirmed successful terminal conversions are eligible for postback dispatch
 - attribution rows carry an internal server-generated `transaction_id` captured at landing entry
 - optional SMS-body variants can render a less technical visible token while storing a one-to-one lookup alias for that internal `transaction_id`
+- the NTH primary-CTA adapter owns the fixed FR integration scope, `fr_sms_v2` version, entries, and weights, and supplies that normalized allocation contract to the shared SMS-body service
 - NTH outbound `reference` values are derived from that `transaction_id` (with a uniqueness suffix) when a pending attribution row is found
 - if no transaction id can be resolved from attribution or MO content, the fallback NTH flow reference still uses a generated `txn_...` root (instead of provider-only prefixes) to keep shared sales correlation consistent
 - successful one-off sales persist this correlation root into `wp_kiwi_sales.transaction_id`

@@ -140,6 +140,9 @@ return [
         'column_metadata' => [
             'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
         ],
+        'column_value_constraints' => [
+            'allocation_version' => ['non_blank' => true],
+        ],
     ],
     'kiwi_sms_body_variant_summary' => [
         'engine' => 'InnoDB',
@@ -150,10 +153,14 @@ return [
             [
                 'unique' => true,
                 'columns' => ['landing_key', 'service_key', 'variant_key', 'seed'],
+                'column_order' => 'any',
             ],
         ],
         'column_metadata' => [
             'allocation_version' => ['type' => 'varchar(50)', 'nullable' => false, 'default' => 'legacy', 'extra' => ''],
+        ],
+        'column_value_constraints' => [
+            'allocation_version' => ['non_blank' => true],
         ],
         'index_metadata' => [
             'variant_summary_version' => [

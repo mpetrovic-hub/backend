@@ -436,6 +436,17 @@ class Kiwi_Sms_Body_Variant_Repository
         $flow_key = $this->sanitize_key((string) ($assignment['flow_key'] ?? ''), 50);
         $now = $this->current_time_mysql();
         $table_name = $this->get_summary_table_name();
+        $initial_assignments = 0;
+
+        if ($counter !== 'assignments') {
+            $assignment_count = $this->count_assignments_for_summary_identity($assignment, true);
+
+            if ($assignment_count === null) {
+                return false;
+            }
+
+            $initial_assignments = $assignment_count;
+        }
 
         $upsert_result = $wpdb->query(
             $wpdb->prepare(
@@ -471,7 +482,7 @@ class Kiwi_Sms_Body_Variant_Repository
                     %s,
                     %s,
                     %s,
-                    0,
+                    %d,
                     0,
                     0,
                     0,
@@ -496,7 +507,8 @@ class Kiwi_Sms_Body_Variant_Repository
                 $flow_key,
                 $variant_key,
                 $seed,
-                $allocation_version
+                $allocation_version,
+                $initial_assignments
             )
         );
 
@@ -576,6 +588,18 @@ class Kiwi_Sms_Body_Variant_Repository
         $flow_key = $this->sanitize_key((string) ($assignment['flow_key'] ?? ''), 50);
         $now = $this->current_time_mysql();
         $table_name = $this->get_summary_table_name();
+        $initial_assignments = 0;
+
+        if ($counter !== 'assignments') {
+            $assignment_count = $this->count_assignments_for_summary_identity($assignment, false);
+
+            if ($assignment_count === null) {
+                return false;
+            }
+
+            $initial_assignments = $assignment_count;
+        }
+
         $upsert_result = $wpdb->query(
             $wpdb->prepare(
                 "INSERT INTO {$table_name} (
@@ -608,7 +632,7 @@ class Kiwi_Sms_Body_Variant_Repository
                     %s,
                     %s,
                     %s,
-                    0,
+                    %d,
                     0,
                     0,
                     0,
@@ -632,7 +656,8 @@ class Kiwi_Sms_Body_Variant_Repository
                 $provider_key,
                 $flow_key,
                 $variant_key,
-                $seed
+                $seed,
+                $initial_assignments
             )
         );
 
@@ -683,6 +708,53 @@ class Kiwi_Sms_Body_Variant_Repository
         );
 
         return $rate_result !== false;
+    }
+
+    private function count_assignments_for_summary_identity(
+        array $assignment,
+        bool $include_allocation_version
+    ): ?int {
+        global $wpdb;
+
+        $landing_key = $this->sanitize_key((string) ($assignment['landing_key'] ?? ''), 100);
+        $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
+        $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+
+        if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
+            return null;
+        }
+
+        $sql = "SELECT COUNT(*)
+                FROM {$this->get_assignments_table_name()}
+                WHERE landing_key = %s
+                  AND service_key = %s
+                  AND variant_key = %s
+                  AND seed = %s";
+        $params = [
+            $landing_key,
+            $service_key,
+            $variant_key,
+            $seed,
+        ];
+
+        if ($include_allocation_version) {
+            $sql .= ' AND allocation_version = %s';
+            $params[] = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
+        }
+
+        $wpdb->last_error = '';
+        $count = $wpdb->get_var($wpdb->prepare($sql, ...$params));
+
+        if ($count === null
+            || $count === false
+            || trim((string) ($wpdb->last_error ?? '')) !== ''
+            || (int) $count < 1
+        ) {
+            return null;
+        }
+
+        return (int) $count;
     }
 
     private function field_for_event_key(string $event_key): string
@@ -818,7 +890,10 @@ class Kiwi_Sms_Body_Variant_Repository
 
             $index = $this->read_index_definition($summary_table, $index_name);
             $is_legacy_identity = ($index['unique'] ?? false) === true
-                && ($index['columns'] ?? []) === self::LEGACY_SUMMARY_UNIQUE_COLUMNS;
+                && $this->has_same_columns(
+                    (array) ($index['columns'] ?? []),
+                    self::LEGACY_SUMMARY_UNIQUE_COLUMNS
+                );
 
             if (($index['present'] ?? false) !== true
                 || ($index_name !== self::LEGACY_SUMMARY_UNIQUE_INDEX && !$is_legacy_identity)
@@ -834,6 +909,18 @@ class Kiwi_Sms_Body_Variant_Repository
                 throw new RuntimeException('A legacy SMS body summary unique index could not be removed.');
             }
         }
+    }
+
+    private function has_same_columns(array $actual, array $expected): bool
+    {
+        if (count($actual) !== count($expected)) {
+            return false;
+        }
+
+        sort($actual, SORT_STRING);
+        sort($expected, SORT_STRING);
+
+        return $actual === $expected;
     }
 
     private function read_unique_index_names(string $table_name): array

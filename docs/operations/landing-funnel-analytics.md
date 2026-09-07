@@ -117,7 +117,7 @@ The active allocation is:
 
 `as_is_txn_prefix` is the only fixed control. `bare_id` and all other historical seeds remain readable on historical assignments but receive no new traffic. The weights are stable hash buckets, not a daily ranking. Replace a variant only after a fixed evaluation round and publish every changed allocation under a new `allocation_version`.
 
-Both assignment and summary rows carry `allocation_version`. Existing rows become `legacy` through the schema default. Summary identity is `landing_key + service_key + variant_key + seed + allocation_version`, so delayed events for a historical assignment continue to update `legacy` rather than `fr_sms_v2`.
+Both assignment and summary rows carry `allocation_version`. Existing rows become `legacy` when the reviewed schema step adds the canonical column with its default. Summary identity is `landing_key + service_key + variant_key + seed + allocation_version`, so delayed events for a historical assignment continue to update `legacy` rather than `fr_sms_v2`. If a partial or manual predecessor state already contains null, empty, or whitespace-only versions, the generic deployment gate stops without backfilling them; an explicit reviewed recovery must establish the intended historical version first.
 
 For a privacy-safe read-only evaluation of **FR Download now**, aggregate the long-lived summary rather than exporting assignment tokens or click IDs:
 
@@ -139,7 +139,7 @@ ORDER BY allocation_version, variant_key, seed;
 
 The primary metric is `CR_smsvar = conv / handoff_attempted`; `conv / assignments` is the control metric. Compare both against `as_is_txn_prefix` only after the agreed fixed observation window. Do not include other landing pages in this cohort.
 
-The `allocation_version` columns and version-aware summary unique index are schema-first changes. Keep the SMS body experiment disabled while deploying the code, then use the external `kiwi database status` / authorized `apply` / green `status` process in `database-migrations.md` before enabling `fr_sms_v2`.
+The `allocation_version` columns and version-aware summary unique index are schema-first changes. The fixed `fr_sms_v2` scope and weights are owned by the NTH integration adapter, while the shared SMS-body service only consumes the normalized contract. Keep the SMS body experiment disabled while deploying the code, then use the external `kiwi database status` / authorized `apply` / green `status` process in `database-migrations.md` before enabling `fr_sms_v2`.
 
 ## Main daily summary
 
