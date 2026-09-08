@@ -4472,6 +4472,9 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
     public $fail_next_summary_query = false;
     public $versioned_schema = true;
     public $table_engines = [];
+    public $summary_identity_lock_available = true;
+    public $summary_identity_lock_name = null;
+    public $summary_identity_lock_names = [];
     private $transaction_snapshot = null;
 
     public function prepare($query, ...$args)
@@ -4582,6 +4585,31 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
         $this->queries[] = $query;
+
+        if (strpos($query, 'SELECT GET_LOCK(') === 0) {
+            $lock_name = (string) ($args[0] ?? '');
+            $this->summary_identity_lock_names[] = $lock_name;
+
+            if (!$this->summary_identity_lock_available || $this->summary_identity_lock_name !== null) {
+                return 0;
+            }
+
+            $this->summary_identity_lock_name = $lock_name;
+
+            return 1;
+        }
+
+        if (strpos($query, 'SELECT RELEASE_LOCK(') === 0) {
+            $lock_name = (string) ($args[0] ?? '');
+
+            if ($this->summary_identity_lock_name !== $lock_name) {
+                return 0;
+            }
+
+            $this->summary_identity_lock_name = null;
+
+            return 1;
+        }
 
         if (strpos($query, 'SELECT ENGINE FROM information_schema.TABLES') === 0) {
             $table_name = (string) ($args[0] ?? '');
@@ -8169,6 +8197,14 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository commits assignment enrollment wi
         kiwi_assert_same(1, (int) ($summary['assignments'] ?? 0), 'Expected the successful retry to commit its summary denominator once.');
         kiwi_assert_contains('ROLLBACK', implode("\n", $wpdb->queries), 'Expected failed enrollment to roll back explicitly.');
         kiwi_assert_contains('COMMIT', implode("\n", $wpdb->queries), 'Expected successful enrollment to commit explicitly.');
+        $identity_lock_index = array_search('SELECT GET_LOCK(%s, %d)', $wpdb->queries, true);
+        $transaction_index = array_search('START TRANSACTION', $wpdb->queries, true);
+        $identity_unlock_index = array_search('SELECT RELEASE_LOCK(%s)', $wpdb->queries, true);
+        $lock_name = (string) ($wpdb->summary_identity_lock_names[0] ?? '');
+        kiwi_assert_true($identity_lock_index !== false && $transaction_index > $identity_lock_index, 'Expected enrollment to acquire its summary identity lock before opening the transaction.');
+        kiwi_assert_true($identity_unlock_index !== false && $identity_unlock_index > $transaction_index, 'Expected enrollment to release its summary identity lock after closing the transaction.');
+        kiwi_assert_same(57, strlen($lock_name), 'Expected the bounded summary identity lock name to contain only its prefix and SHA-1 digest.');
+        kiwi_assert_true(strpos($lock_name, 'lp5-fr') === false, 'Expected the summary identity lock name not to expose raw allocation dimensions.');
     } finally {
         if ($had_wpdb) {
             $wpdb = $previous_wpdb;
@@ -8458,8 +8494,75 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recreates a missing legacy summa
         $assignment_count_index = array_search(true, array_map(static function (string $query): bool {
             return strpos($query, 'SELECT COUNT(*)') !== false;
         }, $wpdb->queries), true);
+        $identity_lock_index = array_search('SELECT GET_LOCK(%s, %d)', $wpdb->queries, true);
+        $identity_unlock_index = array_search('SELECT RELEASE_LOCK(%s)', $wpdb->queries, true);
+        kiwi_assert_true($identity_lock_index !== false && $identity_lock_index < $summary_lock_index, 'Expected missing-summary recovery to acquire the isolation-independent identity lock first.');
         kiwi_assert_true($summary_lock_index !== false, 'Expected missing-summary recovery to lock the indexed summary identity.');
         kiwi_assert_true($assignment_count_index !== false && $assignment_count_index > $summary_lock_index, 'Expected assignment reconstruction only after the missing summary identity is locked.');
+        kiwi_assert_true($identity_unlock_index !== false && $identity_unlock_index > $assignment_count_index, 'Expected missing-summary recovery to retain the identity lock through reconstruction and commit.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository fails closed when its summary identity lock is unavailable', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+    $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $repository->insert_if_new([
+            'landing_key' => 'lp5-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'provider_key' => 'nth',
+            'flow_key' => 'nth-fr-one-off',
+            'country' => 'FR',
+            'keyword' => 'JPLAY',
+            'shortcode' => '84072',
+            'session_token' => 'sess-lock-unavailable',
+            'transaction_id' => 'txn_lock_unavailable_12345678',
+            'visible_token' => 'BonusJeuxlock_unavailable_12345678',
+            'variant_key' => 'cta_phrase',
+            'seed' => 'BonusJeux',
+            'allocation_version' => 'fr_sms_v2',
+            'sms_body' => 'JPLAY BonusJeuxlock_unavailable_12345678',
+        ]);
+        $wpdb->queries = [];
+        $wpdb->summary_identity_lock_names = [];
+        $wpdb->summary_identity_lock_available = false;
+
+        $event_recorded = $repository->mark_event_by_transaction_id(
+            'txn_lock_unavailable_12345678',
+            'cta1'
+        );
+        $new_assignment = $repository->insert_if_new([
+            'landing_key' => 'lp5-fr',
+            'service_key' => 'nth_fr_one_off_jplay',
+            'transaction_id' => 'txn_lock_unavailable_new_87654321',
+            'visible_token' => 'BonusJeuxlock_unavailable_new_87654321',
+            'variant_key' => 'cta_phrase',
+            'seed' => 'BonusJeux',
+            'allocation_version' => 'fr_sms_v2',
+            'sms_body' => 'JPLAY BonusJeuxlock_unavailable_new_87654321',
+        ]);
+        $summary = array_values($wpdb->tables[$summary_table] ?? [])[0] ?? [];
+
+        kiwi_assert_same(false, $event_recorded, 'Expected an event write to fail closed when its summary identity lock cannot be acquired.');
+        kiwi_assert_same(false, $new_assignment['inserted'] ?? true, 'Expected enrollment to fail closed when its summary identity lock cannot be acquired.');
+        kiwi_assert_same('', (string) ($wpdb->tables[$assignment_table][1]['cta1_recorded_at'] ?? ''), 'Expected lock failure not to publish the event marker.');
+        kiwi_assert_same(0, (int) ($summary['cta1'] ?? 0), 'Expected lock failure not to increment the summary.');
+        kiwi_assert_same(1, count($wpdb->tables[$assignment_table] ?? []), 'Expected lock failure not to insert a new assignment.');
+        kiwi_assert_same(false, in_array('START TRANSACTION', $wpdb->queries, true), 'Expected lock acquisition to fail before a write transaction opens.');
+        kiwi_assert_same(2, count($wpdb->summary_identity_lock_names), 'Expected event recording and enrollment to use the same lock gate.');
     } finally {
         if ($had_wpdb) {
             $wpdb = $previous_wpdb;

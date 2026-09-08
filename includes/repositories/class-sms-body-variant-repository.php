@@ -24,6 +24,7 @@ class Kiwi_Sms_Body_Variant_Repository
     private const SUMMARY_UNIQUE_SUB_PARTS = [null, null, null, null, null];
     private const SUMMARY_UNIQUE_TYPE = 'BTREE';
     private const TRANSACTIONAL_ENGINE = 'InnoDB';
+    private const SUMMARY_IDENTITY_LOCK_TIMEOUT_SECONDS = 5;
 
     private function get_assignments_table_name(): string
     {
@@ -142,7 +143,6 @@ class Kiwi_Sms_Body_Variant_Repository
         $transaction_id = $this->sanitize_token((string) ($assignment['transaction_id'] ?? ''), 120);
         $visible_token = $this->sanitize_token((string) ($assignment['visible_token'] ?? ''), 140);
         $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
-        $allocation_version = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
 
         if ($transaction_id === '' || $visible_token === '' || !$this->is_supported_variant_key($variant_key)) {
             return [
@@ -150,6 +150,42 @@ class Kiwi_Sms_Body_Variant_Repository
                 'row' => null,
             ];
         }
+
+        if (!$this->are_variant_tables_transactional()) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        try {
+            return $this->with_summary_identity_lock(
+                $assignment,
+                true,
+                function () use ($assignment, $transaction_id, $visible_token, $variant_key): array {
+                    return $this->insert_if_new_with_identity_lock(
+                        $assignment,
+                        $transaction_id,
+                        $visible_token,
+                        $variant_key
+                    );
+                }
+            );
+        } catch (Throwable $error) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+    }
+
+    private function insert_if_new_with_identity_lock(
+        array $assignment,
+        string $transaction_id,
+        string $visible_token,
+        string $variant_key
+    ): array {
+        global $wpdb;
 
         $existing = $this->find_by_transaction_id($transaction_id);
 
@@ -160,16 +196,8 @@ class Kiwi_Sms_Body_Variant_Repository
             ];
         }
 
-        global $wpdb;
-
+        $allocation_version = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
         $now = $this->current_time_mysql();
-
-        if (!$this->are_variant_tables_transactional()) {
-            return [
-                'inserted' => false,
-                'row' => null,
-            ];
-        }
 
         if ($wpdb->query('START TRANSACTION') === false) {
             return [
@@ -336,8 +364,6 @@ class Kiwi_Sms_Body_Variant_Repository
 
     public function mark_event_by_transaction_id(string $transaction_id, string $event_key): bool
     {
-        global $wpdb;
-
         $transaction_id = $this->sanitize_token($transaction_id, 120);
         $field = $this->field_for_event_key($event_key);
         $counter = $this->counter_for_event_key($event_key);
@@ -349,6 +375,29 @@ class Kiwi_Sms_Body_Variant_Repository
         if (!$this->are_variant_tables_transactional()) {
             return false;
         }
+
+        $assignment = $this->find_by_transaction_id($transaction_id);
+
+        if (!is_array($assignment)) {
+            return false;
+        }
+
+        try {
+            return $this->with_summary_identity_lock(
+                $assignment,
+                array_key_exists('allocation_version', $assignment),
+                function () use ($transaction_id, $field, $counter): bool {
+                    return $this->mark_event_with_identity_lock($transaction_id, $field, $counter);
+                }
+            );
+        } catch (Throwable $error) {
+            return false;
+        }
+    }
+
+    private function mark_event_with_identity_lock(string $transaction_id, string $field, string $counter): bool
+    {
+        global $wpdb;
 
         if ($wpdb->query('START TRANSACTION') === false) {
             return false;
@@ -405,6 +454,73 @@ class Kiwi_Sms_Body_Variant_Repository
 
             return false;
         }
+    }
+
+    private function with_summary_identity_lock(
+        array $assignment,
+        bool $include_allocation_version,
+        callable $callback
+    ) {
+        global $wpdb;
+
+        $landing_key = $this->sanitize_key((string) ($assignment['landing_key'] ?? ''), 100);
+        $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
+        $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+
+        if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
+            throw new InvalidArgumentException('SMS body variant summary identity is required.');
+        }
+
+        $identity_parts = [
+            $this->get_summary_table_name(),
+            $landing_key,
+            $service_key,
+            $variant_key,
+            $seed,
+        ];
+
+        if ($include_allocation_version) {
+            $identity_parts[] = $this->sanitize_allocation_version(
+                (string) ($assignment['allocation_version'] ?? '')
+            );
+        }
+
+        $lock_name = 'kiwi_sms_variant_' . hash('sha1', implode('|', $identity_parts));
+        $wpdb->last_error = '';
+        $acquired = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT GET_LOCK(%s, %d)',
+                $lock_name,
+                self::SUMMARY_IDENTITY_LOCK_TIMEOUT_SECONDS
+            )
+        );
+
+        if ((string) $acquired !== '1' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('SMS body variant summary identity lock acquisition failed.');
+        }
+
+        $result = null;
+        $callback_error = null;
+
+        try {
+            $result = $callback();
+        } catch (Throwable $error) {
+            $callback_error = $error;
+        }
+
+        $wpdb->last_error = '';
+        $released = $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock_name));
+
+        if ($callback_error instanceof Throwable) {
+            throw $callback_error;
+        }
+
+        if ((string) $released !== '1' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('SMS body variant summary identity lock release failed.');
+        }
+
+        return $result;
     }
 
     public function get_summary_rows(array $filters = []): array
