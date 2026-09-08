@@ -8258,16 +8258,22 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository scopes summary locks to the data
         $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
         $first_lock_name = (string) ($wpdb->summary_identity_lock_names[0] ?? '');
 
+        $wpdb->tables[$summary_table] = [];
         $wpdb->database_name = 'kiwi_installation_b';
         $wpdb->summary_identity_lock_release_available = true;
-        $duplicate = $repository->insert_if_new($assignment);
+        $repaired = $repository->insert_if_new(array_merge($assignment, [
+            'session_token' => 'sess-database-lock-scope-2',
+            'transaction_id' => 'txn_database_lock_scope_87654321',
+            'visible_token' => 'BonusJeuxdatabase_lock_scope_87654321',
+            'sms_body' => 'JPLAY BonusJeuxdatabase_lock_scope_87654321',
+        ]));
         $second_lock_name = (string) ($wpdb->summary_identity_lock_names[1] ?? '');
         $summary = array_values($wpdb->tables[$summary_table] ?? [])[0] ?? [];
 
         kiwi_assert_same(true, $inserted['inserted'] ?? false, 'Expected a committed enrollment result to survive an unconfirmed lock release.');
-        kiwi_assert_same(false, $duplicate['inserted'] ?? true, 'Expected the database-scoped retry to retain assignment idempotency.');
-        kiwi_assert_same(1, count($wpdb->tables[$assignment_table] ?? []), 'Expected the unconfirmed release not to duplicate the committed assignment.');
-        kiwi_assert_same(1, (int) ($summary['assignments'] ?? 0), 'Expected the unconfirmed release not to hide or duplicate the committed summary increment.');
+        kiwi_assert_same(true, $repaired['inserted'] ?? false, 'Expected enrollment to repair a missing summary under the database-scoped lock.');
+        kiwi_assert_same(2, count($wpdb->tables[$assignment_table] ?? []), 'Expected the unconfirmed release not to hide the first committed assignment.');
+        kiwi_assert_same(2, (int) ($summary['assignments'] ?? 0), 'Expected missing-summary enrollment to reconstruct both committed assignments without double counting.');
         kiwi_assert_true($first_lock_name !== '' && $second_lock_name !== '' && $first_lock_name !== $second_lock_name, 'Expected otherwise identical summary identities in different databases to use different lock names.');
         kiwi_assert_contains('SELECT RELEASE_LOCK(%s)', implode("\n", $wpdb->queries), 'Expected an unconfirmed release to be attempted and reported separately from the callback result.');
     } finally {
@@ -8362,6 +8368,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository rolls back an event marker when 
             'sms_body' => 'JPLAY BonusJeuxatomic_retry_12345678',
         ]);
         $wpdb->fail_next_summary_query = true;
+        $wpdb->queries = [];
 
         $failed = $repository->mark_event_by_transaction_id('txn_atomic_retry_12345678', 'cta1');
         $after_failure = $repository->find_by_transaction_id('txn_atomic_retry_12345678');
@@ -8372,6 +8379,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository rolls back an event marker when 
         kiwi_assert_same('', (string) ($after_failure['cta1_recorded_at'] ?? ''), 'Expected a failed summary write not to commit the idempotency marker.');
         kiwi_assert_same(true, $retried, 'Expected the event to remain retryable after the summary failure.');
         kiwi_assert_same(1, (int) ($summary['cta1'] ?? 0), 'Expected the successful retry to increment the summary exactly once.');
+        kiwi_assert_same(false, in_array('SELECT GET_LOCK(%s, %d)', $wpdb->queries, true), 'Expected ordinary events with an existing summary not to acquire the recovery lock.');
     } finally {
         if ($had_wpdb) {
             $wpdb = $previous_wpdb;
@@ -8601,6 +8609,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository fails closed when its summary id
             'allocation_version' => 'fr_sms_v2',
             'sms_body' => 'JPLAY BonusJeuxlock_unavailable_12345678',
         ]);
+        $wpdb->tables[$summary_table] = [];
         $wpdb->queries = [];
         $wpdb->summary_identity_lock_names = [];
         $wpdb->summary_identity_lock_available = false;
@@ -8715,6 +8724,7 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository recalculates summary rates from 
             'variant_key' => 'bare_id',
             'sms_body' => 'JPLAY rate_regression_12345678',
         ]);
+        $wpdb->queries = [];
 
         $repository->mark_event_by_transaction_id('txn_rate_regression_12345678', 'cta1');
         $repository->mark_event_by_transaction_id('txn_rate_regression_12345678', 'sms_handoff_attempted');

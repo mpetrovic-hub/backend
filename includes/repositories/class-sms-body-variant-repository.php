@@ -158,19 +158,35 @@ class Kiwi_Sms_Body_Variant_Repository
             ];
         }
 
+        $summary_exists = $this->summary_identity_exists($assignment, true);
+
+        if ($summary_exists === null) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
         try {
-            return $this->with_summary_identity_lock(
+            $insert = function () use (
                 $assignment,
-                true,
-                function () use ($assignment, $transaction_id, $visible_token, $variant_key): array {
-                    return $this->insert_if_new_with_identity_lock(
-                        $assignment,
-                        $transaction_id,
-                        $visible_token,
-                        $variant_key
-                    );
-                }
-            );
+                $transaction_id,
+                $visible_token,
+                $variant_key,
+                $summary_exists
+            ): array {
+                return $this->insert_if_new_in_transaction(
+                    $assignment,
+                    $transaction_id,
+                    $visible_token,
+                    $variant_key,
+                    !$summary_exists
+                );
+            };
+
+            return $summary_exists
+                ? $insert()
+                : $this->with_summary_identity_lock($assignment, true, $insert);
         } catch (Throwable $error) {
             return [
                 'inserted' => false,
@@ -179,11 +195,12 @@ class Kiwi_Sms_Body_Variant_Repository
         }
     }
 
-    private function insert_if_new_with_identity_lock(
+    private function insert_if_new_in_transaction(
         array $assignment,
         string $transaction_id,
         string $visible_token,
-        string $variant_key
+        string $variant_key,
+        bool $repair_missing_summary
     ): array {
         global $wpdb;
 
@@ -264,7 +281,7 @@ class Kiwi_Sms_Body_Variant_Repository
         $row = $this->find_by_transaction_id($transaction_id);
 
         if (!is_array($row)
-            || !$this->increment_summary_counter($row, 'assignments')
+            || !$this->increment_summary_counter($row, 'assignments', $repair_missing_summary)
             || $wpdb->query('COMMIT') === false
         ) {
             $wpdb->query('ROLLBACK');
@@ -382,21 +399,41 @@ class Kiwi_Sms_Body_Variant_Repository
             return false;
         }
 
+        $include_allocation_version = array_key_exists('allocation_version', $assignment);
+        $summary_exists = $this->summary_identity_exists($assignment, $include_allocation_version);
+
+        if ($summary_exists === null) {
+            return false;
+        }
+
         try {
-            return $this->with_summary_identity_lock(
-                $assignment,
-                array_key_exists('allocation_version', $assignment),
-                function () use ($transaction_id, $field, $counter): bool {
-                    return $this->mark_event_with_identity_lock($transaction_id, $field, $counter);
-                }
-            );
+            $record_event = function () use ($transaction_id, $field, $counter, $summary_exists): bool {
+                return $this->mark_event_in_transaction(
+                    $transaction_id,
+                    $field,
+                    $counter,
+                    !$summary_exists
+                );
+            };
+
+            return $summary_exists
+                ? $record_event()
+                : $this->with_summary_identity_lock(
+                    $assignment,
+                    $include_allocation_version,
+                    $record_event
+                );
         } catch (Throwable $error) {
             return false;
         }
     }
 
-    private function mark_event_with_identity_lock(string $transaction_id, string $field, string $counter): bool
-    {
+    private function mark_event_in_transaction(
+        string $transaction_id,
+        string $field,
+        string $counter,
+        bool $repair_missing_summary
+    ): bool {
         global $wpdb;
 
         if ($wpdb->query('START TRANSACTION') === false) {
@@ -419,8 +456,8 @@ class Kiwi_Sms_Body_Variant_Repository
             }
 
             $summary_updated = array_key_exists('allocation_version', $row)
-                ? $this->increment_summary_counter($row, $counter)
-                : $this->increment_legacy_summary_counter($row, $counter);
+                ? $this->increment_summary_counter($row, $counter, $repair_missing_summary)
+                : $this->increment_legacy_summary_counter($row, $counter, $repair_missing_summary);
 
             if (!$summary_updated) {
                 $wpdb->query('ROLLBACK');
@@ -531,6 +568,17 @@ class Kiwi_Sms_Body_Variant_Repository
         return $result;
     }
 
+    private function summary_identity_exists(array $assignment, bool $include_allocation_version): ?bool
+    {
+        $summary_state = $this->read_summary_assignment_state(
+            $assignment,
+            $include_allocation_version,
+            false
+        );
+
+        return $summary_state === null ? null : !empty($summary_state['found']);
+    }
+
     public function get_summary_rows(array $filters = []): array
     {
         global $wpdb;
@@ -565,7 +613,11 @@ class Kiwi_Sms_Body_Variant_Repository
         return is_array($rows) ? $rows : [];
     }
 
-    private function increment_summary_counter(array $assignment, string $counter): bool
+    private function increment_summary_counter(
+        array $assignment,
+        string $counter,
+        bool $repair_missing_summary = false
+    ): bool
     {
         global $wpdb;
 
@@ -591,10 +643,14 @@ class Kiwi_Sms_Body_Variant_Repository
         $table_name = $this->get_summary_table_name();
         $initial_assignments = 0;
 
-        if ($counter !== 'assignments') {
-            $summary_state = $this->read_summary_assignment_state_for_update($assignment, true);
+        if ($counter !== 'assignments' || $repair_missing_summary) {
+            $summary_state = $this->read_summary_assignment_state($assignment, true, true);
 
             if ($summary_state === null) {
+                return false;
+            }
+
+            if (empty($summary_state['found']) && !$repair_missing_summary) {
                 return false;
             }
 
@@ -606,7 +662,9 @@ class Kiwi_Sms_Body_Variant_Repository
                 return false;
             }
 
-            $initial_assignments = $assignment_count;
+            $initial_assignments = $counter === 'assignments'
+                ? max(0, $assignment_count - 1)
+                : $assignment_count;
         }
 
         $upsert_result = $wpdb->query(
@@ -726,7 +784,11 @@ class Kiwi_Sms_Body_Variant_Repository
         return $rate_result !== false;
     }
 
-    private function increment_legacy_summary_counter(array $assignment, string $counter): bool
+    private function increment_legacy_summary_counter(
+        array $assignment,
+        string $counter,
+        bool $repair_missing_summary = false
+    ): bool
     {
         global $wpdb;
 
@@ -751,10 +813,14 @@ class Kiwi_Sms_Body_Variant_Repository
         $table_name = $this->get_summary_table_name();
         $initial_assignments = 0;
 
-        if ($counter !== 'assignments') {
-            $summary_state = $this->read_summary_assignment_state_for_update($assignment, false);
+        if ($counter !== 'assignments' || $repair_missing_summary) {
+            $summary_state = $this->read_summary_assignment_state($assignment, false, true);
 
             if ($summary_state === null) {
+                return false;
+            }
+
+            if (empty($summary_state['found']) && !$repair_missing_summary) {
                 return false;
             }
 
@@ -766,7 +832,9 @@ class Kiwi_Sms_Body_Variant_Repository
                 return false;
             }
 
-            $initial_assignments = $assignment_count;
+            $initial_assignments = $counter === 'assignments'
+                ? max(0, $assignment_count - 1)
+                : $assignment_count;
         }
 
         $upsert_result = $wpdb->query(
@@ -879,9 +947,10 @@ class Kiwi_Sms_Body_Variant_Repository
         return $rate_result !== false;
     }
 
-    private function read_summary_assignment_state_for_update(
+    private function read_summary_assignment_state(
         array $assignment,
-        bool $include_allocation_version
+        bool $include_allocation_version,
+        bool $for_update
     ): ?array {
         global $wpdb;
 
@@ -912,7 +981,11 @@ class Kiwi_Sms_Body_Variant_Repository
             $params[] = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
         }
 
-        $sql .= ' LIMIT 1 FOR UPDATE';
+        $sql .= ' LIMIT 1';
+
+        if ($for_update) {
+            $sql .= ' FOR UPDATE';
+        }
         $wpdb->last_error = '';
         $assignments = $wpdb->get_var($wpdb->prepare($sql, ...$params));
 
