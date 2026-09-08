@@ -472,7 +472,15 @@ class Kiwi_Sms_Body_Variant_Repository
             throw new InvalidArgumentException('SMS body variant summary identity is required.');
         }
 
+        $wpdb->last_error = '';
+        $database_name = trim((string) $wpdb->get_var('SELECT DATABASE()'));
+
+        if ($database_name === '' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('SMS body variant database lock namespace lookup failed.');
+        }
+
         $identity_parts = [
+            $database_name,
             $this->get_summary_table_name(),
             $landing_key,
             $service_key,
@@ -512,12 +520,12 @@ class Kiwi_Sms_Body_Variant_Repository
         $wpdb->last_error = '';
         $released = $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock_name));
 
-        if ($callback_error instanceof Throwable) {
-            throw $callback_error;
+        if ((string) $released !== '1' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            error_log('[kiwi-sms-body-variant] Summary identity lock release failed.');
         }
 
-        if ((string) $released !== '1' || trim((string) ($wpdb->last_error ?? '')) !== '') {
-            throw new RuntimeException('SMS body variant summary identity lock release failed.');
+        if ($callback_error instanceof Throwable) {
+            throw $callback_error;
         }
 
         return $result;

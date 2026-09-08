@@ -4472,7 +4472,9 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
     public $fail_next_summary_query = false;
     public $versioned_schema = true;
     public $table_engines = [];
+    public $database_name = 'kiwi_test';
     public $summary_identity_lock_available = true;
+    public $summary_identity_lock_release_available = true;
     public $summary_identity_lock_name = null;
     public $summary_identity_lock_names = [];
     private $transaction_snapshot = null;
@@ -4586,6 +4588,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
         $this->queries[] = $query;
 
+        if ($query === 'SELECT DATABASE()') {
+            return $this->database_name;
+        }
+
         if (strpos($query, 'SELECT GET_LOCK(') === 0) {
             $lock_name = (string) ($args[0] ?? '');
             $this->summary_identity_lock_names[] = $lock_name;
@@ -4601,6 +4607,12 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
 
         if (strpos($query, 'SELECT RELEASE_LOCK(') === 0) {
             $lock_name = (string) ($args[0] ?? '');
+
+            if (!$this->summary_identity_lock_release_available) {
+                $this->summary_identity_lock_name = null;
+
+                return 0;
+            }
 
             if ($this->summary_identity_lock_name !== $lock_name) {
                 return 0;
@@ -8205,6 +8217,59 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Repository commits assignment enrollment wi
         kiwi_assert_true($identity_unlock_index !== false && $identity_unlock_index > $transaction_index, 'Expected enrollment to release its summary identity lock after closing the transaction.');
         kiwi_assert_same(57, strlen($lock_name), 'Expected the bounded summary identity lock name to contain only its prefix and SHA-1 digest.');
         kiwi_assert_true(strpos($lock_name, 'lp5-fr') === false, 'Expected the summary identity lock name not to expose raw allocation dimensions.');
+    } finally {
+        if ($had_wpdb) {
+            $wpdb = $previous_wpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+});
+
+kiwi_run_test('Kiwi_Sms_Body_Variant_Repository scopes summary locks to the database and preserves committed outcomes', function (): void {
+    global $wpdb;
+
+    $previous_wpdb = $wpdb ?? null;
+    $had_wpdb = isset($wpdb);
+    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $wpdb->database_name = 'kiwi_installation_a';
+    $wpdb->summary_identity_lock_release_available = false;
+    $assignment = [
+        'landing_key' => 'lp5-fr',
+        'service_key' => 'nth_fr_one_off_jplay',
+        'provider_key' => 'nth',
+        'flow_key' => 'nth-fr-one-off',
+        'country' => 'FR',
+        'keyword' => 'JPLAY',
+        'shortcode' => '84072',
+        'session_token' => 'sess-database-lock-scope',
+        'transaction_id' => 'txn_database_lock_scope_12345678',
+        'visible_token' => 'BonusJeuxdatabase_lock_scope_12345678',
+        'variant_key' => 'cta_phrase',
+        'seed' => 'BonusJeux',
+        'allocation_version' => 'fr_sms_v2',
+        'sms_body' => 'JPLAY BonusJeuxdatabase_lock_scope_12345678',
+    ];
+
+    try {
+        $repository = new Kiwi_Sms_Body_Variant_Repository();
+        $inserted = $repository->insert_if_new($assignment);
+        $assignment_table = $wpdb->prefix . 'kiwi_sms_body_variant_assignments';
+        $summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+        $first_lock_name = (string) ($wpdb->summary_identity_lock_names[0] ?? '');
+
+        $wpdb->database_name = 'kiwi_installation_b';
+        $wpdb->summary_identity_lock_release_available = true;
+        $duplicate = $repository->insert_if_new($assignment);
+        $second_lock_name = (string) ($wpdb->summary_identity_lock_names[1] ?? '');
+        $summary = array_values($wpdb->tables[$summary_table] ?? [])[0] ?? [];
+
+        kiwi_assert_same(true, $inserted['inserted'] ?? false, 'Expected a committed enrollment result to survive an unconfirmed lock release.');
+        kiwi_assert_same(false, $duplicate['inserted'] ?? true, 'Expected the database-scoped retry to retain assignment idempotency.');
+        kiwi_assert_same(1, count($wpdb->tables[$assignment_table] ?? []), 'Expected the unconfirmed release not to duplicate the committed assignment.');
+        kiwi_assert_same(1, (int) ($summary['assignments'] ?? 0), 'Expected the unconfirmed release not to hide or duplicate the committed summary increment.');
+        kiwi_assert_true($first_lock_name !== '' && $second_lock_name !== '' && $first_lock_name !== $second_lock_name, 'Expected otherwise identical summary identities in different databases to use different lock names.');
+        kiwi_assert_contains('SELECT RELEASE_LOCK(%s)', implode("\n", $wpdb->queries), 'Expected an unconfirmed release to be attempted and reported separately from the callback result.');
     } finally {
         if ($had_wpdb) {
             $wpdb = $previous_wpdb;
