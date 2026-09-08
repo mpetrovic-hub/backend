@@ -6,6 +6,26 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Nth_Primary_Cta_Adapter implements Kiwi_Landing_Primary_Cta_Adapter_Interface
 {
+    private const SMS_BODY_VARIANT_ALLOCATION = [
+        'version' => 'fr_sms_v2',
+        'context' => [
+            'country' => 'FR',
+            'provider' => 'nth',
+            'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay',
+        ],
+        'entries' => [
+            ['variant_key' => 'as_is_txn_prefix', 'seed' => '', 'weight' => 10],
+            ['variant_key' => 'cta_phrase', 'seed' => 'BonusJeux', 'weight' => 20],
+            ['variant_key' => 'game_word', 'seed' => 'TopJeux', 'weight' => 20],
+            ['variant_key' => 'cta_phrase', 'seed' => 'JouerPlus', 'weight' => 20],
+            ['variant_key' => 'cta_phrase', 'seed' => 'AccederJeux', 'weight' => 8],
+            ['variant_key' => 'game_word', 'seed' => 'JeuxMax', 'weight' => 8],
+            ['variant_key' => 'download_phrase', 'seed' => 'AccederMaintenant', 'weight' => 8],
+            ['variant_key' => 'game_word', 'seed' => 'GameQuest', 'weight' => 6],
+        ],
+    ];
+
     private $sms_body_variant_service;
 
     public function __construct(?Kiwi_Sms_Body_Variant_Service $sms_body_variant_service = null)
@@ -45,7 +65,8 @@ class Kiwi_Nth_Primary_Cta_Adapter implements Kiwi_Landing_Primary_Cta_Adapter_I
                 $shortcode,
                 $landing_page,
                 $service,
-                $attribution
+                $attribution,
+                $this->get_sms_body_variant_allocation()
             );
 
             if (is_array($variant) && trim((string) ($variant['body'] ?? '')) !== '') {
@@ -58,6 +79,11 @@ class Kiwi_Nth_Primary_Cta_Adapter implements Kiwi_Landing_Primary_Cta_Adapter_I
         }
 
         return 'sms:' . $shortcode . '?body=' . rawurlencode($body);
+    }
+
+    public function get_sms_body_variant_allocation(): array
+    {
+        return self::SMS_BODY_VARIANT_ALLOCATION;
     }
 
     private function normalize_keyword_seed(string $keyword): string

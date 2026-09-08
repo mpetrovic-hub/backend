@@ -78,6 +78,8 @@ Provider adapters should forward only normalized fields into attribution resolve
 
 No provider-specific callback shape should leak into shared attribution code.
 
+The same boundary applies to SMS-body allocation. The shared variant service accepts a normalized allocation contract and implements stable selection, rendering, and persistence. Concrete country, Aggregator, flow, service, allocation-version, seed, and weight choices belong to the relevant integration adapter; they are not constants in the shared service.
+
 ## Storage boundary
 
 `wp_kiwi_click_attributions` is temporary attribution state. It stores:
@@ -159,6 +161,7 @@ Example S2S URL template:
 - NTH callback normalization and confirmation logic remain in NTH service/normalizer.
 - NTH resolves pending attribution rows by service/reference and reuses the shared `transaction_id` as the provider reference root.
 - NTH MO adapter may extract `transaction_id` from keyword-suffixed MO content at the provider boundary.
+- NTH primary-CTA adapter supplies the FR integration's normalized SMS-body allocation contract to the shared variant service.
 - When the FR SMS-body variant experiment is active, NTH MO handling resolves assigned visible tokens through `wp_kiwi_sms_body_variant_assignments`.
 - NTH service passes normalized conversion signals into `Kiwi_Conversion_Attribution_Resolver`.
 - Resolver enriches matched sale rows with shared attribution snapshots without leaking provider callback payload shapes into sales writes.

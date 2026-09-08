@@ -231,8 +231,8 @@ class Kiwi_Config
 
     public function is_sms_body_variant_experiment_enabled(): bool
     {
-        return !defined('KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED')
-            || (bool) KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED;
+        return defined('KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED')
+            && (bool) KIWI_SMS_BODY_VARIANT_EXPERIMENT_ENABLED;
     }
 
     public function get_landing_ua_tracking_mode(): string

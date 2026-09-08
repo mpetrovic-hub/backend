@@ -6,6 +6,26 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Sms_Body_Variant_Repository
 {
+    private const SUMMARY_UNIQUE_INDEX = 'variant_summary_version';
+    private const LEGACY_SUMMARY_UNIQUE_INDEX = 'variant_summary';
+    private const SUMMARY_UNIQUE_COLUMNS = [
+        'landing_key',
+        'service_key',
+        'variant_key',
+        'seed',
+        'allocation_version',
+    ];
+    private const LEGACY_SUMMARY_UNIQUE_COLUMNS = [
+        'landing_key',
+        'service_key',
+        'variant_key',
+        'seed',
+    ];
+    private const SUMMARY_UNIQUE_SUB_PARTS = [null, null, null, null, null];
+    private const SUMMARY_UNIQUE_TYPE = 'BTREE';
+    private const TRANSACTIONAL_ENGINE = 'InnoDB';
+    private const SUMMARY_IDENTITY_LOCK_TIMEOUT_SECONDS = 5;
+
     private function get_assignments_table_name(): string
     {
         global $wpdb;
@@ -46,6 +66,7 @@ class Kiwi_Sms_Body_Variant_Repository
             visible_token VARCHAR(140) NOT NULL DEFAULT '',
             variant_key VARCHAR(50) NOT NULL DEFAULT '',
             seed VARCHAR(50) NOT NULL DEFAULT '',
+            allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy',
             sms_body VARCHAR(255) NOT NULL DEFAULT '',
             cta1_recorded_at DATETIME NULL,
             handoff_attempted_at DATETIME NULL,
@@ -67,8 +88,9 @@ class Kiwi_Sms_Body_Variant_Repository
             KEY click_id (click_id),
             KEY variant_key (variant_key),
             KEY seed (seed),
+            KEY allocation_version (allocation_version),
             KEY created_at (created_at)
-        ) {$charset_collate};";
+        ) ENGINE=InnoDB {$charset_collate};";
 
         $summary_sql = "CREATE TABLE {$summary_table} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -80,6 +102,7 @@ class Kiwi_Sms_Body_Variant_Repository
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             variant_key VARCHAR(50) NOT NULL DEFAULT '',
             seed VARCHAR(50) NOT NULL DEFAULT '',
+            allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy',
             assignments INT UNSIGNED NOT NULL DEFAULT 0,
             cta1 INT UNSIGNED NOT NULL DEFAULT 0,
             handoff_attempted INT UNSIGNED NOT NULL DEFAULT 0,
@@ -93,19 +116,26 @@ class Kiwi_Sms_Body_Variant_Repository
             conv_per_cta1_cr DECIMAL(7,2) NOT NULL DEFAULT 0,
             conv_per_hidden_cr DECIMAL(7,2) NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
-            UNIQUE KEY variant_summary (landing_key, service_key, variant_key, seed),
+            UNIQUE KEY variant_summary_version (landing_key, service_key, variant_key, seed, allocation_version),
             KEY landing_key (landing_key),
             KEY service_key (service_key),
             KEY provider_key (provider_key),
             KEY flow_key (flow_key),
             KEY variant_key (variant_key),
             KEY seed (seed),
+            KEY allocation_version (allocation_version),
             KEY updated_at (updated_at)
-        ) {$charset_collate};";
+        ) ENGINE=InnoDB {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
+
         dbDelta($assignments_sql);
         dbDelta($summary_sql);
+        $this->ensure_transactional_table($assignments_table);
+        $this->ensure_transactional_table($summary_table);
+        $this->finalize_versioned_summary_index($summary_table);
     }
 
     public function insert_if_new(array $assignment): array
@@ -121,6 +151,59 @@ class Kiwi_Sms_Body_Variant_Repository
             ];
         }
 
+        if (!$this->are_variant_tables_transactional()) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        $summary_exists = $this->summary_identity_exists($assignment, true);
+
+        if ($summary_exists === null) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
+        try {
+            $insert = function () use (
+                $assignment,
+                $transaction_id,
+                $visible_token,
+                $variant_key,
+                $summary_exists
+            ): array {
+                return $this->insert_if_new_in_transaction(
+                    $assignment,
+                    $transaction_id,
+                    $visible_token,
+                    $variant_key,
+                    !$summary_exists
+                );
+            };
+
+            return $summary_exists
+                ? $insert()
+                : $this->with_summary_identity_lock($assignment, true, $insert);
+        } catch (Throwable $error) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+    }
+
+    private function insert_if_new_in_transaction(
+        array $assignment,
+        string $transaction_id,
+        string $visible_token,
+        string $variant_key,
+        bool $repair_missing_summary
+    ): array {
+        global $wpdb;
+
         $existing = $this->find_by_transaction_id($transaction_id);
 
         if (is_array($existing)) {
@@ -130,9 +213,16 @@ class Kiwi_Sms_Body_Variant_Repository
             ];
         }
 
-        global $wpdb;
-
+        $allocation_version = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
         $now = $this->current_time_mysql();
+
+        if ($wpdb->query('START TRANSACTION') === false) {
+            return [
+                'inserted' => false,
+                'row' => null,
+            ];
+        }
+
         $result = $wpdb->insert(
             $this->get_assignments_table_name(),
             [
@@ -152,6 +242,7 @@ class Kiwi_Sms_Body_Variant_Repository
                 'visible_token' => $visible_token,
                 'variant_key' => $variant_key,
                 'seed' => $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50),
+                'allocation_version' => $allocation_version,
                 'sms_body' => $this->sanitize_sms_body((string) ($assignment['sms_body'] ?? '')),
                 'raw_context' => isset($assignment['raw_context']) ? wp_json_encode($assignment['raw_context']) : '',
             ],
@@ -174,10 +265,13 @@ class Kiwi_Sms_Body_Variant_Repository
                 '%s',
                 '%s',
                 '%s',
+                '%s',
             ]
         );
 
         if ($result === false) {
+            $wpdb->query('ROLLBACK');
+
             return [
                 'inserted' => false,
                 'row' => $this->find_by_transaction_id($transaction_id),
@@ -186,8 +280,16 @@ class Kiwi_Sms_Body_Variant_Repository
 
         $row = $this->find_by_transaction_id($transaction_id);
 
-        if (is_array($row)) {
-            $this->increment_summary_counter($row, 'assignments');
+        if (!is_array($row)
+            || !$this->increment_summary_counter($row, 'assignments', $repair_missing_summary)
+            || $wpdb->query('COMMIT') === false
+        ) {
+            $wpdb->query('ROLLBACK');
+
+            return [
+                'inserted' => false,
+                'row' => $this->find_by_transaction_id($transaction_id),
+            ];
         }
 
         return [
@@ -279,8 +381,6 @@ class Kiwi_Sms_Body_Variant_Repository
 
     public function mark_event_by_transaction_id(string $transaction_id, string $event_key): bool
     {
-        global $wpdb;
-
         $transaction_id = $this->sanitize_token($transaction_id, 120);
         $field = $this->field_for_event_key($event_key);
         $counter = $this->counter_for_event_key($event_key);
@@ -289,31 +389,194 @@ class Kiwi_Sms_Body_Variant_Repository
             return false;
         }
 
-        $now = $this->current_time_mysql();
-        $result = $wpdb->query(
+        if (!$this->are_variant_tables_transactional()) {
+            return false;
+        }
+
+        $assignment = $this->find_by_transaction_id($transaction_id);
+
+        if (!is_array($assignment)) {
+            return false;
+        }
+
+        $include_allocation_version = array_key_exists('allocation_version', $assignment);
+        $summary_exists = $this->summary_identity_exists($assignment, $include_allocation_version);
+
+        if ($summary_exists === null) {
+            return false;
+        }
+
+        try {
+            $record_event = function () use ($transaction_id, $field, $counter, $summary_exists): bool {
+                return $this->mark_event_in_transaction(
+                    $transaction_id,
+                    $field,
+                    $counter,
+                    !$summary_exists
+                );
+            };
+
+            return $summary_exists
+                ? $record_event()
+                : $this->with_summary_identity_lock(
+                    $assignment,
+                    $include_allocation_version,
+                    $record_event
+                );
+        } catch (Throwable $error) {
+            return false;
+        }
+    }
+
+    private function mark_event_in_transaction(
+        string $transaction_id,
+        string $field,
+        string $counter,
+        bool $repair_missing_summary
+    ): bool {
+        global $wpdb;
+
+        if ($wpdb->query('START TRANSACTION') === false) {
+            return false;
+        }
+
+        try {
+            $row = $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT * FROM {$this->get_assignments_table_name()} WHERE transaction_id = %s LIMIT 1 FOR UPDATE",
+                    $transaction_id
+                ),
+                ARRAY_A
+            );
+
+            if (!is_array($row) || trim((string) ($row[$field] ?? '')) !== '') {
+                $wpdb->query('ROLLBACK');
+
+                return false;
+            }
+
+            $summary_updated = array_key_exists('allocation_version', $row)
+                ? $this->increment_summary_counter($row, $counter, $repair_missing_summary)
+                : $this->increment_legacy_summary_counter($row, $counter, $repair_missing_summary);
+
+            if (!$summary_updated) {
+                $wpdb->query('ROLLBACK');
+
+                return false;
+            }
+
+            $now = $this->current_time_mysql();
+            $result = $wpdb->query(
+                $wpdb->prepare(
+                    "UPDATE {$this->get_assignments_table_name()}
+                     SET updated_at = %s,
+                         {$field} = %s
+                     WHERE transaction_id = %s
+                       AND {$field} IS NULL",
+                    $now,
+                    $now,
+                    $transaction_id
+                )
+            );
+
+            if ($result !== 1 || $wpdb->query('COMMIT') === false) {
+                $wpdb->query('ROLLBACK');
+
+                return false;
+            }
+
+            return true;
+        } catch (Throwable $error) {
+            $wpdb->query('ROLLBACK');
+
+            return false;
+        }
+    }
+
+    private function with_summary_identity_lock(
+        array $assignment,
+        bool $include_allocation_version,
+        callable $callback
+    ) {
+        global $wpdb;
+
+        $landing_key = $this->sanitize_key((string) ($assignment['landing_key'] ?? ''), 100);
+        $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
+        $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+
+        if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
+            throw new InvalidArgumentException('SMS body variant summary identity is required.');
+        }
+
+        $wpdb->last_error = '';
+        $database_name = trim((string) $wpdb->get_var('SELECT DATABASE()'));
+
+        if ($database_name === '' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('SMS body variant database lock namespace lookup failed.');
+        }
+
+        $identity_parts = [
+            $database_name,
+            $this->get_summary_table_name(),
+            $landing_key,
+            $service_key,
+            $variant_key,
+            $seed,
+        ];
+
+        if ($include_allocation_version) {
+            $identity_parts[] = $this->sanitize_allocation_version(
+                (string) ($assignment['allocation_version'] ?? '')
+            );
+        }
+
+        $lock_name = 'kiwi_sms_variant_' . hash('sha1', implode('|', $identity_parts));
+        $wpdb->last_error = '';
+        $acquired = $wpdb->get_var(
             $wpdb->prepare(
-                "UPDATE {$this->get_assignments_table_name()}
-                 SET updated_at = %s,
-                     {$field} = %s
-                 WHERE transaction_id = %s
-                   AND {$field} IS NULL",
-                $now,
-                $now,
-                $transaction_id
+                'SELECT GET_LOCK(%s, %d)',
+                $lock_name,
+                self::SUMMARY_IDENTITY_LOCK_TIMEOUT_SECONDS
             )
         );
 
-        if ($result !== 1) {
-            return false;
+        if ((string) $acquired !== '1' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('SMS body variant summary identity lock acquisition failed.');
         }
 
-        $row = $this->find_by_transaction_id($transaction_id);
+        $result = null;
+        $callback_error = null;
 
-        if (!is_array($row)) {
-            return false;
+        try {
+            $result = $callback();
+        } catch (Throwable $error) {
+            $callback_error = $error;
         }
 
-        return $this->increment_summary_counter($row, $counter);
+        $wpdb->last_error = '';
+        $released = $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock_name));
+
+        if ((string) $released !== '1' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            error_log('[kiwi-sms-body-variant] Summary identity lock release failed.');
+        }
+
+        if ($callback_error instanceof Throwable) {
+            throw $callback_error;
+        }
+
+        return $result;
+    }
+
+    private function summary_identity_exists(array $assignment, bool $include_allocation_version): ?bool
+    {
+        $summary_state = $this->read_summary_assignment_state(
+            $assignment,
+            $include_allocation_version,
+            false
+        );
+
+        return $summary_state === null ? null : !empty($summary_state['found']);
     }
 
     public function get_summary_rows(array $filters = []): array
@@ -324,7 +587,7 @@ class Kiwi_Sms_Body_Variant_Repository
         $where = [];
         $params = [];
 
-        foreach (['landing_key', 'service_key', 'variant_key', 'seed'] as $field) {
+        foreach (['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'] as $field) {
             $value = $this->sanitize_key((string) ($filters[$field] ?? ''), 100);
 
             if ($value === '') {
@@ -341,7 +604,7 @@ class Kiwi_Sms_Body_Variant_Repository
             $sql .= ' WHERE ' . implode(' AND ', $where);
         }
 
-        $sql .= ' ORDER BY landing_key ASC, service_key ASC, variant_key ASC, seed ASC';
+        $sql .= ' ORDER BY landing_key ASC, service_key ASC, allocation_version ASC, variant_key ASC, seed ASC';
 
         $rows = !empty($params)
             ? $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A)
@@ -350,7 +613,182 @@ class Kiwi_Sms_Body_Variant_Repository
         return is_array($rows) ? $rows : [];
     }
 
-    private function increment_summary_counter(array $assignment, string $counter): bool
+    private function increment_summary_counter(
+        array $assignment,
+        string $counter,
+        bool $repair_missing_summary = false
+    ): bool
+    {
+        global $wpdb;
+
+        $counter = $this->sanitize_counter($counter);
+
+        if ($counter === '') {
+            return false;
+        }
+
+        $landing_key = $this->sanitize_key((string) ($assignment['landing_key'] ?? ''), 100);
+        $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
+        $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+        $allocation_version = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
+
+        if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
+            return false;
+        }
+
+        $provider_key = $this->sanitize_key((string) ($assignment['provider_key'] ?? ''), 50);
+        $flow_key = $this->sanitize_key((string) ($assignment['flow_key'] ?? ''), 50);
+        $now = $this->current_time_mysql();
+        $table_name = $this->get_summary_table_name();
+        $initial_assignments = 0;
+
+        if ($counter !== 'assignments' || $repair_missing_summary) {
+            $summary_state = $this->read_summary_assignment_state($assignment, true, true);
+
+            if ($summary_state === null) {
+                return false;
+            }
+
+            if (empty($summary_state['found']) && !$repair_missing_summary) {
+                return false;
+            }
+
+            $assignment_count = !empty($summary_state['found'])
+                ? 0
+                : $this->count_assignments_for_summary_identity($assignment, true);
+
+            if ($assignment_count === null) {
+                return false;
+            }
+
+            $initial_assignments = $counter === 'assignments'
+                ? max(0, $assignment_count - 1)
+                : $assignment_count;
+        }
+
+        $upsert_result = $wpdb->query(
+            $wpdb->prepare(
+                "INSERT INTO {$table_name} (
+                    created_at,
+                    updated_at,
+                    landing_key,
+                    service_key,
+                    provider_key,
+                    flow_key,
+                    variant_key,
+                    seed,
+                    allocation_version,
+                    assignments,
+                    cta1,
+                    handoff_attempted,
+                    handoff_hidden,
+                    handoff_no_hide,
+                    handoff_returned,
+                    conv,
+                    cta1_cr,
+                    handoff_hidden_cr,
+                    conv_cr,
+                    conv_per_cta1_cr,
+                    conv_per_hidden_cr
+                ) VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %d,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                )
+                ON DUPLICATE KEY UPDATE
+                    updated_at = VALUES(updated_at),
+                    provider_key = IF(provider_key = '', VALUES(provider_key), provider_key),
+                    flow_key = IF(flow_key = '', VALUES(flow_key), flow_key)",
+                $now,
+                $now,
+                $landing_key,
+                $service_key,
+                $provider_key,
+                $flow_key,
+                $variant_key,
+                $seed,
+                $allocation_version,
+                $initial_assignments
+            )
+        );
+
+        if ($upsert_result === false) {
+            return false;
+        }
+
+        $increment_result = $wpdb->query(
+            $wpdb->prepare(
+                "UPDATE {$table_name}
+                 SET updated_at = %s,
+                     {$counter} = {$counter} + 1
+                 WHERE landing_key = %s
+                   AND service_key = %s
+                   AND variant_key = %s
+                   AND seed = %s
+                   AND allocation_version = %s",
+                $now,
+                $landing_key,
+                $service_key,
+                $variant_key,
+                $seed,
+                $allocation_version
+            )
+        );
+
+        if ($increment_result === false) {
+            return false;
+        }
+
+        $rate_result = $wpdb->query(
+            $wpdb->prepare(
+                "UPDATE {$table_name}
+                 SET updated_at = %s,
+                     cta1_cr = CASE WHEN assignments > 0 THEN ROUND((cta1 / assignments) * 100, 2) ELSE 0 END,
+                     handoff_hidden_cr = CASE WHEN handoff_attempted > 0 THEN ROUND((handoff_hidden / handoff_attempted) * 100, 2) ELSE 0 END,
+                     conv_cr = CASE WHEN assignments > 0 THEN ROUND((conv / assignments) * 100, 2) ELSE 0 END,
+                     conv_per_cta1_cr = CASE WHEN cta1 > 0 THEN ROUND((conv / cta1) * 100, 2) ELSE 0 END,
+                     conv_per_hidden_cr = CASE WHEN handoff_hidden > 0 THEN ROUND((conv / handoff_hidden) * 100, 2) ELSE 0 END
+                 WHERE landing_key = %s
+                   AND service_key = %s
+                   AND variant_key = %s
+                   AND seed = %s
+                   AND allocation_version = %s",
+                $now,
+                $landing_key,
+                $service_key,
+                $variant_key,
+                $seed,
+                $allocation_version
+            )
+        );
+
+        return $rate_result !== false;
+    }
+
+    private function increment_legacy_summary_counter(
+        array $assignment,
+        string $counter,
+        bool $repair_missing_summary = false
+    ): bool
     {
         global $wpdb;
 
@@ -373,6 +811,31 @@ class Kiwi_Sms_Body_Variant_Repository
         $flow_key = $this->sanitize_key((string) ($assignment['flow_key'] ?? ''), 50);
         $now = $this->current_time_mysql();
         $table_name = $this->get_summary_table_name();
+        $initial_assignments = 0;
+
+        if ($counter !== 'assignments' || $repair_missing_summary) {
+            $summary_state = $this->read_summary_assignment_state($assignment, false, true);
+
+            if ($summary_state === null) {
+                return false;
+            }
+
+            if (empty($summary_state['found']) && !$repair_missing_summary) {
+                return false;
+            }
+
+            $assignment_count = !empty($summary_state['found'])
+                ? 0
+                : $this->count_assignments_for_summary_identity($assignment, false);
+
+            if ($assignment_count === null) {
+                return false;
+            }
+
+            $initial_assignments = $counter === 'assignments'
+                ? max(0, $assignment_count - 1)
+                : $assignment_count;
+        }
 
         $upsert_result = $wpdb->query(
             $wpdb->prepare(
@@ -406,7 +869,7 @@ class Kiwi_Sms_Body_Variant_Repository
                     %s,
                     %s,
                     %s,
-                    0,
+                    %d,
                     0,
                     0,
                     0,
@@ -430,7 +893,8 @@ class Kiwi_Sms_Body_Variant_Repository
                 $provider_key,
                 $flow_key,
                 $variant_key,
-                $seed
+                $seed,
+                $initial_assignments
             )
         );
 
@@ -455,7 +919,7 @@ class Kiwi_Sms_Body_Variant_Repository
             )
         );
 
-        if ($increment_result === false) {
+        if ($increment_result !== 1) {
             return false;
         }
 
@@ -481,6 +945,105 @@ class Kiwi_Sms_Body_Variant_Repository
         );
 
         return $rate_result !== false;
+    }
+
+    private function read_summary_assignment_state(
+        array $assignment,
+        bool $include_allocation_version,
+        bool $for_update
+    ): ?array {
+        global $wpdb;
+
+        $landing_key = $this->sanitize_key((string) ($assignment['landing_key'] ?? ''), 100);
+        $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
+        $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+
+        if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
+            return null;
+        }
+
+        $sql = "SELECT assignments
+                FROM {$this->get_summary_table_name()}
+                WHERE landing_key = %s
+                  AND service_key = %s
+                  AND variant_key = %s
+                  AND seed = %s";
+        $params = [
+            $landing_key,
+            $service_key,
+            $variant_key,
+            $seed,
+        ];
+
+        if ($include_allocation_version) {
+            $sql .= ' AND allocation_version = %s';
+            $params[] = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
+        }
+
+        $sql .= ' LIMIT 1';
+
+        if ($for_update) {
+            $sql .= ' FOR UPDATE';
+        }
+        $wpdb->last_error = '';
+        $assignments = $wpdb->get_var($wpdb->prepare($sql, ...$params));
+
+        if ($assignments === false || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            return null;
+        }
+
+        return [
+            'found' => $assignments !== null,
+            'assignments' => $assignments === null ? 0 : max(0, (int) $assignments),
+        ];
+    }
+
+    private function count_assignments_for_summary_identity(
+        array $assignment,
+        bool $include_allocation_version
+    ): ?int {
+        global $wpdb;
+
+        $landing_key = $this->sanitize_key((string) ($assignment['landing_key'] ?? ''), 100);
+        $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
+        $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
+        $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+
+        if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
+            return null;
+        }
+
+        $sql = "SELECT COUNT(*)
+                FROM {$this->get_assignments_table_name()}
+                WHERE landing_key = %s
+                  AND service_key = %s
+                  AND variant_key = %s
+                  AND seed = %s";
+        $params = [
+            $landing_key,
+            $service_key,
+            $variant_key,
+            $seed,
+        ];
+
+        if ($include_allocation_version) {
+            $sql .= ' AND allocation_version = %s';
+            $params[] = $this->sanitize_allocation_version((string) ($assignment['allocation_version'] ?? ''));
+        }
+
+        $wpdb->last_error = '';
+        $count = $wpdb->get_var($wpdb->prepare($sql, ...$params));
+
+        if ($count === null
+            || $count === false
+            || trim((string) ($wpdb->last_error ?? '')) !== ''
+            || (int) $count < 1
+        ) {
+            return null;
+        }
+
+        return (int) $count;
     }
 
     private function field_for_event_key(string $event_key): string
@@ -533,7 +1096,225 @@ class Kiwi_Sms_Body_Variant_Repository
             'bare_id',
             'game_word',
             'cta_phrase',
+            'download_phrase',
         ], true);
+    }
+
+    private function are_variant_tables_transactional(): bool
+    {
+        try {
+            return strcasecmp(
+                $this->read_table_engine($this->get_assignments_table_name()),
+                self::TRANSACTIONAL_ENGINE
+            ) === 0
+                && strcasecmp(
+                    $this->read_table_engine($this->get_summary_table_name()),
+                    self::TRANSACTIONAL_ENGINE
+                ) === 0;
+        } catch (Throwable $error) {
+            return false;
+        }
+    }
+
+    private function ensure_transactional_table(string $table_name): void
+    {
+        global $wpdb;
+
+        if (!is_object($wpdb)
+            || !method_exists($wpdb, 'get_var')
+            || !method_exists($wpdb, 'prepare')
+            || !method_exists($wpdb, 'query')
+        ) {
+            throw new RuntimeException('Database table engine management is unavailable.');
+        }
+
+        if (strcasecmp($this->read_table_engine($table_name), self::TRANSACTIONAL_ENGINE) === 0) {
+            return;
+        }
+
+        $result = $wpdb->query(
+            "ALTER TABLE {$table_name} ENGINE=" . self::TRANSACTIONAL_ENGINE
+        );
+
+        if ($result === false
+            || strcasecmp($this->read_table_engine($table_name), self::TRANSACTIONAL_ENGINE) !== 0
+        ) {
+            throw new RuntimeException('The SMS body variant table could not be converted to transactional storage.');
+        }
+    }
+
+    private function read_table_engine(string $table_name): string
+    {
+        global $wpdb;
+
+        if (property_exists($wpdb, 'last_error')) {
+            $wpdb->last_error = '';
+        }
+
+        $engine = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+                $table_name
+            )
+        );
+
+        if ($engine === null
+            || $engine === false
+            || trim((string) $engine) === ''
+            || trim((string) ($wpdb->last_error ?? '')) !== ''
+        ) {
+            throw new RuntimeException('The SMS body variant table engine could not be verified.');
+        }
+
+        return trim((string) $engine);
+    }
+
+    private function finalize_versioned_summary_index(string $summary_table): void
+    {
+        global $wpdb;
+
+        $versioned_index = $this->read_index_definition($summary_table, self::SUMMARY_UNIQUE_INDEX);
+
+        if (($versioned_index['columns'] ?? []) !== self::SUMMARY_UNIQUE_COLUMNS
+            || ($versioned_index['unique'] ?? false) !== true
+            || ($versioned_index['sub_parts'] ?? []) !== self::SUMMARY_UNIQUE_SUB_PARTS
+            || ($versioned_index['type'] ?? '') !== self::SUMMARY_UNIQUE_TYPE
+        ) {
+            throw new RuntimeException('The versioned SMS body summary unique index was not created as required.');
+        }
+
+        $candidate_names = array_values(array_unique(array_merge(
+            [self::LEGACY_SUMMARY_UNIQUE_INDEX],
+            $this->read_unique_index_names($summary_table)
+        )));
+
+        foreach ($candidate_names as $index_name) {
+            if ($index_name === self::SUMMARY_UNIQUE_INDEX) {
+                continue;
+            }
+
+            $index = $this->read_index_definition($summary_table, $index_name);
+            $is_legacy_identity = ($index['unique'] ?? false) === true
+                && $this->has_same_columns(
+                    (array) ($index['columns'] ?? []),
+                    self::LEGACY_SUMMARY_UNIQUE_COLUMNS
+                );
+
+            if (($index['present'] ?? false) !== true
+                || ($index_name !== self::LEGACY_SUMMARY_UNIQUE_INDEX && !$is_legacy_identity)
+            ) {
+                continue;
+            }
+
+            $result = $wpdb->query(
+                "ALTER TABLE {$summary_table} DROP INDEX " . $this->quote_index_name($index_name)
+            );
+
+            if ($result === false) {
+                throw new RuntimeException('A legacy SMS body summary unique index could not be removed.');
+            }
+        }
+    }
+
+    private function has_same_columns(array $actual, array $expected): bool
+    {
+        if (count($actual) !== count($expected)) {
+            return false;
+        }
+
+        sort($actual, SORT_STRING);
+        sort($expected, SORT_STRING);
+
+        return $actual === $expected;
+    }
+
+    private function read_unique_index_names(string $table_name): array
+    {
+        global $wpdb;
+
+        if (!is_object($wpdb) || !method_exists($wpdb, 'get_results') || !method_exists($wpdb, 'prepare')) {
+            throw new RuntimeException('Database index inspection is unavailable.');
+        }
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                'SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND NON_UNIQUE = 0',
+                $table_name
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            throw new RuntimeException('Database unique-index inspection failed.');
+        }
+
+        $names = [];
+
+        foreach ($rows as $row) {
+            $index_name = is_array($row) ? trim((string) ($row['INDEX_NAME'] ?? '')) : '';
+
+            if ($index_name !== '') {
+                $names[] = $index_name;
+            }
+        }
+
+        return array_values(array_unique($names));
+    }
+
+    private function quote_index_name(string $index_name): string
+    {
+        if (preg_match('/^[A-Za-z0-9_]+$/', $index_name) === 1) {
+            return $index_name;
+        }
+
+        return '`' . str_replace('`', '``', $index_name) . '`';
+    }
+
+    private function read_index_definition(string $table_name, string $index_name): array
+    {
+        global $wpdb;
+
+        if (!is_object($wpdb) || !method_exists($wpdb, 'get_results') || !method_exists($wpdb, 'prepare')) {
+            throw new RuntimeException('Database index inspection is unavailable.');
+        }
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART, INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s ORDER BY SEQ_IN_INDEX ASC',
+                $table_name,
+                $index_name
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            throw new RuntimeException('Database index inspection failed.');
+        }
+
+        return [
+            'present' => !empty($rows),
+            'unique' => !empty($rows) && (int) ($rows[0]['NON_UNIQUE'] ?? 1) === 0,
+            'columns' => array_values(array_map(
+                static function (array $row): string {
+                    return (string) ($row['COLUMN_NAME'] ?? '');
+                },
+                $rows
+            )),
+            'sub_parts' => array_values(array_map(
+                static function (array $row): ?int {
+                    return ($row['SUB_PART'] ?? null) === null ? null : (int) $row['SUB_PART'];
+                },
+                $rows
+            )),
+            'type' => !empty($rows) ? strtoupper(trim((string) ($rows[0]['INDEX_TYPE'] ?? ''))) : '',
+        ];
+    }
+
+    private function sanitize_allocation_version(string $allocation_version): string
+    {
+        $allocation_version = $this->sanitize_key($allocation_version, 50);
+
+        return $allocation_version !== '' ? $allocation_version : 'legacy';
     }
 
     private function sanitize_key(string $value, int $max_length): string
