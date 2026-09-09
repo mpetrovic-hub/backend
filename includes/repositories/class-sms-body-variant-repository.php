@@ -46,6 +46,7 @@ class Kiwi_Sms_Body_Variant_Repository
             visible_token VARCHAR(140) NOT NULL DEFAULT '',
             variant_key VARCHAR(50) NOT NULL DEFAULT '',
             seed VARCHAR(50) NOT NULL DEFAULT '',
+            allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy',
             sms_body VARCHAR(255) NOT NULL DEFAULT '',
             cta1_recorded_at DATETIME NULL,
             handoff_attempted_at DATETIME NULL,
@@ -80,6 +81,7 @@ class Kiwi_Sms_Body_Variant_Repository
             flow_key VARCHAR(50) NOT NULL DEFAULT '',
             variant_key VARCHAR(50) NOT NULL DEFAULT '',
             seed VARCHAR(50) NOT NULL DEFAULT '',
+            allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy',
             assignments INT UNSIGNED NOT NULL DEFAULT 0,
             cta1 INT UNSIGNED NOT NULL DEFAULT 0,
             handoff_attempted INT UNSIGNED NOT NULL DEFAULT 0,
@@ -93,7 +95,7 @@ class Kiwi_Sms_Body_Variant_Repository
             conv_per_cta1_cr DECIMAL(7,2) NOT NULL DEFAULT 0,
             conv_per_hidden_cr DECIMAL(7,2) NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
-            UNIQUE KEY variant_summary (landing_key, service_key, variant_key, seed),
+            UNIQUE KEY variant_summary (landing_key, service_key, variant_key, seed, allocation_version),
             KEY landing_key (landing_key),
             KEY service_key (service_key),
             KEY provider_key (provider_key),
@@ -152,10 +154,12 @@ class Kiwi_Sms_Body_Variant_Repository
                 'visible_token' => $visible_token,
                 'variant_key' => $variant_key,
                 'seed' => $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50),
+                'allocation_version' => $this->allocation_version($assignment),
                 'sms_body' => $this->sanitize_sms_body((string) ($assignment['sms_body'] ?? '')),
                 'raw_context' => isset($assignment['raw_context']) ? wp_json_encode($assignment['raw_context']) : '',
             ],
             [
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -324,7 +328,7 @@ class Kiwi_Sms_Body_Variant_Repository
         $where = [];
         $params = [];
 
-        foreach (['landing_key', 'service_key', 'variant_key', 'seed'] as $field) {
+        foreach (['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'] as $field) {
             $value = $this->sanitize_key((string) ($filters[$field] ?? ''), 100);
 
             if ($value === '') {
@@ -341,7 +345,7 @@ class Kiwi_Sms_Body_Variant_Repository
             $sql .= ' WHERE ' . implode(' AND ', $where);
         }
 
-        $sql .= ' ORDER BY landing_key ASC, service_key ASC, variant_key ASC, seed ASC';
+        $sql .= ' ORDER BY landing_key ASC, service_key ASC, variant_key ASC, seed ASC, allocation_version ASC';
 
         $rows = !empty($params)
             ? $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A)
@@ -364,6 +368,7 @@ class Kiwi_Sms_Body_Variant_Repository
         $service_key = $this->sanitize_key((string) ($assignment['service_key'] ?? ''), 100);
         $variant_key = $this->sanitize_key((string) ($assignment['variant_key'] ?? ''), 50);
         $seed = $this->sanitize_token((string) ($assignment['seed'] ?? ''), 50);
+        $allocation_version = $this->allocation_version($assignment);
 
         if ($landing_key === '' || $service_key === '' || !$this->is_supported_variant_key($variant_key)) {
             return false;
@@ -385,6 +390,7 @@ class Kiwi_Sms_Body_Variant_Repository
                     flow_key,
                     variant_key,
                     seed,
+                    allocation_version,
                     assignments,
                     cta1,
                     handoff_attempted,
@@ -398,6 +404,7 @@ class Kiwi_Sms_Body_Variant_Repository
                     conv_per_cta1_cr,
                     conv_per_hidden_cr
                 ) VALUES (
+                    %s,
                     %s,
                     %s,
                     %s,
@@ -430,7 +437,8 @@ class Kiwi_Sms_Body_Variant_Repository
                 $provider_key,
                 $flow_key,
                 $variant_key,
-                $seed
+                $seed,
+                $allocation_version
             )
         );
 
@@ -446,12 +454,14 @@ class Kiwi_Sms_Body_Variant_Repository
                  WHERE landing_key = %s
                    AND service_key = %s
                    AND variant_key = %s
-                   AND seed = %s",
+                   AND seed = %s
+                   AND allocation_version = %s",
                 $now,
                 $landing_key,
                 $service_key,
                 $variant_key,
-                $seed
+                $seed,
+                $allocation_version
             )
         );
 
@@ -471,12 +481,14 @@ class Kiwi_Sms_Body_Variant_Repository
                  WHERE landing_key = %s
                    AND service_key = %s
                    AND variant_key = %s
-                   AND seed = %s",
+                   AND seed = %s
+                   AND allocation_version = %s",
                 $now,
                 $landing_key,
                 $service_key,
                 $variant_key,
-                $seed
+                $seed,
+                $allocation_version
             )
         );
 
@@ -533,7 +545,14 @@ class Kiwi_Sms_Body_Variant_Repository
             'bare_id',
             'game_word',
             'cta_phrase',
+            'download_phrase',
         ], true);
+    }
+
+    private function allocation_version(array $assignment): string
+    {
+        $version = $this->sanitize_key((string) ($assignment['allocation_version'] ?? 'legacy'), 50);
+        return $version !== '' ? $version : 'legacy';
     }
 
     private function sanitize_key(string $value, int $max_length): string

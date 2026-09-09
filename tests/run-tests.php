@@ -4161,6 +4161,7 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
             'visible_token' => $visible_token,
             'variant_key' => $variant_key,
             'seed' => (string) ($assignment['seed'] ?? ''),
+            'allocation_version' => (string) ($assignment['allocation_version'] ?? 'legacy'),
             'sms_body' => (string) ($assignment['sms_body'] ?? ''),
             'cta1_recorded_at' => '',
             'handoff_attempted_at' => '',
@@ -4281,6 +4282,7 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
             (string) ($assignment['service_key'] ?? ''),
             (string) ($assignment['variant_key'] ?? ''),
             (string) ($assignment['seed'] ?? ''),
+            (string) ($assignment['allocation_version'] ?? 'legacy'),
         ]);
 
         if (!isset($this->summary[$key])) {
@@ -4291,6 +4293,7 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
                 'flow_key' => (string) ($assignment['flow_key'] ?? ''),
                 'variant_key' => (string) ($assignment['variant_key'] ?? ''),
                 'seed' => (string) ($assignment['seed'] ?? ''),
+                'allocation_version' => (string) ($assignment['allocation_version'] ?? 'legacy'),
                 'assignments' => 0,
                 'cta1' => 0,
                 'handoff_attempted' => 0,
@@ -4460,6 +4463,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
             $this->tables[$table] = [];
         }
 
+        kiwi_assert_same(count($data), count($formats), 'Insert formats must match data columns.');
         $id = count($this->tables[$table]) + 1;
         $this->tables[$table][$id] = array_merge(['id' => $id], $data);
 
@@ -4520,7 +4524,16 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
     {
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
 
-        return array_values($this->tables[$summary_table] ?? []);
+        $rows = array_values($this->tables[$summary_table] ?? []);
+        $query = is_array($statement) ? $statement['query'] : $statement;
+        $args = is_array($statement) ? $statement['args'] : [];
+        preg_match_all('/(?:WHERE|AND) ([a-z_]+) = %s/', $query, $matches);
+        foreach ($matches[1] as $i => $field) {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($field, $args, $i): bool {
+                return ($row[$field] ?? '') === $args[$i];
+            }));
+        }
+        return $rows;
     }
 
     public function query($statement)
@@ -4559,7 +4572,8 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
                 (string) ($args[6] ?? ''),
-                (string) ($args[7] ?? '')
+                (string) ($args[7] ?? ''),
+                (string) ($args[8] ?? 'legacy')
             );
 
             if ($row_id === null) {
@@ -4574,6 +4588,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                     'flow_key' => (string) ($args[5] ?? ''),
                     'variant_key' => (string) ($args[6] ?? ''),
                     'seed' => (string) ($args[7] ?? ''),
+                    'allocation_version' => (string) ($args[8] ?? 'legacy'),
                     'assignments' => 0,
                     'cta1' => 0,
                     'handoff_attempted' => 0,
@@ -4600,7 +4615,8 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                 (string) ($args[1] ?? ''),
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
-                (string) ($args[4] ?? '')
+                (string) ($args[4] ?? ''),
+                (string) ($args[5] ?? 'legacy')
             );
 
             if ($row_id === null || !array_key_exists($counter, $this->tables[$summary_table][$row_id])) {
@@ -4618,7 +4634,8 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                 (string) ($args[1] ?? ''),
                 (string) ($args[2] ?? ''),
                 (string) ($args[3] ?? ''),
-                (string) ($args[4] ?? '')
+                (string) ($args[4] ?? ''),
+                (string) ($args[5] ?? 'legacy')
             );
 
             if ($row_id === null) {
@@ -4634,7 +4651,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         return false;
     }
 
-    private function find_summary_row_id(string $landing_key, string $service_key, string $variant_key, string $seed): ?int
+    private function find_summary_row_id(string $landing_key, string $service_key, string $variant_key, string $seed, string $allocation_version): ?int
     {
         $summary_table = $this->prefix . 'kiwi_sms_body_variant_summary';
 
@@ -4643,6 +4660,7 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
                 && (string) ($row['service_key'] ?? '') === $service_key
                 && (string) ($row['variant_key'] ?? '') === $variant_key
                 && (string) ($row['seed'] ?? '') === $seed
+                && (string) ($row['allocation_version'] ?? 'legacy') === $allocation_version
             ) {
                 return (int) $id;
             }
@@ -7985,8 +8003,8 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', f
     kiwi_assert_same('abcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'bare_id'), 'Expected bare variant to remove txn_ prefix.');
     kiwi_assert_same('ArcadeHeroabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'game_word', 'ArcadeHero'), 'Expected game-word variant to prepend deterministic seed.');
     kiwi_assert_same('ActiverJeuxabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'cta_phrase', 'ActiverJeux'), 'Expected CTA phrase variant to prepend deterministic seed.');
-    kiwi_assert_true(in_array($variant_key, ['as_is_txn_prefix', 'bare_id', 'game_word', 'cta_phrase'], true), 'Expected service to assign one of the four configured variants.');
-    kiwi_assert_true($variant_key === 'game_word' || $variant_key === 'cta_phrase' || $seed === '', 'Expected non-speaking variants to have no seed.');
+    kiwi_assert_true(in_array($variant_key, ['as_is_txn_prefix', 'game_word', 'cta_phrase', 'download_phrase'], true), 'Expected service to assign a configured active variant.');
+    kiwi_assert_true(in_array($variant_key, ['game_word', 'cta_phrase', 'download_phrase'], true) || $seed === '', 'Expected non-speaking variants to have no seed.');
     kiwi_assert_same((string) ($first['body'] ?? ''), (string) ($second['body'] ?? ''), 'Expected repeated body resolution for one transaction to stay stable.');
     kiwi_assert_same(1, count($repository->assignments), 'Expected service to create one idempotent assignment.');
 });
@@ -18567,3 +18585,5 @@ kiwi_run_test('Kiwi_Config exposes bounded operational-event cleanup defaults', 
 require_once __DIR__ . '/database-deployment-tests.php';
 require_once __DIR__ . '/landing-session-engagements-migration-tests.php';
 require_once __DIR__ . '/retention-archive-health-tests.php';
+
+require_once __DIR__ . '/sms-body-allocation-tests.php';
