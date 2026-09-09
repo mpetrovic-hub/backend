@@ -92,11 +92,26 @@ class Kiwi_Test_Sms_Allocation_Deployment_Wpdb extends Kiwi_Test_Database_Deploy
     public $ignore_alter = false;
     public $fail_key_inspection = false;
     public $alter_count = 0;
+    public $extra_unique = false;
     public $historical_totals = ['assignments' => 200, 'conv' => 12];
 
     public function get_results($statement, $output = ARRAY_A)
     {
         $sql = is_array($statement) ? $statement['query'] : $statement;
+        if (strpos($sql, 'SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART') === 0) {
+            $rows = [];
+            foreach ($this->key_columns as $column) {
+                $rows[] = ['INDEX_NAME' => 'variant_summary', 'COLUMN_NAME' => $column,
+                    'NON_UNIQUE' => $this->unique ? 0 : 1, 'SUB_PART' => $this->sub_part];
+            }
+            if ($this->extra_unique) {
+                foreach (['landing_key', 'service_key', 'variant_key', 'seed'] as $column) {
+                    $rows[] = ['INDEX_NAME' => 'renamed_legacy_unique', 'COLUMN_NAME' => $column, 'NON_UNIQUE' => 0, 'SUB_PART' => null];
+                }
+            }
+            if ($this->fail_key_inspection) { $this->last_error = 'inspection unavailable'; return null; }
+            return $rows;
+        }
         if (strpos($sql, 'SELECT COLUMN_NAME, NON_UNIQUE, SUB_PART') === 0) {
             $this->queries[] = $sql;
             if ($this->fail_key_inspection) {
@@ -206,5 +221,31 @@ kiwi_run_test('SMS schema new installation creates the canonical versioned key w
             'objects' => ['kiwi_sms_body_variant_summary']]], ['kiwi_sms_body_variant_summary' => $definition]);
         kiwi_assert_same(true, $service->apply()['ready'], 'New schema must pass the same versioned postconditions.');
         kiwi_assert_same(0, $wpdb->alter_count, 'No legacy key replacement on a new installation.');
+    } finally { $wpdb = $previous; }
+});
+
+
+kiwi_run_test('SMS schema rejects renamed legacy uniqueness with and without canonical key', function (): void {
+    global $wpdb;
+    $previous = $wpdb ?? null;
+    $results = [];
+    try {
+        foreach ([true, false] as $has_canonical) {
+            $wpdb = new Kiwi_Test_Sms_Allocation_Deployment_Wpdb();
+            $wpdb->extra_unique = true;
+            $all = require __DIR__ . '/../tools/database/schema-contract.php';
+            $definition = $all['kiwi_sms_body_variant_summary'];
+            $wpdb->key_columns = $has_canonical ? $definition['versioned_summary_key'] : [];
+            $wpdb->objects['abc_kiwi_sms_body_variant_summary'] = ['type' => 'BASE TABLE', 'columns' => $definition['columns'], 'indexes' => $definition['indexes']];
+            $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION] = Kiwi_Database_Deployment_Service::TARGET_SCHEMA_VERSION;
+            $step = new Kiwi_Test_Database_Schema_Step($wpdb, 'abc_kiwi_sms_body_variant_summary', $definition);
+            $service = new Kiwi_Test_Database_Deployment_Service([['name' => 'sms', 'repository' => $step,
+                'objects' => ['kiwi_sms_body_variant_summary']]], ['kiwi_sms_body_variant_summary' => $definition]);
+            $before = $service->status();
+            $applied = $service->apply();
+            $results[] = [$before['ready'], $applied['success'], $step->calls, $wpdb->alter_count];
+        }
+        kiwi_assert_same([[false, false, 0, 0], [false, false, 0, 0]], $results,
+            'Neither renamed-key path may pass status or enter schema writes.');
     } finally { $wpdb = $previous; }
 });

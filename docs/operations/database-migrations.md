@@ -311,7 +311,8 @@ five-column key directly. Repeated apply leaves an already-correct key alone.
 
 `status` checks the ordered key columns, uniqueness and absence of prefix lengths,
 so merely retaining an index with the old name cannot produce green status.
-Unexpected key definitions, inspection errors, ALTER failures and failed
+Unexpected key definitions (including additional unique indexes under other names),
+inspection errors, ALTER failures and failed
 postconditions stop the deployment without publishing the target schema version.
 
 Keep traffic and background writers paused while preparing the reviewed release
@@ -319,6 +320,12 @@ and running `status`, explicitly authorized `apply`, and a green post-apply
 `status`. Enable the new application behavior only afterward. This implementation
 and its synthetic tests do not authorize or execute a Production apply.
 Preserve the backup and verify historical totals before and after deployment.
-Application rollback must not drop the version column or revert the unique key:
-legacy code defaults new writes to `legacy`, so resume traffic only with a reviewed
-compatible application release. Never merge version histories as a rollback shortcut.
+Application rollback must not drop the version column or revert the unique key.
+The pre-#126 repository is NOT a compatible rollback release: its four-dimension
+UPDATE statements would increment both versions when their other dimensions match.
+Do not resume web, callback or background writers with that code. Keep writers
+paused until a reviewed release that preserves version-aware summary writes is
+available and tested, or roll forward to the corrected version-aware release.
+The `legacy` column default alone does not make old UPDATE statements safe.
+No compatibility shim for pre-version writers is provided by this issue. Never
+merge version histories as a rollback shortcut.

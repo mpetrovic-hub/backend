@@ -534,15 +534,24 @@ class Kiwi_Database_Deployment_Service
         global $wpdb;
         $this->reset_database_error();
         $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT COLUMN_NAME, NON_UNIQUE, SUB_PART FROM information_schema.STATISTICS
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = 'variant_summary'
-             ORDER BY SEQ_IN_INDEX",
+            "SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX",
             $table
         ), ARRAY_A);
         if (!is_array($rows) || $this->get_database_error() !== '') {
             throw new RuntimeException('SMS summary key inspection failed.');
         }
-        return $rows;
+        $summary_rows = [];
+        foreach ($rows as $row) {
+            $name = (string) ($row['INDEX_NAME'] ?? '');
+            if ($name === 'variant_summary') {
+                $summary_rows[] = $row;
+            } elseif ($name !== 'PRIMARY' && (int) ($row['NON_UNIQUE'] ?? 0) === 0) {
+                throw new RuntimeException('Unexpected additional SMS summary unique key; reviewed schema repair required.');
+            }
+        }
+        return $summary_rows;
     }
 
     private function inspect_seed_drift(array $contract_drift = []): array
