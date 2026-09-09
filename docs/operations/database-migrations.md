@@ -315,6 +315,17 @@ Unexpected key definitions (including additional unique indexes under other name
 inspection errors, ALTER failures and failed
 postconditions stop the deployment without publishing the target schema version.
 
+Both allocation-version columns are verified as `VARCHAR(50) NOT NULL DEFAULT
+'legacy'`, including MySQL/MariaDB literal-default representations. Existing
+NULL, blank, whitespace-padded or unsupported version values fail the read-only
+inspection. Before replacing the old four-column key, existing version columns
+must contain only `legacy`. Correctly versioned rows are allowed after the
+five-column key exists. Missing columns can be added canonically; malformed
+columns or ambiguous historical values require a separately reviewed repair.
+The generic apply does not guess a backfill or relabel historical records.
+These data postconditions inspect the existing assignments and summary, so allow
+for their read cost in the paused-writer deployment window.
+
 Keep traffic and background writers paused while preparing the reviewed release
 and running `status`, explicitly authorized `apply`, and a green post-apply
 `status`. Enable the new application behavior only afterward. This implementation

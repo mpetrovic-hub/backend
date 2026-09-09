@@ -177,10 +177,7 @@ class Kiwi_Sms_Body_Variant_Service
 
         $country = strtoupper(trim((string) ($landing_page['country'] ?? ($service['country'] ?? ''))));
 
-        $provider = strtolower(trim((string) ($landing_page['provider'] ?? ($service['provider'] ?? ''))));
-        $flow = strtolower(trim((string) ($landing_page['flow'] ?? ($service['flow'] ?? ''))));
-
-        if ($country !== 'FR' || $provider !== 'nth' || !in_array($flow, ['nth-fr-one-off', 'one-off'], true)) {
+        if ($country === '') {
             return false;
         }
 

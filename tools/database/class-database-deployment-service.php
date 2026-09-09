@@ -432,6 +432,14 @@ class Kiwi_Database_Deployment_Service
                 }
             }
 
+            if (!empty($definition['allocation_version_column']) && in_array('allocation_version', $columns, true)) {
+                try {
+                    $this->verify_allocation_version_column($object_name);
+                } catch (Throwable $error) {
+                    $drift[] = ['kind' => 'inspection_error', 'object' => $object_name, 'detail' => $error->getMessage()];
+                }
+            }
+
             if ($expected_type !== 'BASE TABLE') {
                 continue;
             }
@@ -508,6 +516,11 @@ class Kiwi_Database_Deployment_Service
         if ($columns !== ['landing_key', 'service_key', 'variant_key', 'seed']) {
             throw new RuntimeException('Unexpected SMS summary key columns; no key replacement allowed.');
         }
+        foreach ($this->schema_contract as $suffix => $definition) {
+            if (!empty($definition['allocation_version_column'])) {
+                $this->verify_allocation_version_column($wpdb->prefix . $suffix, true);
+            }
+        }
         $this->reset_database_error();
         $existing = $wpdb->get_results($wpdb->prepare(
             'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
@@ -526,6 +539,47 @@ class Kiwi_Database_Deployment_Service
         }
         if (array_column($this->sms_summary_index_rows($table), 'COLUMN_NAME') !== $target) {
             throw new RuntimeException('SMS summary key upgrade postcondition failed.');
+        }
+    }
+
+    private function verify_allocation_version_column(string $table, bool $require_legacy = false): void
+    {
+        global $wpdb;
+        $this->reset_database_error();
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'allocation_version'",
+            $table
+        ), ARRAY_A);
+        if (!is_array($rows) || $this->get_database_error() !== '') {
+            throw new RuntimeException('Allocation version metadata inspection failed.');
+        }
+        if ($rows === []) {
+            if ($require_legacy) {
+                return; // Pre-upgrade absence is repaired by canonical schema creation.
+            }
+            throw new RuntimeException('Allocation version metadata disappeared during inspection.');
+        }
+        $column = $rows[0];
+        $default = (string) ($column['COLUMN_DEFAULT'] ?? '');
+        if ($default === "'legacy'") {
+            $default = 'legacy'; // MariaDB may quote literal defaults in information_schema.
+        }
+        if (count($rows) !== 1 || strtolower((string) $column['COLUMN_TYPE']) !== 'varchar(50)'
+            || $column['IS_NULLABLE'] !== 'NO' || $default !== 'legacy') {
+            throw new RuntimeException('Noncanonical allocation version column; reviewed schema repair required.');
+        }
+        $condition = $require_legacy ? "BINARY allocation_version <> 'legacy'" :
+            "allocation_version IS NULL OR allocation_version = ''
+             OR BINARY allocation_version <> BINARY TRIM(allocation_version)
+             OR allocation_version REGEXP '[^A-Za-z0-9._:-]'";
+        $this->reset_database_error();
+        $invalid = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}` WHERE {$condition}");
+        if ($this->get_database_error() !== '' || $invalid === null || !is_numeric($invalid)) {
+            throw new RuntimeException('Allocation version data inspection failed.');
+        }
+        if ((int) $invalid !== 0) {
+            throw new RuntimeException('Ambiguous allocation version history; reviewed data repair required.');
         }
     }
 

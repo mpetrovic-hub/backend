@@ -35,7 +35,7 @@ kiwi_run_test('SMS allocation covers all 100 buckets with exact weights and all 
     kiwi_assert_same(100, count($repository->assignments), 'Repeated requests must reuse their assignment.');
 });
 
-kiwi_run_test('SMS allocation preserves historical bodies and excludes other countries and flows', function (): void {
+kiwi_run_test('SMS allocation preserves historical bodies and honors the configured country allow-list', function (): void {
     $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
     $service = new Kiwi_Sms_Body_Variant_Service(new Kiwi_Test_Config(), $repository);
     $landing = ['key' => 'lp5-fr', 'provider' => 'nth', 'country' => 'FR', 'flow' => 'nth-fr-one-off', 'service_key' => 'nth_fr_one_off_jplay'];
@@ -44,8 +44,8 @@ kiwi_run_test('SMS allocation preserves historical bodies and excludes other cou
     $result = $service->build_variant_body('JPLAY', '84072', $landing, [], ['transaction_id' => 'txn_historical']);
     kiwi_assert_same('JPLAY historical', $result['body'], 'Existing body must never be reassigned.');
     kiwi_assert_same('legacy', $result['assignment']['allocation_version'], 'Historical version remains legacy.');
-    foreach ([['country' => 'PL'], ['flow' => 'pin'], ['provider' => 'dimoco']] as $override) {
-        kiwi_assert_same(null, $service->build_variant_body('JPLAY', '84072', array_merge($landing, $override), [], ['transaction_id' => 'txn_excluded']), 'Exclude other integrations and countries.');
+    foreach ([['country' => 'PL']] as $override) {
+        kiwi_assert_same(null, $service->build_variant_body('JPLAY', '84072', array_merge($landing, $override), [], ['transaction_id' => 'txn_excluded']), 'Default allow-list excludes unconfigured countries.');
     }
 });
 
@@ -93,11 +93,18 @@ class Kiwi_Test_Sms_Allocation_Deployment_Wpdb extends Kiwi_Test_Database_Deploy
     public $fail_key_inspection = false;
     public $alter_count = 0;
     public $extra_unique = false;
+    public $version_metadata = ['COLUMN_TYPE' => 'varchar(50)', 'IS_NULLABLE' => 'NO', 'COLUMN_DEFAULT' => 'legacy'];
+    public $invalid_versions = 0;
+    public $nonlegacy_versions = 0;
     public $historical_totals = ['assignments' => 200, 'conv' => 12];
 
     public function get_results($statement, $output = ARRAY_A)
     {
         $sql = is_array($statement) ? $statement['query'] : $statement;
+        if (strpos($sql, 'SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT') === 0) {
+            $table = $statement['args'][0];
+            return in_array('allocation_version', $this->objects[$table]['columns'] ?? [], true) ? [$this->version_metadata] : [];
+        }
         if (strpos($sql, 'SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART') === 0) {
             $rows = [];
             foreach ($this->key_columns as $column) {
@@ -123,6 +130,15 @@ class Kiwi_Test_Sms_Allocation_Deployment_Wpdb extends Kiwi_Test_Database_Deploy
             }, $this->key_columns);
         }
         return parent::get_results($statement, $output);
+    }
+
+    public function get_var($statement)
+    {
+        $sql = is_array($statement) ? $statement['query'] : $statement;
+        if (strpos($sql, 'SELECT COUNT(*) FROM') === 0) {
+            return strpos($sql, "allocation_version <> 'legacy'") !== false ? $this->nonlegacy_versions : $this->invalid_versions;
+        }
+        return parent::get_var($statement);
     }
 
     public function query($statement)
@@ -247,5 +263,43 @@ kiwi_run_test('SMS schema rejects renamed legacy uniqueness with and without can
         }
         kiwi_assert_same([[false, false, 0, 0], [false, false, 0, 0]], $results,
             'Neither renamed-key path may pass status or enter schema writes.');
+    } finally { $wpdb = $previous; }
+});
+
+
+kiwi_run_test('SMS shared service preserves configured eligibility without Aggregator-specific gates', function (): void {
+    $config = new class extends Kiwi_Test_Config {
+        public function get_sms_body_variant_experiment_countries(): array { return ['FR', 'PL']; }
+    };
+    $service = new Kiwi_Sms_Body_Variant_Service($config, new Kiwi_Test_Sms_Body_Variant_Repository());
+    $result = $service->build_variant_body('TEST', '12345', ['key' => 'synthetic', 'country' => 'PL', 'provider' => 'synthetic', 'flow' => 'synthetic'], [], ['transaction_id' => 'txn_generic_policy']);
+    kiwi_assert_true(is_array($result), 'The shared service honors the injected country policy; integration routing belongs to callers.');
+});
+
+kiwi_run_test('SMS schema rejects malformed existing version columns before key replacement', function (): void {
+    global $wpdb;
+    $previous = $wpdb ?? null;
+    $results = [];
+    try {
+        foreach (['valid_legacy', 'wrong_type', 'nullable', 'wrong_default', 'invalid_rows', 'nonlegacy_before_upgrade'] as $mode) {
+            $wpdb = new Kiwi_Test_Sms_Allocation_Deployment_Wpdb();
+            $all = require __DIR__ . '/../tools/database/schema-contract.php';
+            $definition = $all['kiwi_sms_body_variant_summary'];
+            $wpdb->objects['abc_kiwi_sms_body_variant_summary'] = ['type' => 'BASE TABLE', 'columns' => $definition['columns'], 'indexes' => $definition['indexes']];
+            if ($mode === 'wrong_type') { $wpdb->version_metadata['COLUMN_TYPE'] = 'varchar(10)'; }
+            if ($mode === 'nullable') { $wpdb->version_metadata['IS_NULLABLE'] = 'YES'; }
+            if ($mode === 'wrong_default') { $wpdb->version_metadata['COLUMN_DEFAULT'] = ''; }
+            if ($mode === 'invalid_rows') { $wpdb->invalid_versions = 1; }
+            if ($mode === 'nonlegacy_before_upgrade') { $wpdb->nonlegacy_versions = 1; }
+            $GLOBALS['kiwi_test_options'][Kiwi_Database_Deployment_Service::SCHEMA_VERSION_OPTION] = '2026-07-23-1';
+            $step = new Kiwi_Test_Database_Schema_Step($wpdb, 'abc_kiwi_sms_body_variant_summary', $definition);
+            $service = new Kiwi_Test_Database_Deployment_Service([['name' => 'sms', 'repository' => $step,
+                'objects' => ['kiwi_sms_body_variant_summary']]], ['kiwi_sms_body_variant_summary' => $definition]);
+            $result = $service->apply();
+            $results[$mode] = [$result['success'], $wpdb->alter_count];
+        }
+        kiwi_assert_same(['valid_legacy' => [true, 1], 'wrong_type' => [false, 0], 'nullable' => [false, 0],
+            'wrong_default' => [false, 0], 'invalid_rows' => [false, 0], 'nonlegacy_before_upgrade' => [false, 0]], $results,
+            'Reuse only canonical, correctly initialized version columns; refuse ambiguous repairs.');
     } finally { $wpdb = $previous; }
 });
