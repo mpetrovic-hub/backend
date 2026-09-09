@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Database_Deployment_Service
 {
     public const SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    public const TARGET_SCHEMA_VERSION = '2026-07-23-1';
+    public const TARGET_SCHEMA_VERSION = '2026-09-09-1';
 
     private const LOCK_PREFIX = 'kiwi_backend_database_apply_';
 
@@ -139,6 +139,12 @@ class Kiwi_Database_Deployment_Service
                 $result['drift'] = $legacy_drift;
 
                 return $result;
+            }
+
+            try {
+                $this->upgrade_sms_summary_key();
+            } catch (Throwable $error) {
+                return $this->failure_result('apply:sms_summary_key', 'schema_command_failed', $error->getMessage());
             }
 
             foreach ($this->schema_steps as $step) {
@@ -448,6 +454,21 @@ class Kiwi_Database_Deployment_Service
                 continue;
             }
 
+            if (isset($definition['versioned_summary_key'])) {
+                try {
+                    $key_rows = $this->sms_summary_index_rows($object_name);
+                    $valid = array_column($key_rows, 'COLUMN_NAME') === $definition['versioned_summary_key'];
+                    foreach ($key_rows as $key_row) {
+                        $valid = $valid && (int) $key_row['NON_UNIQUE'] === 0 && $key_row['SUB_PART'] === null;
+                    }
+                    if (!$valid) {
+                        $drift[] = ['kind' => 'index_definition_mismatch', 'object' => $object_name, 'index' => 'variant_summary'];
+                    }
+                } catch (Throwable $error) {
+                    $drift[] = ['kind' => 'inspection_error', 'object' => $object_name, 'detail' => $error->getMessage()];
+                }
+            }
+
             foreach ((array) ($definition['indexes'] ?? []) as $index) {
                 if (!in_array($index, $indexes, true)) {
                     $drift[] = [
@@ -460,6 +481,68 @@ class Kiwi_Database_Deployment_Service
         }
 
         return ['drift' => $drift];
+    }
+
+    /** Runs only inside the external apply lock, before dbDelta. */
+    private function upgrade_sms_summary_key(): void
+    {
+        global $wpdb;
+        if (!isset($this->schema_contract['kiwi_sms_body_variant_summary']['versioned_summary_key'])) {
+            return;
+        }
+        $table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+        $rows = $this->sms_summary_index_rows($table);
+        if ($rows === []) {
+            return; // New installation: canonical dbDelta creates the complete key.
+        }
+        $target = $this->schema_contract['kiwi_sms_body_variant_summary']['versioned_summary_key'];
+        $columns = array_column($rows, 'COLUMN_NAME');
+        foreach ($rows as $row) {
+            if ((int) $row['NON_UNIQUE'] !== 0 || $row['SUB_PART'] !== null) {
+                throw new RuntimeException('Unexpected SMS summary key metadata; no key replacement allowed.');
+            }
+        }
+        if ($columns === $target) {
+            return;
+        }
+        if ($columns !== ['landing_key', 'service_key', 'variant_key', 'seed']) {
+            throw new RuntimeException('Unexpected SMS summary key columns; no key replacement allowed.');
+        }
+        $this->reset_database_error();
+        $existing = $wpdb->get_results($wpdb->prepare(
+            'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+            $table
+        ), ARRAY_A);
+        if ($this->get_database_error() !== '') {
+            throw new RuntimeException('SMS summary column inspection failed.');
+        }
+        $add_column = in_array('allocation_version', array_column((array) $existing, 'COLUMN_NAME'), true)
+            ? '' : "ADD COLUMN allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy', ";
+        $this->mutation_started = true;
+        $result = $wpdb->query("ALTER TABLE `{$table}` {$add_column}DROP INDEX variant_summary,
+            ADD UNIQUE KEY variant_summary (landing_key, service_key, variant_key, seed, allocation_version)");
+        if ($result === false || $this->get_database_error() !== '') {
+            throw new RuntimeException('SMS summary key upgrade failed.');
+        }
+        if (array_column($this->sms_summary_index_rows($table), 'COLUMN_NAME') !== $target) {
+            throw new RuntimeException('SMS summary key upgrade postcondition failed.');
+        }
+    }
+
+    private function sms_summary_index_rows(string $table): array
+    {
+        global $wpdb;
+        $this->reset_database_error();
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT COLUMN_NAME, NON_UNIQUE, SUB_PART FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = 'variant_summary'
+             ORDER BY SEQ_IN_INDEX",
+            $table
+        ), ARRAY_A);
+        if (!is_array($rows) || $this->get_database_error() !== '') {
+            throw new RuntimeException('SMS summary key inspection failed.');
+        }
+        return $rows;
     }
 
     private function inspect_seed_drift(array $contract_drift = []): array

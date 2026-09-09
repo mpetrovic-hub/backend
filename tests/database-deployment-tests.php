@@ -651,7 +651,7 @@ kiwi_run_test('Kiwi database apply blocks newer and unknown schema versions', fu
 
     $previous_wpdb = $wpdb ?? null;
 
-    foreach (['2026-07-24-1', 'future-release'] as $installed_version) {
+    foreach (['2099-01-01-1', 'future-release'] as $installed_version) {
         $wpdb = new Kiwi_Test_Database_Deployment_Wpdb();
         $contract = kiwi_test_database_contract()['kiwi_test_table'];
         $wpdb->objects['abc_kiwi_test_table'] = [

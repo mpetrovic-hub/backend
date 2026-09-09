@@ -28,7 +28,7 @@ Event model:
 - `cta1`, `cta2`, `cta3`: incremented through the KPI event endpoint into one summary row per landing page.
 - Landing engagement events: stored per landing/session for `page_loaded` and `cta_click`; `cta_click` can include `cta_step=cta1|cta2|cta3` for step-specific engagement columns.
 - SMS handoff events: stored separately for `sms:`/`smsto:` CTA diagnostics; supported events are `sms_handoff_attempted`, `sms_handoff_hidden`, `sms_handoff_returned`, and `sms_handoff_no_hide`.
-- SMS body variant events: assignment, CTA1, handoff, and conversion counters are aggregated by landing/service/variant/seed.
+- SMS body variant events: assignment, CTA1, handoff, and conversion counters are aggregated by landing/service/variant/seed/allocation version.
 - `conv`: incremented once on first confirmed conversion match in attribution resolver.
 
 Engagement, handoff, and SMS-body variant events do not mutate `wp_kiwi_landing_kpi_summary` unless explicitly listed above.
@@ -187,3 +187,63 @@ When validating analytics behavior:
 10. Include sales without `attribution_metric_date`; they must not appear in the main daily summary until repaired/backfilled.
 11. Verify IPv4, IPv6, and invalid/missing-IP buckets come from stored landing-session columns.
 12. Run the same refresh twice and confirm row counts and totals remain unchanged.
+
+
+## Versioned SMS body allocation
+
+The FR NTH one-off integration uses the fixed `fr_sms_v2` allocation on all its
+French landing pages. The eight visible entries are: `as_is_txn_prefix` 10%,
+`BonusJeux` 20%, `TopJeux` 20%, `JouerPlus` 20%, `AccederJeux` 8%, `JeuxMax` 8%,
+`AccederMaintenant` 8%, and `GameQuest` 6%. `AccederMaintenant` uses the
+`download_phrase` category; its text makes no file-download promise.
+
+One stable SHA-256 bucket (0–99) selects the entry and its version together.
+Existing assignments, including historical `bare_id` bodies, are reused unchanged.
+No daily rebalancing or automatic replacement runs. A later fixed evaluation
+round can authorize replacement, which must receive a new `allocation_version`.
+
+`allocation_version` is a generic dimension in both assignments and the summary.
+Existing rows default to `legacy`; new assignments record `fr_sms_v2`. Events
+always increment the version persisted on their assignment, including late
+callbacks for historical assignments. The summary's unique identity is
+`landing_key, service_key, variant_key, seed, allocation_version`.
+Repository reads can filter by `allocation_version`; unfiltered reads retain
+separate rows for each version.
+
+Assignments are detail/correlation records; the versioned summary is the durable
+reporting history. This issue does not introduce assignment retention. A future
+retention policy must preserve sufficient callback/attribution time. Do not empty,
+rename, or periodically recreate either table to reset an experiment.
+
+### FR Download now evaluation
+
+Allocation scope and reporting scope differ: **FR Download now** pools only
+`lp5-fr` and `lp6-fr`. Other French landing pages receive the allocation but must
+not enter this pool. Sum counters first; never average per-page percentages.
+Keep `legacy` and `fr_sms_v2` separate and compare against `as_is_txn_prefix`
+within each version. This read-only query uses the standard `wp_` prefix; replace
+only the prefix for installations that use a different one:
+
+```sql
+SELECT allocation_version, service_key, variant_key, seed,
+       SUM(assignments) AS assignments,
+       SUM(handoff_attempted) AS handoff_attempted,
+       SUM(conv) AS conv,
+       ROUND(100.0 * SUM(conv) / NULLIF(SUM(handoff_attempted), 0), 2) AS CR_smsvar,
+       ROUND(100.0 * SUM(conv) / NULLIF(SUM(assignments), 0), 2) AS conv_per_assignments
+FROM wp_kiwi_sms_body_variant_summary
+WHERE landing_key IN ('lp5-fr', 'lp6-fr')
+GROUP BY allocation_version, service_key, variant_key, seed
+ORDER BY allocation_version, service_key, variant_key, seed;
+```
+
+`CR_smsvar` is the primary percentage; `conv_per_assignments` is the control
+percentage. A missing denominator returns `NULL` (no measurable rate).
+This is a reporting query, not a new Statistics UI or scheduler.
+
+Before the PR, validate weights, SMS forms, idempotency, version separation and
+this reporting query with synthetic data. After deployment, count the distribution
+read-only after one to two days with sufficient traffic and exclude new `bare_id`
+assignments. At the next fixed evaluation round, compare both metrics with enough
+data and allowance for delayed conversions. These live checks are post-deployment
+follow-up, not PR prerequisites.

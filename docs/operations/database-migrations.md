@@ -296,3 +296,29 @@ Record:
 - any remaining rollout checklist items.
 
 Do not mark the GitHub Issue complete automatically; the user decides completion after the rollout evidence is reviewed.
+
+
+## SMS allocation version upgrade (Issue #126)
+
+Target schema version: `2026-09-09-1`. The external `kiwi database apply`
+adds `allocation_version VARCHAR(50) NOT NULL DEFAULT 'legacy'` to SMS assignments
+and summary. Under its existing database lock, it replaces the recognized old
+four-column `variant_summary` unique key with the five-column key including
+`allocation_version`. When needed, the summary column and key replacement happen
+in one ALTER statement before canonical dbDelta runs. Existing counters stay in
+`legacy`; no rows are deleted or rebuilt. New installations get the canonical
+five-column key directly. Repeated apply leaves an already-correct key alone.
+
+`status` checks the ordered key columns, uniqueness and absence of prefix lengths,
+so merely retaining an index with the old name cannot produce green status.
+Unexpected key definitions, inspection errors, ALTER failures and failed
+postconditions stop the deployment without publishing the target schema version.
+
+Keep traffic and background writers paused while preparing the reviewed release
+and running `status`, explicitly authorized `apply`, and a green post-apply
+`status`. Enable the new application behavior only afterward. This implementation
+and its synthetic tests do not authorize or execute a Production apply.
+Preserve the backup and verify historical totals before and after deployment.
+Application rollback must not drop the version column or revert the unique key:
+legacy code defaults new writes to `legacy`, so resume traffic only with a reviewed
+compatible application release. Never merge version histories as a rollback shortcut.
