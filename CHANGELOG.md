@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-09-21:
+- [SMS Assignment Generations] Prepare version-aware assignments, summary identities and all seven counters while preserving the original legacy allocation. Retain stored bodies/tokens including future download phrases. Add the separate resumable online migration and explicitly selected permanent schema metadata checks; no Production rollout or new FR allocation is included.
+
 2026-08-31:
 - [NTH Premium SMS] Treat `submitMessage` as accepted only for readable HTTP-2xx XML with `resultCode=100`; persist rejected result diagnostics as terminal `mt_submit_failed`, avoid false pending blocks, and track service-correlated NTH submit incidents through the shared Operational Event lifecycle without request credentials or subscriber/session data.
 

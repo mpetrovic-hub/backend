@@ -109,6 +109,116 @@ An old backup may contain missing objects or legacy columns. Keep the site in ma
 - `legacy_column` or `legacy_table` means stop. The generic runner intentionally does not transform, rename, or delete that data. Use the reviewed migration-specific external artifact for that exact state.
 - Re-run `status` after every approved operation. Do not open the site until it is green.
 
+## SMS allocation-version preparation (Issue #122)
+
+Schema target `2026-09-21-1` adds `allocation_version VARCHAR(50) NOT NULL
+DEFAULT 'legacy'` to assignments and summaries. The ordered unique summary
+identity is `(landing_key, service_key, variant_key, seed, allocation_version)`.
+The general deployment contract explicitly opts these two column definitions
+and the summary key into detail verification; other metadata (including the
+engagement migration's detailed contract) is not implicitly enabled. Unexpected
+additional unique summary indexes also block readiness. Generic `apply` refuses
+drift on existing SMS tables: it must not use `dbDelta` to perform this migration.
+A new installation receives the canonical target tables directly.
+
+The separate entrypoint is
+`tools/database/migrations/sms-body-variant-allocation-version.php`; its service
+is `tools/database/migrations/class-sms-body-variant-allocation-version-migration-service.php`.
+Both use the actual WordPress prefix. Neither is loaded by application runtime.
+
+Before a Production attempt, the human approves the exact release and target,
+downloads a current complete Hostinger database backup, and confirms its protected
+location. Check that both SMS tables can be restored in an isolated local database.
+Record the current schema and consistent baseline facts/counters; keep historical
+summary discrepancies separate from this migration. Do not send synthetic sales,
+SMS, callbacks, or affiliate requests to Production.
+
+Keep the existing application active during preparation. Stage the reviewed
+`tools/database/` artifact tree separately from the active plugin (including its
+schema contract, deployment service and historical migration dependencies).
+The existing plugin remains active and supplies its existing repository classes;
+only the staged artifact supplies the new schema inspection/migration code.
+From the WordPress root, substituting the reviewed absolute staging path:
+
+```bash
+wp --require=/path/to/staged/tools/database/migrations/sms-body-variant-allocation-version.php kiwi database migration sms-body-variant-allocation-version check
+wp --require=/path/to/staged/tools/database/migrations/sms-body-variant-allocation-version.php kiwi database migration sms-body-variant-allocation-version apply
+wp --require=/path/to/staged/tools/database/kiwi-database.php kiwi database status
+```
+
+`check` is read-only and validates the SMS migration state. It does not assert
+whole-installation readiness. Supported source version is `2026-07-23-1`:
+
+- both columns absent and the original four-part unique key;
+- assignment column present, summary column absent, original key;
+- both columns present with the original key;
+- both columns and the complete five-part target key already present.
+
+Existing version columns must have the exact target definition. Before a
+remaining structural step, existing version values must be exactly `legacy`.
+Complete target structures accept later generations; repeated apply never resets
+them. Empty versions, unexpected columns/index definitions, unknown partial
+states and unrecognized/newer schema versions fail closed. Published target
+version with an incomplete structure is also rejected.
+
+`apply` holds the existing non-waiting deployment advisory lock and sets
+`SET SESSION lock_wait_timeout=0` on its dedicated short-lived CLI connection.
+It adds each missing column with `ALGORITHM=INSTANT`, then replaces the summary
+key in one `ALTER TABLE ... DROP INDEX ... ADD UNIQUE KEY ... ALGORITHM=INPLACE,
+LOCK=NONE`. There is no interval without a unique key, fallback to a more blocking
+algorithm, automatic retry, application write pause, table clearing, or backfill.
+A busy metadata lock or unsupported algorithm returns failure immediately.
+Per-step results report what succeeded without row data or raw database errors.
+
+On any failure, keep compatible application code active and preserve successful
+steps. Do not remove added columns, restore a backup, kill another database
+session, or activate the new application. Inspect the reported state and cause
+read-only. A human must explicitly authorize each later `apply`; it rechecks
+state and skips completed steps. A failed final verification may leave all
+structural steps complete while the source version remains installed. Resolve
+the reported cause before an authorized continuation. Version persistence occurs
+only after target checks and the full existing deployment schema/seed/legacy gate
+pass. Run the general `status` check and verify data preservation before enabling
+the reviewed version-aware application.
+
+Record the exact application commit as the prepared return release for #126.
+This release still creates only `legacy` assignments with the original four
+categories, words and weights. It can read stored `download_phrase` bodies and
+count later-generation events. After #126 ever produces a new generation, never
+return to the original version-blind repository. That repository can update both
+generations through its old four-part filter. Return only to this verified #122
+application release while retaining the database and all stored generations.
+
+After separately authorized activation, observe real new assignments and events
+read-only for an initial 15 minutes. Compare related facts and all seven counters
+without mistaking in-flight writes or existing historical differences for new
+losses. Inspect operational errors. Missing event types remain "not yet observed",
+not passed. Record commit, schema result and sanitized observations; the human
+accepts the rollout before #126 may merge/activate. Further observation after one
+or two days requires an explicitly assigned task; this code schedules none.
+
+Code return and data restoration are distinct, separately authorized decisions.
+Unexpected data loss requires a concrete recovery proposal accounting for all
+legitimate writes since the backup, never an automatic full restore. Conditional
+failure actions that did not occur are recorded as not required. Existing
+Operational Event failure/recovery responsibilities below still apply.
+
+### Validation boundary
+
+Project tests cover version-separated counters/rates/filters, duplicate and late
+events, original selection, stored future bodies/tokens, migration transitions,
+metadata drift, opt-in general detail checks and the command's early WP-CLI
+lifecycle through test doubles. Existing engagement migration tests remain intact.
+The temporary MariaDB 11.8.9 rehearsal executes actual migration/repository SQL
+against synthetic InnoDB tables: all supported stages, preservation, repeated
+apply with multiple generations, concurrent old writers and legacy-only mixed
+writers, real metadata/advisory locks, explicit continuation, negative metadata
+cases and blocked final verification. It also loads the original repository with
+the new external migration. The rehearsal limits the deployment contract to the
+SMS tables and simulates WordPress options; it is not a full WordPress, WP-CLI,
+HTTP, OPcache, Hostinger-load or NTH end-to-end test. Production traffic observation
+and backup/restore verification remain separate authorized deployment work.
+
 ## Landing-session engagement table rename
 
 Issue #96 changes the shared landing-session engagement table from

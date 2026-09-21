@@ -96,6 +96,7 @@ class Kiwi_Sms_Body_Variant_Service
             'visible_token' => $visible_token,
             'variant_key' => $variant_key,
             'seed' => $seed,
+            'allocation_version' => 'legacy',
             'sms_body' => $body,
             'raw_context' => [
                 'source' => 'primary_cta',
@@ -150,7 +151,7 @@ class Kiwi_Sms_Body_Variant_Service
             return $bare_id;
         }
 
-        if ($variant_key === 'game_word' || $variant_key === 'cta_phrase') {
+        if (in_array($variant_key, ['game_word', 'cta_phrase', 'download_phrase'], true)) {
             $seed = $this->sanitize_token($seed, 50);
 
             return $seed . $bare_id;

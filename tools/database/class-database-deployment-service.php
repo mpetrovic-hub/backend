@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
 class Kiwi_Database_Deployment_Service
 {
     public const SCHEMA_VERSION_OPTION = 'kiwi_backend_db_schema_version';
-    public const TARGET_SCHEMA_VERSION = '2026-07-23-1';
+    public const TARGET_SCHEMA_VERSION = '2026-09-21-1';
 
     private const LOCK_PREFIX = 'kiwi_backend_database_apply_';
 
@@ -126,7 +126,7 @@ class Kiwi_Database_Deployment_Service
             $legacy_drift = array_values(array_filter(
                 $preflight_drift,
                 static function (array $drift): bool {
-                    return in_array(($drift['kind'] ?? ''), ['legacy_column', 'legacy_table'], true);
+                    return in_array(($drift['kind'] ?? ''), ['legacy_column', 'legacy_table', 'migration_required'], true);
                 }
             ));
 
@@ -330,7 +330,7 @@ class Kiwi_Database_Deployment_Service
         return $this->get_installed_schema_version() === $schema_version;
     }
 
-    private function inspect_contract(array $contract): array
+    protected function inspect_contract(array $contract): array
     {
         global $wpdb;
 
@@ -388,6 +388,7 @@ class Kiwi_Database_Deployment_Service
                 continue;
             }
 
+            $object_drift_start = count($drift);
             $column_rows = $wpdb->get_results(
                 $wpdb->prepare(
                     'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
@@ -457,9 +458,87 @@ class Kiwi_Database_Deployment_Service
                     ];
                 }
             }
+            $drift = array_merge($drift, $this->inspect_deployment_details($object_name, $definition));
+            if (!empty($definition['migration_required_on_drift']) && count($drift) > $object_drift_start) {
+                $drift[] = ['kind' => 'migration_required', 'object' => $object_name];
+            }
         }
 
         return ['drift' => $drift];
+    }
+
+    /** Detail metadata is opt-in; historical migration contracts remain independent. */
+    protected function inspect_deployment_details(string $table, array $definition): array
+    {
+        global $wpdb;
+        $drift = [];
+        $details = (array) ($definition['deployment_details'] ?? []);
+        foreach ((array) ($details['columns'] ?? []) as $column) {
+            $this->reset_database_error();
+            $rows = $wpdb->get_results($wpdb->prepare(
+                'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s',
+                $table, $column
+            ), ARRAY_A);
+            if ($this->get_database_error() !== '' || !is_array($rows)) {
+                $drift[] = ['kind' => 'inspection_error', 'object' => $table, 'column' => $column];
+                continue;
+            }
+            $expected = $definition['column_metadata'][$column] ?? null;
+            $row = count($rows) === 1 ? $rows[0] : [];
+            $default = $row['COLUMN_DEFAULT'] ?? null;
+            // MariaDB quotes string defaults; MySQL returns them without quotes.
+            if (is_string($default) && strlen($default) >= 2 && $default[0] === "'" && substr($default, -1) === "'") {
+                $default = str_replace("''", "'", substr($default, 1, -1));
+            }
+            $actual = [
+                'type' => strtolower(trim((string) ($row['COLUMN_TYPE'] ?? ''))),
+                'nullable' => ($row['IS_NULLABLE'] ?? '') === 'YES',
+                'default' => $default,
+                'extra' => strtolower(trim((string) ($row['EXTRA'] ?? ''))),
+            ];
+            if (empty($row) || !is_array($expected) || $actual !== $expected) {
+                $drift[] = ['kind' => 'column_definition_mismatch', 'object' => $table, 'column' => $column];
+            }
+        }
+        $index_names = (array) ($details['indexes'] ?? []);
+        $allowed_unique = $definition['deployment_unique_indexes'] ?? null;
+        if ($index_names === [] && $allowed_unique === null) {
+            return $drift;
+        }
+        $this->reset_database_error();
+        $rows = $wpdb->get_results($wpdb->prepare(
+            'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART, INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+            $table
+        ), ARRAY_A);
+        if ($this->get_database_error() !== '' || !is_array($rows)) {
+            $drift[] = ['kind' => 'inspection_error', 'object' => $table];
+            return $drift;
+        }
+        $indexes = [];
+        foreach ($rows as $row) {
+            $name = (string) ($row['INDEX_NAME'] ?? '');
+            $indexes[$name][] = $row;
+            if (is_array($allowed_unique) && (string) ($row['NON_UNIQUE'] ?? '') === '0' && !in_array($name, $allowed_unique, true)) {
+                $drift[] = ['kind' => 'unexpected_unique_index', 'object' => $table, 'index' => $name];
+            }
+        }
+        foreach ($index_names as $name) {
+            $expected = $definition['index_metadata'][$name] ?? null;
+            $parts = $indexes[$name] ?? [];
+            $valid = is_array($expected) && count($parts) === count($expected['columns'] ?? []);
+            foreach ($parts as $i => $part) {
+                $valid = $valid
+                    && (int) ($part['SEQ_IN_INDEX'] ?? 0) === $i + 1
+                    && (string) ($part['NON_UNIQUE'] ?? '') === (!empty($expected['unique']) ? '0' : '1')
+                    && ($part['COLUMN_NAME'] ?? null) === ($expected['columns'][$i] ?? null)
+                    && ($part['SUB_PART'] === null ? null : (int) $part['SUB_PART']) === ($expected['sub_parts'][$i] ?? null)
+                    && strtoupper((string) ($part['INDEX_TYPE'] ?? '')) === ($expected['type'] ?? '');
+            }
+            if (!$valid || $parts === []) {
+                $drift[] = ['kind' => 'index_definition_mismatch', 'object' => $table, 'index' => $name];
+            }
+        }
+        return $drift;
     }
 
     private function inspect_seed_drift(array $contract_drift = []): array
