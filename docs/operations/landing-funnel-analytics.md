@@ -98,6 +98,28 @@ The main summary UI/CSV does not emit sale ID lists, transaction ID lists, `tkzo
 - `wp_kiwi_v_load_to_cta_by_tksource_tkzone`: plugin-managed legacy/debug view for traffic-source funnel analysis, using `2026-05-12 20:00:00` as the default lower bound for reliable `tksource`/`tkzone` data.
 - `wp_kiwi_v_one_for_all`: plugin-managed analytics view for pivot/export work outside the shortcode UI.
 
+## SMS assignment generations
+
+SMS assignments and summaries store `allocation_version` (default `legacy`).
+Summary identity and all seven counters (`assignments`, `cta1`,
+`handoff_attempted`, `handoff_hidden`, `handoff_no_hide`, `handoff_returned`, `conv`)
+use the assignment's stored generation. Late events never adopt the currently
+active generation. Existing rates are recomputed within the same five-part
+identity; repository reads optionally filter `allocation_version` and otherwise
+return separate generation rows.
+
+Issue #122 preserves the previous allocation categories, seed lists, weights and
+deterministic selection; new assignments remain `legacy`. Existing SMS bodies,
+visible tokens and generations remain unchanged, including stored `bare_id` and
+`download_phrase`/`AccederMaintenant` assignments from a later release. This is
+history compatibility, not activation of a new allocation or a reporting cohort.
+
+Assignment/event facts and summary updates retain their existing separate-write
+behavior. No historical repair, retry journal, transactional redesign or reversal
+of business facts is introduced. Existing historical summary discrepancies need
+separate investigation. Schema preparation and the safe return-release boundary
+are documented in [Database migrations](database-migrations.md#sms-allocation-version-preparation-issue-122).
+
 ## Main daily summary
 
 `wp_kiwi_landing_funnel_daily_summary` is the persistent target model for daily landing-funnel analytics.
