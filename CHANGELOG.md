@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-09-24:
+- [FR NTH SMS Allocation] Select the eight approved weighted `fr_sms_v2` entries from an NTH-owned configuration for eligible France one-off landings. Keep selection generic, preserve existing assignments/tokens and experiment switches, and document tested application-only return to the version-aware #122 release with both generations retained. Production rollout remains separately authorized.
+
 2026-09-21:
 - [SMS Assignment Generations] Prepare version-aware assignments, summary identities and all seven counters while preserving the original legacy allocation. Retain stored bodies/tokens including future download phrases. Add the separate resumable online migration and explicitly selected permanent schema metadata checks; no Production rollout or new FR allocation is included.
 

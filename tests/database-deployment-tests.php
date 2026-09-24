@@ -1253,10 +1253,11 @@ kiwi_run_test('Actual SMS repository keeps late legacy events separate from new 
     } finally { $wpdb = $previous; }
 });
 
-kiwi_run_test('Prepared SMS service retains original allocation and stored future bodies and tokens', function (): void {
+kiwi_run_test('Active SMS service preserves original assignments and stored future bodies and tokens', function (): void {
     $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
     $service = new Kiwi_Sms_Body_Variant_Service(new Kiwi_Test_Config(), $repository);
     $landing = ['key' => 'lp5-fr', 'country' => 'FR', 'service_key' => 'nth_fr_one_off_jplay'];
+    $allocation = require dirname(__DIR__) . '/includes/providers/nth/config/fr-one-off-sms-body-variants.php';
     $variants = ['as_is_txn_prefix', 'bare_id', 'game_word', 'cta_phrase'];
     $games = ['ArcadeHero', 'PuzzleRush', 'GameQuest', 'PlayHero', 'FunArcade', 'MegaJeux', 'TopJeux', 'BonusPlay'];
     $ctas = ['ActiverJeux', 'ValiderJeux', 'RecevoirJeux', 'JouerPlus', 'TopJeuxNow', 'PlayNow', 'BonusJeux', 'GoJeux'];
@@ -1265,10 +1266,17 @@ kiwi_run_test('Prepared SMS service retains original allocation and stored futur
         $variant = $variants[hexdec(substr(hash('sha256', 'variant|' . $txn), 0, 8)) % 4];
         $seed = $variant === 'game_word' ? $games[hexdec(substr(hash('sha256', 'game|' . $txn), 0, 8)) % 8]
             : ($variant === 'cta_phrase' ? $ctas[hexdec(substr(hash('sha256', 'cta|' . $txn), 0, 8)) % 8] : '');
-        $result = $service->build_variant_body('JPLAY', '84072', $landing, [], ['transaction_id' => $txn]);
-        kiwi_assert_same($variant, $result['assignment']['variant_key'], 'Original four-way allocation remains stable.');
+        $token = $service->build_visible_token($txn, $variant, $seed);
+        $stored = $repository->insert_if_new(['transaction_id' => $txn, 'visible_token' => $token,
+            'sms_body' => 'JPLAY ' . $token, 'variant_key' => $variant, 'seed' => $seed, 'allocation_version' => 'legacy',
+            'landing_key' => 'lp5-fr', 'service_key' => 'nth_fr_one_off_jplay'])['row'];
+        $result = $service->build_variant_body('JPLAY', '84072', $landing, [], ['transaction_id' => $txn], $allocation);
+        kiwi_assert_same($stored, $result['assignment'], 'Every historical field remains unchanged.');
+        kiwi_assert_same($txn, $service->resolve_transaction_id_from_visible_token($token), 'Historical words retain token correlation.');
+        kiwi_assert_true($repository->mark_event_by_transaction_id($txn, 'conv'), 'Historical inactive variants remain countable.');
+        kiwi_assert_same($variant, $result['assignment']['variant_key'], 'Original stored allocation remains stable.');
         kiwi_assert_same($seed, $result['assignment']['seed'], 'Original words and selection remain stable.');
-        kiwi_assert_same('legacy', $result['assignment']['allocation_version'], 'Preparation allocates legacy only.');
+        kiwi_assert_same('legacy', $result['assignment']['allocation_version'], 'Historical generation is not reassigned.');
     }
     foreach (['bare_id' => '', 'download_phrase' => 'AccederMaintenant'] as $variant => $seed) {
         $txn = 'txn_history_' . $variant;
@@ -1276,7 +1284,7 @@ kiwi_run_test('Prepared SMS service retains original allocation and stored futur
         $body = 'JPLAY ' . $token;
         $repository->insert_if_new(['transaction_id' => $txn, 'visible_token' => $token, 'sms_body' => $body,
             'variant_key' => $variant, 'seed' => $seed, 'allocation_version' => 'fr_sms_v2', 'landing_key' => 'lp5-fr', 'service_key' => 'nth_fr_one_off_jplay']);
-        $result = $service->build_variant_body('JPLAY', '84072', $landing, [], ['transaction_id' => $txn]);
+        $result = $service->build_variant_body('JPLAY', '84072', $landing, [], ['transaction_id' => $txn], $allocation);
         kiwi_assert_same($body, $result['body'], 'Stored future body remains stable.');
         kiwi_assert_same('fr_sms_v2', $result['assignment']['allocation_version'], 'Stored generation remains stable.');
         kiwi_assert_same($txn, $service->resolve_transaction_id_from_visible_token($token), 'Visible token lookup remains usable.');

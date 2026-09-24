@@ -108,11 +108,40 @@ active generation. Existing rates are recomputed within the same five-part
 identity; repository reads optionally filter `allocation_version` and otherwise
 return separate generation rows.
 
-Issue #122 preserves the previous allocation categories, seed lists, weights and
-deterministic selection; new assignments remain `legacy`. Existing SMS bodies,
-visible tokens and generations remain unchanged, including stored `bare_id` and
-`download_phrase`/`AccederMaintenant` assignments from a later release. This is
-history compatibility, not activation of a new allocation or a reporting cohort.
+The prepared Issue #122 release creates `legacy` assignments using the original
+selection. Issue #126 activates `fr_sms_v2` for all eligible NTH France one-off
+landings. The NTH CTA adapter selects
+`includes/providers/nth/config/fr-one-off-sms-body-variants.php` using Aggregator,
+country and flow metadata, with the existing experiment and country switches
+still effective. A country allow-list alone never selects this configuration;
+contradictory service metadata does not enable it. No landing-key list limits it
+to particular FR pages, and Greece's fixed OK-SMS integration is unchanged.
+
+| Category | Seed | Weight |
+|---|---|---:|
+| `as_is_txn_prefix` | empty | 10% |
+| `cta_phrase` | `BonusJeux` | 20% |
+| `game_word` | `TopJeux` | 20% |
+| `cta_phrase` | `JouerPlus` | 20% |
+| `cta_phrase` | `AccederJeux` | 8% |
+| `game_word` | `JeuxMax` | 8% |
+| `download_phrase` | `AccederMaintenant` | 8% |
+| `game_word` | `GameQuest` | 6% |
+
+The shared service consumes the supplied entries and generation; it contains no
+fixed French allocation. It hashes `allocation_version|transaction_id` with
+SHA-256, maps the first eight hex digits to 0–99 and selects the complete entry
+by cumulative weight. These are deterministic bucket weights, not a guarantee
+of exact percentages in a small traffic sample. The reference keeps `txn_<id>`;
+word variants prepend the seed to the existing safe suffix. `AccederMaintenant`
+is a download-phrase category and does not promise a literal file download.
+
+Stored assignments always retain their SMS body, category, seed, visible token
+and generation, including `bare_id` and retired words. New eligible assignments
+never use `bare_id`. Token lookup uses the stored assignment. Invalid or absent
+allocation configuration creates no new assignment; no hidden legacy fallback
+allocation runs inside the shared service. Existing stored assignments can still
+be read. There is no automatic rotation, scheduler, or reporting cohort change.
 
 Assignment/event facts and summary updates retain their existing separate-write
 behavior. No historical repair, retry journal, transactional redesign or reversal
