@@ -7994,8 +7994,9 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', f
         'pid' => 'pid-variant',
     ];
 
-    $first = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution);
-    $second = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution);
+    $allocation = require dirname(__DIR__) . '/includes/providers/nth/config/fr-one-off-sms-body-variants.php';
+    $first = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution, $allocation);
+    $second = $service->build_variant_body('Jplay*', '84072', $landing, $nth_service, $attribution, $allocation);
     $variant_key = (string) ($first['assignment']['variant_key'] ?? '');
     $seed = (string) ($first['assignment']['seed'] ?? '');
 
@@ -8003,11 +8004,129 @@ kiwi_run_test('Kiwi_Sms_Body_Variant_Service builds stable SMS body variants', f
     kiwi_assert_same('abcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'bare_id'), 'Expected bare variant to remove txn_ prefix.');
     kiwi_assert_same('ArcadeHeroabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'game_word', 'ArcadeHero'), 'Expected game-word variant to prepend deterministic seed.');
     kiwi_assert_same('ActiverJeuxabcdef1234567890', $service->build_visible_token('txn_abcdef1234567890', 'cta_phrase', 'ActiverJeux'), 'Expected CTA phrase variant to prepend deterministic seed.');
-    kiwi_assert_true(in_array($variant_key, ['as_is_txn_prefix', 'bare_id', 'game_word', 'cta_phrase'], true), 'Expected service to assign one of the four configured variants.');
-    kiwi_assert_true($variant_key === 'game_word' || $variant_key === 'cta_phrase' || $seed === '', 'Expected non-speaking variants to have no seed.');
+    kiwi_assert_true(in_array($variant_key, ['as_is_txn_prefix', 'game_word', 'cta_phrase', 'download_phrase'], true), 'Expected service to assign a currently configured variant.');
+    kiwi_assert_true(in_array($variant_key, ['game_word', 'cta_phrase', 'download_phrase'], true) || $seed === '', 'Expected non-speaking variants to have no seed.');
     kiwi_assert_same((string) ($first['body'] ?? ''), (string) ($second['body'] ?? ''), 'Expected repeated body resolution for one transaction to stay stable.');
     kiwi_assert_same(1, count($repository->assignments), 'Expected service to create one idempotent assignment.');
 });
+
+kiwi_run_test('FR NTH allocation covers all 100 stable positions and all eight SMS forms', function (): void {
+    $allocation = require dirname(__DIR__) . '/includes/providers/nth/config/fr-one-off-sms-body-variants.php';
+    $expected = [
+        ['as_is_txn_prefix', '', 10], ['cta_phrase', 'BonusJeux', 20], ['game_word', 'TopJeux', 20],
+        ['cta_phrase', 'JouerPlus', 20], ['cta_phrase', 'AccederJeux', 8], ['game_word', 'JeuxMax', 8],
+        ['download_phrase', 'AccederMaintenant', 8], ['game_word', 'GameQuest', 6],
+    ];
+    kiwi_assert_same('fr_sms_v2', $allocation['allocation_version'], 'Generation is explicit in config.');
+    kiwi_assert_same($expected, array_map('array_values', $allocation['entries']), 'Exact category, seed, weight and order.');
+    kiwi_assert_same(100, array_sum(array_column($allocation['entries'], 'weight')), 'Weights cover 100 positions.');
+    $positions = [];
+    for ($i = 0; count($positions) < 100 && $i < 20000; $i++) {
+        $txn = 'txn_weighted_fixture_' . $i;
+        $position = (int) (hexdec(substr(hash('sha256', 'fr_sms_v2|' . $txn), 0, 8)) % 100);
+        $positions[$position] = $txn;
+    }
+    kiwi_assert_same(100, count($positions), 'Fixtures exercise every deterministic position.');
+    ksort($positions);
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $service = new Kiwi_Sms_Body_Variant_Service(new Kiwi_Test_Config(), $repository);
+    $adapter = new Kiwi_Nth_Primary_Cta_Adapter($service);
+    $counts = [];
+    foreach ($positions as $position => $txn) {
+        $landing = ['key' => ['lp2-fr', 'lp5-fr', 'lp6-fr', 'future-fr'][$position % 4],
+            'provider' => 'nth', 'country' => 'FR', 'flow' => 'nth-fr-one-off',
+            'service_key' => 'nth_fr_one_off_jplay', 'shortcode' => '84072', 'keyword' => 'Jplay*'];
+        $attribution = ['transaction_id' => $txn];
+        $href = $adapter->build_primary_cta_href($landing, ['provider' => 'nth', 'country' => 'FR', 'flow' => 'one-off'], $attribution);
+        $upper = 0;
+        foreach ($expected as [$variant, $seed, $weight]) {
+            $upper += $weight;
+            if ($position < $upper) { break; }
+        }
+        $token = $variant === 'as_is_txn_prefix' ? $txn : $seed . substr($txn, 4);
+        $row = $repository->find_by_transaction_id($txn);
+        kiwi_assert_same([$variant, $seed, 'fr_sms_v2'], [$row['variant_key'], $row['seed'], $row['allocation_version']], 'Stable direct entry at every boundary.');
+        kiwi_assert_same('sms:84072?body=' . rawurlencode('JPLAY ' . $token), $href, 'Exact SMS form.');
+        kiwi_assert_same($txn, $service->resolve_transaction_id_from_visible_token($token), 'All eight forms keep callback correlation.');
+        kiwi_assert_same($href, $adapter->build_primary_cta_href($landing, [], $attribution), 'Repeated CTA remains stable.');
+        kiwi_assert_same($row, $repository->find_by_transaction_id($txn), 'Repeated CTA leaves the assignment unchanged.');
+        $counts[$variant . ':' . $seed] = ($counts[$variant . ':' . $seed] ?? 0) + 1;
+    }
+    kiwi_assert_same(100, count($repository->assignments), 'One assignment per transaction, none duplicated.');
+    kiwi_assert_same([10, 20, 20, 20, 8, 8, 8, 6], array_values($counts), 'Exact bucket coverage, not a random traffic assertion.');
+    kiwi_assert_same(false, in_array('bare_id', array_column($repository->assignments, 'variant_key'), true), 'No new bare_id.');
+});
+
+kiwi_run_test('NTH allocation requires matching Aggregator country flow and existing switches', function (): void {
+    $landing = ['key' => 'unrestricted-fr-key', 'provider' => 'nth', 'country' => 'FR', 'flow' => 'nth-fr-one-off',
+        'shortcode' => '84072', 'keyword' => 'Jplay*'];
+    $service = ['provider' => 'nth', 'country' => 'FR', 'flow' => 'one-off'];
+    $config = new class extends Kiwi_Test_Config {
+        public $enabled = true;
+        public $countries = ['FR', 'PL', 'GR'];
+        public function is_sms_body_variant_experiment_enabled(): bool { return $this->enabled; }
+        public function get_sms_body_variant_experiment_countries(): array { return $this->countries; }
+    };
+    $cases = [
+        [$landing, $service, true],
+        [array_diff_key($landing, array_flip(['provider', 'country', 'flow'])), $service, true],
+        [array_replace($landing, ['country' => 'PL']), array_replace($service, ['country' => 'PL']), false],
+        [array_replace($landing, ['provider' => 'lily']), array_replace($service, ['provider' => 'lily']), false],
+        [array_replace($landing, ['flow' => 'subscription']), array_replace($service, ['flow' => 'subscription']), false],
+        [array_replace($landing, ['flow' => '']), $service, false],
+        [$landing, array_replace($service, ['provider' => 'lily']), false],
+        [$landing, array_replace($service, ['country' => 'GR']), false],
+        [$landing, array_replace($service, ['flow' => 'subscription']), false],
+    ];
+    foreach ($cases as $index => [$lp, $svc, $allowed]) {
+        $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+        $adapter = new Kiwi_Nth_Primary_Cta_Adapter(new Kiwi_Sms_Body_Variant_Service($config, $repository));
+        $txn = 'txn_scope_fixture_' . $index;
+        $adapter->build_primary_cta_href($lp, $svc, ['transaction_id' => $txn]);
+        kiwi_assert_same($allowed ? 1 : 0, count($repository->assignments), 'Scope boundary case ' . $index);
+    }
+    foreach ([false, true] as $enabled) {
+        $config->enabled = $enabled;
+        $config->countries = $enabled ? ['PL'] : ['FR'];
+        $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+        $adapter = new Kiwi_Nth_Primary_Cta_Adapter(new Kiwi_Sms_Body_Variant_Service($config, $repository));
+        $href = $adapter->build_primary_cta_href($landing, $service, ['transaction_id' => 'txn_switch_fixture']);
+        kiwi_assert_same(0, count($repository->assignments), 'Global and country switches remain effective.');
+        kiwi_assert_same('sms:84072?body=Jplay%20txn_switch_fixture', $href, 'Existing disabled-experiment CTA remains unchanged.');
+    }
+});
+
+kiwi_run_test('Generic SMS service uses supplied entries and rejects malformed allocation before writes', function (): void {
+    $repository = new Kiwi_Test_Sms_Body_Variant_Repository();
+    $config = new class extends Kiwi_Test_Config {
+        public function get_sms_body_variant_experiment_countries(): array { return ['PL']; }
+    };
+    $service = new Kiwi_Sms_Body_Variant_Service($config, $repository);
+    $landing = ['key' => 'generic-test', 'provider' => 'synthetic', 'country' => 'PL', 'flow' => 'fixture'];
+    $allocation = ['allocation_version' => 'generic_test_v3', 'entries' => [
+        ['variant_key' => 'game_word', 'seed' => 'ExampleWord', 'weight' => 100],
+    ]];
+    $result = $service->build_variant_body('TEST', '12345', $landing, [], ['transaction_id' => 'txn_generic_fixture'], $allocation);
+    kiwi_assert_same('TEST ExampleWordgeneric_fixture', $result['body'], 'No fixed French allocation inside shared service.');
+    kiwi_assert_same('generic_test_v3', $result['assignment']['allocation_version'], 'Caller supplies generation.');
+    $bad = [null, [], array_replace($allocation, ['allocation_version' => '']), array_replace($allocation, ['allocation_version' => str_repeat('a', 51)])];
+    foreach ([['weight', 99], ['weight', 101], ['weight', 0], ['weight', '100'], ['seed', ''], ['seed', 'bad seed'], ['variant_key', 'unknown']] as [$key, $value]) {
+        $invalid = $allocation;
+        $invalid['entries'][0][$key] = $value;
+        $bad[] = $invalid;
+    }
+    foreach ($bad as $index => $invalid) {
+        kiwi_assert_same(null, $service->build_variant_body('TEST', '12345', $landing, [], ['transaction_id' => 'txn_invalid_' . $index], $invalid), 'Malformed config creates no assignment.');
+    }
+    kiwi_assert_same(1, count($repository->assignments), 'Invalid allocations never write.');
+    $changed = $allocation;
+    $changed['entries'][0]['seed'] = 'ChangedWord';
+    $changed['allocation_version'] = 'generic_test_v4';
+    foreach ([$changed, null] as $next) {
+        kiwi_assert_same($result, $service->build_variant_body('CHANGED', '12345', $landing, [], ['transaction_id' => 'txn_generic_fixture'], $next), 'Stored assignment wins over changed or missing allocation.');
+    }
+});
+
 
 kiwi_run_test('Kiwi_Landing_Kpi_Rest_Routes records SMS handoff events without changing KPI counters', function (): void {
     $_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 Android SmsDiag';

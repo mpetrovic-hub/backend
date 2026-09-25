@@ -203,6 +203,52 @@ legitimate writes since the backup, never an automatic full restore. Conditional
 failure actions that did not occur are recorded as not required. Existing
 Operational Event failure/recovery responsibilities below still apply.
 
+### Second step: activate the FR NTH allocation (Issue #126)
+
+This is an application-only release on the prepared #122 schema. Do not run a
+new migration or enable it merely because the columns exist. Before merging or
+activating #126, verify the completed, checked and human-accepted Production
+rollout evidence for #122. Record the reviewed #126 commit and the available
+version-aware #122 return release. The tested return source is
+`c5ca693c2845264d17aad064b2a2fcf066126e11` (merged PR #128), whose application
+and database-tool sources match reviewed commit
+`dc873b22688ded803af1bdc3374aa50bde122d0b`.
+
+Before an explicitly authorized rollout:
+
+1. Verify test evidence covers the exact release and its return path. Ensure no
+   original version-blind application writers remain.
+2. Have the human download and confirm a current complete Hostinger backup;
+   verify isolated local restoration of both SMS tables without exposing data.
+3. Compare the eight entries, categories, weights and `fr_sms_v2` in
+   `includes/providers/nth/config/fr-one-off-sms-body-variants.php` with the
+   approved configuration in [landing-funnel-analytics.md](landing-funnel-analytics.md#sms-assignment-generations).
+4. Run the general `kiwi database status` target check using the reviewed
+   deployment entrypoint. Require the complete target structure before enabling
+   the release; #126 performs no DDL.
+5. Deploy only the explicitly approved application release and confirm its
+   active commit. Observe real traffic read-only for an initial 15 minutes:
+   eligible new assignments use `fr_sms_v2` and only approved entries, historical
+   contents/generations stay unchanged, and events use the stored generation.
+6. Check operational errors and consistent facts/counters, allowing for
+   in-flight writes. Record missing event types as "not yet observed", not
+   passed or failed. Record sanitized evidence and obtain human acceptance.
+
+No synthetic sales, SMS, purchases or callback replays may be sent to Production.
+The code does not schedule follow-up monitoring. A read-only technical check
+after one or two days needs a separately assigned task; the later lp5-fr/lp6-fr
+business evaluation is neither a PR gate nor a new reporting implementation.
+
+If code return is needed, report the cause and obtain explicit approval unless
+that exact return was already authorized. Deploy only the prepared version-aware
+#122 release; keep the database and every assignment from both generations.
+Verify stored bodies/tokens (especially `AccederMaintenant`), late events, and
+new legacy assignments using the original distribution. Never delete a
+generation, reconstruct old bodies from the current list, or use the original
+version-blind application. Unexpected data problems stop deployment and require
+a separately approved recovery proposal preserving legitimate post-backup writes.
+Return and data-restoration actions not needed are recorded as not required.
+
 ### Validation boundary
 
 Project tests cover version-separated counters/rates/filters, duplicate and late
@@ -218,6 +264,18 @@ the new external migration. The rehearsal limits the deployment contract to the
 SMS tables and simulates WordPress options; it is not a full WordPress, WP-CLI,
 HTTP, OPcache, Hostinger-load or NTH end-to-end test. Production traffic observation
 and backup/restore verification remain separate authorized deployment work.
+
+The #126 project tests cover all 100 deterministic positions, exact entries and
+SMS forms, stored historical assignments, generic configuration handling, and
+positive/negative adapter boundaries and switches. A separate temporary
+MariaDB 11.8.9 rehearsal loads actual #122 and #126 service/adapter/repository
+sources in separate PHP processes, followed by an actual #122 code return on
+the unchanged database. It verifies both full-table snapshots before new writes,
+stored tokens/bodies including all eight download-phrase fixtures, all seven
+counters, five existing rates, individual/combined filters, late/duplicate
+events, and exact original selection for new assignments after return. It uses
+synthetic data and a PDO-backed wpdb test adapter; no full WordPress installation,
+NTH HTTP callback, Production traffic or deployment is claimed by these checks.
 
 ## Landing-session engagement table rename
 
