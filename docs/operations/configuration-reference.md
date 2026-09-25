@@ -147,6 +147,44 @@ See `operational-events-runbook.md` for the daily hook, follow-up worker, lock, 
 
 Only add proxy IPs or CIDRs controlled by the deployment edge. Do not document real customer IPs.
 
+## Temporary database connection warning diagnostic
+
+This strictly temporary diagnostic adds restricted execution context next to the
+existing `mysqli_real_connect(): (HY000/2002): Operation not permitted` warning.
+It does not retry a connection, change WordPress, or create database traffic.
+
+- `KIWI_DB_CONNECT_DIAGNOSTICS_ENABLED`
+  - explicit opt-in; only the boolean value `true` enables the diagnostic
+  - no default; leaving it undefined keeps the diagnostic inactive
+- `KIWI_DB_CONNECT_DIAGNOSTICS_EXPIRES_AT_UTC`
+  - mandatory UTC expiry in the exact format `YYYY-MM-DDTHH:MM:SSZ`
+  - the diagnostic is active only before this instant; at and after it no error handler is registered
+
+After review and separate production approval, add the following short-lived
+block in production `wp-config.php` immediately before the existing
+`require_once ABSPATH . 'wp-settings.php';` line. Set the timestamp to exactly
+seven calendar days after activation.
+
+```php
+define('KIWI_DB_CONNECT_DIAGNOSTICS_ENABLED', true);
+define('KIWI_DB_CONNECT_DIAGNOSTICS_EXPIRES_AT_UTC', 'YYYY-MM-DDTHH:MM:SSZ');
+
+require_once __DIR__ . '/tools/database/diagnostics/class-db-connect-warning-context-diagnostic.php';
+Kiwi_Db_Connect_Warning_Context_Diagnostic::register();
+```
+
+The diagnostic writes the `[kiwi-db-connect-diagnostic]` prefix and JSON with
+UTC time, PHP process ID, PHP-SAPI, execution context, entry-script basename,
+and only for normal web requests the URL path without query parameters. It must
+not contain IP addresses, headers, request bodies, query values, cookies,
+credentials, database contents, or CLI arguments. `wp-cron` and `cli` are
+classified without their request or command arguments.
+
+This section, the `wp-config.php` block, the helper file, and its tests are a
+single temporary unit. Remove all of them in the dedicated Issue #130 cleanup
+commit after the seven-day observation period and verify the removal before
+closing its follow-up checkbox.
+
 ## NTH callback observability
 
 - `KIWI_NTH_CALLBACK_LOGGING_ENABLED`
