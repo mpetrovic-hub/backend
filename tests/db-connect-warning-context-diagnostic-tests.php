@@ -103,6 +103,29 @@ kiwi_run_test('DB connect warning diagnostic records only the allowed web contex
     kiwi_assert_same(false, strpos($messages[0], 'secret') !== false, 'Must not log query secrets.');
     kiwi_assert_same(false, strpos($messages[0], '203.0.113.10') !== false, 'Must not log client or proxy IP addresses.');
     kiwi_assert_same(false, strpos($messages[0], 'session=private') !== false, 'Must not log cookies.');
+
+    $php_self_messages = [];
+    Kiwi_Db_Connect_Warning_Context_Diagnostic::record_if_target(
+        E_WARNING,
+        'mysqli_real_connect(): (HY000/2002): Operation not permitted',
+        [
+            'SCRIPT_NAME' => '/index.php/reset/script-name-secret',
+            'PHP_SELF' => '/index.php/reset/very-secret-token',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/reset/very-secret-token',
+        ],
+        'fpm-fcgi',
+        4321,
+        new DateTimeImmutable('2026-09-26T10:00:00Z'),
+        static function (string $message) use (&$php_self_messages): void {
+            $php_self_messages[] = $message;
+        }
+    );
+    kiwi_assert_same(1, count($php_self_messages), 'Expected one diagnostic entry with PHP_SELF present.');
+    kiwi_assert_contains('"entry_script":null', $php_self_messages[0], 'Must omit an entry script when SCRIPT_FILENAME is unavailable.');
+    kiwi_assert_same(false, strpos($php_self_messages[0], 'script-name-secret') !== false, 'Must not log SCRIPT_NAME path info.');
+    kiwi_assert_same(false, strpos($php_self_messages[0], 'very-secret-token') !== false, 'Must not log request-derived PHP_SELF path info.');
+
     kiwi_assert_same(
         false,
         Kiwi_Db_Connect_Warning_Context_Diagnostic::record_if_target(
@@ -155,7 +178,7 @@ kiwi_run_test('DB connect warning diagnostic classifies WP-Cron and CLI without 
     kiwi_assert_same('wp-cron.php', $windows_cron_context['entry_script'], 'Expected Windows-style paths to keep only the entry-script basename.');
 });
 
-kiwi_run_test('DB connect warning diagnostic preserves the previous PHP handler and normal warning', function (): void {
+kiwi_run_test('DB connect warning diagnostic leaves an existing PHP handler untouched', function (): void {
     if (!defined('KIWI_DB_CONNECT_DIAGNOSTICS_ENABLED')) {
         define('KIWI_DB_CONNECT_DIAGNOSTICS_ENABLED', true);
     }
@@ -164,51 +187,57 @@ kiwi_run_test('DB connect warning diagnostic preserves the previous PHP handler 
     }
 
     $previous_handler_calls = 0;
-    $previous_handler_results = [false, null, 0];
     $messages = [];
     set_error_handler(static function (
         int $errno,
         string $errstr,
         string $errfile = '',
         int $errline = 0
-    ) use (&$previous_handler_calls, $previous_handler_results) {
-        $result = array_key_exists($previous_handler_calls, $previous_handler_results)
-            ? $previous_handler_results[$previous_handler_calls]
-            : false;
+    ) use (&$previous_handler_calls): bool {
         $previous_handler_calls++;
 
-        return $result;
-    });
+        return true;
+    }, E_USER_WARNING);
     try {
         kiwi_assert_same(
-            true,
+            false,
             Kiwi_Db_Connect_Warning_Context_Diagnostic::register(
                 static function (string $message) use (&$messages): void {
                     $messages[] = $message;
                 }
             ),
-            'Expected an enabled, unexpired diagnostic to register.'
+            'Expected the diagnostic not to replace an existing error handler with an unknown mask.'
         );
-        $first_result = Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
-            E_WARNING,
-            'mysqli_real_connect(): (HY000/2002): Operation not permitted'
-        );
-        $second_result = Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
-            E_WARNING,
-            'mysqli_real_connect(): (HY000/2002): Operation not permitted'
-        );
-        $third_result = Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
-            E_WARNING,
-            'mysqli_real_connect(): (HY000/2002): Operation not permitted'
-        );
-
-        kiwi_assert_same(false, $first_result, 'Expected a literal false from the previous handler to preserve the normal PHP warning.');
-        kiwi_assert_same(true, $second_result, 'Expected a null previous-handler result to remain handled.');
-        kiwi_assert_same(true, $third_result, 'Expected a falsey non-false previous-handler result to remain handled.');
-        kiwi_assert_same(3, $previous_handler_calls, 'Expected the previous handler to remain in the chain.');
-        kiwi_assert_same(3, count($messages), 'Expected the handler to emit one diagnostic entry per target warning.');
+        kiwi_assert_same(0, $previous_handler_calls, 'Must not invoke the existing handler while checking it.');
+        kiwi_assert_same(0, count($messages), 'Must not emit diagnostics when an existing handler is present.');
+        trigger_error('Existing error-handler mask check.', E_USER_WARNING);
+        kiwi_assert_same(1, $previous_handler_calls, 'Must preserve the existing handler and its error-level mask.');
+        @trigger_error('Existing error-handler non-matching mask check.', E_USER_NOTICE);
+        kiwi_assert_same(1, $previous_handler_calls, 'Must not broaden the existing handler error-level mask.');
     } finally {
         restore_error_handler();
+    }
+
+    kiwi_assert_same(
+        true,
+        Kiwi_Db_Connect_Warning_Context_Diagnostic::register(
+            static function (string $message) use (&$messages): void {
+                $messages[] = $message;
+            }
+        ),
+        'Expected an enabled diagnostic to register when no earlier handler exists.'
+    );
+    try {
+        kiwi_assert_same(
+            false,
+            Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
+                E_WARNING,
+                'mysqli_real_connect(): (HY000/2002): Operation not permitted'
+            ),
+            'Expected the diagnostic to preserve the normal PHP warning when no previous handler exists.'
+        );
+        kiwi_assert_same(1, count($messages), 'Expected the handler to emit one diagnostic entry for the target warning.');
+    } finally {
         restore_error_handler();
     }
 });

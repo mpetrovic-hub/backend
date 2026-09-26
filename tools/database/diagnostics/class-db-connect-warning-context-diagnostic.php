@@ -11,7 +11,6 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     private const LOG_PREFIX = '[kiwi-db-connect-diagnostic]';
     private const TARGET_WARNING = 'mysqli_real_connect(): (HY000/2002): Operation not permitted';
 
-    private static $previous_error_handler = null;
     private static $logger = null;
     private static $registered = false;
     private static $is_writing = false;
@@ -36,10 +35,14 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             return false;
         }
 
+        if (self::has_existing_error_handler()) {
+            return false;
+        }
+
         self::$logger = $logger ?? static function (string $message): void {
             error_log($message);
         };
-        self::$previous_error_handler = set_error_handler(
+        set_error_handler(
             [self::class, 'handle_error'],
             E_WARNING
         );
@@ -100,18 +103,6 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             } finally {
                 self::$is_writing = false;
             }
-        }
-
-        if (is_callable(self::$previous_error_handler)) {
-            $previous_result = call_user_func(
-                self::$previous_error_handler,
-                $errno,
-                $errstr,
-                $errfile,
-                $errline
-            );
-
-            return $previous_result === false ? false : true;
         }
 
         return false;
@@ -222,20 +213,37 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
 
     private static function entry_script(array $server): ?string
     {
-        foreach (['SCRIPT_FILENAME', 'SCRIPT_NAME', 'PHP_SELF'] as $key) {
-            if (!isset($server[$key]) || !is_string($server[$key])) {
-                continue;
-            }
-
-            $value = trim($server[$key]);
-            if ($value === '') {
-                continue;
-            }
-
-            return basename(str_replace(chr(92), '/', $value));
+        if (!isset($server['SCRIPT_FILENAME']) || !is_string($server['SCRIPT_FILENAME'])) {
+            return null;
         }
 
-        return null;
+        $script_filename = trim($server['SCRIPT_FILENAME']);
+        if ($script_filename === '') {
+            return null;
+        }
+
+        return basename(str_replace(chr(92), '/', $script_filename));
+    }
+
+    /**
+     * PHP does not expose an existing handler's error-level mask. Do not replace
+     * it because forwarding a warning might change its original behavior.
+     */
+    private static function has_existing_error_handler(): bool
+    {
+        $existing_handler = set_error_handler(
+            static function (
+                int $errno,
+                string $errstr,
+                string $errfile = '',
+                int $errline = 0
+            ): bool {
+                return false;
+            }
+        );
+        restore_error_handler();
+
+        return is_callable($existing_handler);
     }
 
     private static function execution_context(
