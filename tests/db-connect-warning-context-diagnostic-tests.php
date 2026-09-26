@@ -78,7 +78,7 @@ kiwi_run_test('DB connect warning diagnostic records only the allowed web contex
         [
             'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
             'REQUEST_METHOD' => 'POST',
-            'REQUEST_URI' => '/landing/offer?email=person@example.test&token=secret',
+            'REQUEST_URI' => '/reset/very-secret-token/person@example.test/203.0.113.10?email=person@example.test&token=secret',
             'HTTP_X_FORWARDED_FOR' => '203.0.113.10',
             'HTTP_COOKIE' => 'session=private',
         ],
@@ -95,7 +95,10 @@ kiwi_run_test('DB connect warning diagnostic records only the allowed web contex
     kiwi_assert_contains('[kiwi-db-connect-diagnostic] ', $messages[0], 'Expected the diagnostic prefix.');
     kiwi_assert_contains('"execution_context":"web"', $messages[0], 'Expected web context.');
     kiwi_assert_contains('"entry_script":"index.php"', $messages[0], 'Expected only the entry script basename.');
-    kiwi_assert_contains('"request_path":"/landing/offer"', $messages[0], 'Expected the path without query data.');
+    kiwi_assert_contains('"observed_at_utc":"2026-09-26T10:00:00.123456Z"', $messages[0], 'Expected microseconds to remain in the UTC timestamp.');
+    kiwi_assert_contains('"web_route":"other_web_route"', $messages[0], 'Expected only the safe web-route classification.');
+    kiwi_assert_same(false, strpos($messages[0], '/reset/') !== false, 'Must not log raw URL paths.');
+    kiwi_assert_same(false, strpos($messages[0], 'very-secret-token') !== false, 'Must not log sensitive path segments.');
     kiwi_assert_same(false, strpos($messages[0], 'person@example.test') !== false, 'Must not log query values.');
     kiwi_assert_same(false, strpos($messages[0], 'secret') !== false, 'Must not log query secrets.');
     kiwi_assert_same(false, strpos($messages[0], '203.0.113.10') !== false, 'Must not log client or proxy IP addresses.');
@@ -145,10 +148,10 @@ kiwi_run_test('DB connect warning diagnostic classifies WP-Cron and CLI without 
 
     kiwi_assert_same('wp-cron', $cron_context['execution_context'], 'Expected wp-cron context.');
     kiwi_assert_same('wp-cron.php', $cron_context['entry_script'], 'Expected the wp-cron entry script.');
-    kiwi_assert_same(false, array_key_exists('request_path', $cron_context), 'Must not log WP-Cron query data.');
+    kiwi_assert_same(false, array_key_exists('web_route', $cron_context), 'Must not log WP-Cron request data.');
     kiwi_assert_same('cli', $cli_context['execution_context'], 'Expected CLI context.');
     kiwi_assert_same('wp', $cli_context['entry_script'], 'Expected only the CLI entry-script basename.');
-    kiwi_assert_same(false, array_key_exists('request_path', $cli_context), 'Must not log CLI arguments or paths.');
+    kiwi_assert_same(false, array_key_exists('web_route', $cli_context), 'Must not log CLI arguments or paths.');
     kiwi_assert_same('wp-cron.php', $windows_cron_context['entry_script'], 'Expected Windows-style paths to keep only the entry-script basename.');
 });
 
@@ -161,16 +164,20 @@ kiwi_run_test('DB connect warning diagnostic preserves the previous PHP handler 
     }
 
     $previous_handler_calls = 0;
+    $previous_handler_results = [false, null, 0];
     $messages = [];
     set_error_handler(static function (
         int $errno,
         string $errstr,
         string $errfile = '',
         int $errline = 0
-    ) use (&$previous_handler_calls): bool {
+    ) use (&$previous_handler_calls, $previous_handler_results) {
+        $result = array_key_exists($previous_handler_calls, $previous_handler_results)
+            ? $previous_handler_results[$previous_handler_calls]
+            : false;
         $previous_handler_calls++;
 
-        return false;
+        return $result;
     });
     try {
         kiwi_assert_same(
@@ -182,14 +189,24 @@ kiwi_run_test('DB connect warning diagnostic preserves the previous PHP handler 
             ),
             'Expected an enabled, unexpired diagnostic to register.'
         );
-        $result = Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
+        $first_result = Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
+            E_WARNING,
+            'mysqli_real_connect(): (HY000/2002): Operation not permitted'
+        );
+        $second_result = Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
+            E_WARNING,
+            'mysqli_real_connect(): (HY000/2002): Operation not permitted'
+        );
+        $third_result = Kiwi_Db_Connect_Warning_Context_Diagnostic::handle_error(
             E_WARNING,
             'mysqli_real_connect(): (HY000/2002): Operation not permitted'
         );
 
-        kiwi_assert_same(false, $result, 'Expected the previous handler result to preserve the normal PHP warning.');
-        kiwi_assert_same(1, $previous_handler_calls, 'Expected the previous handler to remain in the chain.');
-        kiwi_assert_same(1, count($messages), 'Expected the handler to emit one diagnostic entry.');
+        kiwi_assert_same(false, $first_result, 'Expected a literal false from the previous handler to preserve the normal PHP warning.');
+        kiwi_assert_same(true, $second_result, 'Expected a null previous-handler result to remain handled.');
+        kiwi_assert_same(true, $third_result, 'Expected a falsey non-false previous-handler result to remain handled.');
+        kiwi_assert_same(3, $previous_handler_calls, 'Expected the previous handler to remain in the chain.');
+        kiwi_assert_same(3, count($messages), 'Expected the handler to emit one diagnostic entry per target warning.');
     } finally {
         restore_error_handler();
         restore_error_handler();

@@ -169,16 +169,18 @@ seven calendar days after activation.
 define('KIWI_DB_CONNECT_DIAGNOSTICS_ENABLED', true);
 define('KIWI_DB_CONNECT_DIAGNOSTICS_EXPIRES_AT_UTC', 'YYYY-MM-DDTHH:MM:SSZ');
 
-require_once __DIR__ . '/tools/database/diagnostics/class-db-connect-warning-context-diagnostic.php';
+require_once __DIR__ . '/wp-content/plugins/backend/tools/database/diagnostics/class-db-connect-warning-context-diagnostic.php';
 Kiwi_Db_Connect_Warning_Context_Diagnostic::register();
 ```
 
 The diagnostic writes the `[kiwi-db-connect-diagnostic]` prefix and JSON with
 UTC time, PHP process ID, PHP-SAPI, execution context, entry-script basename,
-and only for normal web requests the URL path without query parameters. It must
-not contain IP addresses, headers, request bodies, query values, cookies,
-credentials, database contents, or CLI arguments. `wp-cron` and `cli` are
-classified without their request or command arguments.
+and only for normal web requests a fixed route classification: `site_root`,
+`wp-login`, `wp-admin`, `wp-admin-admin-ajax`, `wp-json`, or
+`other_web_route`. It must not contain URL paths or path segments, IP
+addresses, headers, request bodies, query values, cookies, credentials,
+database contents, or CLI arguments. `wp-cron` and `cli` are classified
+without their request or command arguments.
 
 This section, the `wp-config.php` block, the helper file, and its tests are a
 single temporary unit. Remove all of them in the dedicated Issue #130 cleanup

@@ -103,13 +103,15 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         }
 
         if (is_callable(self::$previous_error_handler)) {
-            return (bool) call_user_func(
+            $previous_result = call_user_func(
                 self::$previous_error_handler,
                 $errno,
                 $errstr,
                 $errfile,
                 $errline
             );
+
+            return $previous_result === false ? false : true;
         }
 
         return false;
@@ -165,7 +167,7 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     ): array {
         $entry_script = self::entry_script($server);
         $execution_context = self::execution_context($server, $php_sapi, $entry_script);
-        $timestamp = (new DateTimeImmutable($now->format('c')))
+        $timestamp = (new DateTimeImmutable($now->format('Y-m-d H:i:s.u P')))
             ->setTimezone(new DateTimeZone('UTC'));
 
         $context = [
@@ -178,9 +180,9 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         ];
 
         if ($execution_context === 'web') {
-            $request_path = self::request_path($server);
-            if ($request_path !== null) {
-                $context['request_path'] = $request_path;
+            $web_route = self::web_route_classification($server);
+            if ($web_route !== null) {
+                $context['web_route'] = $web_route;
             }
         }
 
@@ -257,7 +259,10 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         return 'unknown';
     }
 
-    private static function request_path(array $server): ?string
+    /**
+     * Returns only a fixed route class, never a visitor-controlled path segment.
+     */
+    private static function web_route_classification(array $server): ?string
     {
         if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
             return null;
@@ -270,7 +275,23 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
 
         $separator_position = strcspn($request_uri, '?#');
         $path = substr($request_uri, 0, $separator_position);
+        $path = '/' . ltrim($path, '/');
 
-        return $path === '' ? '/' : $path;
+        if ($path === '/') {
+            return 'site_root';
+        }
+        if ($path === '/wp-login.php') {
+            return 'wp-login';
+        }
+        if ($path === '/wp-admin' || strpos($path, '/wp-admin/') === 0) {
+            return $path === '/wp-admin/admin-ajax.php'
+                ? 'wp-admin-admin-ajax'
+                : 'wp-admin';
+        }
+        if ($path === '/wp-json' || strpos($path, '/wp-json/') === 0) {
+            return 'wp-json';
+        }
+
+        return 'other_web_route';
     }
 }
