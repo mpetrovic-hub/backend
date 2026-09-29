@@ -44,6 +44,147 @@ function kiwi_retention_archive_health_open_readonly(string $real_path): PDO
     return new PDO('sqlite:file:' . $uri_path . '?mode=ro&immutable=1');
 }
 
+function kiwi_retention_archive_health_read_proc_io(): ?array
+{
+    $contents = @file_get_contents('/proc/self/io');
+    if (!is_string($contents)) {
+        return null;
+    }
+
+    $values = [];
+    foreach (preg_split('/\r?\n/', trim($contents)) ?: [] as $line) {
+        if (preg_match('/^(read_bytes|write_bytes|syscr|syscw):\s*(\d+)$/', $line, $matches) === 1) {
+            $values[$matches[1]] = (int) $matches[2];
+        }
+    }
+
+    return count($values) === 4 ? $values : null;
+}
+
+function kiwi_retention_archive_health_io_snapshot(): array
+{
+    $usage = function_exists('getrusage') ? @getrusage() : false;
+
+    return [
+        'proc_self_io' => kiwi_retention_archive_health_read_proc_io(),
+        'getrusage' => is_array($usage) ? $usage : null,
+    ];
+}
+
+function kiwi_retention_archive_health_io_delta(?array $before, ?array $after, array $fields): array
+{
+    if (!is_array($before) || !is_array($after)) {
+        return ['available' => false];
+    }
+
+    $delta = ['available' => true];
+    foreach ($fields as $field) {
+        if (!array_key_exists($field, $before)
+            || !array_key_exists($field, $after)
+            || !is_numeric($before[$field])
+            || !is_numeric($after[$field])
+            || (float) $after[$field] < (float) $before[$field]
+        ) {
+            return ['available' => false];
+        }
+        $delta[$field] = (int) $after[$field] - (int) $before[$field];
+    }
+
+    return $delta;
+}
+
+function kiwi_retention_archive_health_write_io_record(array $record): void
+{
+    $home = getenv('HOME');
+    $absolute_home = is_string($home)
+        && ($home !== '' && $home[0] === DIRECTORY_SEPARATOR
+            || DIRECTORY_SEPARATOR === '\\' && preg_match('/^[A-Za-z]:\\\\/', $home) === 1);
+    if (!$absolute_home) {
+        return;
+    }
+
+    $home_real = realpath($home);
+    $directory = $home . DIRECTORY_SEPARATOR . 'codex-deploy';
+    $directory_real = realpath($directory);
+    if (!is_string($home_real)
+        || !is_string($directory_real)
+        || is_link($directory)
+        || !is_dir($directory_real)
+        || strpos($directory_real . DIRECTORY_SEPARATOR, $home_real . DIRECTORY_SEPARATOR) !== 0
+    ) {
+        return;
+    }
+
+    $directory_stat = @stat($directory_real);
+    $home_stat = @stat($home_real);
+    $public_root = realpath(dirname(__DIR__, 5));
+    if (!is_array($directory_stat)
+        || !is_array($home_stat)
+        || !isset($directory_stat['mode'])
+        || !isset($directory_stat['uid'], $home_stat['uid'])
+        || (int) $directory_stat['uid'] !== (int) $home_stat['uid']
+        || (((int) $directory_stat['mode']) & 0077) !== 0
+        || (is_string($public_root)
+            && strpos($directory_real . DIRECTORY_SEPARATOR, rtrim($public_root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR) === 0)
+    ) {
+        return;
+    }
+
+    $path = $directory_real . DIRECTORY_SEPARATOR . 'issue-124-archive-health-io.json';
+    if (file_exists($path) || is_link($path)) {
+        return;
+    }
+
+    $json = json_encode($record, JSON_UNESCAPED_SLASHES);
+    if (!is_string($json) || strpos($json, "\n") !== false) {
+        return;
+    }
+
+    $old_umask = umask(0077);
+    $handle = @fopen($path, 'x');
+    umask($old_umask);
+    if (!is_resource($handle)) {
+        return;
+    }
+
+    $complete = false;
+    try {
+        if (!@chmod($path, 0600)) {
+            return;
+        }
+        $written = @fwrite($handle, $json . "\n");
+        $complete = $written === strlen($json) + 1
+            && @fflush($handle)
+            && (!function_exists('fsync') || @fsync($handle));
+    } finally {
+        @fclose($handle);
+        if (!$complete) {
+            @unlink($path);
+        }
+    }
+}
+
+function kiwi_retention_archive_health_io_record(array $before, array $after, float $started, float $finished): array
+{
+    return [
+        'schema' => 'kiwi_retention_archive_health_io_v1',
+        'scope' => 'sqlite_pragma_quick_check',
+        'started_at_utc' => gmdate('Y-m-d\TH:i:s\Z', (int) $started),
+        'finished_at_utc' => gmdate('Y-m-d\TH:i:s\Z', (int) $finished),
+        'duration_seconds' => max(0, $finished - $started),
+        'proc_self_io' => kiwi_retention_archive_health_io_delta(
+            $before['proc_self_io'] ?? null,
+            $after['proc_self_io'] ?? null,
+            ['read_bytes', 'write_bytes', 'syscr', 'syscw']
+        ),
+        'getrusage' => kiwi_retention_archive_health_io_delta(
+            $before['getrusage'] ?? null,
+            $after['getrusage'] ?? null,
+            ['ru_inblock', 'ru_oublock']
+        ),
+    ];
+}
+
 if (PHP_SAPI === 'cli'
     && isset($argv[1], $argv[2])
     && $argv[1] === '--kiwi-retention-health-child'
@@ -55,6 +196,7 @@ if (PHP_SAPI === 'cli'
     $check = is_array($payload) ? strtolower(trim((string) ($payload['check'] ?? ''))) : '';
     $persist_write_block_on_corruption = is_array($payload)
         && !empty($payload['persist_write_block_on_corruption']);
+    $io_diagnostic = $check === 'quick';
     $allow_blocked_recovery_verification = is_array($payload)
         && !empty($payload['allow_blocked_recovery_verification']);
     $corruption_handoff_timeout_seconds = is_array($payload)
@@ -81,6 +223,7 @@ if (PHP_SAPI === 'cli'
         'reason_code' => 'health_child_input_invalid',
         'check_completed' => false,
     ];
+    $io_record = null;
 
     if (in_array($check, ['quick', 'integrity'], true)
         && Kiwi_Retention_Archive_Name::parse(basename($archive_path)) !== null
@@ -158,7 +301,18 @@ if (PHP_SAPI === 'cli'
                     $pdo = kiwi_retention_archive_health_open_readonly($real_path);
                     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
                     $pdo->exec('PRAGMA query_only = ON');
+                    $io_started = microtime(true);
+                    $io_before = $io_diagnostic ? kiwi_retention_archive_health_io_snapshot() : [];
                     $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
+                    $io_finished = microtime(true);
+                    if ($io_diagnostic) {
+                        $io_record = kiwi_retention_archive_health_io_record(
+                            $io_before,
+                            kiwi_retention_archive_health_io_snapshot(),
+                            $io_started,
+                            $io_finished
+                        );
+                    }
                     $rows = is_array($rows) ? array_values(array_map('strval', $rows)) : [];
                     if (count($rows) === 1 && strtolower(trim($rows[0])) === 'ok') {
                         $result = [
@@ -239,6 +393,13 @@ if (PHP_SAPI === 'cli'
                 @flock($lock_resource, LOCK_UN);
                 @fclose($lock_resource);
             }
+        }
+    }
+
+    if (is_array($io_record)) {
+        try {
+            kiwi_retention_archive_health_write_io_record($io_record);
+        } catch (Throwable $error) {
         }
     }
 
