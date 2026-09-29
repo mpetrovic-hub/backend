@@ -93,6 +93,34 @@ function kiwi_retention_archive_health_io_delta(?array $before, ?array $after, a
     return $delta;
 }
 
+function kiwi_retention_archive_health_public_root(): ?string
+{
+    $current = realpath(__DIR__);
+    while (is_string($current) && $current !== '') {
+        if (is_file($current . DIRECTORY_SEPARATOR . 'wp-load.php')) {
+            return $current;
+        }
+
+        $parent = dirname($current);
+        if ($parent === $current) {
+            break;
+        }
+        $current = $parent;
+    }
+
+    $document_root = $_SERVER['DOCUMENT_ROOT'] ?? getenv('DOCUMENT_ROOT');
+    if (is_string($document_root) && $document_root !== '') {
+        $document_root = realpath($document_root);
+        if (is_string($document_root)
+            && is_file($document_root . DIRECTORY_SEPARATOR . 'wp-load.php')
+        ) {
+            return $document_root;
+        }
+    }
+
+    return null;
+}
+
 function kiwi_retention_archive_health_write_io_record(array $record): void
 {
     $home = getenv('HOME');
@@ -117,15 +145,15 @@ function kiwi_retention_archive_health_write_io_record(array $record): void
 
     $directory_stat = @stat($directory_real);
     $home_stat = @stat($home_real);
-    $public_root = realpath(dirname(__DIR__, 5));
+    $public_root = kiwi_retention_archive_health_public_root();
     if (!is_array($directory_stat)
         || !is_array($home_stat)
         || !isset($directory_stat['mode'])
         || !isset($directory_stat['uid'], $home_stat['uid'])
         || (int) $directory_stat['uid'] !== (int) $home_stat['uid']
         || (((int) $directory_stat['mode']) & 0077) !== 0
-        || (is_string($public_root)
-            && strpos($directory_real . DIRECTORY_SEPARATOR, rtrim($public_root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR) === 0)
+        || !is_string($public_root)
+        || kiwi_retention_archive_health_path_is_within($directory_real, $public_root)
     ) {
         return;
     }
@@ -162,6 +190,20 @@ function kiwi_retention_archive_health_write_io_record(array $record): void
             @unlink($path);
         }
     }
+}
+
+function kiwi_retention_archive_health_path_is_within(string $path, string $directory): bool
+{
+    $directory = rtrim($directory, DIRECTORY_SEPARATOR);
+    $prefix = $directory . DIRECTORY_SEPARATOR;
+    $path_with_separator = rtrim($path, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    if (DIRECTORY_SEPARATOR === '\\') {
+        return strcasecmp($path, $directory) === 0
+            || strncasecmp($path_with_separator, $prefix, strlen($prefix)) === 0;
+    }
+
+    return $path === $directory
+        || strncmp($path_with_separator, $prefix, strlen($prefix)) === 0;
 }
 
 function kiwi_retention_archive_health_io_record(array $before, array $after, float $started, float $finished): array

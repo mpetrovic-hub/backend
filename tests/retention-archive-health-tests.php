@@ -362,12 +362,14 @@ class Kiwi_Test_Sequenced_Safety_Gate extends Kiwi_Retention_Corruption_Safety_G
 function kiwi_run_retention_process(array $command, ?array $environment = null): array
 {
     $inherited_environment = getenv();
-    $process_environment = is_array($environment)
-        ? array_merge(is_array($inherited_environment) ? $inherited_environment : [], $environment)
-        : array_merge(
-            is_array($inherited_environment) ? $inherited_environment : [],
-            ['HOME' => (string) ($GLOBALS['kiwi_retention_test_home'] ?? sys_get_temp_dir())]
-        );
+    $process_environment = array_merge(
+        is_array($inherited_environment) ? $inherited_environment : [],
+        [
+            'HOME' => (string) ($GLOBALS['kiwi_retention_test_home'] ?? sys_get_temp_dir()),
+            'DOCUMENT_ROOT' => (string) ($GLOBALS['kiwi_retention_test_document_root'] ?? sys_get_temp_dir()),
+        ],
+        is_array($environment) ? $environment : []
+    );
     $pipes = [];
     $process = proc_open(
         $command,
@@ -401,8 +403,11 @@ function kiwi_run_retention_process(array $command, ?array $environment = null):
 $GLOBALS['kiwi_retention_test_home'] = kiwi_create_temp_directory('kiwi_retention_io_test_home');
 mkdir($GLOBALS['kiwi_retention_test_home'] . DIRECTORY_SEPARATOR . 'codex-deploy', 0700, true);
 @chmod($GLOBALS['kiwi_retention_test_home'] . DIRECTORY_SEPARATOR . 'codex-deploy', 0700);
+$GLOBALS['kiwi_retention_test_document_root'] = kiwi_create_temp_directory('kiwi_retention_io_test_webroot');
+file_put_contents($GLOBALS['kiwi_retention_test_document_root'] . DIRECTORY_SEPARATOR . 'wp-load.php', "<?php\n");
 register_shutdown_function(static function (): void {
     kiwi_remove_directory((string) ($GLOBALS['kiwi_retention_test_home'] ?? ''));
+    kiwi_remove_directory((string) ($GLOBALS['kiwi_retention_test_document_root'] ?? ''));
 });
 
 kiwi_run_test('Health IO diagnostic reports deltas and marks unavailable sources', function (): void {
@@ -467,7 +472,7 @@ kiwi_run_test('Quick health child records IO only when destination privacy is ve
         kiwi_assert_true(is_file($record_path), 'Expected the private diagnostic record.');
         $record_bytes = (string) file_get_contents($record_path);
         $record = json_decode(trim($record_bytes), true);
-        kiwi_assert_same(1, substr_count(trim($record_bytes), "\n"), 'Expected exactly one JSON line.');
+        kiwi_assert_same(1, substr_count($record_bytes, "\n"), 'Expected exactly one JSON line.');
         kiwi_assert_same('sqlite_pragma_quick_check', $record['scope'] ?? '', 'Expected the diagnostic scope.');
         kiwi_assert_true(array_key_exists('available', $record['proc_self_io'] ?? []), 'Expected source availability metadata.');
         kiwi_assert_same(0600, fileperms($record_path) & 0777, 'Expected private file permissions.');
