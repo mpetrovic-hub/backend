@@ -18,5 +18,5 @@ Capture the PHP child process I/O counters immediately around the SQLite `PRAGMA
 2. Deploy only the reviewed tool file. Do not edit `includes/`, the wrapper, or the cron entry.
 3. Allow exactly one regular `quick` cron run; do not invoke a manual quick check first. Read and preserve the JSON record, then compare its timestamp with the hPanel cron window.
 4. Remove the JSON record after the observation.
-5. Restore the tool to commit `4e53e4e982e4c04fefe6cd21308624f088d14d769`; verify the restored live tool hash is `d7f6cbeed4979844c6afd316bb6e84e7ddd2cde0d2716b03b1dccb001fd239fb` and run one regular quick check.
+5. Restore the tool to commit `4e53e4e982b58b8a0db02d6fb56e8fabe9c9d0bd`; verify the restored live tool hash is `d7f6cbeed4979844c6afd316bb6e84e7ddd2cde0d2716b03b1dccb001fd239fb` and run one regular quick check.
 6. The production deployment and cron observation require a separate approval; this code change does not perform them.
