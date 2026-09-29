@@ -279,6 +279,14 @@ Diese Folgearbeit ist bewusst nicht Bestandteil von Issue `#110`. Die Benachrich
 - Keine E-Mail mit vollständigen Rohfehlern, Archivdaten, Credentials oder Secrets.
 - Keine Umsetzung innerhalb von Issue `#110`.
 
+## 15: Fehlende SMS-Varianten-Summary-Historie untersuchen (Folgeissue)
+
+- [ ] Separates Folgeissue zur Ursachenklärung und zum Umgang mit fehlenden bzw. unvollständigen Zeilen in `wp_kiwi_sms_body_variant_summary` vorbereiten. Die weitere Untersuchung ist auf Nutzerentscheidung vom 17.09.2026 vertagt; keine Erweiterung der laufenden Planung zu Issue #122 / PR #125 und #127.
+- Produktionsabgleich vom 17.09.2026: Von 126 Kombinationen stimmen 118 in allen sieben Zählern überein. Sechs Summary-Zeilen fehlen, zwei weitere enthalten nur spätere Zählungen. Sämtliche Abweichungen betreffen `lp6-fr-v2` / `nth_fr_one_off_jplay`.
+- Fehlende Zählungen gegenüber den vorhandenen Assignments: 14.325 Assignments, 24 CTA1, 24 Handoff attempted, 24 Handoff hidden, 3 Handoff no hide, 14 Handoff returned; keine Conversion-Differenz. `lp5-fr` und `lp6-fr` sind in allen sieben Zählern ohne Abweichung.
+- Beispiel `TopJeuxNow`: 1.754 Assignments seit 15.05., heutige Summary erst seit 11.09. mit Zähler 1. Ihr Anlegedatum entspricht exakt dem neuesten Assignment; es beweist keinen Verlust am 11.09. Ursache und tatsächlicher Verlustzeitpunkt sind offen.
+- Im Folgeissue nach verfügbaren historischen Sicherungen/Änderungsnachweisen suchen und vor einer möglichen Wiederherstellung die Vollständigkeit der Quelldaten prüfen. Bisher keine Reparatur vorgenommen; keine automatische Reparatur oder Änderung des Assignment-Verhaltens beschlossen.
+
 ## 14: Indizes neu bewerten und evtl. entfernen
 
 - `wp_kiwi_landing_handoff_events` -- `created_landing_session_event`: plausibler Kandidat für späteres Entfernen, aber nicht als Nebenwirkung von #73. Erst auf Staging mit Summary-Laufzeit und allen Handoff-Abfragen prüfen.

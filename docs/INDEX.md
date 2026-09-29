@@ -24,6 +24,7 @@ This is the agent-facing map for repository documentation. Human quick-start inf
 
 | Task | Read first | Then read |
 |---|---|---|
+| Planning decisions, accepted tradeoffs, reasons behind prior choices | [Decision log](../DECISIONS.md) | Current issue and Planner Report; relevant area documentation |
 | Aggregator, country, flow, callback, billing | `integrations/INDEX.md` | Relevant Aggregator `INDEX.md`, general API doc, country/flow doc |
 | Capability coverage | `architecture/capability-matrix.md` | Supporting integration or architecture doc |
 | Landing-page folder contract, discovery, metadata | `architecture/landing-page-architecture.md` | `operations/landing-page-runtime.md` for production behavior |
