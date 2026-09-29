@@ -18704,3 +18704,4 @@ kiwi_run_test('Kiwi_Config exposes bounded operational-event cleanup defaults', 
 require_once __DIR__ . '/database-deployment-tests.php';
 require_once __DIR__ . '/landing-session-engagements-migration-tests.php';
 require_once __DIR__ . '/retention-archive-health-tests.php';
+require_once __DIR__ . '/db-connect-warning-context-diagnostic-tests.php';

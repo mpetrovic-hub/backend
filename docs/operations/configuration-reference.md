@@ -147,6 +147,60 @@ See `operational-events-runbook.md` for the daily hook, follow-up worker, lock, 
 
 Only add proxy IPs or CIDRs controlled by the deployment edge. Do not document real customer IPs.
 
+## Temporary database connection warning diagnostic
+
+This strictly temporary diagnostic adds restricted execution context next to the
+existing `mysqli_real_connect(): (HY000/2002): Operation not permitted` warning.
+It does not retry a connection, change WordPress, or create database traffic.
+
+- `KIWI_DB_CONNECT_DIAGNOSTICS_ENABLED`
+  - explicit opt-in; only the boolean value `true` enables the diagnostic
+  - no default; leaving it undefined keeps the diagnostic inactive
+- `KIWI_DB_CONNECT_DIAGNOSTICS_EXPIRES_AT_UTC`
+  - mandatory UTC expiry in the exact format `YYYY-MM-DDTHH:MM:SSZ`
+  - the diagnostic is active only before this instant; at and after it no error handler is registered
+- existing PHP error handler
+  - if one is already registered, this diagnostic remains inactive; PHP does
+    not expose that handler's error-level mask, so replacing or forwarding to
+    it could change its behaviour
+
+After review and separate production approval, add the following short-lived
+block in production `wp-config.php` immediately before the existing
+`require_once ABSPATH . 'wp-settings.php';` line. Set the timestamp to exactly
+seven calendar days after activation.
+
+```php
+define('KIWI_DB_CONNECT_DIAGNOSTICS_ENABLED', true);
+define('KIWI_DB_CONNECT_DIAGNOSTICS_EXPIRES_AT_UTC', 'YYYY-MM-DDTHH:MM:SSZ');
+
+require_once __DIR__ . '/wp-content/plugins/backend/tools/database/diagnostics/class-db-connect-warning-context-diagnostic.php';
+Kiwi_Db_Connect_Warning_Context_Diagnostic::register();
+```
+
+The diagnostic writes the `[kiwi-db-connect-diagnostic]` prefix and JSON with
+UTC time, PHP process ID, PHP-SAPI, execution context, entry-script basename
+from server-controlled `SCRIPT_FILENAME` only, and only for normal web
+requests a fixed route classification: `site_root`, `wp-login`, `wp-admin`,
+`wp-admin-admin-ajax`, `wp-json`, or `other_web_route`. It must not contain
+URL paths or path segments, IP addresses, headers, request bodies, query
+values, cookies, credentials, database contents, or CLI arguments. If
+`SCRIPT_FILENAME` is unavailable, `entry_script` is `null`; `SCRIPT_NAME` and
+request-derived `PHP_SELF` are never used. `wp-cron` and `cli` are classified
+without their request or command arguments.
+
+This section, the `wp-config.php` block, the helper file, and its tests are a
+single temporary unit. After the seven-day observation period, remove them in
+this safe order:
+
+1. Remove the two constants and the `require_once`/`register()` block from the
+   production `wp-config.php` first; do not deploy the helper deletion yet.
+2. Run an approved read-only WordPress bootstrap check and confirm that the
+   removed block no longer loads the diagnostic; do not generate a test warning.
+3. Only then deploy the dedicated Issue #130 cleanup commit that deletes the
+   helper, its tests, and this temporary documentation.
+4. Verify that production no longer has the `wp-config.php` block or helper
+   file, then close the Issue #130 follow-up checkbox.
+
 ## NTH callback observability
 
 - `KIWI_NTH_CALLBACK_LOGGING_ENABLED`
