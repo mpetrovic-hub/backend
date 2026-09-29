@@ -53,12 +53,12 @@ function kiwi_retention_archive_health_read_proc_io(): ?array
 
     $values = [];
     foreach (preg_split('/\r?\n/', trim($contents)) ?: [] as $line) {
-        if (preg_match('/^(read_bytes|write_bytes|syscr|syscw):\s*(\d+)$/', $line, $matches) === 1) {
+        if (preg_match('/^(read_bytes|write_bytes|syscw):\s*(\d+)$/', $line, $matches) === 1) {
             $values[$matches[1]] = (int) $matches[2];
         }
     }
 
-    return count($values) === 4 ? $values : null;
+    return count($values) === 3 ? $values : null;
 }
 
 function kiwi_retention_archive_health_io_snapshot(): array
@@ -108,8 +108,16 @@ function kiwi_retention_archive_health_public_root(): ?string
         $current = $parent;
     }
 
-    $document_root = $_SERVER['DOCUMENT_ROOT'] ?? getenv('DOCUMENT_ROOT');
-    if (is_string($document_root) && $document_root !== '') {
+    $document_roots = [];
+    $server_document_root = $_SERVER['DOCUMENT_ROOT'] ?? null;
+    if (is_string($server_document_root) && trim($server_document_root) !== '') {
+        $document_roots[] = $server_document_root;
+    }
+    $environment_document_root = getenv('DOCUMENT_ROOT');
+    if (is_string($environment_document_root) && trim($environment_document_root) !== '') {
+        $document_roots[] = $environment_document_root;
+    }
+    foreach ($document_roots as $document_root) {
         $document_root = realpath($document_root);
         if (is_string($document_root)
             && is_file($document_root . DIRECTORY_SEPARATOR . 'wp-load.php')
@@ -217,7 +225,7 @@ function kiwi_retention_archive_health_io_record(array $before, array $after, fl
         'proc_self_io' => kiwi_retention_archive_health_io_delta(
             $before['proc_self_io'] ?? null,
             $after['proc_self_io'] ?? null,
-            ['read_bytes', 'write_bytes', 'syscr', 'syscw']
+            ['read_bytes', 'write_bytes', 'syscw']
         ),
         'getrusage' => kiwi_retention_archive_health_io_delta(
             $before['getrusage'] ?? null,
@@ -343,17 +351,33 @@ if (PHP_SAPI === 'cli'
                     $pdo = kiwi_retention_archive_health_open_readonly($real_path);
                     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
                     $pdo->exec('PRAGMA query_only = ON');
-                    $io_started = microtime(true);
-                    $io_before = $io_diagnostic ? kiwi_retention_archive_health_io_snapshot() : [];
-                    $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
-                    $io_finished = microtime(true);
+                    $io_before = [];
+                    $io_started = null;
                     if ($io_diagnostic) {
-                        $io_record = kiwi_retention_archive_health_io_record(
-                            $io_before,
-                            kiwi_retention_archive_health_io_snapshot(),
-                            $io_started,
-                            $io_finished
-                        );
+                        try {
+                            $io_before = kiwi_retention_archive_health_io_snapshot();
+                        } catch (Throwable $error) {
+                            $io_before = [];
+                        }
+                        $io_started = microtime(true);
+                    }
+                    try {
+                        $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
+                    } finally {
+                        if ($io_diagnostic && is_float($io_started)) {
+                            try {
+                                $io_finished = microtime(true);
+                                $io_after = kiwi_retention_archive_health_io_snapshot();
+                                $io_record = kiwi_retention_archive_health_io_record(
+                                    $io_before,
+                                    $io_after,
+                                    $io_started,
+                                    $io_finished
+                                );
+                            } catch (Throwable $error) {
+                                $io_record = null;
+                            }
+                        }
                     }
                     $rows = is_array($rows) ? array_values(array_map('strval', $rows)) : [];
                     if (count($rows) === 1 && strtolower(trim($rows[0])) === 'ok') {

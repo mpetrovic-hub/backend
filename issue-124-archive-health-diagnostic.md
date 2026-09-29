@@ -10,7 +10,7 @@ Capture the PHP child process I/O counters immediately around the SQLite `PRAGMA
 - After measurement and lock release, the tool attempts a create-only write of one JSON line to `$HOME/codex-deploy/issue-124-archive-health-io.json`.
 - The destination must exist, resolve below the canonical home directory, remain outside the detected public web root, and have no group/other permissions. The new file is set to mode `0600`.
 - Missing/unsafe storage, an existing file, unavailable counters, or a write failure must not change the health result, reason code, output, or exit status.
-- The record contains no archive path or request data. It records UTC start/end, duration, `/proc/self/io` byte and syscall deltas, and `getrusage()` block deltas where available.
+- The record contains no archive path or request data. It records UTC start/end, duration, `/proc/self/io` read/write byte and write-syscall deltas, and `getrusage()` block deltas where available. The `syscr` counter is omitted because reading `/proc/self/io` increments that same counter.
 
 ## Deployment observation and rollback
 
