@@ -359,8 +359,17 @@ class Kiwi_Test_Sequenced_Safety_Gate extends Kiwi_Retention_Corruption_Safety_G
     }
 }
 
-function kiwi_run_retention_process(array $command): array
+function kiwi_run_retention_process(array $command, ?array $environment = null): array
 {
+    $inherited_environment = getenv();
+    $process_environment = array_merge(
+        is_array($inherited_environment) ? $inherited_environment : [],
+        [
+            'HOME' => (string) ($GLOBALS['kiwi_retention_test_home'] ?? sys_get_temp_dir()),
+            'DOCUMENT_ROOT' => (string) ($GLOBALS['kiwi_retention_test_document_root'] ?? sys_get_temp_dir()),
+        ],
+        is_array($environment) ? $environment : []
+    );
     $pipes = [];
     $process = proc_open(
         $command,
@@ -371,7 +380,7 @@ function kiwi_run_retention_process(array $command): array
         ],
         $pipes,
         null,
-        null,
+        $process_environment,
         ['bypass_shell' => true]
     );
     if (!is_resource($process)) {
@@ -390,6 +399,202 @@ function kiwi_run_retention_process(array $command): array
         'stderr' => is_string($stderr) ? trim($stderr) : '',
     ];
 }
+
+$GLOBALS['kiwi_retention_test_home'] = kiwi_create_temp_directory('kiwi_retention_io_test_home');
+mkdir($GLOBALS['kiwi_retention_test_home'] . DIRECTORY_SEPARATOR . 'codex-deploy', 0700, true);
+@chmod($GLOBALS['kiwi_retention_test_home'] . DIRECTORY_SEPARATOR . 'codex-deploy', 0700);
+$GLOBALS['kiwi_retention_test_document_root'] = kiwi_create_temp_directory('kiwi_retention_io_test_webroot');
+file_put_contents($GLOBALS['kiwi_retention_test_document_root'] . DIRECTORY_SEPARATOR . 'wp-load.php', "<?php\n");
+register_shutdown_function(static function (): void {
+    kiwi_remove_directory((string) ($GLOBALS['kiwi_retention_test_home'] ?? ''));
+    kiwi_remove_directory((string) ($GLOBALS['kiwi_retention_test_document_root'] ?? ''));
+});
+
+kiwi_run_test('Health IO diagnostic reports deltas and marks unavailable sources', function (): void {
+    $available = kiwi_retention_archive_health_io_record(
+        [
+            'proc_self_io' => ['read_bytes' => 10, 'write_bytes' => 20, 'syscr' => 3, 'syscw' => 4],
+            'getrusage' => ['ru_inblock' => 5, 'ru_oublock' => 6],
+        ],
+        [
+            'proc_self_io' => ['read_bytes' => 15, 'write_bytes' => 29, 'syscr' => 5, 'syscw' => 7],
+            'getrusage' => ['ru_inblock' => 5, 'ru_oublock' => 8],
+        ],
+        100.25,
+        101.75
+    );
+    kiwi_assert_same(5, $available['proc_self_io']['read_bytes'], 'Expected read byte delta.');
+    kiwi_assert_same(9, $available['proc_self_io']['write_bytes'], 'Expected write byte delta.');
+    kiwi_assert_same(false, array_key_exists('syscr', $available['proc_self_io']), 'Expected the self-counting read syscall counter to be omitted.');
+    kiwi_assert_same(3, $available['proc_self_io']['syscw'], 'Expected the write syscall counter to remain available.');
+    kiwi_assert_same(2, $available['getrusage']['ru_oublock'], 'Expected getrusage block delta.');
+    kiwi_assert_same(1.5, $available['duration_seconds'], 'Expected measured check duration.');
+
+    $unavailable = kiwi_retention_archive_health_io_record([], [], 100, 101);
+    kiwi_assert_same(false, $unavailable['proc_self_io']['available'], 'Expected missing /proc source to be unavailable.');
+    kiwi_assert_same(false, $unavailable['getrusage']['available'], 'Expected missing getrusage source to be unavailable.');
+
+    $had_server_document_root = array_key_exists('DOCUMENT_ROOT', $_SERVER);
+    $previous_server_document_root = $_SERVER['DOCUMENT_ROOT'] ?? null;
+    $previous_environment_document_root = getenv('DOCUMENT_ROOT');
+    $_SERVER['DOCUMENT_ROOT'] = '';
+    putenv('DOCUMENT_ROOT=' . (string) $GLOBALS['kiwi_retention_test_document_root']);
+    try {
+        kiwi_assert_same(
+            realpath((string) $GLOBALS['kiwi_retention_test_document_root']),
+            kiwi_retention_archive_health_public_root(),
+            'Expected an empty CLI DOCUMENT_ROOT to fall back to the environment value.'
+        );
+    } finally {
+        if ($had_server_document_root) {
+            $_SERVER['DOCUMENT_ROOT'] = $previous_server_document_root;
+        } else {
+            unset($_SERVER['DOCUMENT_ROOT']);
+        }
+        if (is_string($previous_environment_document_root)) {
+            putenv('DOCUMENT_ROOT=' . $previous_environment_document_root);
+        } else {
+            putenv('DOCUMENT_ROOT');
+        }
+    }
+});
+
+kiwi_run_test('Quick health child records IO only when destination privacy is verifiable', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_io_record');
+    $deploy = $root . DIRECTORY_SEPARATOR . 'codex-deploy';
+    mkdir($deploy, 0700);
+    @chmod($deploy, 0700);
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $readiness = $root . DIRECTORY_SEPARATOR . '.kiwi_retention_health_child_' . str_repeat('b', 32) . '.ready';
+    $fixture = kiwi_run_retention_process(array_merge(kiwi_test_retention_sqlite_php_command(), [
+        '-r',
+        '$pdo=new PDO("sqlite:".$argv[1]);$pdo->exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY)");',
+        $archive,
+    ]));
+    try {
+        kiwi_assert_same(0, $fixture['exit_code'], 'Expected a valid SQLite fixture.');
+        $payload = base64_encode((string) json_encode([
+            'archive_path' => $archive,
+            'readiness_path' => $readiness,
+            'check' => 'quick',
+        ]));
+        $command = array_merge(kiwi_test_retention_sqlite_php_command(), [
+            __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+            '--kiwi-retention-health-child',
+            $payload,
+        ]);
+        $environment = ['HOME' => $root];
+        $first = kiwi_run_retention_process($command, $environment);
+        $first_json = json_decode((string) $first['stdout'], true);
+        kiwi_assert_same(0, $first['exit_code'], 'Expected the healthy check to keep exit code 0.');
+        kiwi_assert_same('ok', $first_json['result'] ?? '', 'Expected the healthy check result to remain unchanged.');
+        kiwi_assert_same('sqlite_check_ok', $first_json['reason_code'] ?? '', 'Expected the health reason to remain unchanged.');
+
+        $record_path = $deploy . DIRECTORY_SEPARATOR . 'issue-124-archive-health-io.json';
+        if (DIRECTORY_SEPARATOR !== '/') {
+            kiwi_assert_same(false, file_exists($record_path), 'Expected fail-closed logging when private permissions cannot be verified.');
+            return;
+        }
+        kiwi_assert_true(is_file($record_path), 'Expected the private diagnostic record.');
+        $record_bytes = (string) file_get_contents($record_path);
+        $record = json_decode(trim($record_bytes), true);
+        kiwi_assert_same(1, substr_count($record_bytes, "\n"), 'Expected exactly one JSON line.');
+        kiwi_assert_same('sqlite_pragma_quick_check', $record['scope'] ?? '', 'Expected the diagnostic scope.');
+        kiwi_assert_true(array_key_exists('available', $record['proc_self_io'] ?? []), 'Expected source availability metadata.');
+        kiwi_assert_same(0600, fileperms($record_path) & 0777, 'Expected private file permissions.');
+
+        $second = kiwi_run_retention_process($command, $environment);
+        kiwi_assert_same($first['stdout'], $second['stdout'], 'Expected repeated diagnostics not to alter health output.');
+        kiwi_assert_same($record_bytes, file_get_contents($record_path), 'Expected an existing record never to be appended or overwritten.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Missing HOME and unsafe diagnostic directory never change health results', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_io_skip');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $readiness = $root . DIRECTORY_SEPARATOR . '.kiwi_retention_health_child_' . str_repeat('c', 32) . '.ready';
+    $fixture = kiwi_run_retention_process(array_merge(kiwi_test_retention_sqlite_php_command(), [
+        '-r',
+        '$pdo=new PDO("sqlite:".$argv[1]);$pdo->exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY)");',
+        $archive,
+    ]));
+    try {
+        kiwi_assert_same(0, $fixture['exit_code'], 'Expected a valid SQLite fixture.');
+        $payload = base64_encode((string) json_encode([
+            'archive_path' => $archive,
+            'readiness_path' => $readiness,
+            'check' => 'quick',
+        ]));
+        $command = array_merge(kiwi_test_retention_sqlite_php_command(), [
+            __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+            '--kiwi-retention-health-child',
+            $payload,
+        ]);
+        $missing_home = kiwi_run_retention_process($command, ['HOME' => '']);
+        $missing_json = json_decode((string) $missing_home['stdout'], true);
+        kiwi_assert_same(0, $missing_home['exit_code'], 'Expected missing HOME not to alter exit status.');
+        kiwi_assert_same('sqlite_check_ok', $missing_json['reason_code'] ?? '', 'Expected missing HOME not to alter the health reason.');
+
+        $insecure_home = $root . DIRECTORY_SEPARATOR . 'insecure-home';
+        mkdir($insecure_home . DIRECTORY_SEPARATOR . 'codex-deploy', 0755, true);
+        @chmod($insecure_home . DIRECTORY_SEPARATOR . 'codex-deploy', 0755);
+        $insecure = kiwi_run_retention_process($command, ['HOME' => $insecure_home]);
+        $insecure_json = json_decode((string) $insecure['stdout'], true);
+        kiwi_assert_same($missing_home['stdout'], $insecure['stdout'], 'Expected unsafe logging destination not to alter output.');
+        kiwi_assert_same($missing_home['exit_code'], $insecure['exit_code'], 'Expected unsafe logging destination not to alter exit status.');
+        kiwi_assert_same('sqlite_check_ok', $insecure_json['reason_code'] ?? '', 'Expected unsafe destination not to alter the health reason.');
+        kiwi_assert_same(false, file_exists($insecure_home . DIRECTORY_SEPARATOR . 'codex-deploy' . DIRECTORY_SEPARATOR . 'issue-124-archive-health-io.json'), 'Expected no record in a non-private directory.');
+
+        $home_file = $root . DIRECTORY_SEPARATOR . 'home-is-a-file';
+        file_put_contents($home_file, '');
+        $write_failure = kiwi_run_retention_process($command, ['HOME' => $home_file]);
+        $failure_json = json_decode((string) $write_failure['stdout'], true);
+        kiwi_assert_same($missing_home['stdout'], $write_failure['stdout'], 'Expected a failed diagnostic destination not to alter output.');
+        kiwi_assert_same($missing_home['exit_code'], $write_failure['exit_code'], 'Expected a failed diagnostic destination not to alter exit status.');
+        kiwi_assert_same('sqlite_check_ok', $failure_json['reason_code'] ?? '', 'Expected a failed diagnostic destination not to alter the health reason.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
+kiwi_run_test('Failed quick PRAGMA still records its diagnostic without changing the health error', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_io_failed_pragma');
+    $deploy = $root . DIRECTORY_SEPARATOR . 'codex-deploy';
+    mkdir($deploy, 0700);
+    @chmod($deploy, 0700);
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $readiness = $root . DIRECTORY_SEPARATOR . '.kiwi_retention_health_child_' . str_repeat('d', 32) . '.ready';
+    file_put_contents($archive, 'not a sqlite database');
+    $payload = base64_encode((string) json_encode([
+        'archive_path' => $archive,
+        'readiness_path' => $readiness,
+        'check' => 'quick',
+    ]));
+    $process = kiwi_run_retention_process(array_merge(kiwi_test_retention_sqlite_php_command(), [
+        __DIR__ . '/../tools/database/kiwi-retention-archive-health.php',
+        '--kiwi-retention-health-child',
+        $payload,
+    ]), ['HOME' => $root]);
+    try {
+        $result = json_decode((string) $process['stdout'], true);
+        kiwi_assert_same(2, $process['exit_code'], 'Expected a failed quick check to retain exit code 2.');
+        kiwi_assert_same('error', $result['result'] ?? '', 'Expected the failed quick check to remain an error.');
+        kiwi_assert_same('sqlite_readonly_check_failed', $result['reason_code'] ?? '', 'Expected the existing Health reason to remain unchanged.');
+
+        $record_path = $deploy . DIRECTORY_SEPARATOR . 'issue-124-archive-health-io.json';
+        if (DIRECTORY_SEPARATOR !== '/') {
+            kiwi_assert_same(false, file_exists($record_path), 'Expected fail-closed logging when private permissions cannot be verified.');
+            return;
+        }
+        kiwi_assert_true(is_file($record_path), 'Expected the failed SQLite check measurement to be written.');
+        $record_bytes = (string) file_get_contents($record_path);
+        kiwi_assert_same(1, substr_count($record_bytes, "\n"), 'Expected one diagnostic line for the failed check.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
 
 function kiwi_run_retention_lock_probe(string $archive): array
 {
@@ -3649,7 +3854,7 @@ kiwi_run_test('WP-CLI exposes exactly check diagnose and unblock with compact JS
     );
     kiwi_assert_true(strpos($source, "LOCK_EX | LOCK_NB") !== false, 'Expected the Health child to own the exclusive generation lock.');
     kiwi_assert_true(strpos($source, 'unset($result[\'_exit_code\'])') !== false, 'Expected process exit code not to be duplicated in public JSON.');
-    kiwi_assert_true(strpos($source, "'scope'") === false, 'Expected no Daily/Annual scope field.');
+    kiwi_assert_true(strpos($source, "\$result['scope']") === false, 'Expected diagnostic scope to stay outside the public health result.');
     kiwi_assert_true(strpos($source, 'is_definitive_corruption') === false, 'Expected exceptions never to classify corruption.');
 });
 
