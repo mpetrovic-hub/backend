@@ -67,6 +67,7 @@ require_once __DIR__ . '/services/class-tracking-capture-service.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-adapter-interface.php';
 require_once __DIR__ . '/services/class-landing-primary-cta-resolver.php';
 require_once __DIR__ . '/services/class-landing-kpi-service.php';
+require_once __DIR__ . '/services/class-landing-funnel-read-context.php';
 require_once __DIR__ . '/services/class-landing-funnel-daily-summary-aggregation-service.php';
 require_once __DIR__ . '/services/class-landing-funnel-daily-tkzone-summary-aggregation-service.php';
 require_once __DIR__ . '/services/class-landing-session-raw-context-compaction-service.php';

@@ -1,0 +1,225 @@
+{
+  "preview_no_persistent_writes": {
+    "passed": true,
+    "changes": [
+      {
+        "summary": "main",
+        "metric_date": "2026-08-30",
+        "dimension_hash": "ec7f53da75e90354b39cadf1f991e339bc30dd07d4430d2a3c75edae61db0613",
+        "metric": "cta1_click_events",
+        "before": 5475,
+        "after": 5483
+      },
+      {
+        "summary": "tkzone",
+        "metric_date": "2026-08-30",
+        "dimension_hash": "11e9cbdb59af6a89f68eeb7a4ff6e57e72796dd75c050cc469e59a2cfae18fef",
+        "metric": "cta1_click_events",
+        "before": 5475,
+        "after": 5483
+      }
+    ],
+    "deep_dates": [
+      "2026-09-06",
+      "2026-08-30",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-05"
+    ]
+  },
+  "worker_requires_expected_run": {
+    "passed": true,
+    "persistent_state_unchanged": true
+  },
+  "apply_resume_completed": {
+    "passed": true,
+    "status": "completed",
+    "archived_rows": 24,
+    "deleted_rows": 24,
+    "verification": {
+      "receipt_verified": true,
+      "exact_source_ids_verified": true,
+      "remaining_frozen_scope_rows": 0
+    },
+    "journal_events": 7
+  },
+  "multiple-generations": {
+    "passed": true,
+    "generations": 2,
+    "snapshot_rows": 34,
+    "duplicates": 0
+  },
+  "generation-overlap": {
+    "passed": true,
+    "generations": 2,
+    "snapshot_rows": 34,
+    "duplicates": 1
+  },
+  "restricted_reader_preview": {
+    "passed": true,
+    "persistent_update_denied": true
+  },
+  "missing_receipt": {
+    "passed": true,
+    "blocked_reason": "archive_receipt_incomplete",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "missing_archive_row": {
+    "passed": true,
+    "blocked_reason": "archive_rows_incomplete",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "missing_archive": {
+    "passed": true,
+    "blocked_reason": "handoff_audit_incomplete",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "live_conflict": {
+    "passed": true,
+    "blocked_reason": "live_archive_conflict",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "logical_duplicate": {
+    "passed": true,
+    "blocked_reason": "handoff_identity_conflict",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "missing_audit": {
+    "passed": true,
+    "blocked_reason": "archive_batch_audit_mismatch",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "audit_count_mismatch": {
+    "passed": true,
+    "blocked_reason": "handoff_audit_incomplete",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "orphan_batch": {
+    "passed": true,
+    "blocked_reason": "archive_batch_audit_mismatch",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "blocked_archive": {
+    "passed": true,
+    "blocked_reason": "archive_health_not_ok",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "locked_archive": {
+    "passed": true,
+    "blocked_reason": "archive_health_not_ok",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "corrupt_archive": {
+    "passed": true,
+    "blocked_reason": "archive_health_not_ok",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "non_cta_change": {
+    "passed": true,
+    "blocked_reason": [
+      "main/2026-08-30/bc1b8375e389384bfab4918c56e9c2e204857b9f7159be6a8017fc6916cbbfe8/handoff_attempts_changed",
+      "main/2026-08-30/ec7f53da75e90354b39cadf1f991e339bc30dd07d4430d2a3c75edae61db0613/handoff_attempts_changed"
+    ],
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "changed_preview": {
+    "passed": true,
+    "blocked_reason": "reviewed_preview_changed",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "publish_failure": {
+    "passed": true,
+    "blocked_reason": "recovery_query_failed",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "journal_failure": {
+    "passed": true,
+    "blocked_reason": "recovery_report_write_failed",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "wrong_run": {
+    "passed": true,
+    "blocked_reason": "recovery_run_identity_mismatch",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": false
+  },
+  "concurrent_change": {
+    "passed": true,
+    "blocked_reason": "concurrent_probe_finished",
+    "persistent_state_unchanged": true,
+    "concurrent_write_blocked": true
+  },
+  "lost_commit_acknowledgement": {
+    "passed": true,
+    "commit_outcome": "unknown",
+    "same_run_resumed_to_completed": true
+  },
+  "completed_receipt_reverification": {
+    "passed": true,
+    "missing_receipt_rejected": true
+  },
+  "explicit_range_and_cutoff_guards": {
+    "passed": true,
+    "persistent_state_unchanged": true
+  },
+  "cli_early_private_preview": {
+    "passed": true,
+    "halts_before_init": true,
+    "report_matches_stdout": true,
+    "rejects_report_overwrite_and_webroot": true
+  },
+  "validation": {
+    "base_commit": "d8d2382cfe1010b53ac203adcfeb31327da0ce6a",
+    "php": "8.4.24",
+    "mariadb": "11.8.6-MariaDB-0+deb13u1 from Debian",
+    "production_access": false,
+    "synthetic_data_only": true,
+    "runtime_files": {
+      "class-config.php": "12531e97c7f39ab27980a9fecb8da4dca6ed3d7f6b3641c58d1d93357390b882",
+      "class-database-table-names.php": "c271294dae9666dd04223b1c6bd045723fb0696f9f96553d820e95b935e4795b",
+      "class-landing-funnel-daily-summary-aggregation-service.php": "a3b170a257340909bb55a323db6992878d85c0a774c78e98b1fecd2ca43f2041",
+      "class-landing-funnel-daily-summary-repository.php": "a43423be2f30141d315cbfd12f4d2ceac9000d186223530ed1a8517c98d519ca",
+      "class-landing-funnel-daily-tkzone-summary-aggregation-service.php": "f596164ea4bff2c8ba0a5599e075934a2630684caeec8588a9bbcd27af204d6a",
+      "class-landing-funnel-daily-tkzone-summary-repository.php": "dcf5ef1c71ff06ada1ef561c845e3f236d067f2503fcf023edbeb87507d20c98",
+      "class-landing-funnel-read-context.php": "9f694bba45ea2bbf82dbbc4819b49fd239b6faf191d5b788aa1654ba0f9e190c",
+      "class-operational-event-repository.php": "44fcddf37b87e8e94d6bfe98b5899aabf3d24b86924d508ae5ac0c025742bc84",
+      "class-operational-event-service.php": "a906649afbae19ad2cfb96dda81587401d4b0fe4f5fec242eaacf70ea9a96cce",
+      "class-retention-archive-check-supervisor.php": "6e24c92dd6ca9cb8353fa68b4de4c1b2ca4d48e0ef9c1cde12fddb9ff6cb1c16",
+      "class-retention-archive-lock.php": "7fcb0f214a8f7f71915f0cfe914e8e798571d78141e0730c9ec66bbaad9d1c8f",
+      "class-retention-archive-name.php": "f06bbb7add80dfe53e6d1e764e1a23f7b6df880a55a290a2d27ea8b4e6cdb7fc",
+      "class-retention-archive-write-block.php": "bf8dc8bb486c53705a2061c7a17d6aafd0e9615c09145252fbf3255d1a518746",
+      "class-retention-cleanup-run-repository.php": "1d7474bed4f536ac1d90931ca187ac576d76284685bb398130bce787967c3208",
+      "class-retention-cleanup-service.php": "1c72835fb5e632be6a85a6094332a6f2cf2e5078d9feb635f307aaec0c8bbf21",
+      "class-retention-corruption-safety-gate-coordinator.php": "3afb7619a098b5aa5f15f98fdb5e5583c8df5bea42e90a6a403e9449f61439f8",
+      "class-retention-coverage-gate.php": "e7799cd646f8164a1ab14362744909b3c356b920e00044b84416e48c535a6c14",
+      "class-retention-recovery-handoff-reader.php": "796505a5656de19bcb92a47cd8d8e2800aa61938eefcc7a88b17544c998a3a90",
+      "class-retention-recovery-sql.php": "635bdca921dda124238e1600caca295e41f4adb7be98ca44fc4b1aa6768107a8",
+      "class-retention-sessions-recovery-service.php": "00c829741af8bfc49f704b93fd0119960f06919538a4ccea508136908f7fe761",
+      "class-retention-source-registry.php": "e8ea9ccd76061d261af56b81b23544907f94d760f6b1710a4bf07b0064dab1b1",
+      "class-retention-sqlite-archive-service.php": "5b007d28f98e5185eb5ef9442f999a3ff59a36a29b712e787cdc367880d6de1d",
+      "class-retention-table-growth-snapshot-repository.php": "da064ffbd52760c49b2597743962d6b7ebca5993427c0476c24f1da73538898c",
+      "kiwi-retention-archive-health.php": "87e293bd4e65925e4e2c104678a916acd83ce4c416071e53e7829aa7573bf2b4",
+      "kiwi-retention-sessions-recovery.php": "108a6c4fd68476817053ca9aa6e0b120c57afbe1a44beaa4658086c7f8582882"
+    },
+    "repository_regression_checks_passed": 403,
+    "integration_scenarios_passed": 27
+  }
+}

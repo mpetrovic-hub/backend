@@ -1,5 +1,7 @@
 # Retention Runbook
 
+For bounded CTA reconciliation using verified archive/live Handoffs and an external preview/apply/resume command, use [Sessions recovery](retention-sessions-recovery.md). This separate recovery procedure does not change the normal policies below.
+
 ## Read when
 
 - Work touches raw landing-session or landing-handoff cleanup, retention coverage policy, SQLite archive/delete, retention WP-Cron, or landing-session raw-context compaction.

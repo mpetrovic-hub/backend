@@ -9,15 +9,18 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
     private $repository;
     private $config;
     private $last_error = '';
+    private $read_context;
 
     public function __construct(
         ?Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository $repository = null,
-        ?Kiwi_Config $config = null
+        ?Kiwi_Config $config = null,
+        ?Kiwi_Landing_Funnel_Read_Context $read_context = null
     ) {
         $this->repository = $repository instanceof Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository
             ? $repository
             : new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository();
         $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
+        $this->read_context = $read_context;
     }
 
     public function refresh_range(string $from_date, string $to_date): array
@@ -128,7 +131,9 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
         $summary_table = $this->repository->get_table_name();
         $landing_session_table = $wpdb->prefix . 'kiwi_landing_page_sessions';
         $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
-        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+        $handoff_table = $this->read_context
+            ? $this->read_context->table('handoffs', $wpdb->prefix . 'kiwi_landing_handoff_events')
+            : $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
         $pid_placeholders = $this->build_placeholder_list(count($tkzone_summary_pids));
         $landing_pid_filter_sql = $pid_placeholders !== ''
@@ -357,7 +362,7 @@ class Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service
               )";
     }
 
-    private function build_refresh_insert_params(
+    public function build_refresh_insert_params(
         string $metric_date,
         string $from_datetime,
         string $to_exclusive_datetime,

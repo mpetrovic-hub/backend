@@ -75,6 +75,14 @@ Recovery is an operator decision outside normal runtime. `unblock` requires expl
 
 This order preserves a continuous safety gate. Replacement transfers no cursor or receipt and creates no automatic successor. A later normal scheduler may create a fresh run against the explicitly available archive generation. Existing rows already deleted into a corrupt archive cannot be reconstructed by the health controller.
 
+## Bounded summary reconciliation
+
+The external Sessions recovery command can inject an explicit `Kiwi_Landing_Funnel_Read_Context` into the two existing aggregators and the Coverage Gate. The default context continues to read ordinary live tables. A recovery context names a connection-local verified archive/live Handoff snapshot and candidate summaries; it can require deep comparison for every explicitly repaired date without changing comparison rules or tolerances.
+
+The external command validates archive Source-ID evidence against independent completed Handoff cleanup audits, builds candidates in temporary tables and publishes only changed CTA metrics. Both summary changes and the normal manual scheduler start share one MySQL transaction. The normal run's gate evidence records the reviewed preview hash, runtime-code hash, repair scope and independently captured initial eligible-ID fingerprint. Workers use the ordinary archive-before-delete contract and can require an expected Run-ID to reject a later source run before archive/delete. Completion is independently checked against the initial ID fingerprint and persisted receipts.
+
+No read context or recovery command is activated in normal cron or HTTP handlers, and no recovery schema or policy change is introduced. This capability addresses an explicit acute repair; future avoidance of the archived-Handoff dependency remains separate work. Operational commands, limitations and rollback/unknown-commit handling are in [Sessions recovery](../operations/retention-sessions-recovery.md).
+
 ## Deliberate exclusions
 
 The capability deliberately contains no central state reducer, state JSON, daily/weekly policy, bounded retry planner, annual snapshot, quarantine marker, automatic successor generation, automatic repair, notification transport, or mutation from `diagnose`. Legacy artifacts may remain on disk during migration, but current code neither reads nor writes them.

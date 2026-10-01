@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-10-01:
+- [Sessions Retention Recovery] Add an external bounded preview/apply/resume command using verified archive/live Handoff evidence. Preserve all non-CTA summary values, publish reviewed CTA changes together with the normal manual retention start, and verify exact receipt-backed completion. Normal policies and click tolerances are unchanged; Production execution is not included.
+
 2026-09-24:
 - [FR NTH SMS Allocation] Select the eight approved weighted `fr_sms_v2` entries from an NTH-owned configuration for eligible France one-off landings. Keep selection generic, preserve existing assignments/tokens and experiment switches, and document tested application-only return to the version-aware #122 release with both generations retained. Production rollout remains separately authorized.
 

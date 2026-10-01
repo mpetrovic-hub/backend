@@ -37,10 +37,15 @@ class Kiwi_Retention_Coverage_Gate
     private const MAX_CTA_WARNING_DEEP_DATES = 2;
 
     private $config;
+    private $read_context;
 
-    public function __construct(?Kiwi_Config $config = null)
+    public function __construct(
+        ?Kiwi_Config $config = null,
+        ?Kiwi_Landing_Funnel_Read_Context $read_context = null
+    )
     {
         $this->config = $config instanceof Kiwi_Config ? $config : new Kiwi_Config();
+        $this->read_context = $read_context;
     }
 
     public function check_landing_page_sessions(array $source, string $cutoff_value): array
@@ -86,6 +91,19 @@ class Kiwi_Retention_Coverage_Gate
         }
 
         $deep_plan = $this->select_deep_compare_dates($candidate_dates, $main_details, $tkzone_details, $accepted_dates);
+        if ($this->read_context) {
+            foreach ($this->read_context->deep_dates() as $date) {
+                if (!in_array($date, $candidate_dates, true) || isset($accepted_dates[$date])) {
+                    return $this->build_failed_gate_result(
+                        $requested_cutoff_value, 'explicit_deep_date_unavailable',
+                        'An explicit deep-compare date has no eligible raw scope.'
+                    );
+                }
+                $deep_plan['dates'][] = $date;
+                $deep_plan['reasons'][$date][] = 'explicit_recovery_date';
+            }
+            $deep_plan['dates'] = array_values(array_unique($deep_plan['dates']));
+        }
         $deep_checked_dates = [];
 
         foreach ((array) ($deep_plan['dates'] ?? []) as $metric_date) {
@@ -125,7 +143,7 @@ class Kiwi_Retention_Coverage_Gate
         $deep_checkable_dates = $this->filter_deep_checkable_dates($candidate_dates, $accepted_dates);
         $totals_only_dates = array_values(array_diff($deep_checkable_dates, $deep_checked_dates));
 
-        return [
+        $result = [
             'status' => $outcome['status'],
             'coverage_mode' => self::COVERAGE_MODE,
             'requested_cutoff_value' => $requested_cutoff_value,
@@ -142,6 +160,10 @@ class Kiwi_Retention_Coverage_Gate
             'main_summary' => $this->build_summary_result('main', $main_details),
             'tkzone_summary' => $this->build_summary_result('tkzone', $tkzone_details),
         ];
+        if ($this->read_context && $this->read_context->audit()) {
+            $result['recovery'] = $this->read_context->audit();
+        }
+        return $result;
     }
 
     protected function find_candidate_metric_dates(array $source, string $cutoff_value): array
@@ -200,9 +222,13 @@ class Kiwi_Retention_Coverage_Gate
         global $wpdb;
 
         $source_table = (string) ($source['source_table'] ?? '');
-        $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_summary';
+        $summary_table = $this->read_context
+            ? $this->read_context->table('main_summary', $wpdb->prefix . 'kiwi_landing_funnel_daily_summary')
+            : $wpdb->prefix . 'kiwi_landing_funnel_daily_summary';
         $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
-        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+        $handoff_table = $this->read_context
+            ? $this->read_context->table('handoffs', $wpdb->prefix . 'kiwi_landing_handoff_events')
+            : $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
 
         if (!$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table, $sales_table])) {
@@ -272,9 +298,13 @@ class Kiwi_Retention_Coverage_Gate
         }
 
         $source_table = (string) ($source['source_table'] ?? '');
-        $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary';
+        $summary_table = $this->read_context
+            ? $this->read_context->table('tkzone_summary', $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary')
+            : $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary';
         $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
-        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+        $handoff_table = $this->read_context
+            ? $this->read_context->table('handoffs', $wpdb->prefix . 'kiwi_landing_handoff_events')
+            : $wpdb->prefix . 'kiwi_landing_handoff_events';
         $sales_table = $wpdb->prefix . 'kiwi_sales';
 
         if (!$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table, $sales_table])) {
@@ -340,9 +370,13 @@ class Kiwi_Retention_Coverage_Gate
 
         $metric_date = (string) ($result['metric_date'] ?? '');
         $source_table = (string) ($source['source_table'] ?? '');
-        $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_summary';
+        $summary_table = $this->read_context
+            ? $this->read_context->table('main_summary', $wpdb->prefix . 'kiwi_landing_funnel_daily_summary')
+            : $wpdb->prefix . 'kiwi_landing_funnel_daily_summary';
         $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
-        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+        $handoff_table = $this->read_context
+            ? $this->read_context->table('handoffs', $wpdb->prefix . 'kiwi_landing_handoff_events')
+            : $wpdb->prefix . 'kiwi_landing_handoff_events';
 
         if ($metric_date === '' || !$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table])) {
             return $this->merge_deep_compare_result($result, [
@@ -394,9 +428,13 @@ class Kiwi_Retention_Coverage_Gate
 
         $metric_date = (string) ($result['metric_date'] ?? '');
         $source_table = (string) ($source['source_table'] ?? '');
-        $summary_table = $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary';
+        $summary_table = $this->read_context
+            ? $this->read_context->table('tkzone_summary', $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary')
+            : $wpdb->prefix . 'kiwi_landing_funnel_daily_tkzone_summary';
         $engagement_table = Kiwi_Database_Table_Names::landing_session_engagements();
-        $handoff_table = $wpdb->prefix . 'kiwi_landing_handoff_events';
+        $handoff_table = $this->read_context
+            ? $this->read_context->table('handoffs', $wpdb->prefix . 'kiwi_landing_handoff_events')
+            : $wpdb->prefix . 'kiwi_landing_handoff_events';
 
         if ($metric_date === '' || !$this->identifiers_are_valid([$source_table, $summary_table, $engagement_table, $handoff_table])) {
             return $this->merge_deep_compare_result($result, [

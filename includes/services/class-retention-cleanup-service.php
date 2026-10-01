@@ -476,6 +476,24 @@ class Kiwi_Retention_Cleanup_Service
 
     public function run_worker(string $source_key): array
     {
+        return $this->execute_worker($source_key, '');
+    }
+
+    public function run_worker_for_run(string $source_key, string $expected_run_id): array
+    {
+        if ($expected_run_id === '') {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'cleanup_run_identity_required',
+                'error_message' => 'Retention worker requires the expected cleanup run.',
+            ];
+        }
+        return $this->execute_worker($source_key, $expected_run_id);
+    }
+
+    private function execute_worker(string $source_key, string $expected_run_id): array
+    {
         $source = $this->source_registry->get($source_key);
 
         if (!is_array($source)) {
@@ -514,6 +532,15 @@ class Kiwi_Retention_Cleanup_Service
                 'worker_phase' => 'no_open_run',
                 'error_code' => 'no_open_cleanup_run',
                 'error_message' => 'Retention worker skipped because no open cleanup run exists.',
+            ];
+        }
+
+        if ($expected_run_id !== '' && (string) ($run['run_id'] ?? '') !== $expected_run_id) {
+            return [
+                'success' => false,
+                'status' => 'failed',
+                'error_code' => 'cleanup_run_identity_mismatch',
+                'error_message' => 'Retention worker did not receive the expected cleanup run.',
             ];
         }
 
