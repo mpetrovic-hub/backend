@@ -261,6 +261,16 @@ kiwi_run_test('DB connect warning diagnostic extracts only one static scalar res
         4321,
         $now
     );
+    $nul_truncated_selector_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/index.php?rest_route=%2Fkiwi-backend%2Fv1%2Fnth-callback&rest_route%00=%2Fevil',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
     $absolute_request_target_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
         [
             'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
@@ -285,6 +295,7 @@ kiwi_run_test('DB connect warning diagnostic extracts only one static scalar res
     kiwi_assert_same(false, array_key_exists('rest_route', $unallowed_route_context), 'Must omit a non-allowlisted rest route.');
     kiwi_assert_same(false, array_key_exists('rest_route', $encoded_query_suffix_context), 'Must omit an encoded query suffix on a rest route selector.');
     kiwi_assert_same(false, array_key_exists('rest_route', $encoded_fragment_suffix_context), 'Must omit an encoded fragment suffix on a rest route selector.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $nul_truncated_selector_context), 'Must omit a selector when PHP can truncate a NUL-containing parameter name.');
     kiwi_assert_same(false, array_key_exists('request_path', $unallowed_route_context), 'Must omit a non-allowlisted request path.');
     kiwi_assert_same('wp-json', $unallowed_route_context['web_route'], 'Must preserve the coarse route class for an unallowlisted REST path.');
     kiwi_assert_same('/wp-json/kiwi-backend/v1/landing-kpi/report', $absolute_request_target_context['request_path'], 'Must keep only the path from an absolute request target.');
