@@ -418,17 +418,23 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         $rest_routes = [];
         foreach (explode('&', $query) as $parameter) {
             $parts = explode('=', $parameter, 2);
-            $parameter_name = rawurldecode($parts[0]);
-            // PHP truncates query-key names at NUL. Omit an ambiguous selector
-            // rather than attributing the warning to a different route.
+            $parameter_name = urldecode($parts[0]);
+            // PHP truncates query-key names at NUL and normalizes dots and
+            // spaces to underscores. Omit ambiguous selectors rather than
+            // attributing the warning to a different route.
             if (strpos($parameter_name, "\0") !== false) {
                 return null;
             }
-            if (strpos($parameter_name, 'rest_route[') === 0) {
+
+            $normalized_parameter_name = str_replace([' ', '.'], '_', $parameter_name);
+            if (strpos($normalized_parameter_name, 'rest_route[') === 0) {
                 return null;
             }
-            if ($parameter_name !== 'rest_route') {
+            if ($normalized_parameter_name !== 'rest_route') {
                 continue;
+            }
+            if ($parameter_name !== 'rest_route') {
+                return null;
             }
 
             $rest_routes[] = isset($parts[1]) ? rawurldecode($parts[1]) : '';
