@@ -11,6 +11,16 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     private const LOG_PREFIX = '[kiwi-db-connect-diagnostic]';
     private const TARGET_WARNING = 'mysqli_real_connect(): (HY000/2002): Operation not permitted';
 
+    /**
+     * Static backend routes only; unknown or dynamic paths are never logged.
+     */
+    private const ALLOWED_REST_ROUTES = [
+        '/kiwi-backend/v1/dimoco-callback',
+        '/kiwi-backend/v1/landing-kpi/event',
+        '/kiwi-backend/v1/landing-kpi/report',
+        '/kiwi-backend/v1/nth-callback',
+    ];
+
     private static $logger = null;
     private static $registered = false;
     private static $is_writing = false;
@@ -288,7 +298,7 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
      */
     private static function web_route_classification(array $server): ?string
     {
-        $path = self::request_path($server);
+        $path = self::raw_request_path($server);
         if ($path === null) {
             return null;
         }
@@ -338,9 +348,34 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     }
 
     /**
-     * Returns the raw request path without the query or fragment portion.
+     * Returns a static, allowlisted request path only.
      */
     private static function request_path(array $server): ?string
+    {
+        $path = self::raw_request_path($server);
+        if ($path === null) {
+            return null;
+        }
+
+        $path = rawurldecode($path);
+        if ($path === '/' || $path === '/index.php') {
+            return $path;
+        }
+
+        foreach (self::ALLOWED_REST_ROUTES as $route) {
+            if ($path === '/wp-json' . $route) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Returns the request path without its query or fragment portion. This is
+     * used internally for classification only and is never logged directly.
+     */
+    private static function raw_request_path(array $server): ?string
     {
         if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
             return null;
@@ -361,7 +396,7 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     }
 
     /**
-     * Extracts only one exact rest_route selector and never retains other query values.
+     * Extracts one exact, static rest_route selector and never retains other query values.
      */
     private static function rest_route(array $server): ?string
     {
@@ -383,7 +418,11 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         $rest_routes = [];
         foreach (explode('&', $query) as $parameter) {
             $parts = explode('=', $parameter, 2);
-            if ($parts[0] !== 'rest_route') {
+            $parameter_name = rawurldecode($parts[0]);
+            if (strpos($parameter_name, 'rest_route[') === 0) {
+                return null;
+            }
+            if ($parameter_name !== 'rest_route') {
                 continue;
             }
 
@@ -396,6 +435,6 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
 
         $route = substr($rest_routes[0], 0, strcspn($rest_routes[0], '?#'));
 
-        return $route === '' ? null : $route;
+        return in_array($route, self::ALLOWED_REST_ROUTES, true) ? $route : null;
     }
 }

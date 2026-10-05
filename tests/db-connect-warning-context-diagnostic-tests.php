@@ -129,6 +129,28 @@ kiwi_run_test('DB connect warning diagnostic records the approved web request co
     kiwi_assert_same(false, strpos($php_self_messages[0], 'script-name-secret') !== false, 'Must not log SCRIPT_NAME path info.');
     kiwi_assert_same(false, strpos($php_self_messages[0], 'very-secret-token') !== false, 'Must not log request-derived PHP_SELF path info.');
 
+    $sensitive_path_messages = [];
+    Kiwi_Db_Connect_Warning_Context_Diagnostic::record_if_target(
+        E_WARNING,
+        'mysqli_real_connect(): (HY000/2002): Operation not permitted',
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/reset/very-secret-token/person@example.test/203.0.113.10',
+        ],
+        'fpm-fcgi',
+        4321,
+        new DateTimeImmutable('2026-09-26T10:00:00Z'),
+        static function (string $message) use (&$sensitive_path_messages): void {
+            $sensitive_path_messages[] = $message;
+        }
+    );
+    kiwi_assert_same(1, count($sensitive_path_messages), 'Expected one diagnostic entry for an unknown web path.');
+    kiwi_assert_same(false, strpos($sensitive_path_messages[0], '"request_path"') !== false, 'Must omit an unknown request path.');
+    kiwi_assert_same(false, strpos($sensitive_path_messages[0], 'very-secret-token') !== false, 'Must not log sensitive path segments.');
+    kiwi_assert_same(false, strpos($sensitive_path_messages[0], 'person@example.test') !== false, 'Must not log an email-like path segment.');
+    kiwi_assert_same(false, strpos($sensitive_path_messages[0], '203.0.113.10') !== false, 'Must not log an IP-like path segment.');
+
     kiwi_assert_same(
         false,
         Kiwi_Db_Connect_Warning_Context_Diagnostic::record_if_target(
@@ -147,7 +169,7 @@ kiwi_run_test('DB connect warning diagnostic records the approved web request co
     kiwi_assert_same(1, count($messages), 'Expected a non-target warning not to add a diagnostic log entry.');
 });
 
-kiwi_run_test('DB connect warning diagnostic extracts only one scalar rest route', function (): void {
+kiwi_run_test('DB connect warning diagnostic extracts only one static scalar rest route', function (): void {
     $now = new DateTimeImmutable('2026-09-26T10:00:00Z');
     $query_style_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
         [
@@ -189,6 +211,36 @@ kiwi_run_test('DB connect warning diagnostic extracts only one scalar rest route
         4321,
         $now
     );
+    $mixed_route_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/?rest_route=/kiwi-backend/v1/nth-callback&rest_route%5B%5D=/second',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $mixed_array_first_route_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/?rest_route%5B%5D=/first&rest_route=/kiwi-backend/v1/nth-callback',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $unallowed_route_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => '/wp-json/wp/v2/users/1?rest_route=/wp/v2/users/1',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
     $absolute_request_target_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
         [
             'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
@@ -208,6 +260,11 @@ kiwi_run_test('DB connect warning diagnostic extracts only one scalar rest route
     kiwi_assert_same(false, array_key_exists('request_method', $invalid_method_context), 'Must omit an invalid HTTP method.');
     kiwi_assert_same(false, array_key_exists('rest_route', $duplicate_route_context), 'Must omit ambiguous duplicate rest_route values.');
     kiwi_assert_same(false, array_key_exists('rest_route', $array_route_context), 'Must omit rest_route array values.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $mixed_route_context), 'Must omit mixed scalar and array rest_route values.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $mixed_array_first_route_context), 'Must omit mixed array and scalar rest_route values in either order.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $unallowed_route_context), 'Must omit a non-allowlisted rest route.');
+    kiwi_assert_same(false, array_key_exists('request_path', $unallowed_route_context), 'Must omit a non-allowlisted request path.');
+    kiwi_assert_same('wp-json', $unallowed_route_context['web_route'], 'Must preserve the coarse route class for an unallowlisted REST path.');
     kiwi_assert_same('/wp-json/kiwi-backend/v1/landing-kpi/report', $absolute_request_target_context['request_path'], 'Must keep only the path from an absolute request target.');
     kiwi_assert_same('GET', $absolute_request_target_context['request_method'], 'Expected the absolute request target HTTP method.');
 });

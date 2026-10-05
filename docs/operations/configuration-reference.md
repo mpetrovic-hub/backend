@@ -183,13 +183,20 @@ basename from server-controlled `SCRIPT_FILENAME` only, and for normal web
 requests a fixed route classification: `site_root`, `wp-login`, `wp-admin`,
 `wp-admin-admin-ajax`, `wp-json`, or `other_web_route`.
 
-For the temporary Issue #130 investigation, the owner explicitly approved
-three additional web-only fields: `request_method` (a valid HTTP token in
-uppercase), `request_path` (the raw `REQUEST_URI` path before `?` or `#`), and
-`rest_route` (only one exact scalar `rest_route` selector, without an embedded
-query or fragment). This is deliberately not a full raw URL: host, scheme and
-all other query values remain excluded. Duplicate, empty and array-valued
-`rest_route` inputs are omitted.
+For the temporary Issue #130 investigation, web entries may additionally carry
+`request_method` (a valid HTTP token in uppercase), `request_path`, and
+`rest_route`. `request_path` is never an arbitrary raw request path: it is
+emitted only for `/`, `/index.php`, or one of the fixed, static backend REST
+paths below `/wp-json`. `rest_route` is emitted only for one exact scalar
+selector whose route is one of those same fixed backend routes. Unknown,
+dynamic, duplicate, mixed scalar/array, empty and array-valued route inputs
+are omitted; the fixed `web_route` class remains available for coarse grouping.
+The allowlist is `/kiwi-backend/v1/landing-kpi/event`,
+`/kiwi-backend/v1/landing-kpi/report`, `/kiwi-backend/v1/nth-callback`, and
+`/kiwi-backend/v1/dimoco-callback`.
+
+This is deliberately not a full raw URL: host, scheme, arbitrary path
+segments and all other query values remain excluded.
 
 It must not contain IP addresses, headers, request bodies, cookies,
 credentials, database contents, CLI arguments, `SCRIPT_NAME`, request-derived
