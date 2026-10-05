@@ -162,7 +162,7 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             ->setTimezone(new DateTimeZone('UTC'));
 
         $context = [
-            'schema_version' => 1,
+            'schema_version' => 2,
             'observed_at_utc' => $timestamp->format('Y-m-d\\TH:i:s.u\\Z'),
             'process_id' => $process_id,
             'php_sapi' => $php_sapi,
@@ -174,6 +174,21 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             $web_route = self::web_route_classification($server);
             if ($web_route !== null) {
                 $context['web_route'] = $web_route;
+            }
+
+            $request_method = self::request_method($server);
+            if ($request_method !== null) {
+                $context['request_method'] = $request_method;
+            }
+
+            $request_path = self::request_path($server);
+            if ($request_path !== null) {
+                $context['request_path'] = $request_path;
+            }
+
+            $rest_route = self::rest_route($server);
+            if ($rest_route !== null) {
+                $context['rest_route'] = $rest_route;
             }
         }
 
@@ -268,21 +283,21 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     }
 
     /**
-     * Returns only a fixed route class, never a visitor-controlled path segment.
+     * Returns only a fixed route class. The raw path is logged separately under
+     * the explicit, time-limited Issue #130 decision.
      */
     private static function web_route_classification(array $server): ?string
     {
-        if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
+        $path = self::request_path($server);
+        if ($path === null) {
             return null;
         }
 
-        $request_uri = trim($server['REQUEST_URI']);
-        if ($request_uri === '') {
+        $path = trim($path);
+        if ($path === '') {
             return null;
         }
 
-        $separator_position = strcspn($request_uri, '?#');
-        $path = substr($request_uri, 0, $separator_position);
         $path = '/' . ltrim($path, '/');
 
         if ($path === '/') {
@@ -301,5 +316,86 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         }
 
         return 'other_web_route';
+    }
+
+    /**
+     * Returns a canonical HTTP method only when it is a valid HTTP token.
+     */
+    private static function request_method(array $server): ?string
+    {
+        if (!isset($server['REQUEST_METHOD']) || !is_string($server['REQUEST_METHOD'])) {
+            return null;
+        }
+
+        $request_method = trim($server['REQUEST_METHOD']);
+        if ($request_method === ''
+            || preg_match('/^[A-Za-z0-9!#$%&\'*+\-.^_`|~]+$/', $request_method) !== 1
+        ) {
+            return null;
+        }
+
+        return strtoupper($request_method);
+    }
+
+    /**
+     * Returns the raw request path without the query or fragment portion.
+     */
+    private static function request_path(array $server): ?string
+    {
+        if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
+            return null;
+        }
+
+        $request_uri = $server['REQUEST_URI'];
+        $separator_position = strcspn($request_uri, '?#');
+        $path = substr($request_uri, 0, $separator_position);
+
+        if (preg_match('#^[A-Za-z][A-Za-z0-9+.-]*://#', $path) === 1) {
+            $path = parse_url($path, PHP_URL_PATH);
+            if (!is_string($path)) {
+                return null;
+            }
+        }
+
+        return $path === '' ? null : $path;
+    }
+
+    /**
+     * Extracts only one exact rest_route selector and never retains other query values.
+     */
+    private static function rest_route(array $server): ?string
+    {
+        if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
+            return null;
+        }
+
+        $query_start = strpos($server['REQUEST_URI'], '?');
+        if ($query_start === false) {
+            return null;
+        }
+
+        $query = substr($server['REQUEST_URI'], $query_start + 1);
+        $fragment_start = strpos($query, '#');
+        if ($fragment_start !== false) {
+            $query = substr($query, 0, $fragment_start);
+        }
+
+        $rest_routes = [];
+        foreach (explode('&', $query) as $parameter) {
+            $parts = explode('=', $parameter, 2);
+            if ($parts[0] !== 'rest_route') {
+                continue;
+            }
+
+            $rest_routes[] = isset($parts[1]) ? rawurldecode($parts[1]) : '';
+        }
+
+        if (count($rest_routes) !== 1) {
+            return null;
+        }
+
+        $route = substr($rest_routes[0], 0, strcspn($rest_routes[0], '?#'));
+
+        return $route === '' ? null : $route;
     }
 }

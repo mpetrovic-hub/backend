@@ -70,15 +70,15 @@ kiwi_run_test('DB connect warning diagnostic requires an enabled future UTC expi
     );
 });
 
-kiwi_run_test('DB connect warning diagnostic records only the allowed web context', function (): void {
+kiwi_run_test('DB connect warning diagnostic records the approved web request context only', function (): void {
     $messages = [];
     $recorded = Kiwi_Db_Connect_Warning_Context_Diagnostic::record_if_target(
         E_WARNING,
         'mysqli_real_connect(): (HY000/2002): Operation not permitted',
         [
             'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
-            'REQUEST_METHOD' => 'POST',
-            'REQUEST_URI' => '/reset/very-secret-token/person@example.test/203.0.113.10?email=person@example.test&token=secret',
+            'REQUEST_METHOD' => 'post',
+            'REQUEST_URI' => '/wp-json/kiwi-backend/v1/landing-kpi/event?email=person@example.test&token=secret&rest_route=%2Fkiwi-backend%2Fv1%2Flanding-kpi%2Fevent',
             'HTTP_X_FORWARDED_FOR' => '203.0.113.10',
             'HTTP_COOKIE' => 'session=private',
         ],
@@ -96,11 +96,14 @@ kiwi_run_test('DB connect warning diagnostic records only the allowed web contex
     kiwi_assert_contains('"execution_context":"web"', $messages[0], 'Expected web context.');
     kiwi_assert_contains('"entry_script":"index.php"', $messages[0], 'Expected only the entry script basename.');
     kiwi_assert_contains('"observed_at_utc":"2026-09-26T10:00:00.123456Z"', $messages[0], 'Expected microseconds to remain in the UTC timestamp.');
-    kiwi_assert_contains('"web_route":"other_web_route"', $messages[0], 'Expected only the safe web-route classification.');
-    kiwi_assert_same(false, strpos($messages[0], '/reset/') !== false, 'Must not log raw URL paths.');
-    kiwi_assert_same(false, strpos($messages[0], 'very-secret-token') !== false, 'Must not log sensitive path segments.');
-    kiwi_assert_same(false, strpos($messages[0], 'person@example.test') !== false, 'Must not log query values.');
-    kiwi_assert_same(false, strpos($messages[0], 'secret') !== false, 'Must not log query secrets.');
+    kiwi_assert_contains('"schema_version":2', $messages[0], 'Expected the updated schema version.');
+    kiwi_assert_contains('"web_route":"wp-json"', $messages[0], 'Expected the fixed web-route classification.');
+    kiwi_assert_contains('"request_method":"POST"', $messages[0], 'Expected the canonical HTTP method.');
+    kiwi_assert_contains('"request_path":"/wp-json/kiwi-backend/v1/landing-kpi/event"', $messages[0], 'Expected the raw path without query data.');
+    kiwi_assert_contains('"rest_route":"/kiwi-backend/v1/landing-kpi/event"', $messages[0], 'Expected only the targeted REST route.');
+    kiwi_assert_same(false, strpos($messages[0], '?email=') !== false, 'Must not log the raw query string.');
+    kiwi_assert_same(false, strpos($messages[0], 'person@example.test') !== false, 'Must not log unrelated query values.');
+    kiwi_assert_same(false, strpos($messages[0], 'token=secret') !== false, 'Must not log unrelated query secrets.');
     kiwi_assert_same(false, strpos($messages[0], '203.0.113.10') !== false, 'Must not log client or proxy IP addresses.');
     kiwi_assert_same(false, strpos($messages[0], 'session=private') !== false, 'Must not log cookies.');
 
@@ -112,7 +115,7 @@ kiwi_run_test('DB connect warning diagnostic records only the allowed web contex
             'SCRIPT_NAME' => '/index.php/reset/script-name-secret',
             'PHP_SELF' => '/index.php/reset/very-secret-token',
             'REQUEST_METHOD' => 'POST',
-            'REQUEST_URI' => '/reset/very-secret-token',
+            'REQUEST_URI' => '/wp-json/kiwi-backend/v1/landing-kpi/event',
         ],
         'fpm-fcgi',
         4321,
@@ -144,6 +147,71 @@ kiwi_run_test('DB connect warning diagnostic records only the allowed web contex
     kiwi_assert_same(1, count($messages), 'Expected a non-target warning not to add a diagnostic log entry.');
 });
 
+kiwi_run_test('DB connect warning diagnostic extracts only one scalar rest route', function (): void {
+    $now = new DateTimeImmutable('2026-09-26T10:00:00Z');
+    $query_style_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/index.php?rest_route=%2Fkiwi-backend%2Fv1%2Fnth-callback&email=person@example.test&token=secret',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $invalid_method_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST invalid',
+            'REQUEST_URI' => '/?rest_route=/kiwi-backend/v1/dimoco-callback',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $duplicate_route_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/?rest_route=/first&rest_route=/second',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $array_route_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/?rest_route%5B%5D=/array-route',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $absolute_request_target_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => 'https://user:private@example.test/wp-json/kiwi-backend/v1/landing-kpi/report?unused=private',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+
+    kiwi_assert_same('/index.php', $query_style_context['request_path'], 'Expected the raw query-style request path.');
+    kiwi_assert_same('/kiwi-backend/v1/nth-callback', $query_style_context['rest_route'], 'Expected the only scalar rest_route value.');
+    kiwi_assert_same('POST', $query_style_context['request_method'], 'Expected the query-style HTTP method.');
+    kiwi_assert_same(false, array_key_exists('email', $query_style_context), 'Must not retain unrelated query keys.');
+    kiwi_assert_same(false, array_key_exists('token', $query_style_context), 'Must not retain unrelated query keys.');
+    kiwi_assert_same(false, array_key_exists('request_method', $invalid_method_context), 'Must omit an invalid HTTP method.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $duplicate_route_context), 'Must omit ambiguous duplicate rest_route values.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $array_route_context), 'Must omit rest_route array values.');
+    kiwi_assert_same('/wp-json/kiwi-backend/v1/landing-kpi/report', $absolute_request_target_context['request_path'], 'Must keep only the path from an absolute request target.');
+    kiwi_assert_same('GET', $absolute_request_target_context['request_method'], 'Expected the absolute request target HTTP method.');
+});
+
 kiwi_run_test('DB connect warning diagnostic classifies WP-Cron and CLI without request data', function (): void {
     $now = new DateTimeImmutable('2026-09-26T10:00:00Z');
     $cron_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
@@ -168,14 +236,30 @@ kiwi_run_test('DB connect warning diagnostic classifies WP-Cron and CLI without 
         99,
         $now
     );
+    $unknown_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [],
+        'fpm-fcgi',
+        100,
+        $now
+    );
 
     kiwi_assert_same('wp-cron', $cron_context['execution_context'], 'Expected wp-cron context.');
     kiwi_assert_same('wp-cron.php', $cron_context['entry_script'], 'Expected the wp-cron entry script.');
     kiwi_assert_same(false, array_key_exists('web_route', $cron_context), 'Must not log WP-Cron request data.');
+    kiwi_assert_same(false, array_key_exists('request_method', $cron_context), 'Must not log WP-Cron request method.');
+    kiwi_assert_same(false, array_key_exists('request_path', $cron_context), 'Must not log WP-Cron request path.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $cron_context), 'Must not log WP-Cron request route.');
     kiwi_assert_same('cli', $cli_context['execution_context'], 'Expected CLI context.');
     kiwi_assert_same('wp', $cli_context['entry_script'], 'Expected only the CLI entry-script basename.');
     kiwi_assert_same(false, array_key_exists('web_route', $cli_context), 'Must not log CLI arguments or paths.');
+    kiwi_assert_same(false, array_key_exists('request_method', $cli_context), 'Must not log CLI request method.');
+    kiwi_assert_same(false, array_key_exists('request_path', $cli_context), 'Must not log CLI request path.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $cli_context), 'Must not log CLI request route.');
     kiwi_assert_same('wp-cron.php', $windows_cron_context['entry_script'], 'Expected Windows-style paths to keep only the entry-script basename.');
+    kiwi_assert_same('unknown', $unknown_context['execution_context'], 'Expected the unknown context without request details.');
+    kiwi_assert_same(false, array_key_exists('request_method', $unknown_context), 'Must not log unknown-context request method.');
+    kiwi_assert_same(false, array_key_exists('request_path', $unknown_context), 'Must not log unknown-context request path.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $unknown_context), 'Must not log unknown-context request route.');
 });
 
 kiwi_run_test('DB connect warning diagnostic leaves an existing PHP handler untouched', function (): void {
