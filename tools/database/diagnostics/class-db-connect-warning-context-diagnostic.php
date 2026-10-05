@@ -11,6 +11,16 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     private const LOG_PREFIX = '[kiwi-db-connect-diagnostic]';
     private const TARGET_WARNING = 'mysqli_real_connect(): (HY000/2002): Operation not permitted';
 
+    /**
+     * Static backend routes only; unknown or dynamic paths are never logged.
+     */
+    private const ALLOWED_REST_ROUTES = [
+        '/kiwi-backend/v1/dimoco-callback',
+        '/kiwi-backend/v1/landing-kpi/event',
+        '/kiwi-backend/v1/landing-kpi/report',
+        '/kiwi-backend/v1/nth-callback',
+    ];
+
     private static $logger = null;
     private static $registered = false;
     private static $is_writing = false;
@@ -162,7 +172,7 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             ->setTimezone(new DateTimeZone('UTC'));
 
         $context = [
-            'schema_version' => 1,
+            'schema_version' => 2,
             'observed_at_utc' => $timestamp->format('Y-m-d\\TH:i:s.u\\Z'),
             'process_id' => $process_id,
             'php_sapi' => $php_sapi,
@@ -174,6 +184,21 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             $web_route = self::web_route_classification($server);
             if ($web_route !== null) {
                 $context['web_route'] = $web_route;
+            }
+
+            $request_method = self::request_method($server);
+            if ($request_method !== null) {
+                $context['request_method'] = $request_method;
+            }
+
+            $request_path = self::request_path($server);
+            if ($request_path !== null) {
+                $context['request_path'] = $request_path;
+            }
+
+            $rest_route = self::rest_route($server);
+            if ($rest_route !== null) {
+                $context['rest_route'] = $rest_route;
             }
         }
 
@@ -268,21 +293,21 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     }
 
     /**
-     * Returns only a fixed route class, never a visitor-controlled path segment.
+     * Returns only a fixed route class. The raw path is logged separately under
+     * the explicit, time-limited Issue #130 decision.
      */
     private static function web_route_classification(array $server): ?string
     {
-        if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
+        $path = self::raw_request_path($server);
+        if ($path === null) {
             return null;
         }
 
-        $request_uri = trim($server['REQUEST_URI']);
-        if ($request_uri === '') {
+        $path = trim($path);
+        if ($path === '') {
             return null;
         }
 
-        $separator_position = strcspn($request_uri, '?#');
-        $path = substr($request_uri, 0, $separator_position);
         $path = '/' . ltrim($path, '/');
 
         if ($path === '/') {
@@ -301,5 +326,159 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         }
 
         return 'other_web_route';
+    }
+
+    /**
+     * Returns a canonical HTTP method only when it is a valid HTTP token.
+     */
+    private static function request_method(array $server): ?string
+    {
+        if (!isset($server['REQUEST_METHOD']) || !is_string($server['REQUEST_METHOD'])) {
+            return null;
+        }
+
+        $request_method = trim($server['REQUEST_METHOD']);
+        if ($request_method === ''
+            || preg_match('/^[A-Za-z0-9!#$%&\'*+\-.^_`|~]+$/', $request_method) !== 1
+        ) {
+            return null;
+        }
+
+        return strtoupper($request_method);
+    }
+
+    /**
+     * Returns a static, allowlisted request path only.
+     */
+    private static function request_path(array $server): ?string
+    {
+        $path = self::raw_request_path($server);
+        if ($path === null) {
+            return null;
+        }
+
+        $path = rawurldecode($path);
+        if ($path === '/' || $path === '/index.php') {
+            return $path;
+        }
+
+        foreach (self::ALLOWED_REST_ROUTES as $route) {
+            if ($path === '/wp-json' . $route) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Returns the request path without its query portion. This is used
+     * internally for classification only and is never logged directly.
+     */
+    private static function raw_request_path(array $server): ?string
+    {
+        if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
+            return null;
+        }
+
+        $request_uri = $server['REQUEST_URI'];
+        $query_start = strpos($request_uri, '?');
+        $path = $query_start === false ? $request_uri : substr($request_uri, 0, $query_start);
+
+        if (preg_match('#^[A-Za-z][A-Za-z0-9+.-]*://#', $path) === 1) {
+            $authority_start = strpos($path, '://') + 3;
+            $path_start = strpos($path, '/', $authority_start);
+            if ($path_start === false) {
+                return null;
+            }
+
+            $path = substr($path, $path_start);
+        }
+
+        return $path === '' ? null : $path;
+    }
+
+    /**
+     * Extracts one exact, static rest_route selector and never retains other query values.
+     */
+    private static function rest_route(array $server): ?string
+    {
+        if (!isset($server['REQUEST_URI']) || !is_string($server['REQUEST_URI'])) {
+            return null;
+        }
+
+        $query_start = strpos($server['REQUEST_URI'], '?');
+        if ($query_start === false) {
+            return null;
+        }
+
+        $query = substr($server['REQUEST_URI'], $query_start + 1);
+
+        $max_input_vars = (int) ini_get('max_input_vars');
+        $input_separators = ini_get('arg_separator.input');
+        if ($max_input_vars < 1 || !is_string($input_separators) || $input_separators === '') {
+            return null;
+        }
+
+        $parameters = preg_split('/[' . preg_quote($input_separators, '/') . ']/', $query);
+        if (!is_array($parameters)) {
+            return null;
+        }
+
+        $rest_routes = [];
+        $input_variable_count = 0;
+        foreach ($parameters as $parameter) {
+            if ($parameter === '') {
+                continue;
+            }
+
+            ++$input_variable_count;
+            // Match PHP's request-input limit without parsing an oversized
+            // whole query and emitting another warning from this diagnostic.
+            if ($input_variable_count > $max_input_vars) {
+                break;
+            }
+
+            $parts = explode('=', $parameter, 2);
+            $raw_parameter_name = rawurldecode($parts[0]);
+            $normalized_parameter_name = self::normalized_query_parameter_name($parts[0]);
+            $is_rest_route_array = strpos($normalized_parameter_name, 'rest_route[') === 0;
+            if ($normalized_parameter_name !== 'rest_route' && !$is_rest_route_array) {
+                continue;
+            }
+
+            // Only one literal scalar selector is safe to attribute. The
+            // name normalization intentionally avoids parser warnings here.
+            if ($raw_parameter_name !== 'rest_route' || $is_rest_route_array) {
+                return null;
+            }
+
+            $rest_routes[] = isset($parts[1]) ? urldecode($parts[1]) : '';
+        }
+
+        if (count($rest_routes) !== 1) {
+            return null;
+        }
+
+        // The decoded selector itself must be an exact allowlisted route. Do
+        // not normalize a suffix such as "?secret=value" into another route.
+        $route = $rest_routes[0];
+
+        return in_array($route, self::ALLOWED_REST_ROUTES, true) ? $route : null;
+    }
+
+    /**
+     * Applies PHP's relevant query-key transformations without parsing nested
+     * structures, so malformed keys cannot emit diagnostic-time warnings.
+     */
+    private static function normalized_query_parameter_name(string $raw_parameter_name): string
+    {
+        $parameter_name = urldecode($raw_parameter_name);
+        $null_position = strpos($parameter_name, "\0");
+        if ($null_position !== false) {
+            $parameter_name = substr($parameter_name, 0, $null_position);
+        }
+
+        return str_replace([' ', '.'], '_', ltrim($parameter_name, ' '));
     }
 }

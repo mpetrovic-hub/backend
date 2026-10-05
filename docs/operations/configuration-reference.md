@@ -177,16 +177,32 @@ require_once __DIR__ . '/wp-content/plugins/backend/tools/database/diagnostics/c
 Kiwi_Db_Connect_Warning_Context_Diagnostic::register();
 ```
 
-The diagnostic writes the `[kiwi-db-connect-diagnostic]` prefix and JSON with
-UTC time, PHP process ID, PHP-SAPI, execution context, entry-script basename
-from server-controlled `SCRIPT_FILENAME` only, and only for normal web
+The diagnostic writes the `[kiwi-db-connect-diagnostic]` prefix and schema-2
+JSON with UTC time, PHP process ID, PHP-SAPI, execution context, entry-script
+basename from server-controlled `SCRIPT_FILENAME` only, and for normal web
 requests a fixed route classification: `site_root`, `wp-login`, `wp-admin`,
-`wp-admin-admin-ajax`, `wp-json`, or `other_web_route`. It must not contain
-URL paths or path segments, IP addresses, headers, request bodies, query
-values, cookies, credentials, database contents, or CLI arguments. If
-`SCRIPT_FILENAME` is unavailable, `entry_script` is `null`; `SCRIPT_NAME` and
-request-derived `PHP_SELF` are never used. `wp-cron` and `cli` are classified
-without their request or command arguments.
+`wp-admin-admin-ajax`, `wp-json`, or `other_web_route`.
+
+For the temporary Issue #130 investigation, web entries may additionally carry
+`request_method` (a valid HTTP token in uppercase), `request_path`, and
+`rest_route`. `request_path` is never an arbitrary raw request path: it is
+emitted only for `/`, `/index.php`, or one of the fixed, static backend REST
+paths below `/wp-json`. `rest_route` is emitted only for one exact scalar
+selector whose route is one of those same fixed backend routes. Unknown,
+dynamic, duplicate, mixed scalar/array, empty and array-valued route inputs
+are omitted; the fixed `web_route` class remains available for coarse grouping.
+The allowlist is `/kiwi-backend/v1/landing-kpi/event`,
+`/kiwi-backend/v1/landing-kpi/report`, `/kiwi-backend/v1/nth-callback`, and
+`/kiwi-backend/v1/dimoco-callback`.
+
+This is deliberately not a full raw URL: host, scheme, arbitrary path
+segments and all other query values remain excluded.
+
+It must not contain IP addresses, headers, request bodies, cookies,
+credentials, database contents, CLI arguments, `SCRIPT_NAME`, request-derived
+`PHP_SELF`, or query values other than the explicitly allowed `rest_route`.
+If `SCRIPT_FILENAME` is unavailable, `entry_script` is `null`. `wp-cron` and
+`cli` are classified without their request or command arguments.
 
 This section, the `wp-config.php` block, the helper file, and its tests are a
 single temporary unit. After the seven-day observation period, remove them in
