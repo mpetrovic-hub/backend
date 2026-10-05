@@ -418,26 +418,19 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         $rest_routes = [];
         foreach (explode('&', $query) as $parameter) {
             $parts = explode('=', $parameter, 2);
-            $parameter_name = urldecode($parts[0]);
-            // PHP truncates query-key names at NUL and normalizes dots and
-            // spaces to underscores. Omit ambiguous selectors rather than
-            // attributing the warning to a different route.
-            if (strpos($parameter_name, "\0") !== false) {
-                return null;
-            }
-
-            $normalized_parameter_name = str_replace([' ', '.'], '_', $parameter_name);
-            if (strpos($normalized_parameter_name, 'rest_route[') === 0) {
-                return null;
-            }
-            if ($normalized_parameter_name !== 'rest_route') {
+            $parsed_parameter = [];
+            parse_str($parameter, $parsed_parameter);
+            if (!array_key_exists('rest_route', $parsed_parameter)) {
                 continue;
             }
-            if ($parameter_name !== 'rest_route') {
+
+            // Use PHP's own query parsing rules to detect aliases and array
+            // forms. Only one literal scalar selector is safe to attribute.
+            if (rawurldecode($parts[0]) !== 'rest_route' || !is_string($parsed_parameter['rest_route'])) {
                 return null;
             }
 
-            $rest_routes[] = isset($parts[1]) ? rawurldecode($parts[1]) : '';
+            $rest_routes[] = $parsed_parameter['rest_route'];
         }
 
         if (count($rest_routes) !== 1) {
