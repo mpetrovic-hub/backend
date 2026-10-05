@@ -415,8 +415,31 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             $query = substr($query, 0, $fragment_start);
         }
 
+        $max_input_vars = (int) ini_get('max_input_vars');
+        $input_separators = ini_get('arg_separator.input');
+        if ($max_input_vars < 1 || !is_string($input_separators) || $input_separators === '') {
+            return null;
+        }
+
+        $parameters = preg_split('/[' . preg_quote($input_separators, '/') . ']/', $query);
+        if (!is_array($parameters)) {
+            return null;
+        }
+
         $rest_routes = [];
-        foreach (explode('&', $query) as $parameter) {
+        $input_variable_count = 0;
+        foreach ($parameters as $parameter) {
+            if ($parameter === '') {
+                continue;
+            }
+
+            ++$input_variable_count;
+            // Match PHP's request-input limit without parsing an oversized
+            // whole query and emitting another warning from this diagnostic.
+            if ($input_variable_count > $max_input_vars) {
+                break;
+            }
+
             $parts = explode('=', $parameter, 2);
             $parsed_parameter = [];
             parse_str($parameter, $parsed_parameter);

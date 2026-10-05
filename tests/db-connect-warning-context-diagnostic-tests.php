@@ -301,6 +301,23 @@ kiwi_run_test('DB connect warning diagnostic extracts only one static scalar res
         4321,
         $now
     );
+    $max_input_vars = (int) ini_get('max_input_vars');
+    kiwi_assert_same(true, $max_input_vars > 0, 'Expected PHP to expose a positive max_input_vars limit.');
+    $over_limit_parameters = [];
+    for ($index = 0; $index < $max_input_vars; ++$index) {
+        $over_limit_parameters[] = 'ignored' . $index . '=1';
+    }
+    $over_limit_parameters[] = 'rest_route=%2Fkiwi-backend%2Fv1%2Fnth-callback';
+    $over_limit_route_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/index.php?' . implode('&', $over_limit_parameters),
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
     $absolute_request_target_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
         [
             'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
@@ -329,6 +346,7 @@ kiwi_run_test('DB connect warning diagnostic extracts only one static scalar res
     kiwi_assert_same(false, array_key_exists('rest_route', $dotted_alias_selector_context), 'Must omit a selector when PHP normalizes a dotted parameter-name alias.');
     kiwi_assert_same(false, array_key_exists('rest_route', $plus_alias_selector_context), 'Must omit a selector when PHP normalizes a plus-sign parameter-name alias.');
     kiwi_assert_same(false, array_key_exists('rest_route', $leading_space_alias_selector_context), 'Must omit a selector when PHP strips a leading-space parameter-name alias.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $over_limit_route_context), 'Must omit a selector after PHP reaches its configured input-variable limit.');
     kiwi_assert_same(false, array_key_exists('request_path', $unallowed_route_context), 'Must omit a non-allowlisted request path.');
     kiwi_assert_same('wp-json', $unallowed_route_context['web_route'], 'Must preserve the coarse route class for an unallowlisted REST path.');
     kiwi_assert_same('/wp-json/kiwi-backend/v1/landing-kpi/report', $absolute_request_target_context['request_path'], 'Must keep only the path from an absolute request target.');
