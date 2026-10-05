@@ -372,8 +372,8 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
     }
 
     /**
-     * Returns the request path without its query or fragment portion. This is
-     * used internally for classification only and is never logged directly.
+     * Returns the request path without its query portion. This is used
+     * internally for classification only and is never logged directly.
      */
     private static function raw_request_path(array $server): ?string
     {
@@ -382,14 +382,17 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         }
 
         $request_uri = $server['REQUEST_URI'];
-        $separator_position = strcspn($request_uri, '?#');
-        $path = substr($request_uri, 0, $separator_position);
+        $query_start = strpos($request_uri, '?');
+        $path = $query_start === false ? $request_uri : substr($request_uri, 0, $query_start);
 
         if (preg_match('#^[A-Za-z][A-Za-z0-9+.-]*://#', $path) === 1) {
-            $path = parse_url($path, PHP_URL_PATH);
-            if (!is_string($path)) {
+            $authority_start = strpos($path, '://') + 3;
+            $path_start = strpos($path, '/', $authority_start);
+            if ($path_start === false) {
                 return null;
             }
+
+            $path = substr($path, $path_start);
         }
 
         return $path === '' ? null : $path;
@@ -410,10 +413,6 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         }
 
         $query = substr($server['REQUEST_URI'], $query_start + 1);
-        $fragment_start = strpos($query, '#');
-        if ($fragment_start !== false) {
-            $query = substr($query, 0, $fragment_start);
-        }
 
         $max_input_vars = (int) ini_get('max_input_vars');
         $input_separators = ini_get('arg_separator.input');
@@ -441,19 +440,20 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             }
 
             $parts = explode('=', $parameter, 2);
-            $parsed_parameter = [];
-            parse_str($parameter, $parsed_parameter);
-            if (!array_key_exists('rest_route', $parsed_parameter)) {
+            $raw_parameter_name = rawurldecode($parts[0]);
+            $normalized_parameter_name = self::normalized_query_parameter_name($parts[0]);
+            $is_rest_route_array = strpos($normalized_parameter_name, 'rest_route[') === 0;
+            if ($normalized_parameter_name !== 'rest_route' && !$is_rest_route_array) {
                 continue;
             }
 
-            // Use PHP's own query parsing rules to detect aliases and array
-            // forms. Only one literal scalar selector is safe to attribute.
-            if (rawurldecode($parts[0]) !== 'rest_route' || !is_string($parsed_parameter['rest_route'])) {
+            // Only one literal scalar selector is safe to attribute. The
+            // name normalization intentionally avoids parser warnings here.
+            if ($raw_parameter_name !== 'rest_route' || $is_rest_route_array) {
                 return null;
             }
 
-            $rest_routes[] = $parsed_parameter['rest_route'];
+            $rest_routes[] = isset($parts[1]) ? urldecode($parts[1]) : '';
         }
 
         if (count($rest_routes) !== 1) {
@@ -465,5 +465,20 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
         $route = $rest_routes[0];
 
         return in_array($route, self::ALLOWED_REST_ROUTES, true) ? $route : null;
+    }
+
+    /**
+     * Applies PHP's relevant query-key transformations without parsing nested
+     * structures, so malformed keys cannot emit diagnostic-time warnings.
+     */
+    private static function normalized_query_parameter_name(string $raw_parameter_name): string
+    {
+        $parameter_name = urldecode($raw_parameter_name);
+        $null_position = strpos($parameter_name, "\0");
+        if ($null_position !== false) {
+            $parameter_name = substr($parameter_name, 0, $null_position);
+        }
+
+        return str_replace([' ', '.'], '_', ltrim($parameter_name, ' '));
     }
 }

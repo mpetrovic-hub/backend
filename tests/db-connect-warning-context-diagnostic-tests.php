@@ -301,6 +301,49 @@ kiwi_run_test('DB connect warning diagnostic extracts only one static scalar res
         4321,
         $now
     );
+    $literal_hash_selector_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/index.php?rest_route=%2Fkiwi-backend%2Fv1%2Fnth-callback#suffix',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $literal_hash_path_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+        [
+            'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/wp-json/kiwi-backend/v1/landing-kpi/event#suffix',
+        ],
+        'fpm-fcgi',
+        4321,
+        $now
+    );
+    $nested_route_name = 'rest_route' . str_repeat('%5Bdeep%5D', (int) ini_get('max_input_nesting_level') + 1);
+    $nested_warning_messages = [];
+    set_error_handler(static function (int $errno, string $errstr) use (&$nested_warning_messages): bool {
+        if ($errno === E_WARNING) {
+            $nested_warning_messages[] = $errstr;
+        }
+
+        return true;
+    });
+    try {
+        $over_nested_selector_context = Kiwi_Db_Connect_Warning_Context_Diagnostic::build_context(
+            [
+                'SCRIPT_FILENAME' => '/home/example/public_html/index.php',
+                'REQUEST_METHOD' => 'POST',
+                'REQUEST_URI' => '/index.php?rest_route=%2Fkiwi-backend%2Fv1%2Fnth-callback&' . $nested_route_name . '=%2Fevil',
+            ],
+            'fpm-fcgi',
+            4321,
+            $now
+        );
+    } finally {
+        restore_error_handler();
+    }
     $max_input_vars = (int) ini_get('max_input_vars');
     kiwi_assert_same(true, $max_input_vars > 0, 'Expected PHP to expose a positive max_input_vars limit.');
     $over_limit_parameters = [];
@@ -346,6 +389,10 @@ kiwi_run_test('DB connect warning diagnostic extracts only one static scalar res
     kiwi_assert_same(false, array_key_exists('rest_route', $dotted_alias_selector_context), 'Must omit a selector when PHP normalizes a dotted parameter-name alias.');
     kiwi_assert_same(false, array_key_exists('rest_route', $plus_alias_selector_context), 'Must omit a selector when PHP normalizes a plus-sign parameter-name alias.');
     kiwi_assert_same(false, array_key_exists('rest_route', $leading_space_alias_selector_context), 'Must omit a selector when PHP strips a leading-space parameter-name alias.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $literal_hash_selector_context), 'Must omit a selector with a literal hash suffix.');
+    kiwi_assert_same(false, array_key_exists('request_path', $literal_hash_path_context), 'Must not treat a literal hash in the request target as a path fragment.');
+    kiwi_assert_same([], $nested_warning_messages, 'Must not emit warnings while rejecting an over-nested selector name.');
+    kiwi_assert_same(false, array_key_exists('rest_route', $over_nested_selector_context), 'Must omit an over-nested selector name.');
     kiwi_assert_same(false, array_key_exists('rest_route', $over_limit_route_context), 'Must omit a selector after PHP reaches its configured input-variable limit.');
     kiwi_assert_same(false, array_key_exists('request_path', $unallowed_route_context), 'Must omit a non-allowlisted request path.');
     kiwi_assert_same('wp-json', $unallowed_route_context['web_route'], 'Must preserve the coarse route class for an unallowlisted REST path.');
