@@ -433,7 +433,9 @@ final class Kiwi_Db_Connect_Warning_Context_Diagnostic
             return null;
         }
 
-        $route = substr($rest_routes[0], 0, strcspn($rest_routes[0], '?#'));
+        // The decoded selector itself must be an exact allowlisted route. Do
+        // not normalize a suffix such as "?secret=value" into another route.
+        $route = $rest_routes[0];
 
         return in_array($route, self::ALLOWED_REST_ROUTES, true) ? $route : null;
     }
