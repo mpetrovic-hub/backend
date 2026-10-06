@@ -1,1 +1,7 @@
 .codex/mcp/
+
+# Graphify: version the portable map, report, and manifest only.
+/graphify-out/*
+!/graphify-out/graph.json
+!/graphify-out/GRAPH_REPORT.md
+!/graphify-out/manifest.json
