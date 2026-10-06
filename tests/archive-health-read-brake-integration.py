@@ -10,11 +10,13 @@ import subprocess
 import tempfile
 import time
 
+from archive_health_brake_php import resolve_php_binary
+
 REPO = Path(__file__).resolve().parent.parent
 HELPER = REPO / "tools/database/class-retention-archive-health-read-brake.php"
 CHILD = REPO / "tools/database/kiwi-retention-archive-health.php"
 FIXTURE = REPO / "tools/database/archive-health-read-brake/fixtures/kiwi_retention_archive_2000.sqlite"
-PHP = shutil.which("php")
+PHP = resolve_php_binary()
 assert os.name == "posix" and PHP and FIXTURE.exists(), "Linux, PDO SQLite, and the built bundle are required"
 results = []
 

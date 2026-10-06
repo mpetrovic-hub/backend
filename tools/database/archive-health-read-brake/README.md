@@ -29,9 +29,12 @@ Required dependencies: `libsqlite3.so.0`, `libdl.so.2`, `libpthread.so.0`, `libc
 php -d date.timezone=UTC tests/run-tests.php
 python3 tests/archive-health-read-brake-contracts.py
 python3 tests/archive-health-read-brake-integration.py
+python3 tests/archive-health-read-brake-shim-tests.py
 ```
 
 Tests use synthetic databases/private faulty libraries. They cover the real child, both rates in one PID, missing/ineffective hooks, configuration loss, rate lock, target replacement, mappings/FD reuse, shared chunk pacing, EOF/unaligned offsets, short reads/EINTR and injected clock/sleep/advice/FD faults. The PHP suite covers a surviving real child with worker deferral and receipt-backed continuation after release.
+
+The Python drivers resolve PHP's reported `PHP_BINARY` before creating the child's preload environment. A PHP version-manager launcher is used only for that unpreloaded resolution. The shim regression runs the entire actual child suite with such a launcher first on `PATH` and proves that the loaded child bypasses its intermediate helper processes.
 
 Symbol inspection is insufficient: run `tests/fixtures/archive-health-brake-glibc217.c` under actual glibc 2.17. The implementation used `quay.io/centos/centos@sha256:e4ca2ed0202e76be184e75fb26d14bf974193579039d5573fb2348664deef76e`, layer SHA-256 `2d473b07cdd5f0912cd6f1a703352c82b512407db6b05b43f2553732b55df3bc`, and separately built SQLite 3.34.1. Its official Debian source SHA-256 is `082f583440c662cb484ae1c124ffe285b587bbb7837e095e693026e6df50334d`. Test SQLite enables both pread/pwrite feature macros and binds x86_64 `fcntl64` to compatible `fcntl@GLIBC_2.2.5`; it is not a deployment artifact. Both full fixture scans, native status and paced `pread`/`pread64` passed. The image's sequential SQLite read path is deliberately rejected. The actual deployment's PHP/PDO compatibility remains a post-merge check requiring separate rollout authorization.
 

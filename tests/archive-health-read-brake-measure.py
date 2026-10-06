@@ -9,7 +9,6 @@ import json
 import mmap
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import time
 import uuid
@@ -78,8 +77,8 @@ def run(args):
         os.posix_fadvise(source.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
     cache_after = residency(archive)
     assert cache_after == 0, 'Cold-file eviction incomplete'
-    php = shutil.which('php')
-    assert php
+    from archive_health_brake_php import resolve_php_binary
+    php = resolve_php_binary()
     environment = None
     if args.rate == 700:
         command = [php, str(REPO/'tests/fixtures/archive-health-brake-measure.php'), str(archive), '700']

@@ -6,8 +6,10 @@ import shutil
 import subprocess
 import tempfile
 
+from archive_health_brake_php import resolve_php_binary
+
 repo=Path(__file__).resolve().parent.parent
-php=shutil.which('php')
+php=resolve_php_binary()
 config=repo/'includes/core/class-config.php'
 helper=repo/'tools/database/class-retention-archive-health-read-brake.php'
 code="define('ABSPATH',getcwd().'/');if($argv[2]!=='default'){define('KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS',(int)$argv[2]);}require $argv[1];echo (new Kiwi_Config())->get_retention_archive_health_timeout_seconds();"
