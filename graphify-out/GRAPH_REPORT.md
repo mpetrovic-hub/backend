@@ -5,12 +5,12 @@
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 3030 nodes · 4891 edges · 315 communities (144 shown, 171 thin omitted)
+- 3027 nodes · 4891 edges · 312 communities (144 shown, 168 thin omitted)
 - Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 307 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `773f3139`
+- Built from commit: `2dbf3e58`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -287,10 +287,7 @@
 - [[_COMMUNITY_Non-Intrusive Diagnostic Observation|Non-Intrusive Diagnostic Observation]]
 - [[_COMMUNITY_SQLite Quick Check IO Measurement|SQLite Quick Check I/O Measurement]]
 - [[_COMMUNITY_Secure Diagnostic JSON Record|Secure Diagnostic JSON Record]]
-- [[_COMMUNITY_Raw Context Trim Proposal|Raw Context Trim Proposal]]
 - [[_COMMUNITY_Kiwi Backend Repository Overview|Kiwi Backend Repository Overview]]
-- [[_COMMUNITY_Retention Repair Assessment|Retention Repair Assessment]]
-- [[_COMMUNITY_Session and Handoff Retention Dependency|Session and Handoff Retention Dependency]]
 - [[_COMMUNITY_Operational Event Email Notification Follow-up|Operational Event Email Notification Follow-up]]
 - [[_COMMUNITY_Archive Primary Key Precheck|Archive Primary Key Precheck]]
 - [[_COMMUNITY_Retention Recovery Prototype README|Retention Recovery Prototype README]]
@@ -328,7 +325,7 @@
 - **DIMOCO Austria Click/TAN Subscription Flow** — docs_integrations_dimoco_source_2025_at_kiwi_mobile_starbabes_115512_getstronger_115510_integration_guide_click_tan_subscription_flow, docs_integrations_dimoco_source_dimoco_specification_paysmart_paysmart_payment_api, docs_integrations_dimoco_source_2025_at_kiwi_mobile_starbabes_115512_getstronger_115510_integration_guide_asynchronous_payment_callback [EXTRACTED 1.00]
 - **French MyJoyplay Primary CTA Pattern** — landing_pages_lp2_fr_index_document, landing_pages_lp3_fr_index_document, landing_pages_lp4_fr_img_preload_responsive_test_index_document, landing_pages_lp4_fr_index_document, landing_pages_lp5_fr_v2_index_document, landing_pages_lp5_fr_index_document, landing_pages_lp6_fr_v2_index_document, landing_pages_lp6_fr_index_document, landing_pages_lp2_fr_index_kiwi_primary_cta_href [INFERRED 0.85]
 
-## Communities (315 total, 171 thin omitted)
+## Communities (312 total, 168 thin omitted)
 
 ### Community 0 - "Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service"
 Cohesion: 0.07
@@ -771,21 +768,21 @@ Cohesion: 0.67
 Nodes (3): Data with return, Enduser return, Status with return
 
 ## Knowledge Gaps
-- **676 isolated node(s):** `WP_REST_Server`, `Kiwi_WP_CLI_Command_Namespace`, `Kiwi_WP_CLI_Command_Namespace`, `Kiwi_Landing_Session_Engagements_Migration_Command_Namespace`, `Kiwi_Sms_Body_Variant_Allocation_Version_Migration_Command_Namespace` (+671 more)
+- **673 isolated node(s):** `Was aktuell in `raw_context` steht`, `Erster Vorschlag für weitere Kürzung`, `Ausgeführter Test mit der Archivkopie`, `Größerer möglicher Hebel – mit Datenverlust`, `Abgrenzung` (+668 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **171 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **168 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `Kiwi_Config` connect `Kiwi_Config` to `Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service`, `Kiwi_Test_Runtime_Config`, `Kiwi_Landing_Funnel_Daily_Summary_Repository`, `Kiwi_Landing_Session_Raw_Context_Compaction_Service`, `wp_json_encode`, `retention-archive-health-tests.php`, `Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service`, `Kiwi_Plugin`, `Kiwi_Landing_Kpi_Service`, `Kiwi_Test_Config`, `Kiwi_Landing_Kpi_Rest_Routes`, `Kiwi_Nth_Premium_Sms_Normalizer`, `Kiwi_Click_Attribution_Repository`, `Kiwi_Test_Operational_Event_Cleanup_Config`, `.__construct`, `Kiwi_Dimoco_Refund_Batch_Service`, `Kiwi_Sales_Attribution_Snapshot_Builder`, `.__construct`, `.get_landing_pages`, `Kiwi_Nth_Client`, `Kiwi_Test_Dimoco_Blacklister_Shortcode`, `.__construct`, `Kiwi_Premium_Sms_Fraud_Shortcode`, `Kiwi_Landing_Page_Gallery_Service`, `Kiwi_Operational_Event_Repository`, `Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service`, `Kiwi_Dimoco_Response_Parser`, `Kiwi_Device_Model_Brand_Map_Repository`, `get_option`, `Kiwi_Sms_Body_Variant_Service`, `Kiwi_Retention_Archive_Check_Supervisor`, `.get_dimoco_services`, `Kiwi_Dimoco_Blacklist_Batch_Service`, `Kiwi_Test_Landing_Session_Raw_Context_Compaction_Config`, `.__construct`, `Kiwi_Test_Plugin_Performance_Gates`?**
-  _High betweenness centrality (0.116) - this node is a cross-community bridge._
-- **Why does `current_time()` connect `current_time` to `run-tests.php`, `Kiwi_Sms_Body_Variant_Repository`, `Kiwi_Retention_Cleanup_Service`, `Kiwi_Landing_Session_Raw_Context_Compaction_Service`, `wp_json_encode`, `Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service`, `Kiwi_Retention_Sqlite_Archive_Service`, `Kiwi_Landing_Kpi_Service`, `Kiwi_Landing_Session_Engagement_Repository`, `Kiwi_Nth_Fr_One_Off_Service`, `Kiwi_Operational_Event_Service`, `Kiwi_Dimoco_Callback_Operator_Lookup_Repository`, `Kiwi_Nth_Premium_Sms_Normalizer`, `Kiwi_Click_Attribution_Repository`, `Kiwi_Landing_Handoff_Event_Repository`, `.run_landing_funnel_daily_summary_refresh_job`, `Kiwi_Retention_Cleanup_Run_Repository`, `Kiwi_Retention_Table_Growth_Snapshot_Repository`, `Kiwi_Operational_Event_Repository`, `Kiwi_Premium_Sms_Fraud_Signal_Repository`, `dbDelta`, `Kiwi_Dimoco_Callback_Refund_Repository`, `Kiwi_Landing_Kpi_Summary_Repository`, `Kiwi_Landing_Page_Session_Repository`?**
-  _High betweenness centrality (0.039) - this node is a cross-community bridge._
+  _High betweenness centrality (0.125) - this node is a cross-community bridge._
 - **Why does `wp_json_encode()` connect `wp_json_encode` to `run-tests.php`, `Kiwi_Sms_Body_Variant_Repository`, `Kiwi_Landing_Page_Router`, `Kiwi_Nth_Fr_One_Off_Service`, `WP_CLI`, `Kiwi_Operational_Event_Service`, `Kiwi_Landing_Kpi_Rest_Routes`, `Kiwi_Dimoco_Callback_Operator_Lookup_Repository`, `Kiwi_Nth_Premium_Sms_Normalizer`, `Kiwi_Click_Attribution_Repository`, `Kiwi_Sms_Body_Variant_Allocation_Version_Migration_Command`, `Kiwi_Landing_Handoff_Event_Repository`, `Kiwi_Nth_Client`, `Kiwi_Retention_Archive_Health_Command`, `Kiwi_Retention_Cleanup_Run_Repository`, `Kiwi_Premium_Sms_Fraud_Signal_Repository`, `Kiwi_Landing_Session_Engagements_Migration_Command`, `dbDelta`, `Kiwi_Dimoco_Callback_Refund_Repository`, `Kiwi_Landing_Page_Session_Repository`?**
-  _High betweenness centrality (0.035) - this node is a cross-community bridge._
-- **What connects `WP_REST_Server`, `Kiwi_WP_CLI_Command_Namespace`, `Kiwi_WP_CLI_Command_Namespace` to the rest of the system?**
-  _683 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _High betweenness centrality (0.045) - this node is a cross-community bridge._
+- **Why does `kiwi_test_expect_cli_halt()` connect `Kiwi_Test_Wpdb_Sms_Body_Variant` to `database-deployment-tests.php`?**
+  _High betweenness centrality (0.029) - this node is a cross-community bridge._
+- **What connects `Was aktuell in `raw_context` steht`, `Erster Vorschlag für weitere Kürzung`, `Ausgeführter Test mit der Archivkopie` to the rest of the system?**
+  _680 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service` be split into smaller, more focused modules?**
   _Cohesion score 0.06547619047619048 - nodes in this community are weakly interconnected._
 - **Should `run-tests.php` be split into smaller, more focused modules?**
