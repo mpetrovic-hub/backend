@@ -4,6 +4,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once dirname(__DIR__, 2) . '/tools/database/class-retention-archive-health-read-brake.php';
+
 final class Kiwi_Retention_Archive_Check_Supervisor
 {
     private const READINESS_LOCKED = 'locked';
@@ -91,6 +93,18 @@ final class Kiwi_Retention_Archive_Check_Supervisor
         }
 
         try {
+            $child_environment = Kiwi_Retention_Archive_Health_Read_Brake::child_environment($archive_path);
+        } catch (Throwable $error) {
+            $reason = in_array($error->getMessage(), [
+                'health_brake_unavailable',
+                'health_brake_configuration_invalid',
+                'health_brake_target_unverified',
+            ], true) ? $error->getMessage() : 'health_brake_unavailable';
+
+            return $this->failure($reason, microtime(true) - $started);
+        }
+
+        try {
             $readiness_token = bin2hex(random_bytes(16));
         } catch (Throwable $error) {
             $readiness_token = substr(hash('sha256', uniqid('', true)), 0, 32);
@@ -108,6 +122,7 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             'persist_write_block_on_corruption' => $persist_write_block_on_corruption,
             'allow_blocked_recovery_verification' => $allow_blocked_recovery_verification,
             'corruption_handoff_timeout_seconds' => $this->config->get_retention_archive_health_timeout_seconds(),
+            'health_read_units_per_second' => 700,
         ]);
         if (!is_string($payload)) {
             return $this->failure('health_child_payload_invalid');
@@ -123,7 +138,7 @@ final class Kiwi_Retention_Archive_Check_Supervisor
             ],
             $pipes,
             null,
-            null,
+            $child_environment,
             ['bypass_shell' => true]
         );
         if (!is_resource($process)) {

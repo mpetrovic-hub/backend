@@ -6,7 +6,7 @@ require_once __DIR__ . '/../tools/database/kiwi-retention-archive-health.php';
 class Kiwi_Test_Lean_Archive_Config extends Kiwi_Config
 {
     public $archive_root = '';
-    public $timeout_seconds = 600;
+    public $timeout_seconds = 7200;
 
     public function get_retention_archive_root(): string
     {
@@ -15,7 +15,7 @@ class Kiwi_Test_Lean_Archive_Config extends Kiwi_Config
 
     public function get_retention_archive_health_timeout_seconds(): int
     {
-        return min(3600, max(30, $this->timeout_seconds));
+        return min(7200, max(30, $this->timeout_seconds));
     }
 }
 
@@ -370,6 +370,22 @@ function kiwi_run_retention_process(array $command, ?array $environment = null):
         ],
         is_array($environment) ? $environment : []
     );
+    $child_argument = array_search('--kiwi-retention-health-child', $command, true);
+    if (is_int($child_argument)
+        && isset($command[$child_argument - 1], $command[$child_argument + 1])
+        && basename((string) $command[$child_argument - 1]) === 'kiwi-retention-archive-health.php'
+    ) {
+        $payload = json_decode((string) base64_decode((string) $command[$child_argument + 1], true), true);
+        kiwi_assert_true(is_array($payload), 'Expected the real-child test payload.');
+        $payload['health_read_units_per_second'] = 700;
+        $command[$child_argument + 1] = base64_encode((string) json_encode($payload));
+        $brake_environment = Kiwi_Retention_Archive_Health_Read_Brake::child_environment((string) $payload['archive_path']);
+        foreach ($brake_environment as $name => $value) {
+            if (strpos($name, 'KIWI_HEALTH_') === 0 || in_array($name, ['LD_PRELOAD', 'LD_BIND_NOW'], true)) {
+                $process_environment[$name] = $value;
+            }
+        }
+    }
     $pipes = [];
     $process = proc_open(
         $command,
@@ -626,14 +642,89 @@ function kiwi_test_retention_sqlite_php_command(): array
     return $command;
 }
 
-kiwi_run_test('Kiwi_Config preserves the bounded 600 second archive health timeout', function (): void {
+kiwi_run_test('Kiwi_Config defaults to the bounded 7200 second archive health budget', function (): void {
     $config = new Kiwi_Config();
 
     kiwi_assert_same(
-        600,
+        7200,
         $config->get_retention_archive_health_timeout_seconds(),
-        'Expected the external health child timeout to remain ten minutes by default.'
+        'Expected 120 minutes of supervision by default, without killing the child.'
     );
+});
+
+kiwi_run_test('Braked real child survives timeout while the same receipt-backed worker defers and resumes', function (): void {
+    global $wpdb;
+    $previous_wpdb = $wpdb ?? null;
+    $previous_options = $GLOBALS['kiwi_test_options'];
+    $root = kiwi_create_temp_directory('kiwi_retention_braked_worker_overlap');
+    $path = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    copy(__DIR__ . '/../tools/database/archive-health-read-brake/fixtures/kiwi_retention_archive_2000.sqlite', $path);
+    $before_hash = hash_file('sha256', $path);
+    $wpdb = (object) ['prefix' => 'wp_'];
+    $GLOBALS['kiwi_test_transients'] = [];
+    $GLOBALS['kiwi_test_options'] = ['kiwi_retention_settings' => [
+        'landing_page_sessions' => ['enabled' => true, 'dry_run' => false, 'retention_days' => 14],
+    ]];
+    $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    $archive->new_archive_db_path = $path;
+    $archive->chunks[] = [
+        'success' => false, 'archive_batch_id' => 'landing_page_sessions_test',
+        'archive_db_path' => $path, 'archived_rows' => 2, 'archive_inserted_rows' => 2,
+        'archive_duplicate_rows' => 0, 'archived_primary_keys' => [101, 102],
+        'last_primary_key' => 102, 'has_more' => false, 'receipt_status' => 'pending_verification',
+        'error_code' => 'archive_failed', 'error_message' => 'Synthetic batch-finalization failure.',
+    ];
+    $archive->verified_receipt_batches[] = [
+        'success' => true, 'primary_keys' => [101, 102], 'last_primary_key' => 102,
+        'has_more' => false, 'archive_inserted_count' => 2, 'archive_duplicate_count' => 0,
+        'error_code' => '', 'error_message' => '',
+    ];
+    $service = new Kiwi_Test_Retention_Cleanup_Service(
+        new Kiwi_Config(), new Kiwi_Retention_Source_Registry(), $runs,
+        new Kiwi_Test_Retention_Table_Growth_Snapshot_Repository(), $archive,
+        new Kiwi_Test_Retention_Coverage_Gate(['status' => 'passed']), null,
+        new Kiwi_Retention_Archive_Lock()
+    );
+    $service->eligible_rows = 2;
+    $service->target_max_primary_key = 102;
+    $service->delete_result = ['deleted_rows' => 2, 'delete_batches' => 1];
+    try {
+        $scheduled = $service->run_source('landing_page_sessions', 'wp_cli');
+        $service->run_worker('landing_page_sessions');
+        kiwi_assert_same(102, $runs->rows[1]['archive_last_primary_key'] ?? 0, 'Expected a persisted receipt cursor before the Health overlap.');
+        $runs->rows[1]['updated_at'] = '2026-04-01 09:00:00';
+        $outcome = (new Kiwi_Retention_Archive_Check_Supervisor(new Kiwi_Test_One_Second_Archive_Health_Config()))->run($path, 'quick');
+        kiwi_assert_same('inconclusive', $outcome['result'], 'Expected the deliberately shortened test budget.');
+        kiwi_assert_same(true, $outcome['child_running'], 'Expected the actual braked child to survive timeout.');
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            $deferred = $service->run_worker('landing_page_sessions');
+            kiwi_assert_same('archive_lock_active', $deferred['error_code'] ?? '', 'Expected the actual OS lock to defer the worker.');
+            kiwi_assert_same('lock_skipped', $deferred['worker_phase'] ?? '', 'Expected a resumable lock deferral.');
+            kiwi_assert_same([], $service->deleted_primary_keys, 'Expected no MySQL deletion during the Health lock.');
+            kiwi_assert_same([], $archive->chunks, 'Expected no new archive batch during the Health lock.');
+            kiwi_assert_same(102, $runs->rows[1]['archive_last_primary_key'] ?? 0, 'Expected the original receipt cursor.');
+        }
+        $rescheduled = $service->run_source('landing_page_sessions', 'cron');
+        kiwi_assert_same($scheduled['run_id'], $rescheduled['run_id'], 'Expected the same paused run despite the simulated audit age.');
+        kiwi_assert_same(1, count($runs->rows), 'Expected no successor run.');
+        $lock = new Kiwi_Retention_Archive_Lock();
+        $deadline = microtime(true) + 20;
+        do {
+            usleep(100000);
+            $released = $lock->acquire_for_archive($path);
+        } while (empty($released['acquired']) && microtime(true) < $deadline);
+        kiwi_assert_true(!empty($released['acquired']), 'Expected the actual child to complete and release its lock.');
+        $lock->release($released['handle'] ?? null);
+        $completed = $service->run_worker('landing_page_sessions');
+        kiwi_assert_same('completed', $completed['status'] ?? '', 'Expected receipt-backed continuation after Health completion.');
+        kiwi_assert_same([101, 102], $service->deleted_primary_keys, 'Expected only the verified receipt IDs to be deleted.');
+        kiwi_assert_same($before_hash, hash_file('sha256', $path), 'Expected the actual Health child to preserve SQLite bytes.');
+    } finally {
+        $wpdb = $previous_wpdb;
+        $GLOBALS['kiwi_test_options'] = $previous_options;
+        kiwi_remove_directory($root);
+    }
 });
 
 kiwi_run_test('Supervisor does not require the unused proc_terminate API', function (): void {

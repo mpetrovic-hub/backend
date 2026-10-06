@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-10-06:
+- [DB Retention Archive Health] Require a repository-owned Linux read brake in the actual PHP/PDO health child, prove both fixture rates before each full archive scan, and fail closed on missing pacing, file identity or supported read path. Preserve the full SQLite check, WAL gates, generation lock and corruption contract. Raise the default/maximum supervision and corruption handoff budget to 7,200 seconds; document reproducible native builds and a rollback that keeps the external check stopped until safe. (#138)
+
 2026-09-24:
 - [FR NTH SMS Allocation] Select the eight approved weighted `fr_sms_v2` entries from an NTH-owned configuration for eligible France one-off landings. Keep selection generic, preserve existing assignments/tokens and experiment switches, and document tested application-only return to the version-aware #122 release with both generations retained. Production rollout remains separately authorized.
 

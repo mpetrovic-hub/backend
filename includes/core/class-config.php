@@ -704,9 +704,9 @@ class Kiwi_Config
     {
         $value = defined('KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS')
             ? (int) KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS
-            : 600;
+            : 7200;
 
-        return min(3600, max(30, $value));
+        return min(7200, max(30, $value));
     }
 
     public function get_retention_default_batch_limit(): int
