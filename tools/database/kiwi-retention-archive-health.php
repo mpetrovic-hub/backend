@@ -3,8 +3,9 @@
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-name.php';
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-write-block.php';
 require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
+require_once __DIR__ . '/class-retention-archive-health-read-brake.php';
 
-function kiwi_retention_archive_health_open_readonly(string $real_path): PDO
+function kiwi_retention_archive_health_assert_sidecars_clear(string $real_path): void
 {
     foreach ([
         [
@@ -35,6 +36,12 @@ function kiwi_retention_archive_health_open_readonly(string $real_path): PDO
             }
         }
     }
+
+}
+
+function kiwi_retention_archive_health_open_readonly(string $real_path): PDO
+{
+    kiwi_retention_archive_health_assert_sidecars_clear($real_path);
 
     $uri_path = implode('/', array_map(
         'rawurlencode',
@@ -250,8 +257,8 @@ if (PHP_SAPI === 'cli'
     $allow_blocked_recovery_verification = is_array($payload)
         && !empty($payload['allow_blocked_recovery_verification']);
     $corruption_handoff_timeout_seconds = is_array($payload)
-        ? min(3600, max(30, (int) ($payload['corruption_handoff_timeout_seconds'] ?? 600)))
-        : 600;
+        ? min(7200, max(30, (int) ($payload['corruption_handoff_timeout_seconds'] ?? 7200)))
+        : 7200;
     $write_readiness_state = static function (string $path, string $state): bool {
         $resource = @fopen($path, 'c+b');
         if (!is_resource($resource)) {
@@ -348,9 +355,12 @@ if (PHP_SAPI === 'cli'
                         'check_completed' => false,
                     ];
                 } else {
-                    $pdo = kiwi_retention_archive_health_open_readonly($real_path);
-                    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                    $pdo->exec('PRAGMA query_only = ON');
+                    kiwi_retention_archive_health_assert_sidecars_clear($real_path);
+                    $brake = new Kiwi_Retention_Archive_Health_Read_Brake(
+                        $real_path,
+                        $payload['health_read_units_per_second'] ?? null
+                    );
+                    $pdo = $brake->open_verified_archive();
                     $io_before = [];
                     $io_started = null;
                     if ($io_diagnostic) {
@@ -363,6 +373,9 @@ if (PHP_SAPI === 'cli'
                     }
                     try {
                         $rows = $pdo->query('PRAGMA ' . $check . '_check')->fetchAll(PDO::FETCH_COLUMN);
+                    } catch (Throwable $error) {
+                        $brake->verify_after_check($pdo);
+                        throw $error;
                     } finally {
                         if ($io_diagnostic && is_float($io_started)) {
                             try {
@@ -379,6 +392,7 @@ if (PHP_SAPI === 'cli'
                             }
                         }
                     }
+                    $brake->verify_after_check($pdo);
                     $rows = is_array($rows) ? array_values(array_map('strval', $rows)) : [];
                     if (count($rows) === 1 && strtolower(trim($rows[0])) === 'ok') {
                         $result = [
@@ -446,6 +460,10 @@ if (PHP_SAPI === 'cli'
                 'sqlite_wal_state_invalid',
                 'sqlite_rollback_journal_not_empty',
                 'sqlite_rollback_journal_state_invalid',
+                'health_brake_unavailable',
+                'health_brake_configuration_invalid',
+                'health_brake_probe_failed',
+                'health_brake_target_unverified',
             ], true)
                 ? $error->getMessage()
                 : 'sqlite_readonly_check_failed';

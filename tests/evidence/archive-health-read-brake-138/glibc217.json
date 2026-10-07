@@ -1,0 +1,12 @@
+{
+  "result": "PASS",
+  "glibc": "2.17",
+  "sqlite": "3.34.1",
+  "fixture_700_seconds": 2.282756,
+  "fixture_350_seconds": 4.485567,
+  "pread": true,
+  "pread64": true,
+  "runtime_image": "quay.io/centos/centos@sha256:e4ca2ed0202e76be184e75fb26d14bf974193579039d5573fb2348664deef76e",
+  "runtime_layer_sha256": "2d473b07cdd5f0912cd6f1a703352c82b512407db6b05b43f2553732b55df3bc",
+  "library_sha256": "c616f6f7a3200513d3d1a9766acd20898c3589e8572ea381c6fc4ff0d5a0a39f"
+}

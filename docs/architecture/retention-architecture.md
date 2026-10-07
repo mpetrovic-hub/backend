@@ -46,12 +46,15 @@ The public WP-CLI surface has exactly three modes:
 - `Kiwi_Retention_Archive_Health_Service` is a thin facade over the controller.
 - `Kiwi_Retention_Archive_Health_Controller` resolves the target, interprets supervised results, and coordinates Operational Incidents and manual recovery.
 - `Kiwi_Retention_Archive_Check_Supervisor` owns the bounded child process and accepts corruption only from a completed non-`ok` PRAGMA result.
+- `Kiwi_Retention_Archive_Health_Read_Brake` proves the child-only native brake through the actual PDO/SQLite path before opening the full target. Two complete synthetic fixture scans at 700/350 covered 4-KiB read units per second share the later target PID. Exact file/VFS identity, counters and elapsed time must agree; the normal target rate is then locked at 700. Missing proof or a lost binding is a technical error, never corruption evidence.
 - `Kiwi_Retention_Corruption_Safety_Gate_Coordinator` is the single fail-closed contract shared with cleanup for the generation write-block sentinel and corruption Incident.
 - `Kiwi_Retention_Archive_Lock` provides one exclusive, non-waiting per-generation OS lock for both the read-only child and the cleanup worker.
 - `Kiwi_Retention_Archive_Name` provides the shared strict archive filename and generation contract.
 - `Kiwi_Retention_Archive_Health_Bootstrap_Recorder` emits only compact sanitized output when normal bootstrap is unavailable. It owns no state file, receipt, Incident spool, or database fallback.
 
 External scheduling owns frequency, retries, alerts, and escalation. The runtime never manufactures a replacement archive or silently chooses another generation after corruption.
+
+The repository ships one source/manifest/library/fixture bundle under `tools/database/archive-health-read-brake/`. The supervisor sets `LD_PRELOAD` only in its child's inherited environment snapshot; parent PHP and web requests remain unchanged. Foreign preload configuration is rejected. The Linux x86_64 library paces each covered 4-KiB section of `pread`/`pread64` through one monotonic ledger, requires random read advice, denies mappings of the bound files, and rejects an unsupported read path. There is no unbraked fallback or public rate switch. Non-empty WAL/journal gates run before the fixture proof and again before target opening. The 30-second fixture deadline is separate from the `30..7200` supervision budget; neither a supervisor timeout nor a technical brake failure permits archive writes or MySQL deletes while the child owns the generation lock.
 
 ## Result and safety transitions
 
