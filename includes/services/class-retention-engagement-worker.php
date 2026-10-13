@@ -18,9 +18,10 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
             throw new RuntimeException('engagement_source_invalid');
         }
         if (!$this->mark_stale_runs($source_key)) {
-            return ['success' => false, 'error_code' => 'stale_run_detection_failed'];
+            return $this->scheduled([], 'stale_run_detection_failed');
         }
-        $open = $this->run_repository->find_open_run_for_source($source_key);
+        try { $open = $this->run_repository->find_open_run_for_source($source_key); }
+        catch (Throwable $error) { return $this->scheduled([], 'open_run_lookup_failed'); }
         if (is_array($open)) {
             return $this->scheduled($open);
         }
@@ -30,7 +31,8 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
         $this->set_lock($source_key);
         try {
             // Re-read after acquiring the same source lock used by the scheduler.
-            $open = $this->run_repository->find_open_run_for_source($source_key);
+            try { $open = $this->run_repository->find_open_run_for_source($source_key); }
+            catch (Throwable $error) { return $this->scheduled([], 'open_run_lookup_failed'); }
             if (is_array($open)) {
                 return $this->scheduled($open);
             }

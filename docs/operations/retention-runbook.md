@@ -105,7 +105,7 @@ A failed `before_cleanup` snapshot is fail-closed: no worker is scheduled and th
 
 ## Engagement retention and external read-index preparation
 
-Transient Engagement audit lookup failures return a scheduled retry without changing durable run state. This also applies to the initial lookup, the locked recheck and recovery after an already committed delete; an unavailable audit never releases more archive/delete work.
+Transient Engagement audit lookup failures return a scheduled retry without changing durable run state. The daily scheduler applies this before and after the Source lock and when stale-run verification is unavailable; it never creates a new run while the existing audit is unknown. The worker applies the same contract to the initial lookup, the locked recheck and recovery after an already committed delete; an unavailable audit never releases more archive/delete work.
 
 `landing_session_engagements` follows the existing Session/Handoff sources, disabled and Dry-run by default under `kiwi_retention_settings.landing_session_engagements`. Keep 14 complete WordPress calendar days after `updated_at`, with a minimum of seven. This is the earliest age release, not a guaranteed deletion date. Any matching live MySQL session protects the row, regardless of its date. Complete snapshots include every CTA, source/attribution, UA and soft-flag field. The exact 2-% / five-CTA-event daily rules and fixed historical exception are in `../architecture/retention-architecture.md`; the existing Session gate is unchanged.
 

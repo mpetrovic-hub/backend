@@ -146,9 +146,15 @@ final class Engagement_Test_Worker extends Kiwi_Retention_Engagement_Worker
 }
 final class Engagement_Test_Run_Repository extends Kiwi_Retention_Cleanup_Run_Repository
 {
+    public $fail_stale_checks = 0;
     public $after_checkpoint_write;
     public $before_delete_audit;
     public $before_open_return;
+    public function mark_stale_unfinished_runs(string $key, int $minutes = 30): ?array
+    {
+        if ($this->fail_stale_checks > 0) { $this->fail_stale_checks--; return null; }
+        return parent::mark_stale_unfinished_runs($key, $minutes);
+    }
     public function find_open_run_for_source(string $key): ?array
     {
         $run = parent::find_open_run_for_source($key);
@@ -495,6 +501,43 @@ function et_audit_lookup_scenario(string $step): void
         'Scheduled ' . $step . ' audit retry finishes the same run exactly once');
 }
 
+function et_scheduler_audit_scenario(string $step): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $before = null;
+    if ($step === 'locked') {
+        $fixture['repo']->before_open_return = function () use ($fixture, &$before) {
+            global $wpdb;
+            // The first scheduler read saw no run. A competing invocation
+            // creates one before the original scheduler obtains its lock.
+            $fixture['worker']->run_source('landing_session_engagements');
+            $before = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+            $wpdb->fail_open_audit_reads = 1;
+        };
+    } else {
+        $fixture['worker']->run_source('landing_session_engagements');
+        $before = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+        if ($step === 'open') { $wpdb->fail_open_audit_reads = 1; }
+        else { $fixture['repo']->fail_stale_checks = 1; }
+    }
+    $result = null;
+    try { $result = $fixture['worker']->run_source('landing_session_engagements'); }
+    catch (Throwable $error) { /* The scheduler must contain the outage and return its retry result. */ }
+    et_check(is_array($result) && !$result['success'] && !empty($result['schedule_worker'])
+        && !empty($result['reschedule_worker']) && $result['reschedule_delay_seconds'] === 60,
+        'Scheduler ' . $step . ' audit outage schedules the existing run rather than losing its worker event');
+    $wpdb->fail_open_audit_reads = 0; $fixture['repo']->fail_stale_checks = 0;
+    $persisted = $fixture['repo']->find_run_by_id((int) $before['id']);
+    et_check($persisted === $before && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1,
+        'Scheduler ' . $step . ' outage creates no competing audit and preserves the exact existing checkpoint');
+    $run = et_finish($fixture);
+    et_check($run['status'] === 'completed' && $run['run_id'] === $before['run_id'] && (int) $run['deleted_rows'] === 1,
+        'Scheduler ' . $step . ' recovery finishes the same existing run exactly once');
+}
+
 function et_version_day_scenarios(): void
 {
     global $wpdb;
@@ -579,6 +622,11 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['open', 'locked', 'stale'] as $step) {
+        if (in_array('--scheduler-audit=' . $step, $argv, true)) {
+            et_scheduler_audit_scenario($step); echo 'SCHEDULER_AUDIT_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     foreach (['open', 'recheck', 'recovery'] as $step) {
         if (in_array('--audit-lookup=' . $step, $argv, true)) {
             et_audit_lookup_scenario($step); echo 'AUDIT_LOOKUP_TEST_PASSED ', $step, "\n"; return;
@@ -1027,6 +1075,7 @@ try {
     et_recovery_scenarios($other);
     foreach ($boundaries as $test) { $test($other); }
     foreach (['open', 'recheck', 'recovery'] as $step) { et_audit_lookup_scenario($step); }
+    foreach (['open', 'locked', 'stale'] as $step) { et_scheduler_audit_scenario($step); }
     et_version_day_scenarios();
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
