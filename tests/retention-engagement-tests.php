@@ -44,6 +44,8 @@ final class Engagement_Test_Wpdb
     public $last_failure_code = 0;
     public $fail_summary_reads = false;
     public $fail_after_reads = false;
+    public $fail_open_audit_reads = 0;
+    public $fail_run_audit_reads = 0;
     public function __construct(PDO $pdo) { $this->pdo = $pdo; }
     public function get_charset_collate() { return 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci'; }
     public function prepare(string $sql, ...$args): string
@@ -72,6 +74,10 @@ final class Engagement_Test_Wpdb
         if (preg_match('/LIMIT (\d+)\s*$/i', $sql, $match)) { $this->maximum_limit = max($this->maximum_limit, (int) $match[1]); }
         if ($this->source_page_delay_us > 0 && strpos($sql, 'SELECT e.*') === 0) { usleep($this->source_page_delay_us); }
         $this->last_error = '';
+        if (preg_match('/^SELECT\s+\*\s+FROM\s+t72_kiwi_retention_cleanup_runs\s+WHERE/i', $sql)) {
+            $failure = strpos($sql, 'source_key =') !== false ? 'fail_open_audit_reads' : 'fail_run_audit_reads';
+            if ($this->$failure > 0) { $this->$failure--; $this->last_error = 'controlled_audit_read_failure'; return []; }
+        }
         if ($this->fail_after_reads && strpos($sql, 'SELECT id FROM t72_kiwi_landing_session_engagements WHERE id>') === 0) {
             $this->last_error = 'controlled_after_read_failure'; return [];
         }
@@ -458,6 +464,37 @@ function et_receipt_payload_scenario(PDO $other): void
         'A stale batch receipt never authorizes a different complete payload even when archive and MySQL now agree');
 }
 
+function et_audit_lookup_scenario(string $step): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $fixture['worker']->run_source('landing_session_engagements');
+    $before = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    if ($step === 'open') { $wpdb->fail_open_audit_reads = 1; }
+    elseif ($step === 'recheck') { $wpdb->fail_run_audit_reads = 2; }
+    else {
+        $fixture['archive']->after_commit = function () {
+            global $wpdb; $wpdb->fail_after_reads = true; $wpdb->fail_run_audit_reads = 1;
+        };
+    }
+    $result = null;
+    try { $result = $fixture['worker']->run_worker('landing_session_engagements'); }
+    catch (Throwable $error) { /* Assert below that the production worker contained the read failure. */ }
+    et_check(is_array($result) && !$result['success'] && !empty($result['schedule_worker'])
+        && !empty($result['reschedule_worker']) && $result['reschedule_delay_seconds'] === 60,
+        'Transient ' . $step . ' audit lookup failure returns a scheduled retry rather than escaping');
+    $wpdb->fail_open_audit_reads = 0; $wpdb->fail_run_audit_reads = 0; $wpdb->fail_after_reads = false;
+    $fixture['archive']->after_commit = null;
+    $persisted = $fixture['repo']->find_run_by_id((int) $before['id']);
+    et_check($step === 'recovery' ? ((int) $persisted['deleted_rows'] === 1 && $persisted['finished_at'] === null)
+        : $persisted === $before, 'Audit lookup outage retains the exact durable ' . $step . ' recovery state');
+    $run = et_finish($fixture);
+    et_check($run['status'] === 'completed' && (int) $run['archived_rows'] === 1 && (int) $run['deleted_rows'] === 1,
+        'Scheduled ' . $step . ' audit retry finishes the same run exactly once');
+}
+
 function et_version_day_scenarios(): void
 {
     global $wpdb;
@@ -542,6 +579,11 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['open', 'recheck', 'recovery'] as $step) {
+        if (in_array('--audit-lookup=' . $step, $argv, true)) {
+            et_audit_lookup_scenario($step); echo 'AUDIT_LOOKUP_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     $boundaries = ['checkpoint' => 'et_checkpoint_readback_scenario', 'pending' => 'et_pending_budget_scenario',
         'coverage' => 'et_tiny_coverage_scenario', 'receipt' => 'et_receipt_payload_scenario'];
     foreach ($boundaries as $name => $test) {
@@ -984,6 +1026,7 @@ try {
 
     et_recovery_scenarios($other);
     foreach ($boundaries as $test) { $test($other); }
+    foreach (['open', 'recheck', 'recovery'] as $step) { et_audit_lookup_scenario($step); }
     et_version_day_scenarios();
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {

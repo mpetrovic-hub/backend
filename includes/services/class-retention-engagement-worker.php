@@ -77,7 +77,8 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
     public function run_worker(string $source_key): array
     {
         $source = $this->source_registry->get($source_key);
-        $run = $this->run_repository->find_open_run_for_source($source_key);
+        try { $run = $this->run_repository->find_open_run_for_source($source_key); }
+        catch (Throwable $error) { return $this->scheduled([], 'open_run_lookup_failed'); }
         if (!is_array($run)) {
             return ['success' => true, 'status' => 'skipped', 'error_code' => 'no_open_cleanup_run'];
         }
@@ -94,7 +95,8 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
         try {
             // The initial open-run read precedes the transient lock. Another
             // worker may have advanced it before this invocation acquires it.
-            $run = $this->run_repository->find_run_by_id((int) $run['id']);
+            try { $run = $this->run_repository->find_run_by_id((int) $run['id']); }
+            catch (Throwable $error) { return $this->scheduled($run, 'run_audit_recheck_failed'); }
             if (!is_array($run) || ($run['finished_at'] ?? null) !== null) {
                 return ['success' => true, 'status' => 'skipped', 'error_code' => 'no_open_cleanup_run'];
             }
@@ -178,7 +180,8 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
             $wpdb->query('ROLLBACK');
             $reader->close();
             $code = preg_match('/^[a-z][a-z0-9_]*$/D', $error->getMessage()) ? $error->getMessage() : 'engagement_worker_failed';
-            $persisted = $this->run_repository->find_run_by_id((int) $run['id']);
+            try { $persisted = $this->run_repository->find_run_by_id((int) $run['id']); }
+            catch (Throwable $audit_error) { return $this->scheduled($run, 'engagement_audit_recheck_failed'); }
             if (!is_array($persisted) || ($persisted['finished_at'] ?? null) !== null) {
                 return ['success' => false, 'error_code' => 'engagement_audit_recheck_failed'];
             }
