@@ -10,15 +10,15 @@ class Kiwi_Retention_Cleanup_Service
     private const WORKER_LOCK_PREFIX = 'kiwi_retention_cleanup_worker_lock_';
     private const STALE_RUN_AFTER_MINUTES = 30;
 
-    private $config;
-    private $source_registry;
-    private $run_repository;
-    private $snapshot_repository;
-    private $archive_service;
-    private $archive_lock;
-    private $coverage_gate;
-    private $operational_event_service;
-    private $corruption_safety_gate;
+    protected $config;
+    protected $source_registry;
+    protected $run_repository;
+    protected $snapshot_repository;
+    protected $archive_service;
+    protected $archive_lock;
+    protected $coverage_gate;
+    protected $operational_event_service;
+    protected $corruption_safety_gate;
 
     public function __construct(
         ?Kiwi_Config $config = null,
@@ -65,6 +65,9 @@ class Kiwi_Retention_Cleanup_Service
 
     public function run_source(string $source_key, string $triggered_by = 'cron'): array
     {
+        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
+            return $this->engagement_worker()->run_source($source_key, $triggered_by);
+        }
         $source = $this->source_registry->get($source_key);
 
         if (!is_array($source)) {
@@ -476,6 +479,9 @@ class Kiwi_Retention_Cleanup_Service
 
     public function run_worker(string $source_key): array
     {
+        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
+            return $this->engagement_worker()->run_worker($source_key);
+        }
         $source = $this->source_registry->get($source_key);
 
         if (!is_array($source)) {
@@ -1300,7 +1306,7 @@ class Kiwi_Retention_Cleanup_Service
         return in_array($gate_status, ['passed', 'partial'], true);
     }
 
-    private function mark_stale_runs(string $source_key): bool
+    protected function mark_stale_runs(string $source_key): bool
     {
         try {
             $stale_runs = $this->run_repository->mark_stale_unfinished_runs(
@@ -1855,7 +1861,7 @@ class Kiwi_Retention_Cleanup_Service
         return ($timestamp === false ? $current_date : gmdate('Y-m-d', $timestamp)) . ' 00:00:00';
     }
 
-    private function finish_run(int $run_db_id, array $result): array
+    protected function finish_run(int $run_db_id, array $result): array
     {
         $update = array_merge($result, [
             'finished_at' => $this->current_time_mysql(),
@@ -1887,7 +1893,7 @@ class Kiwi_Retention_Cleanup_Service
         return $result;
     }
 
-    private function update_run_progress(int $run_db_id, array $data): bool
+    protected function update_run_progress(int $run_db_id, array $data): bool
     {
         if ($run_db_id <= 0) {
             return false;
@@ -1915,7 +1921,7 @@ class Kiwi_Retention_Cleanup_Service
         return $this->finish_run($run_db_id, $failure);
     }
 
-    private function resolve_retention_days(array $settings, array $source): int
+    protected function resolve_retention_days(array $settings, array $source): int
     {
         $minimum = max(1, (int) ($source['retention_days_min'] ?? 1));
         $default = max($minimum, (int) ($source['retention_days_default'] ?? $minimum));
@@ -1923,14 +1929,14 @@ class Kiwi_Retention_Cleanup_Service
         return max($minimum, (int) ($settings['retention_days'] ?? $default));
     }
 
-    private function normalize_triggered_by(string $triggered_by): string
+    protected function normalize_triggered_by(string $triggered_by): string
     {
         $triggered_by = strtolower(trim($triggered_by));
 
         return in_array($triggered_by, ['cron', 'manual', 'wp_cli'], true) ? $triggered_by : 'manual';
     }
 
-    private function generate_run_id(): string
+    protected function generate_run_id(): string
     {
         if (function_exists('wp_generate_uuid4')) {
             return 'retention_' . str_replace('-', '', wp_generate_uuid4());
@@ -1939,18 +1945,18 @@ class Kiwi_Retention_Cleanup_Service
         return 'retention_' . gmdate('YmdHis') . '_' . substr(md5(uniqid('', true)), 0, 12);
     }
 
-    private function generate_archive_batch_id(string $source_key): string
+    protected function generate_archive_batch_id(string $source_key): string
     {
         return $source_key . '_' . gmdate('YmdHis') . '_' . substr(md5(uniqid('', true)), 0, 8);
     }
 
-    private function has_lock(string $source_key): bool
+    protected function has_lock(string $source_key): bool
     {
         return function_exists('get_transient')
             && get_transient(self::LOCK_PREFIX . $source_key) !== false;
     }
 
-    private function set_lock(string $source_key): void
+    protected function set_lock(string $source_key): void
     {
         if (!function_exists('set_transient')) {
             return;
@@ -1963,20 +1969,20 @@ class Kiwi_Retention_Cleanup_Service
         );
     }
 
-    private function clear_lock(string $source_key): void
+    protected function clear_lock(string $source_key): void
     {
         if (function_exists('delete_transient')) {
             delete_transient(self::LOCK_PREFIX . $source_key);
         }
     }
 
-    private function has_worker_lock(string $source_key): bool
+    protected function has_worker_lock(string $source_key): bool
     {
         return function_exists('get_transient')
             && get_transient(self::WORKER_LOCK_PREFIX . $source_key) !== false;
     }
 
-    private function set_worker_lock(string $source_key): void
+    protected function set_worker_lock(string $source_key): void
     {
         if (!function_exists('set_transient')) {
             return;
@@ -1989,7 +1995,7 @@ class Kiwi_Retention_Cleanup_Service
         );
     }
 
-    private function clear_worker_lock(string $source_key): void
+    protected function clear_worker_lock(string $source_key): void
     {
         if (function_exists('delete_transient')) {
             delete_transient(self::WORKER_LOCK_PREFIX . $source_key);
@@ -2001,12 +2007,21 @@ class Kiwi_Retention_Cleanup_Service
         return preg_match('/^[A-Za-z0-9_]+$/', $value) === 1;
     }
 
-    private function current_time_mysql(): string
+    protected function current_time_mysql(): string
     {
         if (function_exists('current_time')) {
             return (string) current_time('mysql');
         }
 
         return gmdate('Y-m-d H:i:s');
+    }
+
+    private function engagement_worker(): Kiwi_Retention_Engagement_Worker
+    {
+        return new Kiwi_Retention_Engagement_Worker(
+            $this->config, $this->source_registry, $this->run_repository,
+            $this->snapshot_repository, $this->archive_service, $this->coverage_gate,
+            $this->operational_event_service, $this->archive_lock, $this->corruption_safety_gate
+        );
     }
 }

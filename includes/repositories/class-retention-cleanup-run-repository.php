@@ -6,6 +6,26 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Retention_Cleanup_Run_Repository
 {
+    private const CHECKPOINT_COLUMNS = ['worker_runs', 'gate_results_json', 'archive_last_primary_key',
+        'delete_last_primary_key', 'archived_rows', 'deleted_rows', 'archive_db_path', 'archive_batch_id'];
+
+    /** Normalize fetched SQL values, preserving stored NULLs in checkpoint guards. */
+    public function checkpoint_for_stored_run(array $run): array
+    {
+        $normalized = $this->normalize_row($run);
+        $checkpoint = [];
+        foreach (self::CHECKPOINT_COLUMNS as $column) {
+            if (array_key_exists($column, $run)) { $checkpoint[$column] = $run[$column] === null ? null : $normalized[$column]; }
+        }
+        return $checkpoint;
+    }
+
+    /** The guards this update wrote, without adopting another worker's readback. */
+    public function checkpoint_after_update(array $data, array $previous): array
+    {
+        return $this->checkpoint_for_stored_run(array_replace($previous, $this->normalize_row($data)));
+    }
+
     public function get_table_name(): string
     {
         global $wpdb;
@@ -142,6 +162,53 @@ class Kiwi_Retention_Cleanup_Run_Repository
         return is_array($current) && ($current['finished_at'] ?? null) === null;
     }
 
+    /** Atomic engagement checkpoints without changing the shared source flow. */
+    public function update_run_checkpoint(int $id, array $data, array $expected): bool
+    {
+        if ($id <= 0) { return false; }
+        global $wpdb;
+        $row = $this->normalize_row(array_merge($data, ['updated_at' => $this->current_time_mysql()]));
+        $raw_expected = $expected;
+        $expected = $this->normalize_row($expected);
+        $guards = self::CHECKPOINT_COLUMNS;
+        $set = [];
+        $args = [];
+        foreach ($row as $column => $value) {
+            $set[] = '`' . $column . '`=' . ($value === null ? 'NULL' : $this->formats_for([$column])[0]);
+            if ($value !== null) { $args[] = $value; }
+        }
+        $where = ['id=%d', 'finished_at IS NULL'];
+        $args[] = $id;
+        foreach ($guards as $column) {
+            if (!array_key_exists($column, $expected)) { return false; }
+            if ($raw_expected[$column] === null) {
+                $expected[$column] = null;
+                $where[] = '`' . $column . '` IS NULL';
+                continue;
+            }
+            $format = $this->formats_for([$column])[0];
+            $where[] = $format === '%d' ? '`' . $column . '` <=> %d'
+                : 'BINARY `' . $column . '` <=> BINARY %s';
+            $args[] = $expected[$column];
+        }
+        $result = $wpdb->query($wpdb->prepare('UPDATE ' . $this->get_table_name()
+            . ' SET ' . implode(',', $set) . ' WHERE ' . implode(' AND ', $where), ...$args));
+        if ($result === false) { return false; }
+        if ((int) $result === 1) { return true; }
+        // MySQL returns zero for an identical write. Accept only that exact
+        // no-op, never a checkpoint advanced by a different invocation.
+        $current = $this->find_run_by_id($id);
+        if (!is_array($current) || ($current['finished_at'] ?? null) !== null) { return false; }
+        $raw_current = $current;
+        $current = $this->normalize_row($current);
+        foreach ($guards as $column) {
+            $value = $raw_current[$column] === null ? null : $current[$column];
+            if ($value !== $expected[$column]) { return false; }
+        }
+        foreach ($row as $column => $value) { if ($current[$column] !== $value) { return false; } }
+        return true;
+    }
+
     public function find_run_by_id(int $id): ?array
     {
         if ($id <= 0) {
@@ -243,6 +310,9 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $stale_after_minutes = max(1, $stale_after_minutes);
         $now = $this->current_time_mysql();
         $resumable_worker_phases = [
+            'engagement_preparing',
+            'engagement_archive',
+            'engagement_after',
             'active_run_rescheduled',
             'archive_pending',
             'archive_running',

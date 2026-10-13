@@ -103,6 +103,37 @@ On archive or receipt failure, destructive progress stops. A lock-active worker 
 
 A failed `before_cleanup` snapshot is fail-closed: no worker is scheduled and the cleanup run is marked failed with `snapshot_before_failed`. If the `after_cleanup` snapshot fails after archive/delete already completed successfully, the run stays `completed` and records `error_code=snapshot_after_failed` as an operational warning; completed destructive work is not misreported as failed.
 
+## Engagement retention and external read-index preparation
+
+`landing_session_engagements` follows the existing Session/Handoff sources, disabled and Dry-run by default under `kiwi_retention_settings.landing_session_engagements`. Keep 14 complete WordPress calendar days after `updated_at`, with a minimum of seven. This is the earliest age release, not a guaranteed deletion date. Any matching live MySQL session protects the row, regardless of its date. Complete snapshots include every CTA, source/attribution, UA and soft-flag field. The exact 2-% / five-CTA-event daily rules and fixed historical exception are in `../architecture/retention-architecture.md`; the existing Session gate is unchanged.
+
+`kiwi_retention_cleanup_runs.gate_results_json` stores the preparation/coverage/archive/after phase, bounded cursors and pending source-ID/hash page, `counts` for before/after observations, age candidates, recent-update protection, session/change deferrals, releases and already-absent receipt rows, and `daily_results` for Main/TK metrics. Dry-run runs preparation, full-day coverage, a final bounded eligibility recheck and final counting, without original archive rows/receipts or deletes. Failed preparation never starts archive/delete. Counts are observations within the frozen scope; newly created rows are outside the cleanup target. The after-count target and independent receipt/archive/delete cursors remain in the audit. There is no additional last-result option. Conditional checkpoint writes prevent stale workers from replacing newer durable cursors/counts. Committed receipt pages can resume in smaller prefixes after a budget reduction. A failure during final counting or audit finalization keeps the run open with its committed delete counts; retry resumes it instead of reporting that destructive work never occurred.
+
+Engagement version selection is fixed: count each Source-ID once, using MySQL if present, otherwise the newest verified archive year/numeric generation. The reader uses this rule automatically for complete-day coverage; no new operator setting is needed. New snapshots/receipts go only into the run's frozen current generation. Older differing Engagement snapshots remain stored as historical versions. Missing/invalid newest receipt evidence, technical or corruption errors remain blockers; no silent older-version fallback. Immutable Session copies retain their complete conflict check, and the current full snapshot/receipt/delete guard stays byte-exact. Resumed receipts must still match the original pending snapshot hash. Both committed receipts and uncommitted pending snapshot pages obey a smaller retry budget; a daily session lookup also resumes with a one-row budget. Each conditional audit write retains its own written checkpoint rather than adopting a newer worker's subsequent readback.
+
+Existing archives need explicitly prepared read indexes before enabling the source. Select one canonical archive at a time, with Kiwi Backend active, through the repository artifact:
+
+```bash
+wp --require=wp-content/plugins/backend/tools/database/migrations/retention-archive-read-indexes.php kiwi retention archive-read-indexes status --archive=kiwi_retention_archive_2026.sqlite
+# apply is mutating: obtain the concrete archive/deployment authorization first
+nice -n 15 ionice -c 3 wp --require=wp-content/plugins/backend/tools/database/migrations/retention-archive-read-indexes.php kiwi retention archive-read-indexes apply --archive=kiwi_retention_archive_2026.sqlite
+wp --require=wp-content/plugins/backend/tools/database/migrations/retention-archive-read-indexes.php kiwi retention archive-read-indexes status --archive=kiwi_retention_archive_2026.sqlite
+```
+
+The artifact runs after `plugins_loaded` and exits before `init`. `status` changes no archive data/schema. Both modes also verify that the Engagement source and cleanup audit use InnoDB, hold the generation lock and respect corruption and immutable-read/WAL gates. Definitions are checked in full: column order, ASC, NOCASE only on both Session pair keys, BINARY on the remaining fields, non-UNIQUE and non-partial. `status` reports missing or mismatched definitions and `replacement_required`. Explicit external `apply` creates missing indexes or replaces only the named approved read index, atomically under the generation lock; an old same-named BINARY pair index must be replaced. Payloads, receipts and the existing source-PK unique index remain intact. Repeating `apply` is a no-op after successful preparation. Free space must cover at least the archive size plus 64 MiB; the small cache and disabled mmap limit memory use. Check restore readiness, space reserve and acceptable lock duration first. Low process priority does not guarantee Hostinger Account/LVE IOPS. Global health checks remain external. Missing or wrong indexes never cause a runtime migration or unbounded fallback scan.
+
+MySQL pair matching and live-session protection retain the existing collations and keys. The archive lookup uses NOCASE for both pair keys with identical comparisons on every `(created_at, _source_pk)` page; original key values stay unchanged. The ASCII-only NOCASE approximation and its Unicode/trailing-space limits are documented in the Retention architecture. Daily tolerances apply to derived statistics, while complete snapshot/receipt/delete verification remains byte-exact, including case-only payload changes.
+
+Activation is a later operator action after a verified successful merge and reviewed release:
+
+1. Obtain one-time fachliche Fraud-/Billing-Freigabe for the 14-day period. Every reduction needs renewed approval.
+2. Obtain deployment and external preparation authorization for the named release and actual archives. Deploy with Engagement disabled; complete `status → apply → status` and the existing restore/schema/health gates.
+3. Authorize and inspect a Production Dry-run. Check completed preparation, full-day Main/TK proof, historical exception, candidates, deferrals and releases; prove no original archive/delete occurred.
+4. Obtain separate explicit authorization to activate the concrete Engagement configuration. This approves the future regularly automatic mechanism once, not each later run.
+5. Inspect the first active run's archive, receipt, delete, deferral and cursor evidence. No synthetic Sale/Billing requests are required.
+
+Local tests and a Planner Report do not authorize activation or a shorter period. The historical exception waives statistics proof only. Archive-boundary errors retain the original run and pending receipt for recovery. Follow the recorded post-merge acceptance and let the user decide completion.
+
 ## External SQLite archive health controller
 
 The repository-owned runner is `tools/database/kiwi-retention-archive-health.php`. It is an external WP-CLI surface and must be invoked with `--require` before WordPress loads. It has exactly three public modes:

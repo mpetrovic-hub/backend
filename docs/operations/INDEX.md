@@ -26,7 +26,7 @@ Operations docs describe production behavior, runbooks, configuration, and troub
 | `landing-page-runtime.md` | Filesystem-only landing-page routing, rendering, gallery, multi-domain exposure, runtime checks, troubleshooting, and deployment rollback. |
 | `landing-funnel-analytics.md` | Landing KPI, Statistics UI, daily funnel summaries, TK-zone summaries, analytics storage/read behavior. |
 | `premium-sms-fraud-monitoring.md` | Premium SMS fraud monitor UI, MO/engagement soft flags, hidden filters, and block/observe behavior. |
-| `retention-runbook.md` | Landing-session raw retention coverage gate, archive/delete worker, external SQLite health operations, and raw-context compaction. |
+| `retention-runbook.md` | Session/Handoff/Engagement retention, archive/delete worker, external archive read-index preparation and SQLite health, and raw-context compaction. |
 | [Archive-health brake build](../../tools/database/archive-health-read-brake/README.md) | Reproducible Linux native bundle, synthetic guard tests, compatibility and complete local-copy measurements. |
 | `operational-events-runbook.md` | Operational-event reads, open incidents, cleanup, producer checks, and troubleshooting. |
 | `database-migrations.md` | External schema status/apply deployment gate, setup, restore, failure, and rollback procedure. |

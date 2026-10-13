@@ -83,6 +83,8 @@ require_once __DIR__ . '/services/class-retention-corruption-safety-gate-coordin
 require_once __DIR__ . '/services/class-retention-archive-health-controller.php';
 require_once __DIR__ . '/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/services/class-retention-cleanup-service.php';
+require_once __DIR__ . '/services/class-retention-archive-reader.php';
+require_once __DIR__ . '/services/class-retention-engagement-worker.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
 require_once __DIR__ . '/services/class-landing-page-variant-agent.php';
 require_once __DIR__ . '/services/class-landing-session-engagement-evaluator-interface.php';
