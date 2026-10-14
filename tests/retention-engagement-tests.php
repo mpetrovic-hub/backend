@@ -185,6 +185,11 @@ class Engagement_Test_Archive extends Kiwi_Retention_Sqlite_Archive_Service
 final class Engagement_Test_Worker extends Kiwi_Retention_Engagement_Worker
 {
     public function cutoff(int $days): string { return $this->build_cutoff_value($days); }
+    public function source_transient(bool $active): void
+    {
+        if ($active) { $this->set_lock('landing_session_engagements'); }
+        else { $this->clear_lock('landing_session_engagements'); }
+    }
 }
 final class Engagement_Test_Run_Repository extends Kiwi_Retention_Cleanup_Run_Repository
 {
@@ -721,6 +726,63 @@ function et_source_creation_scenario(string $step, PDO $other): void
         'Source ' . $step . ' retry recovers exactly one requested run');
 }
 
+function et_transient_start_scenario(string $step, PDO $other): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $plugin = new Engagement_Test_Plugin($fixture['worker']); $plugin->register();
+    if ($step === 'existing') {
+        $fixture['worker']->run_source('landing_session_engagements', 'wp_cli');
+        $before = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+        $fixture['worker']->source_transient(true);
+        $result = $plugin->start_source();
+        et_check($result['run_id'] === $before['run_id'] && empty($result['retry_source'])
+            && count($GLOBALS['engagement_test_cron']) === 1
+            && $GLOBALS['engagement_test_cron'][0]['args'] === ['landing_session_engagements'],
+            'An existing durable run bypasses the advisory transient and queues an ordinary worker');
+        $fixture['worker']->source_transient(false);
+    } elseif ($step === 'concurrent') {
+        $competing = null;
+        $fixture['repo']->before_create = function () use ($plugin, $other, &$competing) {
+            global $wpdb;
+            $primary = $wpdb; $transients = $GLOBALS['engagement_test_transients'];
+            $wpdb = new Engagement_Test_Wpdb($other);
+            try { $competing = $plugin->start_source(); }
+            finally { $wpdb = $primary; }
+            et_check($transients === $GLOBALS['engagement_test_transients'],
+                'A concurrent blocked start neither clears nor replaces its owner transient');
+        };
+        $plugin->start_source();
+        et_check(is_array($competing) && !empty($competing['retry_source'])
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1,
+            'A concurrent start retains its intent while the first start creates exactly one run');
+    } else {
+        // Simulate a terminated creator: its connection-owned lock is gone,
+        // but the existing source transient has not yet expired.
+        $fixture['worker']->source_transient(true);
+        $transients = $GLOBALS['engagement_test_transients'];
+        $result = $plugin->start_source();
+        et_check(!$result['success'] && !empty($result['retry_source'])
+            && count($GLOBALS['engagement_test_cron']) === 1
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 0,
+            'An orphan source transient preserves the requested start as a queued retry');
+        $retry = et_dispatch_cron();
+        et_check(!empty($retry['retry_source']) && count($GLOBALS['engagement_test_cron']) === 1
+            && $transients === $GLOBALS['engagement_test_transients']
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 0,
+            'Repeated advisory blocking preserves one original start without extending the transient');
+        $fixture['worker']->source_transient(false); // Controlled transient expiry.
+    }
+    for ($i = 0; $i < 20 && $GLOBALS['engagement_test_cron']; $i++) { et_dispatch_cron(); }
+    $run = $wpdb->get_row('SELECT * FROM t72_kiwi_retention_cleanup_runs ORDER BY id DESC LIMIT 1');
+    et_check(is_array($run) && $run['status'] === 'completed' && $run['triggered_by'] === ($step === 'existing' ? 'wp_cli' : 'manual')
+        && (int) $run['deleted_rows'] === 1 && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1
+        && !$GLOBALS['engagement_test_cron'],
+        'Advisory transient ' . $step . ' path finishes the same requested run once');
+}
+
 function et_mutable_receipt_scenario(string $step): void
 {
     global $wpdb;
@@ -872,6 +934,11 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['orphan', 'concurrent', 'existing'] as $step) {
+        if (in_array('--transient-start=' . $step, $argv, true)) {
+            et_transient_start_scenario($step, $other); echo 'TRANSIENT_START_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     foreach (['target', 'insert', 'parallel', 'lease', 'lock_error'] as $step) {
         if (in_array('--source-creation=' . $step, $argv, true)) {
             et_source_creation_scenario($step, $other); echo 'SOURCE_CREATION_TEST_PASSED ', $step, "\n"; return;
@@ -1346,6 +1413,7 @@ try {
     et_version_day_scenarios();
     foreach (['target', 'insert', 'parallel', 'lease', 'lock_error'] as $step) { et_source_creation_scenario($step, $other); }
     foreach (['metadata', 'missing', 'identity'] as $step) { et_mutable_receipt_scenario($step); }
+    foreach (['orphan', 'concurrent', 'existing'] as $step) { et_transient_start_scenario($step, $other); }
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

@@ -26,7 +26,7 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
             return $this->scheduled($open);
         }
         if ($this->has_lock($source_key)) {
-            return ['success' => true, 'status' => 'skipped', 'error_code' => 'lock_active'];
+            return $this->source_retry($triggered_by, 'lock_active');
         }
         try { $creation_lock = $this->run_repository->acquire_source_creation_lock($source_key); }
         catch (Throwable $error) { return $this->source_retry($triggered_by, 'source_creation_lock_failed'); }
