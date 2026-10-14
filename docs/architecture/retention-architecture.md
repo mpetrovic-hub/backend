@@ -42,6 +42,8 @@ An Engagement source-audit outage retains the requested source-start intent and 
 
 Engagement run creation also takes a non-waiting MySQL named lock scoped to the database, audit table and source before its final open-run lookup. The guarded INSERT requires that same connection to still own the lock; a reconnect or lost lease inserts nothing, and a stale insert ID cannot count as success. Parallel starts resume one audit run. Target-bound reads, audit insertion and lock failures preserve the explicit source retry. An advisory source transient without a durable run also retains that retry, including after a terminated creator; waiting attempts neither clear nor extend another creator's transient. Once it clears or expires, the original start can proceed under the named lock. An already stored run queues its ordinary worker directly. The lock is released when source preparation exits; other sources retain their existing creation path.
 
+For immutable Sessions, a live MySQL row and any archived copy of the same Source-ID must have byte-matching complete mapped snapshots, just as copies across archive generations must. The Cleanup reads the full live row by primary key and compares duplicate copies, including fields outside the five counting fields. A mismatch blocks coverage; a matching live/archive duplicate counts once. Pair lookups and their covering index retain the five counting fields, and the mutable Engagement version policy remains separate.
+
 ## Archive-before-delete contract
 
 For every source and every cleanup chunk:

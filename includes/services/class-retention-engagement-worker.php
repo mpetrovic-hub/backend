@@ -413,12 +413,15 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
     private function canonical(array $source, array $row, int $origin, array $files, Kiwi_Retention_Archive_Reader $reader): ?array
     {
         $session = $source['source_key'] === Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
-        $copies = $session ? $reader->session_copies($source, (int) $row['id']) : $reader->copies($source, (int) $row['id']);
         if ($session) {
             global $wpdb;
-            $live = $wpdb->get_row($wpdb->prepare('SELECT id,landing_key,session_token,created_at,pid FROM ' . $source['source_table'] . ' WHERE id=%d LIMIT 1', $row['id']), ARRAY_A);
+            $live = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $source['source_table'] . ' WHERE id=%d LIMIT 1', $row['id']), ARRAY_A);
             $this->assert_query_ok();
-        } else { $live = $this->live_by_id($source, (int) $row['id']); }
+            $copies = $reader->session_copies($source, (int) $row['id'], $live);
+        } else {
+            $copies = $reader->copies($source, (int) $row['id']);
+            $live = $this->live_by_id($source, (int) $row['id']);
+        }
         if ($origin === 0) {
             return $live;
         }

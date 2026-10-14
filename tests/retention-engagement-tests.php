@@ -783,6 +783,50 @@ function et_transient_start_scenario(string $step, PDO $other): void
         'Advisory transient ' . $step . ' path finishes the same requested run once');
 }
 
+function et_live_session_copy_scenario(string $step, PDO $other): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    $sessions = $fixture['registry']->get('landing_page_sessions');
+    et_full_row($source, et_engagement(1));
+    et_archive_sessions($fixture, [et_session(11, 1, '2026-07-06 12:00:00', ['user_agent' => 'Receipt-UA'])]);
+    $sqlite = new PDO('sqlite:' . $fixture['archive']->resolve_archive_db_path());
+    $archived = $sqlite->query('SELECT * FROM ' . $sessions['source_table'] . ' WHERE _source_pk=11')->fetch(PDO::FETCH_ASSOC);
+    $sqlite = null;
+    $live = Kiwi_Retention_Archive_Reader::snapshot($sessions, $archived);
+    if ($step === 'conflict') { $live['user_agent'] = 'receipt-ua'; }
+    if (!$wpdb->insert($sessions['source_table'], $live)) { throw new RuntimeException('fixture_session_restore_failed'); }
+    et_summary($config, '2026-07-06', 1, 2);
+    $removed = false;
+    $after = function ($id, array $data) use ($fixture, $sessions, $other, &$removed, &$after): void {
+        $state = $data['gate_results_json'] ?? [];
+        if (($state['phase'] ?? '') === 'archive' && !empty($data['archive_db_path'])) {
+            // A Session cleanup finishes after the complete-day evidence was
+            // persisted but before Engagement archive/delete starts.
+            $other->exec('DELETE FROM ' . $sessions['source_table'] . ' WHERE id=11');
+            $removed = true;
+        } else { $fixture['repo']->after_checkpoint_write = $after; }
+    };
+    $fixture['repo']->after_checkpoint_write = $after;
+    $run = et_finish($fixture);
+    if ($step === 'conflict') {
+        et_check($run['status'] === 'failed' && $run['error_code'] === 'archive_reader_snapshot_conflict'
+            && !$removed && (int) $run['archived_rows'] === 0 && (int) $run['deleted_rows'] === 0
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+            'A live Session differing only outside counting fields blocks before coverage can authorize later delete'
+                . ' (observed status=' . $run['status'] . ', deleted=' . (int) $run['deleted_rows'] . ')');
+    } else {
+        et_check($removed && $run['status'] === 'completed' && $run['gate_status'] === 'passed'
+            && (int) $run['archived_rows'] === 1 && (int) $run['deleted_rows'] === 1,
+            'A byte-matching live/archive Session counts once and permits guarded delete after the live Session is removed');
+        $daily = et_state($run)['daily_results']['2026-07-06']['modes'];
+        et_check($daily['main']['metrics']['page_loaded_sessions']['raw'] === 1
+            && $daily['tkzone']['metrics']['page_loaded_sessions']['raw'] === 1,
+            'Matching live/archive Session duplication preserves separate Main and TK pair counts');
+    }
+}
+
 function et_mutable_receipt_scenario(string $step): void
 {
     global $wpdb;
@@ -934,6 +978,11 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['matching', 'conflict'] as $step) {
+        if (in_array('--live-session-copy=' . $step, $argv, true)) {
+            et_live_session_copy_scenario($step, $other); echo 'LIVE_SESSION_COPY_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     foreach (['orphan', 'concurrent', 'existing'] as $step) {
         if (in_array('--transient-start=' . $step, $argv, true)) {
             et_transient_start_scenario($step, $other); echo 'TRANSIENT_START_TEST_PASSED ', $step, "\n"; return;
@@ -1414,6 +1463,7 @@ try {
     foreach (['target', 'insert', 'parallel', 'lease', 'lock_error'] as $step) { et_source_creation_scenario($step, $other); }
     foreach (['metadata', 'missing', 'identity'] as $step) { et_mutable_receipt_scenario($step); }
     foreach (['orphan', 'concurrent', 'existing'] as $step) { et_transient_start_scenario($step, $other); }
+    foreach (['matching', 'conflict'] as $step) { et_live_session_copy_scenario($step, $other); }
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

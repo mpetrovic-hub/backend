@@ -283,8 +283,8 @@ class Kiwi_Retention_Archive_Reader
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    /** Counting reads stay covered; duplicate generations require full proof. */
-    public function session_copies(array $source, int $id): array
+    /** Pair reads stay covered; live/archive duplicates require full proof. */
+    public function session_copies(array $source, int $id, ?array $live = null): array
     {
         if ($this->files !== null && array_column($this->archive_service->list_archive_files(), 'path') !== array_column($this->files, 'path')) {
             throw new RuntimeException('archive_inventory_changed');
@@ -301,8 +301,8 @@ class Kiwi_Retention_Archive_Reader
             $this->verify_row_receipt($pdo, $source, $row);
             $copies[$file['path']] = $row;
         }
-        if (count($copies) > 1) {
-            $reference = null;
+        if (count($copies) > 1 || ($copies && $live !== null)) {
+            $reference = $live === null ? null : self::snapshot($source, $live);
             foreach ($copies as $path => $metadata) {
                 $statement = $this->connections[$path]->prepare('SELECT * FROM "' . $table . '" WHERE _source_pk=?');
                 $statement->execute([$id]);
