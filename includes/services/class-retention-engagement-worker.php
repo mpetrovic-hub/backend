@@ -18,10 +18,10 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
             throw new RuntimeException('engagement_source_invalid');
         }
         if (!$this->mark_stale_runs($source_key)) {
-            return $this->scheduled([], 'stale_run_detection_failed');
+            return $this->source_retry($triggered_by, 'stale_run_detection_failed');
         }
         try { $open = $this->run_repository->find_open_run_for_source($source_key); }
-        catch (Throwable $error) { return $this->scheduled([], 'open_run_lookup_failed'); }
+        catch (Throwable $error) { return $this->source_retry($triggered_by, 'open_run_lookup_failed'); }
         if (is_array($open)) {
             return $this->scheduled($open);
         }
@@ -32,7 +32,7 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
         try {
             // Re-read after acquiring the same source lock used by the scheduler.
             try { $open = $this->run_repository->find_open_run_for_source($source_key); }
-            catch (Throwable $error) { return $this->scheduled([], 'open_run_lookup_failed'); }
+            catch (Throwable $error) { return $this->source_retry($triggered_by, 'open_run_lookup_failed'); }
             if (is_array($open)) {
                 return $this->scheduled($open);
             }
@@ -763,6 +763,12 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
             'worker_phase' => $run['worker_phase'] ?? 'engagement_preparing', 'schedule_worker' => true,
             'reschedule_worker' => true, 'reschedule_delay_seconds' => $this->config->get_retention_worker_reschedule_delay_seconds(),
             'error_code' => $code];
+    }
+
+    private function source_retry(string $triggered_by, string $code): array
+    {
+        return array_merge($this->scheduled([], $code), ['retry_source' => true,
+            'triggered_by' => $this->normalize_triggered_by($triggered_by)]);
     }
 
     private function available(array $budget): bool

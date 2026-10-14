@@ -15,6 +15,22 @@ function get_transient($key) { return $GLOBALS['engagement_test_transients'][$ke
 function set_transient($key, $value, $ttl = 0) { $GLOBALS['engagement_test_transients'][$key] = $value; return true; }
 function delete_transient($key) { unset($GLOBALS['engagement_test_transients'][$key]); return true; }
 function dbDelta($sql) { global $wpdb; if ($wpdb->query($sql) === false) { throw new RuntimeException('fixture_schema_failed'); } }
+function add_action($hook, $callback, $priority = 10, $accepted_args = 1): void
+{
+    $GLOBALS['engagement_test_actions'][$hook] = ['callback' => $callback, 'accepted_args' => $accepted_args];
+}
+function wp_next_scheduled($hook, $args = [])
+{
+    foreach ($GLOBALS['engagement_test_cron'] ?? [] as $event) {
+        if ($event['hook'] === $hook && $event['args'] === $args) { return $event['time']; }
+    }
+    return false;
+}
+function wp_schedule_single_event($timestamp, $hook, $args = []): bool
+{
+    $GLOBALS['engagement_test_cron'][] = ['time' => $timestamp, 'hook' => $hook, 'args' => $args];
+    return true;
+}
 
 foreach (['core/class-config.php', 'core/class-database-table-names.php',
     'repositories/interface-statistics-read-repository.php',
@@ -30,6 +46,20 @@ foreach (['core/class-config.php', 'core/class-database-table-names.php',
     require_once ABSPATH . 'includes/' . $file;
 }
 require_once ABSPATH . 'tools/database/migrations/class-retention-archive-read-indexes-migration-service.php';
+require_once ABSPATH . 'includes/core/class-plugin.php';
+
+final class Engagement_Test_Plugin extends Kiwi_Plugin
+{
+    private $worker;
+    public function __construct(Kiwi_Retention_Engagement_Worker $worker) { $this->worker = $worker; }
+    protected function build_retention_cleanup_service(): Kiwi_Retention_Cleanup_Service { return $this->worker; }
+    protected function log_retention_cleanup(string $message): void {}
+    public function start_source(): array
+    {
+        return (new ReflectionMethod(Kiwi_Plugin::class, 'run_retention_cleanup_source'))
+            ->invoke($this, 'landing_session_engagements', 'manual');
+    }
+}
 
 final class Engagement_Test_Wpdb
 {
@@ -205,6 +235,7 @@ function et_fixture(Engagement_Test_Config $config): array
 {
     global $wpdb;
     $GLOBALS['engagement_test_transients'] = [];
+    $GLOBALS['engagement_test_cron'] = []; $GLOBALS['engagement_test_actions'] = [];
     foreach (['kiwi_landing_session_engagements', 'kiwi_landing_page_sessions', 'kiwi_retention_cleanup_runs',
         'kiwi_landing_funnel_daily_summary', 'kiwi_landing_funnel_daily_tkzone_summary'] as $name) { $wpdb->pdo->exec('DROP TABLE IF EXISTS t72_' . $name); }
     (new Kiwi_Landing_Session_Engagement_Repository())->create_table();
@@ -538,6 +569,77 @@ function et_scheduler_audit_scenario(string $step): void
         'Scheduler ' . $step . ' recovery finishes the same existing run exactly once');
 }
 
+function et_dispatch_cron(): array
+{
+    $event = array_shift($GLOBALS['engagement_test_cron']);
+    if ($event === null) { throw new RuntimeException('fixture_cron_event_missing'); }
+    $action = $GLOBALS['engagement_test_actions'][$event['hook']] ?? null;
+    if ($action === null) { throw new RuntimeException('fixture_cron_handler_missing'); }
+    return call_user_func_array($action['callback'], array_slice($event['args'], 0, $action['accepted_args']));
+}
+
+function et_source_retry_scenario(string $step): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $plugin = new Engagement_Test_Plugin($fixture['worker']); $plugin->register();
+    if ($step === 'invalid') {
+        $result = $plugin->run_retention_cleanup_worker('landing_session_engagements',
+            ['retry_source' => 'true', 'triggered_by' => 'manual']);
+        et_check($result['error_code'] === 'no_open_cleanup_run' && !$GLOBALS['engagement_test_cron']
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 0,
+            'A malformed retry context never creates a source run');
+        return;
+    }
+    if ($step === 'terminal') {
+        $completed = et_finish($fixture);
+        $result = $plugin->run_retention_cleanup_worker('landing_session_engagements');
+        et_check($result['error_code'] === 'no_open_cleanup_run' && !$GLOBALS['engagement_test_cron']
+            && $fixture['repo']->find_run_by_id((int) $completed['id']) === $completed
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1,
+            'An ordinary worker after completion never starts another cleanup run');
+        return;
+    }
+    $existing = null;
+    if (in_array($step, ['existing', 'existing_disabled'], true)) {
+        $fixture['worker']->run_source('landing_session_engagements');
+        $existing = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    }
+    if ($step === 'stale') { $fixture['repo']->fail_stale_checks = 1; }
+    else { $wpdb->fail_open_audit_reads = 1; }
+    if ($step === 'queued') {
+        wp_schedule_single_event(time(), 'kiwi_retention_cleanup_worker', ['landing_session_engagements']);
+    }
+    $result = $plugin->start_source();
+    et_check(!$result['success'] && count($GLOBALS['engagement_test_cron']) === ($step === 'queued' ? 2 : 1),
+        'Audit outage preserves exactly one distinct deferred source attempt: ' . $step);
+    if ($step === 'repeat') {
+        $wpdb->fail_open_audit_reads = 1; et_dispatch_cron();
+        et_check(count($GLOBALS['engagement_test_cron']) === 1
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 0,
+            'Repeated source outage preserves one pending start intent without creating an audit');
+    }
+    if (in_array($step, ['disabled', 'existing_disabled'], true)) { $config->enabled = false; }
+    $wpdb->fail_open_audit_reads = 0; $fixture['repo']->fail_stale_checks = 0;
+    if ($step === 'queued') {
+        $ordinary = et_dispatch_cron();
+        et_check($ordinary['error_code'] === 'no_open_cleanup_run' && count($GLOBALS['engagement_test_cron']) === 1,
+            'An already queued ordinary worker cannot consume or discard the distinct source retry');
+    }
+    et_dispatch_cron();
+    $run = $wpdb->get_row('SELECT * FROM t72_kiwi_retention_cleanup_runs ORDER BY id DESC LIMIT 1');
+    et_check(is_array($run) && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1
+        && ($existing === null ? $run['triggered_by'] === 'manual' : $run['run_id'] === $existing['run_id']),
+        'Source retry creates or resumes exactly one requested run with its original trigger: ' . $step);
+    for ($i = 0; $i < 20 && $GLOBALS['engagement_test_cron']; $i++) { et_dispatch_cron(); }
+    $run = $wpdb->get_row('SELECT * FROM t72_kiwi_retention_cleanup_runs ORDER BY id DESC LIMIT 1');
+    et_check($run['status'] === ($step === 'disabled' ? 'skipped' : 'completed')
+        && (int) $run['deleted_rows'] === ($step === 'disabled' ? 0 : 1) && !$GLOBALS['engagement_test_cron'],
+        'Source retry honors new-start enablement or the existing frozen scope without a retry loop: ' . $step);
+}
+
 function et_version_day_scenarios(): void
 {
     global $wpdb;
@@ -622,6 +724,11 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['new', 'stale', 'existing', 'terminal', 'disabled', 'repeat', 'queued', 'invalid', 'existing_disabled'] as $step) {
+        if (in_array('--source-retry=' . $step, $argv, true)) {
+            et_source_retry_scenario($step); echo 'SOURCE_RETRY_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     foreach (['open', 'locked', 'stale'] as $step) {
         if (in_array('--scheduler-audit=' . $step, $argv, true)) {
             et_scheduler_audit_scenario($step); echo 'SCHEDULER_AUDIT_TEST_PASSED ', $step, "\n"; return;
@@ -1076,6 +1183,7 @@ try {
     foreach ($boundaries as $test) { $test($other); }
     foreach (['open', 'recheck', 'recovery'] as $step) { et_audit_lookup_scenario($step); }
     foreach (['open', 'locked', 'stale'] as $step) { et_scheduler_audit_scenario($step); }
+    foreach (['new', 'stale', 'existing', 'terminal', 'disabled', 'repeat', 'queued', 'invalid', 'existing_disabled'] as $step) { et_source_retry_scenario($step); }
     et_version_day_scenarios();
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {

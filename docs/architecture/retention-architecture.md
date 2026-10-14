@@ -38,6 +38,8 @@ The Engagement source and cleanup audit require InnoDB, checked by the external 
 
 Both committed receipts and uncommitted pending snapshots resume in prefixes bounded by the current worker budget. A resumed daily session lookup verifies the engagement signature and continues its saved cursor, so even a one-row budget makes progress without duplicate counting. After an audit write, the worker retains exactly the checkpoint it wrote; it never adopts a later readback while keeping older local state.
 
+An Engagement source-audit outage retains the requested source-start intent and normalized original trigger in the existing Worker cron job. Only that explicit internal context re-enters `run_source()`, which resumes an existing run or checks current configuration for a new start. Existing runs retain their frozen settings; current enablement controls new starts. Repeated source errors retain the context; a successful source step queues ordinary workers. Start retries and ordinary worker jobs deduplicate separately, so an already queued ordinary worker cannot discard the start intent. The existing hook accepts the optional second argument; old jobs and other sources keep their existing dispatch. An ordinary worker with no open run stops, including after completion. No new hook, schedule, configuration, audit schema or last-result option is introduced.
+
 ## Archive-before-delete contract
 
 For every source and every cleanup chunk:
