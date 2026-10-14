@@ -347,17 +347,35 @@ class Kiwi_Retention_Sqlite_Archive_Service
                     array_map('intval', $receipt_statement->fetchAll(PDO::FETCH_COLUMN))
                 );
 
+                $mutable = !empty($source['mutable_snapshot']);
+                // Drive the receipt PK from batch identities, never scan all
+                // receipt rows for each Source-ID. This page is at most 500 IDs.
+                $insertion_evidence = $mutable ? ', NOT EXISTS (
+                    SELECT 1 FROM archive_batches AS prior_batch
+                    CROSS JOIN archive_batch_rows AS prior_receipt
+                    WHERE prior_batch.source_key=? AND prior_batch.source_table=?
+                      AND prior_batch.archive_batch_id<>?
+                      AND prior_receipt.archive_batch_id=prior_batch.archive_batch_id
+                      AND prior_receipt.source_pk=archive_row._source_pk
+                ) AS _retention_inserted' : '';
                 $archive_statement = $pdo->prepare(
-                    'SELECT _source_pk, _archive_batch_id
-                     FROM ' . $archive_table . '
+                    'SELECT _source_pk, _archive_batch_id' . $insertion_evidence . '
+                     FROM ' . $archive_table . ' AS archive_row
                      WHERE _source_pk IN (' . $placeholders . ')
                      ORDER BY _source_pk ASC'
                 );
-                $archive_statement->execute($chunk);
+                $archive_statement->execute($mutable
+                    ? array_merge([$source['source_key'], $source_table, $archive_batch_id], $chunk) : $chunk);
                 foreach ($archive_statement->fetchAll(PDO::FETCH_ASSOC) as $archive_row) {
                     $archive_primary_keys[] = (int) ($archive_row['_source_pk'] ?? 0);
 
-                    if ((string) ($archive_row['_archive_batch_id'] ?? '') === $archive_batch_id) {
+                    if ($mutable && (string) ($archive_row['_archive_batch_id'] ?? '') !== $archive_batch_id) {
+                        $result['error_code'] = 'archive_receipt_snapshot_batch_mismatch';
+                        $result['error_message'] = 'The mutable snapshot belongs to a different receipt batch.';
+                        return $result;
+                    }
+                    if ($mutable ? !empty($archive_row['_retention_inserted'])
+                        : (string) ($archive_row['_archive_batch_id'] ?? '') === $archive_batch_id) {
                         $archive_inserted_count++;
                     }
                 }
@@ -736,13 +754,18 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $quoted = array_map([$this, 'quote_identifier'], $columns);
             $updated = array_map(static function (string $column): string {
                 return '"' . $column . '"=excluded."' . $column . '"';
-            }, array_merge(['_archived_at'], array_keys($source['archive_columns'])));
-            // Keep original insertion provenance; update every source field.
+            }, array_merge(['_archive_batch_id'], array_keys($source['archive_columns'])));
+            // Bind the replacement to its current receipt, retaining first
+            // archive time and prior receipt/batch history.
             $insert = $pdo->prepare('INSERT INTO ' . $this->quote_identifier($source['source_table'])
                 . ' (' . implode(',', $quoted) . ') VALUES (' . implode(',', array_fill(0, count($columns), '?'))
                 . ') ON CONFLICT(_source_pk) DO UPDATE SET ' . implode(',', $updated));
             $receipt = $this->prepare_archive_batch_row_statement($pdo);
+            $row_exists = $pdo->prepare('SELECT 1 FROM ' . $this->quote_identifier($source['source_table']) . ' WHERE _source_pk=?');
+            $receipt_exists = $pdo->prepare('SELECT 1 FROM archive_batch_rows WHERE archive_batch_id=? AND source_pk=?');
             $ids = [];
+            $inserted = 0;
+            $duplicates = 0;
             $pdo->beginTransaction();
             foreach ($rows as $row) {
                 $snapshot = Kiwi_Retention_Archive_Reader::snapshot($source, $row);
@@ -750,12 +773,25 @@ class Kiwi_Retention_Sqlite_Archive_Service
                 if ($id < 1 || isset($ids[$id]) || strcmp((string) $snapshot[$source['cutoff_column']], $cutoff) >= 0) {
                     throw new RuntimeException('archive_snapshot_boundary_invalid');
                 }
+                $receipt_exists->execute([$batch, $id]);
+                if (!$receipt_exists->fetchColumn()) {
+                    $row_exists->execute([$id]);
+                    if ($row_exists->fetchColumn()) { $duplicates++; } else { $inserted++; }
+                }
                 $insert->execute(array_merge([$batch, $this->current_time_mysql(), $id], array_values($snapshot)));
                 $this->insert_archive_batch_row($receipt, $batch, $id);
                 $ids[$id] = $snapshot;
             }
+            // Count only new receipts in this bounded page, atomically with
+            // their snapshots. Replaying committed receipts adds no counts.
+            $finish = $pdo->prepare('UPDATE archive_batches
+                SET finished_at=?, archived_rows=archived_rows+?,
+                    archive_inserted_rows=archive_inserted_rows+?,
+                    archive_duplicate_rows=archive_duplicate_rows+?,
+                    status=\'success\', error_message=\'\'
+                WHERE archive_batch_id=?');
+            $finish->execute([$this->current_time_mysql(), $inserted + $duplicates, $inserted, $duplicates, $batch]);
             $pdo->commit();
-            $this->finish_archive_batch($pdo, $source, $batch, ['success' => true]);
             $pdo = null;
             $verified = $this->fetch_verified_snapshots($source, $path, $batch, array_keys($ids));
             foreach ($verified['rows'] as $row) {

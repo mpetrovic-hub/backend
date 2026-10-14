@@ -28,6 +28,11 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
         if ($this->has_lock($source_key)) {
             return ['success' => true, 'status' => 'skipped', 'error_code' => 'lock_active'];
         }
+        try { $creation_lock = $this->run_repository->acquire_source_creation_lock($source_key); }
+        catch (Throwable $error) { return $this->source_retry($triggered_by, 'source_creation_lock_failed'); }
+        if ($creation_lock === null) {
+            return $this->source_retry($triggered_by, 'source_creation_lock_active');
+        }
         $this->set_lock($source_key);
         try {
             // Re-read after acquiring the same source lock used by the scheduler.
@@ -60,9 +65,9 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
                 'started_at' => $this->current_time_mysql(), 'status' => $enabled ? 'pending' : 'skipped',
                 'gate_status' => $enabled ? 'pending' : 'skipped', 'worker_phase' => 'engagement_preparing',
                 'archive_batch_id' => $this->generate_archive_batch_id($source_key), 'gate_results_json' => $state];
-            $id = $this->run_repository->create_run($run);
+            $id = $this->run_repository->create_run_with_source_lock($run, $creation_lock);
             if ($id <= 0) {
-                return ['success' => false, 'error_code' => 'run_audit_create_failed'];
+                return $this->source_retry($triggered_by, 'run_audit_create_failed');
             }
             $run['id'] = $id;
             if (!$enabled) {
@@ -71,8 +76,14 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
                     'error_code' => 'cleanup_disabled', 'gate_results_json' => $state]);
             }
             return $this->scheduled($run);
+        } catch (Throwable $error) {
+            // Before a durable run exists, retry the requested source start.
+            // A committed insert is found on that retry instead of duplicated.
+            return $this->source_retry($triggered_by, 'source_preparation_failed');
         } finally {
             $this->clear_lock($source_key);
+            try { $this->run_repository->release_source_creation_lock($creation_lock); }
+            catch (Throwable $error) { /* A lost connection releases its server lock. */ }
         }
     }
 

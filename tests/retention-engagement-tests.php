@@ -76,6 +76,9 @@ final class Engagement_Test_Wpdb
     public $fail_after_reads = false;
     public $fail_open_audit_reads = 0;
     public $fail_run_audit_reads = 0;
+    public $fail_target_reads = 0;
+    public $fail_audit_inserts = 0;
+    public $fail_creation_locks = 0;
     public function __construct(PDO $pdo) { $this->pdo = $pdo; }
     public function get_charset_collate() { return 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci'; }
     public function prepare(string $sql, ...$args): string
@@ -91,6 +94,9 @@ final class Engagement_Test_Wpdb
     {
         $this->last_error = '';
         try {
+            if ($this->fail_audit_inserts > 0 && preg_match('/^INSERT INTO t72_kiwi_retention_cleanup_runs/', $sql)) {
+                $this->fail_audit_inserts--; throw new RuntimeException('fixture_audit_insert_failure');
+            }
             if ($this->fail_audit_once && preg_match('/^UPDATE t72_kiwi_retention_cleanup_runs/', $sql)) {
                 $this->fail_audit_once = false; throw new RuntimeException('fixture_audit_failure');
             }
@@ -104,6 +110,12 @@ final class Engagement_Test_Wpdb
         if (preg_match('/LIMIT (\d+)\s*$/i', $sql, $match)) { $this->maximum_limit = max($this->maximum_limit, (int) $match[1]); }
         if ($this->source_page_delay_us > 0 && strpos($sql, 'SELECT e.*') === 0) { usleep($this->source_page_delay_us); }
         $this->last_error = '';
+        if ($this->fail_target_reads > 0 && strpos($sql, 'SELECT id FROM t72_kiwi_landing_session_engagements ORDER BY id DESC') === 0) {
+            $this->fail_target_reads--; $this->last_error = 'controlled_target_read_failure'; return [];
+        }
+        if ($this->fail_creation_locks > 0 && strpos($sql, 'SELECT GET_LOCK(') === 0) {
+            $this->fail_creation_locks--; $this->last_error = 'controlled_creation_lock_failure'; return [];
+        }
         if (preg_match('/^SELECT\s+\*\s+FROM\s+t72_kiwi_retention_cleanup_runs\s+WHERE/i', $sql)) {
             $failure = strpos($sql, 'source_key =') !== false ? 'fail_open_audit_reads' : 'fail_run_audit_reads';
             if ($this->$failure > 0) { $this->$failure--; $this->last_error = 'controlled_audit_read_failure'; return []; }
@@ -180,6 +192,23 @@ final class Engagement_Test_Run_Repository extends Kiwi_Retention_Cleanup_Run_Re
     public $after_checkpoint_write;
     public $before_delete_audit;
     public $before_open_return;
+    public $before_create;
+    private function before_creation(string $lock = ''): void
+    {
+        if ($this->before_create !== null) {
+            $callback = $this->before_create; $this->before_create = null; $callback($lock);
+        }
+    }
+    public function create_run(array $data): int
+    {
+        $this->before_creation();
+        return parent::create_run($data);
+    }
+    public function create_run_with_source_lock(array $data, string $lock): int
+    {
+        $this->before_creation($lock);
+        return parent::create_run_with_source_lock($data, $lock);
+    }
     public function mark_stale_unfinished_runs(string $key, int $minutes = 30): ?array
     {
         if ($this->fail_stale_checks > 0) { $this->fail_stale_checks--; return null; }
@@ -481,7 +510,7 @@ function et_tiny_coverage_scenario(): void
         'One-row budget completes a non-historical full-day Main and TK lookup without duplicate counting');
 }
 
-function et_receipt_payload_scenario(PDO $other): void
+function et_receipt_payload_scenario(PDO $other, bool $same_batch = false): void
 {
     global $wpdb;
     $config = new Engagement_Test_Config(); $config->dry_run = false;
@@ -493,13 +522,17 @@ function et_receipt_payload_scenario(PDO $other): void
     $fixture['archive']->after_commit = null;
     $other->exec('UPDATE ' . $source['source_table'] . " SET user_agent='Changed-receipt-payload' WHERE id=1");
     $changed = $wpdb->get_row('SELECT * FROM ' . $source['source_table'] . ' WHERE id=1');
-    $fixture['archive']->archive_snapshot_batch($source, [$changed], $open['cutoff_value'], 'fixture-newer-payload', $open['archive_db_path']);
+    $fixture['archive']->archive_snapshot_batch($source, [$changed], $open['cutoff_value'],
+        $same_batch ? $open['archive_batch_id'] : 'fixture-newer-payload', $open['archive_db_path']);
     $fixture['worker']->run_worker('landing_session_engagements');
     $run = $fixture['repo']->find_run_by_id((int) $open['id']);
     et_check((int) $run['deleted_rows'] === 0 && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1
-        && $run['error_code'] === 'engagement_snapshot_hash_mismatch',
-        'A stale batch receipt never authorizes a different complete payload even when archive and MySQL now agree');
+        && $run['error_code'] === ($same_batch ? 'engagement_snapshot_hash_mismatch' : 'archive_snapshot_receipt_invalid'),
+        $same_batch ? 'Matching batch metadata never bypasses the byte-exact original pending snapshot hash'
+            : 'A stale batch receipt never authorizes a different current payload even when archive and MySQL now agree');
 }
+
+function et_receipt_hash_scenario(PDO $other): void { et_receipt_payload_scenario($other, true); }
 
 function et_audit_lookup_scenario(string $step): void
 {
@@ -640,6 +673,121 @@ function et_source_retry_scenario(string $step): void
         'Source retry honors new-start enablement or the existing frozen scope without a retry loop: ' . $step);
 }
 
+function et_source_creation_scenario(string $step, PDO $other): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $plugin = new Engagement_Test_Plugin($fixture['worker']); $plugin->register();
+    $competing = null;
+    if ($step === 'target') { $wpdb->fail_target_reads = 1; }
+    elseif ($step === 'insert') { $wpdb->fail_audit_inserts = 1; }
+    elseif ($step === 'lock_error') { $wpdb->fail_creation_locks = 1; }
+    elseif ($step === 'lease') {
+        $fixture['repo']->before_create = function (string $lock) {
+            global $wpdb;
+            if ($lock !== '') { $statement = $wpdb->pdo->prepare('SELECT RELEASE_LOCK(?)'); $statement->execute([$lock]); }
+            $wpdb->insert_id = 123; // A zero-row guarded INSERT must not reuse this value.
+        };
+    } else {
+        $fixture['repo']->before_create = function () use ($fixture, $plugin, $other, &$competing) {
+            global $wpdb;
+            $primary = $wpdb; $transients = $GLOBALS['engagement_test_transients'];
+            // Reproduce two requests that both missed the advisory transient
+            // before either published it, using distinct MySQL connections.
+            $GLOBALS['engagement_test_transients'] = [];
+            $wpdb = new Engagement_Test_Wpdb($other);
+            try { $competing = $plugin->start_source(); }
+            finally { $wpdb = $primary; $GLOBALS['engagement_test_transients'] = $transients; }
+        };
+    }
+    $result = null;
+    try { $result = $plugin->start_source(); }
+    catch (Throwable $error) { /* The assertion requires a contained, scheduled failure. */ }
+    $count = (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs');
+    if ($step === 'parallel') {
+        et_check($count === 1 && is_array($competing) && !empty($competing['retry_source']),
+            'Concurrent source starts on separate connections create one audit despite a transient race');
+    } else {
+        et_check(is_array($result) && !$result['success'] && !empty($result['retry_source'])
+            && count($GLOBALS['engagement_test_cron']) === 1 && $count === 0,
+            'Source ' . $step . ' failure queues its original start without creating an audit');
+    }
+    for ($i = 0; $i < 20 && $GLOBALS['engagement_test_cron']; $i++) { et_dispatch_cron(); }
+    $run = $wpdb->get_row('SELECT * FROM t72_kiwi_retention_cleanup_runs ORDER BY id DESC LIMIT 1');
+    et_check(is_array($run) && $run['status'] === 'completed' && $run['triggered_by'] === 'manual'
+        && (int) $run['deleted_rows'] === 1 && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1,
+        'Source ' . $step . ' retry recovers exactly one requested run');
+}
+
+function et_mutable_receipt_scenario(string $step): void
+{
+    global $wpdb;
+    $fixture = et_fixture(new Engagement_Test_Config()); $source = $fixture['registry']->get('landing_session_engagements');
+    $full = et_full_row($source, et_engagement(1)); $path = $fixture['archive']->resolve_archive_db_path();
+    $first = $fixture['archive']->archive_snapshot_batch($source, [$full], '2026-09-28 00:00:00', 'mutable-original', $path);
+    $sqlite = new PDO('sqlite:' . $path);
+    $original_row = $sqlite->query('SELECT * FROM ' . $source['source_table'])->fetch(PDO::FETCH_ASSOC);
+    $original_receipt = $sqlite->query("SELECT * FROM archive_batch_rows WHERE archive_batch_id='mutable-original'")->fetchAll(PDO::FETCH_ASSOC);
+    $original_batch = $sqlite->query("SELECT * FROM archive_batches WHERE archive_batch_id='mutable-original'")->fetch(PDO::FETCH_ASSOC);
+    $schema = $sqlite->query("SELECT sql FROM sqlite_master WHERE type='table' ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
+    $full['cta1_click_count'] = 7; $full['user_agent'] = 'Renewed-Bytes';
+    $before = $GLOBALS['engagement_test_now'];
+    $GLOBALS['engagement_test_now'] = '2026-10-13 12:00:00';
+    try { $renewed = $fixture['archive']->archive_snapshot_batch($source, [$full], '2026-09-28 00:00:00', 'mutable-renewed', $path); }
+    finally { $GLOBALS['engagement_test_now'] = $before; }
+    if ($step === 'metadata') {
+        $row = $sqlite->query('SELECT * FROM ' . $source['source_table'])->fetch(PDO::FETCH_ASSOC);
+        et_check($row['_archive_batch_id'] === 'mutable-renewed' && $row['_archived_at'] === $original_row['_archived_at']
+            && Kiwi_Retention_Archive_Reader::snapshot($source, $row) === Kiwi_Retention_Archive_Reader::snapshot($source, $full),
+            'Renewed payload binds its current receipt and keeps its first archive time');
+        et_check($original_receipt === $sqlite->query("SELECT * FROM archive_batch_rows WHERE archive_batch_id='mutable-original'")->fetchAll(PDO::FETCH_ASSOC)
+            && $original_batch === $sqlite->query("SELECT * FROM archive_batches WHERE archive_batch_id='mutable-original'")->fetch(PDO::FETCH_ASSOC)
+            && $schema === $sqlite->query("SELECT sql FROM sqlite_master WHERE type='table' ORDER BY name")->fetchAll(PDO::FETCH_COLUMN),
+            'Renewal preserves old receipt history, batch metadata and table columns');
+        $retried = $fixture['archive']->archive_snapshot_batch($source, [$full], '2026-09-28 00:00:00', 'mutable-renewed', $path);
+        et_check($first['archive_inserted_count'] === 1 && $first['archive_duplicate_count'] === 0
+            && $renewed['archive_inserted_count'] === 0 && $renewed['archive_duplicate_count'] === 1
+            && $retried['archive_inserted_count'] === 0 && $retried['archive_duplicate_count'] === 1,
+            'Mutable insert versus renewal counters remain stable on receipt retry');
+        $batch = $sqlite->query("SELECT * FROM archive_batches WHERE archive_batch_id='mutable-renewed'")->fetch(PDO::FETCH_ASSOC);
+        et_check((int) $batch['archived_rows'] === 1 && (int) $batch['archive_inserted_rows'] === 0 && (int) $batch['archive_duplicate_rows'] === 1,
+            'Persisted mutable batch counters classify the renewal correctly');
+        $invalid = $fixture['archive']->verify_batch_receipt($source, $path, 'mutable-original', [1]);
+        et_check(!$invalid['success'], 'An old mutable batch receipt cannot verify the current version');
+        $new = [];
+        foreach ([2, 3] as $id) {
+            $new[] = et_full_row($source, et_engagement($id));
+            $foreign = $original_batch; $foreign['archive_batch_id'] = 'foreign-' . $id;
+            $foreign[$id === 2 ? 'source_key' : 'source_table'] = 'other_identity';
+            $statement = $sqlite->prepare('INSERT INTO archive_batches ("' . implode('","', array_keys($foreign))
+                . '") VALUES (' . implode(',', array_fill(0, count($foreign), '?')) . ')');
+            $statement->execute(array_values($foreign));
+            $statement = $sqlite->prepare('INSERT INTO archive_batch_rows VALUES (?,?)');
+            $statement->execute([$foreign['archive_batch_id'], $id]);
+        }
+        $page = $fixture['archive']->archive_snapshot_batch($source, $new, '2026-09-28 00:00:00', 'mutable-renewed', $path);
+        et_check($page['archive_inserted_count'] === 2 && $page['archive_duplicate_count'] === 0,
+            'Other source or table receipt identities do not turn new mutable rows into duplicates');
+        $fixture['archive']->archive_snapshot_batch($source, $new, '2026-09-28 00:00:00', 'mutable-renewed', $path);
+        $batch = $sqlite->query("SELECT * FROM archive_batches WHERE archive_batch_id='mutable-renewed'")->fetch(PDO::FETCH_ASSOC);
+        et_check((int) $batch['archived_rows'] === 3 && (int) $batch['archive_inserted_rows'] === 2 && (int) $batch['archive_duplicate_rows'] === 1,
+            'Mixed mutable page retries advance persisted total counters exactly once');
+        return;
+    }
+    $reader = new Kiwi_Retention_Archive_Reader($fixture['archive'], $fixture['lock'], $fixture['gate']);
+    et_check(count($reader->copies($source, 1)) === 1, 'Healthy current mutable receipt is readable'); $reader->close();
+    if ($step === 'missing') { $sqlite->exec("DELETE FROM archive_batch_rows WHERE archive_batch_id='mutable-renewed'"); }
+    else { $sqlite->exec("UPDATE archive_batches SET source_table='wrong_table' WHERE archive_batch_id='mutable-renewed'"); }
+    $blocked = false;
+    try { $reader->copies($source, 1); }
+    catch (RuntimeException $error) { $blocked = $error->getMessage() === 'archive_reader_receipt_missing'; }
+    finally { $reader->close(); }
+    et_check($blocked && $original_receipt === $sqlite->query("SELECT * FROM archive_batch_rows WHERE archive_batch_id='mutable-original'")->fetchAll(PDO::FETCH_ASSOC),
+        'A ' . $step . ' current receipt blocks a renewed payload despite surviving old receipt evidence');
+}
+
 function et_version_day_scenarios(): void
 {
     global $wpdb;
@@ -724,6 +872,16 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['target', 'insert', 'parallel', 'lease', 'lock_error'] as $step) {
+        if (in_array('--source-creation=' . $step, $argv, true)) {
+            et_source_creation_scenario($step, $other); echo 'SOURCE_CREATION_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
+    foreach (['metadata', 'missing', 'identity'] as $step) {
+        if (in_array('--mutable-receipt=' . $step, $argv, true)) {
+            et_mutable_receipt_scenario($step); echo 'MUTABLE_RECEIPT_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     foreach (['new', 'stale', 'existing', 'terminal', 'disabled', 'repeat', 'queued', 'invalid', 'existing_disabled'] as $step) {
         if (in_array('--source-retry=' . $step, $argv, true)) {
             et_source_retry_scenario($step); echo 'SOURCE_RETRY_TEST_PASSED ', $step, "\n"; return;
@@ -740,7 +898,8 @@ try {
         }
     }
     $boundaries = ['checkpoint' => 'et_checkpoint_readback_scenario', 'pending' => 'et_pending_budget_scenario',
-        'coverage' => 'et_tiny_coverage_scenario', 'receipt' => 'et_receipt_payload_scenario'];
+        'coverage' => 'et_tiny_coverage_scenario', 'receipt' => 'et_receipt_payload_scenario',
+        'receipt_hash' => 'et_receipt_hash_scenario'];
     foreach ($boundaries as $name => $test) {
         if (in_array('--boundary=' . $name, $argv, true)) {
             $test($other); echo 'BOUNDARY_TEST_PASSED ', $name, "\n"; return;
@@ -1185,6 +1344,8 @@ try {
     foreach (['open', 'locked', 'stale'] as $step) { et_scheduler_audit_scenario($step); }
     foreach (['new', 'stale', 'existing', 'terminal', 'disabled', 'repeat', 'queued', 'invalid', 'existing_disabled'] as $step) { et_source_retry_scenario($step); }
     et_version_day_scenarios();
+    foreach (['target', 'insert', 'parallel', 'lease', 'lock_error'] as $step) { et_source_creation_scenario($step, $other); }
+    foreach (['metadata', 'missing', 'identity'] as $step) { et_mutable_receipt_scenario($step); }
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

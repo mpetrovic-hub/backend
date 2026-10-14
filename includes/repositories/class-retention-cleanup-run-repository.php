@@ -94,8 +94,78 @@ class Kiwi_Retention_Cleanup_Run_Repository
     {
         global $wpdb;
 
+        $row = $this->new_run_row($data);
+        $result = $wpdb->insert(
+            $this->get_table_name(),
+            $row,
+            $this->formats_for(array_keys($row))
+        );
+
+        if ($result === false) {
+            return 0;
+        }
+
+        return (int) ($wpdb->insert_id ?? 0);
+    }
+
+    /** Engagement starts serialize independently of the advisory transient. */
+    public function acquire_source_creation_lock(string $source_key): ?string
+    {
+        global $wpdb;
+        $name = $this->source_creation_lock_name($source_key);
+        $acquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $name));
+        if (trim((string) ($wpdb->last_error ?? '')) !== '' || $acquired === null) {
+            throw new RuntimeException('source_creation_lock_failed');
+        }
+        return (int) $acquired === 1 ? $name : null;
+    }
+
+    public function release_source_creation_lock(string $name): void
+    {
+        global $wpdb;
+        $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $name));
+    }
+
+    /** A reconnect must not insert after losing the connection-owned lock. */
+    public function create_run_with_source_lock(array $data, string $name): int
+    {
+        global $wpdb;
+        if ($name !== $this->source_creation_lock_name((string) ($data['source_key'] ?? ''))) {
+            return 0;
+        }
+        $row = $this->new_run_row($data);
+        $values = [];
+        $args = [];
+        foreach ($row as $column => $value) {
+            $values[] = $value === null ? 'NULL' : $this->formats_for([$column])[0];
+            if ($value !== null) { $args[] = $value; }
+        }
+        $args[] = $name;
+        $wpdb->insert_id = 0;
+        $result = $wpdb->query($wpdb->prepare(
+            'INSERT INTO ' . $this->get_table_name() . ' (`' . implode('`,`', array_keys($row)) . '`)
+             SELECT ' . implode(',', $values) . ' WHERE IS_USED_LOCK(%s)=CONNECTION_ID()',
+            ...$args
+        ));
+        return $result === 1 && trim((string) ($wpdb->last_error ?? '')) === ''
+            ? max(0, (int) ($wpdb->insert_id ?? 0)) : 0;
+    }
+
+    private function source_creation_lock_name(string $source_key): string
+    {
+        global $wpdb;
+        $database = $wpdb->get_var('SELECT DATABASE()');
+        if (!is_string($database) || $database === '' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('source_creation_lock_database_failed');
+        }
+        return 'kiwi-retention-' . substr(hash('sha256', $database . "\0" . $this->get_table_name() . "\0" . $source_key), 0, 48);
+    }
+
+    private function new_run_row(array $data): array
+    {
+
         $now = $this->current_time_mysql();
-        $row = $this->normalize_row(array_merge([
+        return $this->normalize_row(array_merge([
             'status' => 'skipped',
             'triggered_by' => 'cron',
             'enabled' => 0,
@@ -113,17 +183,6 @@ class Kiwi_Retention_Cleanup_Run_Repository
             'updated_at' => $now,
         ], $data));
 
-        $result = $wpdb->insert(
-            $this->get_table_name(),
-            $row,
-            $this->formats_for(array_keys($row))
-        );
-
-        if ($result === false) {
-            return 0;
-        }
-
-        return (int) ($wpdb->insert_id ?? 0);
     }
 
     public function update_run(int $id, array $data): bool
