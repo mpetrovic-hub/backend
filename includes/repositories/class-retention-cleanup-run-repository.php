@@ -6,6 +6,26 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Retention_Cleanup_Run_Repository
 {
+    private const CHECKPOINT_COLUMNS = ['worker_runs', 'gate_results_json', 'archive_last_primary_key',
+        'delete_last_primary_key', 'archived_rows', 'deleted_rows', 'archive_db_path', 'archive_batch_id'];
+
+    /** Normalize fetched SQL values, preserving stored NULLs in checkpoint guards. */
+    public function checkpoint_for_stored_run(array $run): array
+    {
+        $normalized = $this->normalize_row($run);
+        $checkpoint = [];
+        foreach (self::CHECKPOINT_COLUMNS as $column) {
+            if (array_key_exists($column, $run)) { $checkpoint[$column] = $run[$column] === null ? null : $normalized[$column]; }
+        }
+        return $checkpoint;
+    }
+
+    /** The guards this update wrote, without adopting another worker's readback. */
+    public function checkpoint_after_update(array $data, array $previous): array
+    {
+        return $this->checkpoint_for_stored_run(array_replace($previous, $this->normalize_row($data)));
+    }
+
     public function get_table_name(): string
     {
         global $wpdb;
@@ -74,8 +94,78 @@ class Kiwi_Retention_Cleanup_Run_Repository
     {
         global $wpdb;
 
+        $row = $this->new_run_row($data);
+        $result = $wpdb->insert(
+            $this->get_table_name(),
+            $row,
+            $this->formats_for(array_keys($row))
+        );
+
+        if ($result === false) {
+            return 0;
+        }
+
+        return (int) ($wpdb->insert_id ?? 0);
+    }
+
+    /** Engagement starts serialize independently of the advisory transient. */
+    public function acquire_source_creation_lock(string $source_key): ?string
+    {
+        global $wpdb;
+        $name = $this->source_creation_lock_name($source_key);
+        $acquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $name));
+        if (trim((string) ($wpdb->last_error ?? '')) !== '' || $acquired === null) {
+            throw new RuntimeException('source_creation_lock_failed');
+        }
+        return (int) $acquired === 1 ? $name : null;
+    }
+
+    public function release_source_creation_lock(string $name): void
+    {
+        global $wpdb;
+        $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $name));
+    }
+
+    /** A reconnect must not insert after losing the connection-owned lock. */
+    public function create_run_with_source_lock(array $data, string $name): int
+    {
+        global $wpdb;
+        if ($name !== $this->source_creation_lock_name((string) ($data['source_key'] ?? ''))) {
+            return 0;
+        }
+        $row = $this->new_run_row($data);
+        $values = [];
+        $args = [];
+        foreach ($row as $column => $value) {
+            $values[] = $value === null ? 'NULL' : $this->formats_for([$column])[0];
+            if ($value !== null) { $args[] = $value; }
+        }
+        $args[] = $name;
+        $wpdb->insert_id = 0;
+        $result = $wpdb->query($wpdb->prepare(
+            'INSERT INTO ' . $this->get_table_name() . ' (`' . implode('`,`', array_keys($row)) . '`)
+             SELECT ' . implode(',', $values) . ' WHERE IS_USED_LOCK(%s)=CONNECTION_ID()',
+            ...$args
+        ));
+        return $result === 1 && trim((string) ($wpdb->last_error ?? '')) === ''
+            ? max(0, (int) ($wpdb->insert_id ?? 0)) : 0;
+    }
+
+    private function source_creation_lock_name(string $source_key): string
+    {
+        global $wpdb;
+        $database = $wpdb->get_var('SELECT DATABASE()');
+        if (!is_string($database) || $database === '' || trim((string) ($wpdb->last_error ?? '')) !== '') {
+            throw new RuntimeException('source_creation_lock_database_failed');
+        }
+        return 'kiwi-retention-' . substr(hash('sha256', $database . "\0" . $this->get_table_name() . "\0" . $source_key), 0, 48);
+    }
+
+    private function new_run_row(array $data): array
+    {
+
         $now = $this->current_time_mysql();
-        $row = $this->normalize_row(array_merge([
+        return $this->normalize_row(array_merge([
             'status' => 'skipped',
             'triggered_by' => 'cron',
             'enabled' => 0,
@@ -93,17 +183,6 @@ class Kiwi_Retention_Cleanup_Run_Repository
             'updated_at' => $now,
         ], $data));
 
-        $result = $wpdb->insert(
-            $this->get_table_name(),
-            $row,
-            $this->formats_for(array_keys($row))
-        );
-
-        if ($result === false) {
-            return 0;
-        }
-
-        return (int) ($wpdb->insert_id ?? 0);
     }
 
     public function update_run(int $id, array $data): bool
@@ -140,6 +219,53 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $current = $this->find_run_by_id($id);
 
         return is_array($current) && ($current['finished_at'] ?? null) === null;
+    }
+
+    /** Atomic engagement checkpoints without changing the shared source flow. */
+    public function update_run_checkpoint(int $id, array $data, array $expected): bool
+    {
+        if ($id <= 0) { return false; }
+        global $wpdb;
+        $row = $this->normalize_row(array_merge($data, ['updated_at' => $this->current_time_mysql()]));
+        $raw_expected = $expected;
+        $expected = $this->normalize_row($expected);
+        $guards = self::CHECKPOINT_COLUMNS;
+        $set = [];
+        $args = [];
+        foreach ($row as $column => $value) {
+            $set[] = '`' . $column . '`=' . ($value === null ? 'NULL' : $this->formats_for([$column])[0]);
+            if ($value !== null) { $args[] = $value; }
+        }
+        $where = ['id=%d', 'finished_at IS NULL'];
+        $args[] = $id;
+        foreach ($guards as $column) {
+            if (!array_key_exists($column, $expected)) { return false; }
+            if ($raw_expected[$column] === null) {
+                $expected[$column] = null;
+                $where[] = '`' . $column . '` IS NULL';
+                continue;
+            }
+            $format = $this->formats_for([$column])[0];
+            $where[] = $format === '%d' ? '`' . $column . '` <=> %d'
+                : 'BINARY `' . $column . '` <=> BINARY %s';
+            $args[] = $expected[$column];
+        }
+        $result = $wpdb->query($wpdb->prepare('UPDATE ' . $this->get_table_name()
+            . ' SET ' . implode(',', $set) . ' WHERE ' . implode(' AND ', $where), ...$args));
+        if ($result === false) { return false; }
+        if ((int) $result === 1) { return true; }
+        // MySQL returns zero for an identical write. Accept only that exact
+        // no-op, never a checkpoint advanced by a different invocation.
+        $current = $this->find_run_by_id($id);
+        if (!is_array($current) || ($current['finished_at'] ?? null) !== null) { return false; }
+        $raw_current = $current;
+        $current = $this->normalize_row($current);
+        foreach ($guards as $column) {
+            $value = $raw_current[$column] === null ? null : $current[$column];
+            if ($value !== $expected[$column]) { return false; }
+        }
+        foreach ($row as $column => $value) { if ($current[$column] !== $value) { return false; } }
+        return true;
     }
 
     public function find_run_by_id(int $id): ?array
@@ -243,6 +369,9 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $stale_after_minutes = max(1, $stale_after_minutes);
         $now = $this->current_time_mysql();
         $resumable_worker_phases = [
+            'engagement_preparing',
+            'engagement_archive',
+            'engagement_after',
             'active_run_rescheduled',
             'archive_pending',
             'archive_running',

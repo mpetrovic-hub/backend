@@ -68,7 +68,7 @@ class Kiwi_Plugin
         add_action(self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_DAILY_HOOK, [$this, 'run_landing_session_raw_context_compaction_daily']);
         add_action(self::LANDING_SESSION_RAW_CONTEXT_COMPACTION_WORKER_HOOK, [$this, 'run_landing_session_raw_context_compaction_worker']);
         add_action(self::RETENTION_CLEANUP_SCHEDULER_DAILY_HOOK, [$this, 'run_retention_cleanup_scheduler_daily']);
-        add_action(self::RETENTION_CLEANUP_WORKER_HOOK, [$this, 'run_retention_cleanup_worker']);
+        add_action(self::RETENTION_CLEANUP_WORKER_HOOK, [$this, 'run_retention_cleanup_worker'], 10, 2);
         add_action(self::OPERATIONAL_EVENT_CLEANUP_DAILY_HOOK, [$this, 'run_operational_event_cleanup']);
         add_action(self::OPERATIONAL_EVENT_CLEANUP_WORKER_HOOK, [$this, 'run_operational_event_cleanup_worker']);
         add_action('init', [$this, 'maybe_export_statistics']);
@@ -387,11 +387,18 @@ class Kiwi_Plugin
         ];
     }
 
-    public function run_retention_cleanup_worker(string $source_key = ''): array
+    public function run_retention_cleanup_worker(string $source_key = '', array $retry_context = []): array
     {
         $source_key = trim($source_key);
         if ($source_key === '') {
             $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
+        }
+
+        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS
+            && ($retry_context['retry_source'] ?? false) === true
+            && in_array($retry_context['triggered_by'] ?? null, ['cron', 'manual', 'wp_cli'], true)
+        ) {
+            return $this->run_retention_cleanup_source($source_key, $retry_context['triggered_by']);
         }
 
         $result = $this->build_retention_cleanup_service()->run_worker($source_key);
@@ -427,7 +434,9 @@ class Kiwi_Plugin
         if (!empty($result['schedule_worker']) || !empty($result['reschedule_worker'])) {
             $this->schedule_retention_cleanup_worker(
                 (int) ($result['reschedule_delay_seconds'] ?? 0),
-                $source_key
+                $source_key,
+                ($result['retry_source'] ?? false) === true
+                    ? ['retry_source' => true, 'triggered_by' => (string) ($result['triggered_by'] ?? $triggered_by)] : []
             );
         }
 
@@ -1222,7 +1231,7 @@ TEXT;
         );
     }
 
-    protected function schedule_retention_cleanup_worker(int $delay_seconds = 0, string $source_key = ''): bool
+    protected function schedule_retention_cleanup_worker(int $delay_seconds = 0, string $source_key = '', array $retry_context = []): bool
     {
         if (!function_exists('wp_schedule_single_event')) {
             return false;
@@ -1233,6 +1242,12 @@ TEXT;
             $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
         }
         $hook_args = [$source_key];
+        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS
+            && ($retry_context['retry_source'] ?? false) === true
+            && in_array($retry_context['triggered_by'] ?? null, ['cron', 'manual', 'wp_cli'], true)
+        ) {
+            $hook_args[] = ['retry_source' => true, 'triggered_by' => $retry_context['triggered_by']];
+        }
 
         if (function_exists('wp_next_scheduled')) {
             if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS

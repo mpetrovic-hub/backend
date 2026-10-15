@@ -2,6 +2,13 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-10-15:
+- [Engagement Retention] Persist disabled new starts as complete terminal audits in their guarded INSERT, preserving source retries after insert failure and frozen settings for existing active runs. Avoid abandoned skipped audits and false cron timeouts after a failed finalization update. (#72)
+- [Engagement Retention] Separate the Engagement worker from the Session/Handoff cleanup implementation through a shared worker-support base without source/worker flows. Preserve the dispatcher and safety contracts; clarify the independently bounded before/after audit observations and their distinction from committed delete counts. Commit initial source schema, batch identity, snapshots and receipts atomically; expose a new generation only after its complete first commit without replacing an existing archive. Bound live coverage pair pages to their day while retaining date-independent Session protection and complete conflict checks. (#72)
+
+2026-10-13:
+- [Engagement Retention] Add default-off `landing_session_engagements` after Sessions/Handoffs, with a 14-day `updated_at` calendar cutoff, resumable preparation/Dry-run, separate complete-day Main/TK 2-% / five-CTA-event gates, and the fixed historical statistics exception. Preserve live-session protection, verify complete mutable snapshots/receipts before guarded delete plus atomic audit progress, and lock the unique key during engagement writes. Add external NOCASE archive read-index preparation, MySQL-first/newest-generation Engagement version selection, stale-checkpoint protection and smaller-budget/post-delete recovery. Serialize Engagement audit creation across connections, retain start retries on preparation failure, and bind renewed snapshots to their current receipt with atomic bounded counter updates. Include real SQLite/MariaDB concurrency/interruption checks and the separate rollout/Fraud/Billing activation contract. (#72)
+
 2026-10-06:
 - [DB Retention Archive Health] Require a repository-owned Linux read brake in the actual PHP/PDO health child, prove both fixture rates before each full archive scan, and fail closed on missing pacing, file identity or supported read path. Preserve the full SQLite check, WAL gates, generation lock and corruption contract. Raise the default/maximum supervision and corruption handoff budget to 7,200 seconds; document reproducible native builds and a rollback that keeps the external check stopped until safe. (#138)
 

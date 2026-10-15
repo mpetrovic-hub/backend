@@ -93,6 +93,7 @@ Registered source defaults are stored in the `kiwi_retention_settings` option:
 
 - `landing_page_sessions`: `enabled=false`, `dry_run=true`, `retention_days=14`, minimum `7`; Main/TK-zone summary coverage is required.
 - `landing_handoff_events`: `enabled=false`, `dry_run=true`, `retention_days=21`, minimum `7`; analytics summary coverage is deliberately not required.
+- `landing_session_engagements`: `enabled=false`, `dry_run=true`, `retention_days=14`, minimum `7`; age uses `updated_at` and the WordPress calendar, while its own Main/TK-zone gate uses `created_at`. Live sessions protect the engagement. See `retention-runbook.md` for external read-index preparation and the separate one-time Fraud/Billing and activation approvals; reducing the period requires renewed approval.
 
 Saved per-source settings are not overwritten when defaults change. Every source still uses the shared bounded archive-before-delete worker and must be dry-run validated before separate Production activation.
 
