@@ -296,6 +296,87 @@ function et_fixture(Engagement_Test_Config $config): array
     $worker = new Engagement_Test_Worker($config, $registry, $repo, $archive, $events, $lock, $gate);
     return compact('events', 'lock', 'repo', 'gate', 'archive', 'registry', 'worker', 'config');
 }
+function et_initial_archive_scenario(string $step): void
+{
+    $fixture = et_fixture(new Engagement_Test_Config());
+    $source = $fixture['registry']->get('landing_session_engagements');
+    $row = et_full_row($source, et_engagement(1));
+    $path = $fixture['archive']->resolve_archive_db_path();
+    if ($step === 'existing') {
+        et_archive_sessions($fixture, [et_session(11, 1)]);
+        $pdo = new PDO('sqlite:' . $path);
+        $pdo->exec("CREATE TRIGGER reject_initial_identity BEFORE INSERT ON archive_batches
+            WHEN NEW.source_key='landing_session_engagements'
+            BEGIN SELECT RAISE(ABORT, 'controlled_identity_failure'); END");
+        $pdo = null;
+    }
+    $failed_row = $row;
+    if ($step === 'new') { $failed_row['updated_at'] = '2026-10-01 00:00:00'; }
+    $failed = false;
+    try {
+        $fixture['archive']->archive_snapshot_batch($source, [$failed_row], '2026-09-28 00:00:00', 'initial-identity', $path);
+    } catch (RuntimeException $error) { $failed = $error->getMessage() === 'archive_snapshot_batch_failed'; }
+    et_check($failed, 'Controlled first-batch failure occurs for ' . $step . ' generation');
+    if ($step === 'existing') {
+        $pdo = new PDO('sqlite:' . $path);
+        $reader = new Kiwi_Retention_Archive_Reader($fixture['archive'], $fixture['lock'], $fixture['gate']);
+        $safe_absence = false;
+        try { $safe_absence = !$reader->has_source($pdo, $source); } catch (RuntimeException $error) {}
+        et_check($safe_absence, 'Failed initial identity leaves no unidentifiable source table in an existing generation');
+        $sessions = $fixture['registry']->get('landing_page_sessions');
+        et_check($reader->has_source($pdo, $sessions)
+            && (int) $pdo->query('SELECT COUNT(*) FROM ' . $sessions['source_table'])->fetchColumn() === 1
+            && (int) $pdo->query('SELECT COUNT(*) FROM archive_batch_rows')->fetchColumn() === 1,
+            'Failed source initialization preserves existing Session snapshots and receipts');
+        $pdo->exec('DROP TRIGGER reject_initial_identity');
+        $pdo = null;
+    } else {
+        clearstatcache(true, $path);
+        et_check(!file_exists($path), 'Failed first payload never exposes an incomplete canonical generation');
+        et_check($fixture['archive']->list_archive_files() === [], 'An interrupted new generation is absent from reader inventory');
+    }
+    $result = $fixture['archive']->archive_snapshot_batch($source, [$row], '2026-09-28 00:00:00', 'initial-identity', $path);
+    et_check(count($result['rows']) === 1 && Kiwi_Retention_Archive_Reader::snapshot($source, $result['rows'][0])
+        === Kiwi_Retention_Archive_Reader::snapshot($source, $row),
+        'Retry after first-batch failure verifies the complete payload and Source-ID receipt for ' . $step . ' generation');
+    $pdo = new PDO('sqlite:' . $path);
+    et_check($pdo->query("SELECT archive_db_path FROM archive_batches WHERE archive_batch_id='initial-identity'")->fetchColumn() === $path,
+        'First-batch metadata keeps the canonical archive path for ' . $step . ' generation');
+}
+
+function et_session_day_scenario(string $step): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false; $config->row_limit = 1;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    $sessions = $fixture['registry']->get('landing_page_sessions');
+    et_full_row($source, et_engagement(1));
+    if (in_array($step, ['live_conflict', 'archive_conflict'], true)) {
+        $archive_date = $step === 'live_conflict' ? '2026-07-05 12:00:00' : '2026-07-06 12:00:00';
+        et_archive_sessions($fixture, [et_session(11, 1, $archive_date)]);
+        et_full_row($sessions, et_session(11, 1, $step === 'live_conflict' ? '2026-07-06 12:00:00' : '2026-07-05 12:00:00'));
+        et_summary($config, '2026-07-06', 1, 2);
+        $run = et_finish($fixture, 80);
+        et_check($run['status'] === 'failed' && $run['error_code'] === 'archive_reader_snapshot_conflict'
+            && (int) $run['archived_rows'] === 0 && (int) $run['deleted_rows'] === 0,
+            'Day-bounded pair lookup still rejects complete cross-day Session conflicts: ' . $step);
+        return;
+    }
+    for ($id = 1; $id <= 100; $id++) { et_full_row($sessions, et_session($id, 1, '2026-07-05 12:00:00')); }
+    $target_present = $step === 'target';
+    if ($target_present) { et_full_row($sessions, et_session(101, 1)); }
+    et_summary($config, '2026-07-06', $target_present ? 1 : 0, $target_present ? 2 : 0);
+    $run = et_finish($fixture, 80);
+    $day = et_state($run)['daily_results']['2026-07-06']['modes'];
+    et_check($run['status'] === 'completed' && $run['gate_status'] === 'passed'
+        && $day['main']['metrics']['page_loaded_sessions']['raw'] === ($target_present ? 1 : 0)
+        && $day['tkzone']['metrics']['page_loaded_sessions']['raw'] === ($target_present ? 1 : 0),
+        'Day-bounded live lookup completes within a small worker budget despite 100 matching off-day Sessions: ' . $step);
+    et_check((int) $run['archived_rows'] === 0 && (int) $run['deleted_rows'] === 0
+        && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+        'Off-day live Sessions retain their date-independent archive/delete protection: ' . $step);
+}
+
 function et_dispatcher_scenario(): void
 {
     global $wpdb;
@@ -1020,6 +1101,16 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['existing', 'new'] as $step) {
+        if (in_array('--initial-archive=' . $step, $argv, true)) {
+            et_initial_archive_scenario($step); echo 'INITIAL_ARCHIVE_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
+    foreach (['target', 'offday', 'live_conflict', 'archive_conflict'] as $step) {
+        if (in_array('--session-day=' . $step, $argv, true)) {
+            et_session_day_scenario($step); echo 'SESSION_DAY_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     foreach (['matching', 'conflict'] as $step) {
         if (in_array('--live-session-copy=' . $step, $argv, true)) {
             et_live_session_copy_scenario($step, $other); echo 'LIVE_SESSION_COPY_TEST_PASSED ', $step, "\n"; return;
@@ -1510,6 +1601,8 @@ try {
     foreach (['orphan', 'concurrent', 'existing'] as $step) { et_transient_start_scenario($step, $other); }
     foreach (['matching', 'conflict'] as $step) { et_live_session_copy_scenario($step, $other); }
     et_dispatcher_scenario();
+    foreach (['existing', 'new'] as $step) { et_initial_archive_scenario($step); }
+    foreach (['target', 'offday', 'live_conflict', 'archive_conflict'] as $step) { et_session_day_scenario($step); }
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

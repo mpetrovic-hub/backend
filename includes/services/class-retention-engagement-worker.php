@@ -379,8 +379,10 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
             if ($origin === 0) {
                 $rows = $wpdb->get_results($wpdb->prepare(
                     'SELECT id,landing_key,session_token,created_at,pid FROM ' . $source['source_table'] . ' WHERE landing_key=%s AND session_token=%s
-                     AND id>%d ORDER BY id LIMIT %d',
-                    $engagement['landing_key'], $engagement['session_token'], $lookup['id'], $this->page_limit($budget)
+                     AND created_at>=%s AND created_at<%s AND id>%d ORDER BY id LIMIT %d',
+                    $engagement['landing_key'], $engagement['session_token'], $date . ' 00:00:00',
+                    (new DateTimeImmutable($date))->modify('+1 day')->format('Y-m-d') . ' 00:00:00',
+                    $lookup['id'], $this->page_limit($budget)
                 ), ARRAY_A);
                 $this->assert_query_ok();
             } else {

@@ -744,10 +744,22 @@ class Kiwi_Retention_Sqlite_Archive_Service
             throw new RuntimeException('archive_snapshot_input_invalid');
         }
         $pdo = null;
+        $temporary = null;
         try {
-            $pdo = new PDO('sqlite:' . $path);
+            // A first generation must not become discoverable until its first
+            // complete snapshot/receipt transaction has committed. The caller
+            // holds the same generation lock for existing and new archives.
+            if (!file_exists($path)) {
+                $initial_path = $path . '.initial-' . bin2hex(random_bytes(12));
+                $created = @fopen($initial_path, 'x+b');
+                if ($created === false) { throw new RuntimeException('archive_snapshot_initial_create_failed'); }
+                $temporary = $initial_path;
+                fclose($created);
+            }
+            $pdo = new PDO('sqlite:' . ($temporary ?? $path));
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $pdo->exec('PRAGMA foreign_keys = ON');
+            $pdo->beginTransaction();
             $this->ensure_archive_schema($pdo, $source);
             $this->start_archive_batch($pdo, $source, $batch, $cutoff, $path, false);
             $columns = array_merge(['_archive_batch_id', '_archived_at', '_source_pk'], array_keys($source['archive_columns']));
@@ -766,7 +778,6 @@ class Kiwi_Retention_Sqlite_Archive_Service
             $ids = [];
             $inserted = 0;
             $duplicates = 0;
-            $pdo->beginTransaction();
             foreach ($rows as $row) {
                 $snapshot = Kiwi_Retention_Archive_Reader::snapshot($source, $row);
                 $id = (int) $snapshot[$source['primary_key']];
@@ -792,7 +803,16 @@ class Kiwi_Retention_Sqlite_Archive_Service
                 WHERE archive_batch_id=?');
             $finish->execute([$this->current_time_mysql(), $inserted + $duplicates, $inserted, $duplicates, $batch]);
             $pdo->commit();
+            // Statements retain their PDO connection. Close all of them before
+            // publishing so SQLite never has the same file open under aliases.
+            unset($insert, $receipt, $row_exists, $receipt_exists, $finish);
             $pdo = null;
+            if ($temporary !== null) {
+                // A same-directory hard link publishes the committed file in
+                // one step and fails rather than replacing an existing target.
+                if (!@link($temporary, $path)) { throw new RuntimeException('archive_snapshot_initial_publish_failed'); }
+                if (@unlink($temporary)) { $temporary = null; }
+            }
             $verified = $this->fetch_verified_snapshots($source, $path, $batch, array_keys($ids));
             foreach ($verified['rows'] as $row) {
                 $id = (int) $row[$source['primary_key']];
@@ -807,6 +827,10 @@ class Kiwi_Retention_Sqlite_Archive_Service
             }
             // A committed receipt is deliberately retained for the next worker.
             throw new RuntimeException('archive_snapshot_batch_failed');
+        } finally {
+            unset($insert, $receipt, $row_exists, $receipt_exists, $finish);
+            $pdo = null;
+            if ($temporary !== null) { @unlink($temporary); }
         }
     }
 
