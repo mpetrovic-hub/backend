@@ -15,9 +15,9 @@
     "semantic_hash": "81c1a90358a7e6e1a839946f100979d6"
   },
   "includes/core/class-config.php": {
-    "mtime": 1787835619.1144426,
-    "ast_hash": "2051b4781a96219b189aed70e9b1ae48",
-    "semantic_hash": "2051b4781a96219b189aed70e9b1ae48"
+    "mtime": 1791824887.6093693,
+    "ast_hash": "fba7e64219d196c37a4552b179f07286",
+    "semantic_hash": ""
   },
   "includes/core/class-container.php": {
     "mtime": 1773322089.2030416,
@@ -515,9 +515,9 @@
     "semantic_hash": "305ba327f4ba9ce1681ad642862564ff"
   },
   "CHANGELOG.md": {
-    "mtime": 1790670102.8587258,
-    "ast_hash": "afb2cdb307860455812812dc005c42cb",
-    "semantic_hash": "afb2cdb307860455812812dc005c42cb"
+    "mtime": 1791824887.5853653,
+    "ast_hash": "bd8622293dcbdff050b0de324de93c51",
+    "semantic_hash": ""
   },
   "GLOSSARY.md": {
     "mtime": 1784104012.9467535,
@@ -740,13 +740,13 @@
     "semantic_hash": "b4395a6f5b530550222c09b8b382df74"
   },
   "docs/operations/INDEX.md": {
-    "mtime": 1786025623.1787138,
-    "ast_hash": "85479e81bd04218ff28e9c5ea2ab9db3",
-    "semantic_hash": "85479e81bd04218ff28e9c5ea2ab9db3"
+    "mtime": 1791824887.596368,
+    "ast_hash": "75d73f971329833a2df1489c1d48966d",
+    "semantic_hash": ""
   },
   "docs/operations/configuration-reference.md": {
-    "mtime": 1791282084.8243015,
-    "ast_hash": "fdc16ac8f6b78e7ac00448e16ca2413e",
+    "mtime": 1791824887.6003687,
+    "ast_hash": "a2a1ba419ef852326fea44938f18e5a1",
     "semantic_hash": ""
   },
   "docs/operations/database-migrations.md": {
@@ -775,9 +775,9 @@
     "semantic_hash": "31af669f39e5268c56fa745114c8e8ff"
   },
   "docs/operations/retention-runbook.md": {
-    "mtime": 1787835619.1054428,
-    "ast_hash": "a30d00bc090c256552889da8c13fc961",
-    "semantic_hash": "a30d00bc090c256552889da8c13fc961"
+    "mtime": 1791824887.6053674,
+    "ast_hash": "82f4dd2f979955737b9aa169e2d33e13",
+    "semantic_hash": ""
   },
   "includes/core/class-database-table-names.php": {
     "mtime": 1787652299.1360393,
@@ -800,9 +800,9 @@
     "semantic_hash": "082788a837711aaffa8a5d72c75d8a30"
   },
   "includes/services/class-retention-archive-check-supervisor.php": {
-    "mtime": 1786025623.1857135,
-    "ast_hash": "b7b8f34d4732c24acf9671f1a17e794d",
-    "semantic_hash": "b7b8f34d4732c24acf9671f1a17e794d"
+    "mtime": 1791824887.6133685,
+    "ast_hash": "12fc41c90f897f4dc6c32f75aecf3e8e",
+    "semantic_hash": ""
   },
   "includes/services/class-retention-archive-health-controller.php": {
     "mtime": 1786025623.1867163,
@@ -865,9 +865,9 @@
     "semantic_hash": "02a24593938a1c345cad6047dfcafe41"
   },
   "tests/retention-archive-health-tests.php": {
-    "mtime": 1790759565.9138267,
-    "ast_hash": "3995a8e9e7a64bdf37de5b6bf70d7c4c",
-    "semantic_hash": "3995a8e9e7a64bdf37de5b6bf70d7c4c"
+    "mtime": 1791824887.826412,
+    "ast_hash": "e096dddc95736d712ed29604d97e06ca",
+    "semantic_hash": ""
   },
   "tools/database/class-retention-archive-health-bootstrap-recorder.php": {
     "mtime": 1786025623.1977136,
@@ -880,9 +880,9 @@
     "semantic_hash": ""
   },
   "tools/database/kiwi-retention-archive-health.php": {
-    "mtime": 1790759565.914827,
-    "ast_hash": "98b01569ff840d171e6f681f2b1bf53e",
-    "semantic_hash": "98b01569ff840d171e6f681f2b1bf53e"
+    "mtime": 1791824887.887933,
+    "ast_hash": "d1b6f23f80290fd2d4db7be7d4e17dce",
+    "semantic_hash": ""
   },
   "tools/database/migrations/class-landing-session-engagements-migration-service.php": {
     "mtime": 1787652299.1510417,
@@ -920,9 +920,9 @@
     "semantic_hash": "997af0542588507e8580228823d4ff2f"
   },
   "docs/architecture/retention-architecture.md": {
-    "mtime": 1787835619.0824382,
-    "ast_hash": "bd6df309f5f7432e970591edb8f8fe9a",
-    "semantic_hash": "bd6df309f5f7432e970591edb8f8fe9a"
+    "mtime": 1791824887.5903676,
+    "ast_hash": "198296f0f49c21df113d45ea350f79dc",
+    "semantic_hash": ""
   },
   "issue-124-archive-health-diagnostic.md": {
     "mtime": 1790759565.9128256,
@@ -943,5 +943,145 @@
     "mtime": 1790784400.6756122,
     "ast_hash": "8c0ff9e09ddae56c5d1b6e3c2da0e92f",
     "semantic_hash": "8c0ff9e09ddae56c5d1b6e3c2da0e92f"
+  },
+  "tests/archive-health-read-brake-contracts.py": {
+    "mtime": 1791824887.6133685,
+    "ast_hash": "beea527102bfe4aa932113c81a50c475",
+    "semantic_hash": ""
+  },
+  "tests/archive-health-read-brake-integration.py": {
+    "mtime": 1791824887.61437,
+    "ast_hash": "589f4c18c4045966e0051db94fe6987e",
+    "semantic_hash": ""
+  },
+  "tests/archive-health-read-brake-measure.py": {
+    "mtime": 1791824887.61437,
+    "ast_hash": "bac73b04691aca815882186ea23bb122",
+    "semantic_hash": ""
+  },
+  "tests/archive-health-read-brake-shim-tests.py": {
+    "mtime": 1791824887.6203704,
+    "ast_hash": "5d6d80fb5a66c3c1d5d0dc872eb9e540",
+    "semantic_hash": ""
+  },
+  "tests/archive_health_brake_php.py": {
+    "mtime": 1791824887.6243715,
+    "ast_hash": "9d31a947f82a312c31cbdc4498c0b17e",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/cold-350-result.json": {
+    "mtime": 1791824887.653373,
+    "ast_hash": "ee94e875efcb4bd5d008744af091d760",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/cold-700-result.json": {
+    "mtime": 1791824887.669379,
+    "ast_hash": "abf5ec9d2079e1abdfd61ac7e9145d0b",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/glibc217.json": {
+    "mtime": 1791824887.6738884,
+    "ast_hash": "89fbda506de027ed4ec170ad18753c54",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/measurement-environment.json": {
+    "mtime": 1791824887.6778882,
+    "ast_hash": "e14c7ab44769e8aa7218f2b89e971fde",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/rejected-noise-result.json": {
+    "mtime": 1791824887.6898918,
+    "ast_hash": "8f695e5507788797e931055af6d72b66",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/validation-summary.json": {
+    "mtime": 1791824887.6898918,
+    "ast_hash": "4a39a03056ca9272cbb481dd7aea8525",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/verify-curves.py": {
+    "mtime": 1791824887.6958885,
+    "ast_hash": "36f2a02748425c55f536d3961a407d12",
+    "semantic_hash": ""
+  },
+  "tests/fixtures/archive-health-brake-faults.c": {
+    "mtime": 1791824887.7028892,
+    "ast_hash": "5a0fbb58902837a3e3fe07fcd9ddf0ef",
+    "semantic_hash": ""
+  },
+  "tests/fixtures/archive-health-brake-glibc217.c": {
+    "mtime": 1791824887.7068923,
+    "ast_hash": "21af55bc97cab3c8a1398cd95aefb74e",
+    "semantic_hash": ""
+  },
+  "tests/fixtures/archive-health-brake-measure.php": {
+    "mtime": 1791824887.7118907,
+    "ast_hash": "7476e726bde7f571f84d5ae38b4b7a61",
+    "semantic_hash": ""
+  },
+  "tests/fixtures/archive-health-brake-native-probe.py": {
+    "mtime": 1791824887.7158928,
+    "ast_hash": "5709971960cf6eaa458e91c9fda58c7d",
+    "semantic_hash": ""
+  },
+  "tests/fixtures/archive-health-brake-no-pacing.c": {
+    "mtime": 1791824887.8154128,
+    "ast_hash": "b0239ee1c62d8bac69d0ba57d8cdc3ea",
+    "semantic_hash": ""
+  },
+  "tests/fixtures/retention-health-brake-probe.php": {
+    "mtime": 1791824887.820411,
+    "ast_hash": "c992417264bb1a7a1238739159b8dee6",
+    "semantic_hash": ""
+  },
+  "tools/database/archive-health-read-brake/build-compat.sh": {
+    "mtime": 1791824887.8324127,
+    "ast_hash": "ce04bc15be4cb9021f7eb5d6360c77b6",
+    "semantic_hash": ""
+  },
+  "tools/database/archive-health-read-brake/build-fixture.py": {
+    "mtime": 1791824887.8384151,
+    "ast_hash": "de20315ada2ab7285051c5442dd55229",
+    "semantic_hash": ""
+  },
+  "tools/database/archive-health-read-brake/limit-archive-reads.c": {
+    "mtime": 1791824887.857421,
+    "ast_hash": "dd3f0ca132a2c3945e1efac781d472b2",
+    "semantic_hash": ""
+  },
+  "tools/database/archive-health-read-brake/manifest.json": {
+    "mtime": 1791824887.869423,
+    "ast_hash": "12cf9ee760640e10e4623cf1129a26b9",
+    "semantic_hash": ""
+  },
+  "tools/database/archive-health-read-brake/prepare-sdk.py": {
+    "mtime": 1791824887.8729343,
+    "ast_hash": "b177a64f80cfb560fa88ded64bfc77ba",
+    "semantic_hash": ""
+  },
+  "tools/database/archive-health-read-brake/sdk-inputs.json": {
+    "mtime": 1791824887.8769364,
+    "ast_hash": "1237e3fae89b8f7456e5d77bb54bd623",
+    "semantic_hash": ""
+  },
+  "tools/database/class-retention-archive-health-read-brake.php": {
+    "mtime": 1791824887.8829336,
+    "ast_hash": "816eacceb191e396406c18c43c380671",
+    "semantic_hash": ""
+  },
+  "Issue-72-Planung.md": {
+    "mtime": 1791815235.8882039,
+    "ast_hash": "3d9a9152959ff8b04c4bbbb5b7c5bba6",
+    "semantic_hash": ""
+  },
+  "tests/evidence/archive-health-read-brake-138/README.md": {
+    "mtime": 1791824887.6293728,
+    "ast_hash": "9d5951c98fe3590d2f8ff6982c3f8608",
+    "semantic_hash": ""
+  },
+  "tools/database/archive-health-read-brake/README.md": {
+    "mtime": 1791824887.8274117,
+    "ast_hash": "a8cac5478ee1203ae9338687e1f7d59b",
+    "semantic_hash": ""
   }
 }
