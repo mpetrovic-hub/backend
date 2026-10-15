@@ -3,6 +3,7 @@
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
 2026-10-15:
+- [Engagement Retention] Persist disabled new starts as complete terminal audits in their guarded INSERT, preserving source retries after insert failure and frozen settings for existing active runs. Avoid abandoned skipped audits and false cron timeouts after a failed finalization update. (#72)
 - [Engagement Retention] Separate the Engagement worker from the Session/Handoff cleanup implementation through a shared worker-support base without source/worker flows. Preserve the dispatcher and safety contracts; clarify the independently bounded before/after audit observations and their distinction from committed delete counts. Commit initial source schema, batch identity, snapshots and receipts atomically; expose a new generation only after its complete first commit without replacing an existing archive. Bound live coverage pair pages to their day while retaining date-independent Session protection and complete conflict checks. (#72)
 
 2026-10-13:

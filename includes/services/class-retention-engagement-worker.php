@@ -65,15 +65,22 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
                 'started_at' => $this->current_time_mysql(), 'status' => $enabled ? 'pending' : 'skipped',
                 'gate_status' => $enabled ? 'pending' : 'skipped', 'worker_phase' => 'engagement_preparing',
                 'archive_batch_id' => $this->generate_archive_batch_id($source_key), 'gate_results_json' => $state];
+            if (!$enabled) {
+                // Disabled starts are terminal at the guarded INSERT. A
+                // separate finalizing UPDATE would leave an orphan on failure.
+                $run['finished_at'] = $run['started_at'];
+                $run['worker_phase'] = 'cleanup_disabled';
+                $run['error_code'] = 'cleanup_disabled';
+            }
             $id = $this->run_repository->create_run_with_source_lock($run, $creation_lock);
             if ($id <= 0) {
                 return $this->source_retry($triggered_by, 'run_audit_create_failed');
             }
             $run['id'] = $id;
             if (!$enabled) {
-                return $this->finish_run($id, ['success' => true, 'run_id' => $run['run_id'],
+                return ['success' => true, 'run_id' => $run['run_id'],
                     'status' => 'skipped', 'gate_status' => 'skipped', 'worker_phase' => 'cleanup_disabled',
-                    'error_code' => 'cleanup_disabled', 'gate_results_json' => $state]);
+                    'error_code' => 'cleanup_disabled', 'gate_results_json' => $state];
             }
             return $this->scheduled($run);
         } catch (Throwable $error) {

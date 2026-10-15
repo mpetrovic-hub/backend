@@ -739,6 +739,60 @@ function et_dispatch_cron(): array
     return call_user_func_array($action['callback'], array_slice($event['args'], 0, $action['accepted_args']));
 }
 
+function et_disabled_audit_scenario(string $step): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false; $config->enabled = $step === 'existing';
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $plugin = new Engagement_Test_Plugin($fixture['worker']); $plugin->register();
+    if ($step === 'existing') {
+        $plugin->start_source();
+        $original = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+        $config->enabled = false;
+        $resumed = $plugin->start_source();
+        $stored = $fixture['repo']->find_run_by_id((int) $original['id']);
+        et_check($resumed['run_id'] === $original['run_id'] && (int) $stored['enabled'] === 1
+            && $stored['finished_at'] === null && $stored['status'] === 'pending'
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1,
+            'Disabling new starts never terminalizes or replaces an existing frozen active run');
+        for ($i = 0; $i < 20 && $GLOBALS['engagement_test_cron']; $i++) { et_dispatch_cron(); }
+        $stored = $fixture['repo']->find_run_by_id((int) $original['id']);
+        et_check($stored['status'] === 'completed' && $stored['finished_at'] !== null
+            && (int) $stored['deleted_rows'] === 1 && !$GLOBALS['engagement_test_cron'],
+            'An existing active run completes under its frozen settings after new starts are disabled');
+        return;
+    }
+    if ($step === 'insert') { $wpdb->fail_audit_inserts = 1; }
+    else { $wpdb->fail_audit_once = true; }
+    $result = $plugin->start_source();
+    if ($step === 'insert') {
+        et_check(!$result['success'] && !empty($result['retry_source'])
+            && count($GLOBALS['engagement_test_cron']) === 1
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 0,
+            'Failed disabled audit insertion preserves source retry without an unfinished audit');
+        $result = et_dispatch_cron();
+    }
+    $stored = $wpdb->get_row('SELECT * FROM t72_kiwi_retention_cleanup_runs ORDER BY id DESC LIMIT 1');
+    et_check($result['success'] && $result['error_code'] === 'cleanup_disabled'
+        && $stored['status'] === 'skipped' && $stored['gate_status'] === 'skipped'
+        && $stored['worker_phase'] === 'cleanup_disabled' && $stored['error_code'] === 'cleanup_disabled'
+        && $stored['finished_at'] !== null && !$GLOBALS['engagement_test_cron'],
+        'Disabled audit is durably terminal without depending on a follow-up update: ' . $step);
+    $wpdb->fail_audit_once = false;
+    $now = $GLOBALS['engagement_test_now'];
+    try {
+        $GLOBALS['engagement_test_now'] = (new DateTimeImmutable($now))->modify('+31 minutes')->format('Y-m-d H:i:s');
+        $stale = $fixture['repo']->mark_stale_unfinished_runs('landing_session_engagements', 30);
+        $idle = $plugin->run_retention_cleanup_worker('landing_session_engagements');
+        et_check($stale === [] && $idle['error_code'] === 'no_open_cleanup_run'
+            && $fixture['repo']->find_run_by_id((int) $stored['id']) === $stored
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM t72_kiwi_retention_cleanup_runs') === 1
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+            'Disabled audit never becomes a false timeout or successor worker and leaves source data intact: ' . $step);
+    } finally { $GLOBALS['engagement_test_now'] = $now; }
+}
+
 function et_source_retry_scenario(string $step): void
 {
     global $wpdb;
@@ -1101,6 +1155,11 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    foreach (['update', 'insert', 'existing'] as $step) {
+        if (in_array('--disabled-audit=' . $step, $argv, true)) {
+            et_disabled_audit_scenario($step); echo 'DISABLED_AUDIT_TEST_PASSED ', $step, "\n"; return;
+        }
+    }
     foreach (['existing', 'new'] as $step) {
         if (in_array('--initial-archive=' . $step, $argv, true)) {
             et_initial_archive_scenario($step); echo 'INITIAL_ARCHIVE_TEST_PASSED ', $step, "\n"; return;
@@ -1603,6 +1662,7 @@ try {
     et_dispatcher_scenario();
     foreach (['existing', 'new'] as $step) { et_initial_archive_scenario($step); }
     foreach (['target', 'offday', 'live_conflict', 'archive_conflict'] as $step) { et_session_day_scenario($step); }
+    foreach (['update', 'insert', 'existing'] as $step) { et_disabled_audit_scenario($step); }
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

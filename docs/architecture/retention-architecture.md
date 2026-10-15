@@ -48,6 +48,8 @@ For immutable Sessions, a live MySQL row and any archived copy of the same Sourc
 
 For the mutable snapshot writer, source schema, initial batch identity, complete snapshots and Source-ID receipts commit in the same SQLite transaction. When the frozen canonical generation does not yet exist, its first bounded batch commits in an exclusively created, non-discoverable `.sqlite.initial-<random>` file in the same directory. After closing all SQLite statements and connections, a hard link atomically publishes the committed file at the canonical path without replacing an existing target, under the existing generation lock. Batch metadata already identifies the canonical path. Failure before publication leaves the canonical generation absent; failure after publication retains complete committed receipt evidence. Existing generations use the same transaction without a temporary copy. Strict readers and rejection of incomplete or damaged existing archives remain unchanged; this is initial creation, not runtime repair.
 
+Disabled new Engagement starts insert a complete terminal `skipped` audit, including `finished_at` and `cleanup_disabled`, in the same connection-guarded INSERT. They need no subsequent finalizing UPDATE or worker. A failed INSERT retains the source-start retry without an unfinished audit; an already existing active run is still resumed with its frozen settings before current enablement is considered.
+
 ## Archive-before-delete contract
 
 For every source and every cleanup chunk:
