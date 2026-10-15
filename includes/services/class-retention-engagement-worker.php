@@ -5,7 +5,7 @@ if (!defined('ABSPATH')) {
 }
 
 /** Source boundary for mutable engagement; the shared sources keep their flow. */
-class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Cleanup_Service
+class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
 {
     private $checkpoint;
     private const METRICS = ['page_loaded_sessions', 'cta1_sessions', 'cta1_click_events',

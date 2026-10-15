@@ -41,18 +41,26 @@ foreach (['core/class-config.php', 'core/class-database-table-names.php',
     'services/class-retention-archive-name.php', 'services/class-retention-archive-write-block.php',
     'services/class-retention-archive-lock.php', 'services/class-retention-sqlite-archive-service.php',
     'services/class-retention-coverage-gate.php', 'services/class-operational-event-service.php',
-    'services/class-retention-corruption-safety-gate-coordinator.php', 'services/class-retention-cleanup-service.php',
+    'services/class-retention-corruption-safety-gate-coordinator.php', 'services/class-retention-worker-support.php',
+    'services/class-retention-cleanup-service.php',
     'services/class-retention-archive-reader.php', 'services/class-retention-engagement-worker.php'] as $file) {
     require_once ABSPATH . 'includes/' . $file;
 }
 require_once ABSPATH . 'tools/database/migrations/class-retention-archive-read-indexes-migration-service.php';
 require_once ABSPATH . 'includes/core/class-plugin.php';
 
-final class Engagement_Test_Plugin extends Kiwi_Plugin
+final class Engagement_Test_Cleanup_Dispatcher extends Kiwi_Retention_Cleanup_Service
 {
     private $worker;
     public function __construct(Kiwi_Retention_Engagement_Worker $worker) { $this->worker = $worker; }
-    protected function build_retention_cleanup_service(): Kiwi_Retention_Cleanup_Service { return $this->worker; }
+    protected function engagement_worker(): Kiwi_Retention_Engagement_Worker { return $this->worker; }
+}
+
+final class Engagement_Test_Plugin extends Kiwi_Plugin
+{
+    private $cleanup;
+    public function __construct(Kiwi_Retention_Engagement_Worker $worker) { $this->cleanup = new Engagement_Test_Cleanup_Dispatcher($worker); }
+    protected function build_retention_cleanup_service(): Kiwi_Retention_Cleanup_Service { return $this->cleanup; }
     protected function log_retention_cleanup(string $message): void {}
     public function start_source(): array
     {
@@ -285,9 +293,43 @@ function et_fixture(Engagement_Test_Config $config): array
     $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator($lock, $events, $repo);
     $archive = new Engagement_Test_Archive($config);
     $registry = new Kiwi_Retention_Source_Registry();
-    $worker = new Engagement_Test_Worker($config, $registry, $repo, null, $archive, null, $events, $lock, $gate);
+    $worker = new Engagement_Test_Worker($config, $registry, $repo, $archive, $events, $lock, $gate);
     return compact('events', 'lock', 'repo', 'gate', 'archive', 'registry', 'worker', 'config');
 }
+function et_dispatcher_scenario(): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->enabled = false;
+    $fixture = et_fixture($config);
+    $dispatcher = new Kiwi_Retention_Cleanup_Service($config, $fixture['registry'], $fixture['repo'], null,
+        $fixture['archive'], null, $fixture['events'], $fixture['lock'], $fixture['gate']);
+    $disabled = $dispatcher->run_source('landing_session_engagements', 'manual');
+    $idle = $dispatcher->run_worker('landing_session_engagements');
+    et_check($disabled['error_code'] === 'cleanup_disabled' && $idle['error_code'] === 'no_open_cleanup_run',
+        'Shared dispatcher preserves disabled Engagement settings without creating a successor run');
+
+    $config = new Engagement_Test_Config(); $config->dry_run = false; $config->row_limit = 1;
+    $fixture = et_fixture($config); $source = $fixture['registry']->get('landing_session_engagements');
+    $dispatcher = new Kiwi_Retention_Cleanup_Service($config, $fixture['registry'], $fixture['repo'], null,
+        $fixture['archive'], null, $fixture['events'], $fixture['lock'], $fixture['gate']);
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $dispatcher->run_source('landing_session_engagements', 'manual');
+    $open = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    et_full_row($source, et_engagement(2, '2026-04-23 12:00:00'));
+    for ($attempt = 0; $attempt < 80; $attempt++) {
+        $dispatcher->run_worker('landing_session_engagements');
+        $run = $fixture['repo']->find_run_by_id((int) $open['id']);
+        if ($run['finished_at'] !== null) { break; }
+    }
+    et_check($run['status'] === 'completed' && (int) $run['deleted_rows'] === 1
+        && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table'] . ' WHERE id=2') === 1,
+        'Production dispatcher resumes independent Engagement workers and retains rows above the original target');
+    $state = et_state($run);
+    et_check((int) $run['target_max_primary_key'] === 1 && $state['after_target'] === 2
+        && $state['counts']['rows_before'] === 1 && $state['counts']['rows_after'] === 1,
+        'Before and after observations retain their distinct saved ID bounds rather than implying a deletion count');
+}
+
 function et_spawn_writer(string $database): array
 {
     $environment = getenv(); $environment['KIWI_RETENTION_TEST_DATABASE'] = $database;
@@ -1021,6 +1063,9 @@ try {
             $test($other); echo 'BOUNDARY_TEST_PASSED ', $name, "\n"; return;
         }
     }
+    if (in_array('--dispatcher', $argv, true)) {
+        et_dispatcher_scenario(); echo "DISPATCHER_TEST_PASSED\n"; return;
+    }
     et_check(strpos($admin->query('SELECT VERSION()')->fetchColumn(), '11.8.9-MariaDB') === 0, 'Exact temporary MariaDB 11.8.9 engine');
     $fixture = et_fixture(new Engagement_Test_Config());
     $source = $fixture['registry']->get('landing_session_engagements');
@@ -1464,6 +1509,7 @@ try {
     foreach (['metadata', 'missing', 'identity'] as $step) { et_mutable_receipt_scenario($step); }
     foreach (['orphan', 'concurrent', 'existing'] as $step) { et_transient_start_scenario($step, $other); }
     foreach (['matching', 'conflict'] as $step) { et_live_session_copy_scenario($step, $other); }
+    et_dispatcher_scenario();
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

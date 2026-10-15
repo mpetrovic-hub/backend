@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-10-15:
+- [Engagement Retention] Separate the Engagement worker from the Session/Handoff cleanup implementation through a shared worker-support base without source/worker flows. Preserve the dispatcher and safety contracts; clarify the independently bounded before/after audit observations and their distinction from committed delete counts. (#72)
+
 2026-10-13:
 - [Engagement Retention] Add default-off `landing_session_engagements` after Sessions/Handoffs, with a 14-day `updated_at` calendar cutoff, resumable preparation/Dry-run, separate complete-day Main/TK 2-% / five-CTA-event gates, and the fixed historical statistics exception. Preserve live-session protection, verify complete mutable snapshots/receipts before guarded delete plus atomic audit progress, and lock the unique key during engagement writes. Add external NOCASE archive read-index preparation, MySQL-first/newest-generation Engagement version selection, stale-checkpoint protection and smaller-budget/post-delete recovery. Serialize Engagement audit creation across connections, retain start retries on preparation failure, and bind renewed snapshots to their current receipt with atomic bounded counter updates. Include real SQLite/MariaDB concurrency/interruption checks and the separate rollout/Fraud/Billing activation contract. (#72)
 

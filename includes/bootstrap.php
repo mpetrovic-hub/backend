@@ -82,6 +82,7 @@ require_once __DIR__ . '/services/class-retention-archive-check-supervisor.php';
 require_once __DIR__ . '/services/class-retention-corruption-safety-gate-coordinator.php';
 require_once __DIR__ . '/services/class-retention-archive-health-controller.php';
 require_once __DIR__ . '/services/class-retention-archive-health-service.php';
+require_once __DIR__ . '/services/class-retention-worker-support.php';
 require_once __DIR__ . '/services/class-retention-cleanup-service.php';
 require_once __DIR__ . '/services/class-retention-archive-reader.php';
 require_once __DIR__ . '/services/class-retention-engagement-worker.php';
