@@ -294,63 +294,18 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
                     'raw' => ['main' => $zero, 'tkzone' => $zero],
                     'summary' => ['main' => $zero, 'tkzone' => $zero], 'summary_rows' => ['main' => 0, 'tkzone' => 0]];
             }
-            $day =& $state['day'];
-            if ($day['stage'] === 'raw') {
-                $origin = (int) $day['origin'];
-                if ($origin > count($state['files'])) {
-                    $day['stage'] = 'main';
-                    $day['summary_cursor'] = 0;
-                    continue;
-                }
-                $rows = $origin === 0
-                    ? $this->live_day_page($source, $date, $day['cursor'], 1)
-                    : $reader->day_page($source, $state['files'][$origin - 1], $date, $day['cursor'], 1);
-                if (!$rows) {
-                    $day['origin']++;
-                    $day['cursor'] = ['id' => 0, 'created_at' => $date . ' 00:00:00'];
-                    continue;
-                }
-                $row = $rows[0];
-                $canonical = $this->canonical($source, $row, $origin, $state['files'], $reader);
-                if ($canonical !== null) {
-                    $signature = hash('sha256', json_encode(Kiwi_Retention_Archive_Reader::snapshot($source, $canonical), JSON_THROW_ON_ERROR));
-                    if (!isset($day['lookup']) || $day['lookup']['signature'] !== $signature) {
-                        $budget['rows']++;
-                        $day['lookup'] = ['signature' => $signature, 'origin' => 0, 'id' => 0,
-                            'cursor' => ['id' => 0, 'created_at' => $date . ' 00:00:00'], 'main' => false, 'tkzone' => false];
-                    }
-                    if (!$this->session_pair($sessions, $canonical, $day['lookup'], $state['files'], $reader, $budget)) {
-                        return;
-                    }
-                    foreach (['main', 'tkzone'] as $mode) {
-                        if ($day['lookup'][$mode]) {
-                            $day['raw'][$mode]['page_loaded_sessions'] += $canonical['page_loaded_at'] === null ? 0 : 1;
-                            foreach (['cta1', 'cta2', 'cta3'] as $step) {
-                                $day['raw'][$mode][$step . '_sessions'] += $canonical['first_' . $step . '_click_at'] === null ? 0 : 1;
-                                $day['raw'][$mode][$step . '_click_events'] += (int) $canonical[$step . '_click_count'];
-                            }
-                        }
-                    }
-                    unset($day['lookup']);
-                } else { $budget['rows']++; }
-                $day['cursor'] = ['id' => (int) $row['id'], 'created_at' => $row['created_at']];
+            if ($state['day']['stage'] === 'raw') {
+                $step = $this->advance_raw_day($source, $sessions, $date, $state['day'], $state['files'], $reader, $budget);
+                $state['day'] = $step['day'];
+                $budget['rows'] += $step['rows_used'];
+                if (!$step['complete']) { return; }
                 continue;
             }
-            $mode = $day['stage'];
-            $rows = $this->summary_page($mode, $date, (int) $day['summary_cursor'], $this->page_limit($budget));
-            foreach ($rows as $row) {
-                if (!$this->available($budget)) { return; }
-                $budget['rows']++;
-                foreach (self::METRICS as $metric) { $day['summary'][$mode][$metric] += (int) $row[$metric]; }
-                $day['summary_rows'][$mode]++;
-                $day['summary_cursor'] = (int) $row['id'];
-            }
-            if ($rows) { continue; }
-            if ($mode === 'main') {
-                $day['stage'] = 'tkzone';
-                $day['summary_cursor'] = 0;
-                continue;
-            }
+            $step = $this->advance_summary_day($state['day']['stage'], $date, $state['day'], $budget);
+            $state['day'] = $step['day'];
+            $budget['rows'] += $step['rows_used'];
+            if (!$step['day_complete']) { continue; }
+            $day = $state['day'];
             $result = ['historical_exception' => false, 'ok' => true, 'modes' => []];
             foreach (['main', 'tkzone'] as $checked_mode) {
                 $comparison = self::compare_day($day['raw'][$checked_mode], $day['summary'][$checked_mode], $day['summary_rows'][$checked_mode] > 0);
@@ -376,10 +331,90 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
         }
     }
 
-    private function session_pair(array $source, array $engagement, array &$lookup, array $files, Kiwi_Retention_Archive_Reader $reader, array &$budget): bool
+    /** Return one raw-page step; coverage owns the durable day and row budget. */
+    private function advance_raw_day(array $source, array $sessions, string $date, array $day, array $files,
+        Kiwi_Retention_Archive_Reader $reader, array $budget): array
+    {
+        $rows_used = 0;
+        $origin = (int) $day['origin'];
+        if ($origin > count($files)) {
+            $day['stage'] = 'main';
+            $day['summary_cursor'] = 0;
+            return ['day' => $day, 'rows_used' => $rows_used, 'complete' => true];
+        }
+        $rows = $origin === 0
+            ? $this->live_day_page($source, $date, $day['cursor'], 1)
+            : $reader->day_page($source, $files[$origin - 1], $date, $day['cursor'], 1);
+        if (!$rows) {
+            $day['origin']++;
+            $day['cursor'] = ['id' => 0, 'created_at' => $date . ' 00:00:00'];
+            return ['day' => $day, 'rows_used' => $rows_used, 'complete' => true];
+        }
+        $row = $rows[0];
+        $canonical = $this->canonical($source, $row, $origin, $files, $reader);
+        if ($canonical !== null) {
+            $signature = hash('sha256', json_encode(Kiwi_Retention_Archive_Reader::snapshot($source, $canonical), JSON_THROW_ON_ERROR));
+            if (!isset($day['lookup']) || $day['lookup']['signature'] !== $signature) {
+                $rows_used++;
+                $budget['rows']++;
+                $day['lookup'] = ['signature' => $signature, 'origin' => 0, 'id' => 0,
+                    'cursor' => ['id' => 0, 'created_at' => $date . ' 00:00:00'], 'main' => false, 'tkzone' => false];
+            }
+            $pair = $this->lookup_session_pair($sessions, $canonical, $day['lookup'], $files, $reader, $budget);
+            $day['lookup'] = $pair['lookup'];
+            $rows_used += $pair['rows_used'];
+            if (!$pair['complete']) {
+                return ['day' => $day, 'rows_used' => $rows_used, 'complete' => false];
+            }
+            foreach (['main', 'tkzone'] as $mode) {
+                if ($day['lookup'][$mode]) {
+                    $day['raw'][$mode]['page_loaded_sessions'] += $canonical['page_loaded_at'] === null ? 0 : 1;
+                    foreach (['cta1', 'cta2', 'cta3'] as $step) {
+                        $day['raw'][$mode][$step . '_sessions'] += $canonical['first_' . $step . '_click_at'] === null ? 0 : 1;
+                        $day['raw'][$mode][$step . '_click_events'] += (int) $canonical[$step . '_click_count'];
+                    }
+                }
+            }
+            unset($day['lookup']);
+        } else { $rows_used++; }
+        $day['cursor'] = ['id' => (int) $row['id'], 'created_at' => $row['created_at']];
+        return ['day' => $day, 'rows_used' => $rows_used, 'complete' => true];
+    }
+
+    /** Return one summary-page step; only coverage advances the saved day. */
+    private function advance_summary_day(string $mode, string $date, array $day, array $budget): array
+    {
+        $rows_used = 0;
+        $rows = $this->summary_page($mode, $date, (int) $day['summary_cursor'], $this->page_limit($budget));
+        foreach ($rows as $row) {
+            if (!$this->available($budget)) {
+                return ['day' => $day, 'rows_used' => $rows_used, 'day_complete' => false];
+            }
+            $budget['rows']++;
+            $rows_used++;
+            foreach (self::METRICS as $metric) { $day['summary'][$mode][$metric] += (int) $row[$metric]; }
+            $day['summary_rows'][$mode]++;
+            $day['summary_cursor'] = (int) $row['id'];
+        }
+        if ($rows) {
+            return ['day' => $day, 'rows_used' => $rows_used, 'day_complete' => false];
+        }
+        if ($mode === 'main') {
+            $day['stage'] = 'tkzone';
+            $day['summary_cursor'] = 0;
+            return ['day' => $day, 'rows_used' => $rows_used, 'day_complete' => false];
+        }
+        return ['day' => $day, 'rows_used' => $rows_used, 'day_complete' => true];
+    }
+
+    /** A resumed pair lookup returns its cursor and consumed budget as values. */
+    private function lookup_session_pair(array $source, array $engagement, array $lookup, array $files, Kiwi_Retention_Archive_Reader $reader, array $budget): array
     {
         global $wpdb;
-        if ($engagement['landing_key'] === '' || $engagement['session_token'] === '') { return true; }
+        $rows_used = 0;
+        if ($engagement['landing_key'] === '' || $engagement['session_token'] === '') {
+            return ['lookup' => $lookup, 'rows_used' => $rows_used, 'complete' => true];
+        }
         $date = substr($engagement['created_at'], 0, 10);
         while ($this->available($budget) && $lookup['origin'] <= count($files)) {
             $origin = (int) $lookup['origin'];
@@ -402,8 +437,11 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
                 continue;
             }
             foreach ($rows as $row) {
-                if (!$this->available($budget)) { return false; }
+                if (!$this->available($budget)) {
+                    return ['lookup' => $lookup, 'rows_used' => $rows_used, 'complete' => false];
+                }
                 $budget['rows']++;
+                $rows_used++;
                 $lookup['id'] = (int) $row['id'];
                 $lookup['cursor'] = ['id' => (int) $row['id'], 'created_at' => $row['created_at']];
                 $canonical = $this->canonical($source, $row, $origin, $files, $reader);
@@ -416,7 +454,7 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
                 }
             }
         }
-        return $lookup['origin'] > count($files);
+        return ['lookup' => $lookup, 'rows_used' => $rows_used, 'complete' => $lookup['origin'] > count($files)];
     }
 
     private function canonical(array $source, array $row, int $origin, array $files, Kiwi_Retention_Archive_Reader $reader): ?array
