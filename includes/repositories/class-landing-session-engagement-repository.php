@@ -155,54 +155,6 @@ class Kiwi_Landing_Session_Engagement_Repository
 
         $now = $this->current_time_mysql();
 
-        if (!is_array($row)) {
-            $initial_row = [
-                'created_at' => $now,
-                'updated_at' => $now,
-                'provider_key' => trim((string) ($context['provider_key'] ?? '')),
-                'service_key' => trim((string) ($context['service_key'] ?? '')),
-                'flow_key' => trim((string) ($context['flow_key'] ?? '')),
-                'pid' => $this->sanitize_pid((string) ($context['pid'] ?? '')),
-                'click_id' => $this->sanitize_click_id((string) ($context['click_id'] ?? '')),
-                'tksource' => $this->sanitize_source_value((string) ($context['tksource'] ?? '')),
-                'tkzone' => $this->sanitize_source_value((string) ($context['tkzone'] ?? '')),
-                'landing_key' => $landing_key,
-                'session_token' => $session_token,
-                'page_loaded_at' => null,
-                'first_cta_click_at' => null,
-                'last_cta_click_at' => null,
-                'cta_click_count' => 0,
-                'first_cta1_click_at' => null,
-                'last_cta1_click_at' => null,
-                'cta1_click_count' => 0,
-                'first_cta2_click_at' => null,
-                'last_cta2_click_at' => null,
-                'cta2_click_count' => 0,
-                'first_cta3_click_at' => null,
-                'last_cta3_click_at' => null,
-                'cta3_click_count' => 0,
-                'last_event_at' => $occurred_at,
-            ];
-            $initial_row = array_merge($initial_row, $this->normalize_ua_context($context));
-
-            if ($event_type === 'page_loaded') {
-                $initial_row['page_loaded_at'] = $occurred_at;
-            } elseif ($event_type === 'cta_click') {
-                $initial_row['first_cta_click_at'] = $occurred_at;
-                $initial_row['last_cta_click_at'] = $occurred_at;
-                $initial_row['cta_click_count'] = 1;
-                $this->apply_cta_step_initial_values($initial_row, $cta_step, $occurred_at);
-            }
-
-            $initial_row = array_merge($initial_row, $this->build_soft_flag_data($initial_row, $now));
-
-            if (!$this->insert_row($initial_row)) {
-                throw new RuntimeException('Landing engagement insert failed.');
-            }
-
-            return $this->get_by_landing_session($landing_key, $session_token) ?? [];
-        }
-
         $update_data = [
             'updated_at' => $now,
             'last_event_at' => $occurred_at,
@@ -624,17 +576,6 @@ class Kiwi_Landing_Session_Engagement_Repository
         $cta_step = strtolower(trim($cta_step));
 
         return in_array($cta_step, self::CTA_STEPS, true) ? $cta_step : '';
-    }
-
-    private function apply_cta_step_initial_values(array &$row, string $cta_step, string $occurred_at): void
-    {
-        if ($cta_step === '') {
-            return;
-        }
-
-        $row['first_' . $cta_step . '_click_at'] = $occurred_at;
-        $row['last_' . $cta_step . '_click_at'] = $occurred_at;
-        $row[$cta_step . '_click_count'] = 1;
     }
 
     private function apply_cta_step_update_values(array &$update_data, array $row, string $cta_step, string $occurred_at): void
