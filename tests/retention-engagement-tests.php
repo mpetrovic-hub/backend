@@ -813,6 +813,10 @@ function et_safety_pause_scenarios(): void
     $fixture['worker']->run_worker('landing_session_engagements');
     $before = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
     $path = $before['archive_db_path'];
+    $sqlite = new PDO('sqlite:' . $path);
+    $receipt_before = $sqlite->query('SELECT * FROM archive_batch_rows ORDER BY archive_batch_id, source_pk')->fetchAll(PDO::FETCH_ASSOC);
+    $sqlite = null;
+    et_check(count($receipt_before) === 1, 'Controlled gate test starts from one committed SQLite receipt');
     $fixture['archive']->after_commit = null;
     $injected = false;
     $fixture['archive']->after_receipt_readback = function (string $read_path) use ($path, &$injected) {
@@ -832,8 +836,12 @@ function et_safety_pause_scenarios(): void
     et_check(Kiwi_Retention_Archive_Write_Block::clear($path . '.lock'),
         'Controlled local corruption marker clears for receipt retry');
     $run = et_finish($fixture);
+    $sqlite = new PDO('sqlite:' . $path);
+    $receipt_after = $sqlite->query('SELECT * FROM archive_batch_rows ORDER BY archive_batch_id, source_pk')->fetchAll(PDO::FETCH_ASSOC);
+    $sqlite = null;
     et_check($run['status'] === 'completed' && (int) $run['archived_rows'] === 1
-        && (int) $run['deleted_rows'] === 1 && (int) $run['delete_last_primary_key'] === 1,
+        && (int) $run['deleted_rows'] === 1 && (int) $run['delete_last_primary_key'] === 1
+        && $receipt_after === $receipt_before,
         'Original committed receipt resumes after the controlled gate clears');
 
     $config = new Engagement_Test_Config(); $config->dry_run = false; $config->row_limit = 1;
