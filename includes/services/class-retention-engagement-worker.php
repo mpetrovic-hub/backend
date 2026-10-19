@@ -525,39 +525,23 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
             $new_pending = false;
             $this->check_safety($path);
             // This also discovers a receipt committed before its audit cursor.
-            $receipt_ids = is_file($path) ? $this->archive_service->fetch_archived_primary_key_batch(
-                $source, $path, $run['archive_batch_id'], (int) ($run['delete_last_primary_key'] ?? 0), $this->page_limit($budget)
-            ) : [];
-            if ($receipt_ids) {
-                $pending_ids = $state['pending_batch']['receipt_ids'] ?? [];
-                if ($receipt_ids !== array_slice($pending_ids, 0, count($receipt_ids))) {
-                    throw new RuntimeException('engagement_receipt_checkpoint_mismatch');
-                }
-                $snapshots = $this->archive_service->fetch_verified_snapshots($source, $path, $run['archive_batch_id'], $receipt_ids);
-                $budget['rows'] += count($receipt_ids);
-                $this->delete_snapshots($source, $run, $state, $snapshots, $path);
+            $receipt = $this->load_verified_receipt($source, $run, $state, $path, $budget);
+            if ($receipt !== null) {
+                $budget['rows'] += $receipt['rows_used'];
+                $this->delete_snapshots($source, $run, $state, $receipt['snapshots'], $path);
                 continue;
             }
             if (!isset($state['pending_batch'])) {
-                $rows = $this->source_page($source, (int) $state['archive_scan_cursor'], (int) $run['target_max_primary_key'], $this->page_limit($budget));
-                if (!$rows) {
+                $page = $this->build_pending_page($source, $run, $state, $budget);
+                if ($page === null) {
                     $state['phase'] = 'after';
                     $state['after_cursor'] = 0;
                     $state['after_target'] = (int) $wpdb->get_var('SELECT id FROM ' . $source['source_table'] . ' ORDER BY id DESC LIMIT 1');
                     $this->assert_query_ok();
                     return;
                 }
-                $pending = ['through' => (int) $state['archive_scan_cursor'], 'hashes' => [],
-                    'receipt_ids' => null, 'session_deferred' => 0, 'changed_deferred' => 0, 'already_absent' => 0];
-                foreach ($rows as $row) {
-                    if (!$this->available($budget)) { break; }
-                    $budget['rows']++;
-                    $pending['through'] = (int) $row['id'];
-                    if (strcmp($row['updated_at'], $run['cutoff_value']) >= 0) { continue; }
-                    if (!empty($row['_retention_live_session'])) { $pending['session_deferred']++; continue; }
-                    $pending['hashes'][(int) $row['id']] = hash('sha256', json_encode(Kiwi_Retention_Archive_Reader::snapshot($source, $row), JSON_THROW_ON_ERROR));
-                }
-                $state['pending_batch'] = $pending;
+                $state['pending_batch'] = $page['pending'];
+                $budget['rows'] += $page['rows_used'];
                 $new_pending = true;
                 // Bound pending IDs and hashes to this <=500-row page. No raw
                 // subscriber/session values are stored in the checkpoint.
@@ -569,34 +553,79 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
             $ids = array_slice(array_keys($state['pending_batch']['hashes']), 0,
                 $new_pending ? 500 : $this->page_limit($budget));
             if (!$new_pending) { $budget['rows'] += count($ids); }
-            $reader = new Kiwi_Retention_Archive_Reader($this->archive_service, $this->archive_lock, $this->corruption_safety_gate);
-            try {
-                foreach ($ids as $id) { $reader->copies($source, (int) $id, $handle); }
-            } finally { $reader->close(); }
-            $this->check_safety($path);
-            // Re-read eligibility immediately before committing the snapshots.
-            $fresh = [];
-            foreach ($ids as $id) {
-                $signature = $state['pending_batch']['hashes'][$id];
-                $current = $this->live_by_id($source, (int) $id);
-                if ($current === null) { $state['pending_batch']['already_absent']++; }
-                elseif (hash('sha256', json_encode(Kiwi_Retention_Archive_Reader::snapshot($source, $current), JSON_THROW_ON_ERROR)) !== $signature
-                    || strcmp($current['updated_at'], $run['cutoff_value']) >= 0
-                ) { $state['pending_batch']['changed_deferred']++; }
-                elseif ($this->live_session_exists($current)) { $state['pending_batch']['session_deferred']++; }
-                else { $fresh[] = $current; continue; }
-                unset($state['pending_batch']['hashes'][$id]);
-            }
-            $state['pending_batch']['receipt_ids'] = array_map('intval', array_column($fresh, 'id'));
+            $checked = $this->recheck_pending_rows($source, $run, $state['pending_batch'], $ids, $path, $handle);
+            $state['pending_batch'] = $checked['pending'];
+            $fresh = $checked['fresh'];
             $this->save($run, $state);
             if ($fresh) {
                 $snapshots = $this->archive_service->archive_snapshot_batch($source, $fresh, $run['cutoff_value'], $run['archive_batch_id'], $path);
                 $this->delete_snapshots($source, $run, $state, $snapshots, $path);
             } else {
-                if (!$state['pending_batch']['hashes']) { $this->finish_pending_page($state); }
+                if (!$state['pending_batch']['hashes']) { $state = $this->completed_pending_page($state); }
                 $this->save($run, $state);
             }
         }
+    }
+
+    /** Verify a committed receipt against the saved pending IDs before any new scan. */
+    private function load_verified_receipt(array $source, array $run, array $state, string $path, array $budget): ?array
+    {
+        $receipt_ids = is_file($path) ? $this->archive_service->fetch_archived_primary_key_batch(
+            $source, $path, $run['archive_batch_id'], (int) ($run['delete_last_primary_key'] ?? 0), $this->page_limit($budget)
+        ) : [];
+        if (!$receipt_ids) { return null; }
+        $pending_ids = $state['pending_batch']['receipt_ids'] ?? [];
+        if ($receipt_ids !== array_slice($pending_ids, 0, count($receipt_ids))) {
+            throw new RuntimeException('engagement_receipt_checkpoint_mismatch');
+        }
+        return ['snapshots' => $this->archive_service->fetch_verified_snapshots($source, $path, $run['archive_batch_id'], $receipt_ids),
+            'rows_used' => count($receipt_ids)];
+    }
+
+    /** Build a bounded pending page without saving the checkpoint. */
+    private function build_pending_page(array $source, array $run, array $state, array $budget): ?array
+    {
+        $rows = $this->source_page($source, (int) $state['archive_scan_cursor'], (int) $run['target_max_primary_key'], $this->page_limit($budget));
+        if (!$rows) { return null; }
+        $pending = ['through' => (int) $state['archive_scan_cursor'], 'hashes' => [],
+            'receipt_ids' => null, 'session_deferred' => 0, 'changed_deferred' => 0, 'already_absent' => 0];
+        $rows_used = 0;
+        foreach ($rows as $row) {
+            if (!$this->available($budget)) { break; }
+            $budget['rows']++;
+            $rows_used++;
+            $pending['through'] = (int) $row['id'];
+            if (strcmp($row['updated_at'], $run['cutoff_value']) >= 0) { continue; }
+            if (!empty($row['_retention_live_session'])) { $pending['session_deferred']++; continue; }
+            $pending['hashes'][(int) $row['id']] = hash('sha256', json_encode(Kiwi_Retention_Archive_Reader::snapshot($source, $row), JSON_THROW_ON_ERROR));
+        }
+        return ['pending' => $pending, 'rows_used' => $rows_used];
+    }
+
+    /** Recheck archive copies and current eligibility; the caller owns the save. */
+    private function recheck_pending_rows(array $source, array $run, array $pending, array $ids, string $path,
+        Kiwi_Retention_Archive_Lock_Handle $handle): array
+    {
+        $reader = new Kiwi_Retention_Archive_Reader($this->archive_service, $this->archive_lock, $this->corruption_safety_gate);
+        try {
+            foreach ($ids as $id) { $reader->copies($source, (int) $id, $handle); }
+        } finally { $reader->close(); }
+        $this->check_safety($path);
+        // Re-read eligibility immediately before committing the snapshots.
+        $fresh = [];
+        foreach ($ids as $id) {
+            $signature = $pending['hashes'][$id];
+            $current = $this->live_by_id($source, (int) $id);
+            if ($current === null) { $pending['already_absent']++; }
+            elseif (hash('sha256', json_encode(Kiwi_Retention_Archive_Reader::snapshot($source, $current), JSON_THROW_ON_ERROR)) !== $signature
+                || strcmp($current['updated_at'], $run['cutoff_value']) >= 0
+            ) { $pending['changed_deferred']++; }
+            elseif ($this->live_session_exists($current)) { $pending['session_deferred']++; }
+            else { $fresh[] = $current; continue; }
+            unset($pending['hashes'][$id]);
+        }
+        $pending['receipt_ids'] = array_map('intval', array_column($fresh, 'id'));
+        return ['pending' => $pending, 'fresh' => $fresh];
     }
 
     private function delete_snapshots(array $source, array &$run, array &$state, array $snapshots, string $path): void
@@ -658,7 +687,7 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
             $next_state['pending_batch']['receipt_ids'] = array_slice($next_state['pending_batch']['receipt_ids'], count($handled_ids));
             foreach ($handled_ids as $id) { unset($next_state['pending_batch']['hashes'][$id]); }
             if (!$next_state['pending_batch']['receipt_ids'] && !$next_state['pending_batch']['hashes']) {
-                $this->finish_pending_page($next_state);
+                $next_state = $this->completed_pending_page($next_state);
             }
             // MySQL delete and its audit cursor commit atomically. An audit
             // failure rolls back deletes; the SQLite receipt remains resumable.
@@ -688,13 +717,14 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
         }
     }
 
-    private function finish_pending_page(array &$state): void
+    private function completed_pending_page(array $state): array
     {
         foreach (['session_deferred', 'changed_deferred', 'already_absent'] as $count) {
             $state['counts'][$count] += $state['pending_batch'][$count];
         }
         $state['archive_scan_cursor'] = $state['pending_batch']['through'];
         unset($state['pending_batch']);
+        return $state;
     }
 
     private function dry_eligibility(array $source, array &$run, array &$state, array &$budget): void
