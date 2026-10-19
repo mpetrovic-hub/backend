@@ -176,18 +176,30 @@ final class Engagement_Test_Events extends Kiwi_Operational_Event_Service
 }
 final class Engagement_Test_Evaluator implements Kiwi_Landing_Session_Engagement_Evaluator_Interface
 {
-    public function evaluate(array $row): array { return ['is_soft_flag' => 0]; }
+    private $result;
+    public function __construct(array $result = ['is_soft_flag' => 0]) { $this->result = $result; }
+    public function evaluate(array $row): array { return $this->result; }
 }
 class Engagement_Test_Archive extends Kiwi_Retention_Sqlite_Archive_Service
 {
     public $before_commit;
     public $after_commit;
+    public $after_receipt_readback;
     public function archive_snapshot_batch(array $source, array $rows, string $cutoff, string $batch, string $path): array
     {
         if ($this->before_commit !== null) { ($this->before_commit)(); }
         $result = parent::archive_snapshot_batch($source, $rows, $cutoff, $batch, $path);
         if ($this->after_commit !== null) { ($this->after_commit)($result); }
         return $result;
+    }
+    public function fetch_verified_snapshots(array $source, string $path, string $batch, array $ids): array
+    {
+        $snapshots = parent::fetch_verified_snapshots($source, $path, $batch, $ids);
+        if ($this->after_receipt_readback !== null) {
+            $callback = $this->after_receipt_readback; $this->after_receipt_readback = null;
+            $callback($path);
+        }
+        return $snapshots;
     }
 }
 final class Engagement_Test_Worker extends Kiwi_Retention_Engagement_Worker
@@ -287,6 +299,10 @@ function et_fixture(Engagement_Test_Config $config): array
     (new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository($config))->create_table();
     $config->root = sys_get_temp_dir() . '/codex-retention-72-' . bin2hex(random_bytes(8));
     mkdir($config->root . '/sqlite', 0700, true);
+    return et_components($config);
+}
+function et_components(Engagement_Test_Config $config): array
+{
     $events = new Engagement_Test_Events();
     $lock = new Kiwi_Retention_Archive_Lock();
     $repo = new Engagement_Test_Run_Repository();
@@ -420,6 +436,25 @@ function et_spawn_writer(string $database): array
     stream_set_blocking($pipes[1], false); stream_set_blocking($pipes[2], false);
     return ['process' => $process, 'out' => $pipes[1], 'err' => $pipes[2]];
 }
+function et_resume_in_new_process(string $database, string $root): void
+{
+    global $wpdb;
+    $parent_connection = (int) $wpdb->pdo->query('SELECT CONNECTION_ID()')->fetchColumn();
+    $environment = getenv();
+    $environment['KIWI_RETENTION_TEST_DATABASE'] = $database;
+    $environment['KIWI_RETENTION_TEST_ARCHIVE_ROOT'] = $root;
+    $process = proc_open([PHP_BINARY, '-c', php_ini_loaded_file(), __FILE__, '--resume-existing'],
+        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
+    if (!is_resource($process)) { throw new RuntimeException('fixture_resume_spawn_failed'); }
+    fclose($pipes[0]);
+    $output = stream_get_contents($pipes[1]); $error = stream_get_contents($pipes[2]);
+    fclose($pipes[1]); fclose($pipes[2]);
+    $exit = proc_close($process);
+    et_check($exit === 0 && $error === ''
+        && preg_match('/^resume_complete pid=(\d+) connection=(\d+)$/m', $output, $match) === 1
+        && (int) $match[1] !== getmypid() && (int) $match[2] !== $parent_connection,
+        'Resume uses a new PHP process and a new MariaDB connection');
+}
 function et_wait_lock_waits(PDO $pdo, int $expected): bool
 {
     $deadline = microtime(true) + 4;
@@ -485,6 +520,354 @@ function et_finish(array $fixture, int $calls = 200): array
     throw new RuntimeException('fixture_worker_did_not_finish');
 }
 function et_state(array $run): array { return json_decode($run['gate_results_json'], true, 512, JSON_THROW_ON_ERROR); }
+
+function et_fields(array $row, array $expected, string $label): void
+{
+    foreach ($expected as $field => $value) {
+        et_check(array_key_exists($field, $row)
+            && ($value === null ? $row[$field] === null : (string) $row[$field] === (string) $value),
+            $label . ': ' . $field);
+    }
+}
+
+function et_writer_field_scenario(): void
+{
+    global $wpdb;
+    $fixture = et_fixture(new Engagement_Test_Config());
+    $table = $fixture['registry']->get('landing_session_engagements')['source_table'];
+    $writer = new Kiwi_Landing_Session_Engagement_Repository(new Engagement_Test_Evaluator([
+        'is_soft_flag' => 1, 'soft_flag_reason' => 'test-rule', 'soft_flag_rule_key' => 'rule-1',
+    ]));
+    $context = ['landing_key' => 'writer-landing', 'session_token' => 'page-first',
+        'provider_key' => 'dimoco', 'service_key' => 'service-one', 'flow_key' => 'click',
+        'pid' => '106', 'click_id' => 'click-123', 'tksource' => 'source-a', 'tkzone' => 'zone-a',
+        'ua_ch_supported' => 1, 'ua_ch_mobile' => 1, 'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '14', 'ua_ch_model' => 'Test Phone',
+        'ua_ch_brands' => 'Brand A', 'ua_ch_full_version_list' => 'Brand A 14',
+        'user_agent' => 'Fixture Browser'];
+    $GLOBALS['engagement_test_now'] = '2026-10-12 12:00:00';
+    $first = $writer->upsert_event($context, 'page_loaded', '2026-07-06 10:00:00');
+    $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $table . ' WHERE id=%d', $first['id']));
+    et_fields($row, [
+        'created_at' => '2026-10-12 12:00:00', 'updated_at' => '2026-10-12 12:00:00',
+        'last_event_at' => '2026-07-06 10:00:00', 'landing_key' => 'writer-landing',
+        'session_token' => 'page-first', 'page_loaded_at' => '2026-07-06 10:00:00',
+        'first_cta_click_at' => null, 'last_cta_click_at' => null, 'cta_click_count' => 0,
+        'first_cta1_click_at' => null, 'last_cta1_click_at' => null, 'cta1_click_count' => 0,
+        'first_cta2_click_at' => null, 'last_cta2_click_at' => null, 'cta2_click_count' => 0,
+        'first_cta3_click_at' => null, 'last_cta3_click_at' => null, 'cta3_click_count' => 0,
+        'provider_key' => 'dimoco', 'service_key' => 'service-one', 'flow_key' => 'click',
+        'pid' => '106', 'click_id' => 'click-123', 'tksource' => 'source-a', 'tkzone' => 'zone-a',
+        'ua_ch_supported' => 1, 'ua_ch_mobile' => 1, 'ua_ch_platform' => 'Android',
+        'ua_ch_platform_version' => '14', 'ua_ch_model' => 'Test Phone',
+        'ua_ch_brands' => 'Brand A', 'ua_ch_full_version_list' => 'Brand A 14',
+        'user_agent' => 'Fixture Browser', 'is_soft_flag' => 1,
+        'soft_flag_reason' => 'test-rule', 'soft_flag_rule_key' => 'rule-1',
+        'soft_flag_evaluated_at' => '2026-10-12 12:00:00',
+    ], 'First real Page Load stores its complete contract');
+
+    $GLOBALS['engagement_test_now'] = '2026-10-12 13:00:00';
+    $writer->upsert_event(array_merge($context, ['service_key' => 'replacement',
+        'ua_ch_supported' => 0, 'ua_ch_mobile' => 0, 'user_agent' => 'Replacement Browser']),
+        'page_loaded', '2026-07-06 11:00:00');
+    $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $table . ' WHERE id=%d', $first['id']));
+    et_fields($row, ['created_at' => '2026-10-12 12:00:00', 'updated_at' => '2026-10-12 13:00:00',
+        'last_event_at' => '2026-07-06 11:00:00', 'page_loaded_at' => '2026-07-06 10:00:00',
+        'service_key' => 'service-one', 'ua_ch_supported' => 1, 'ua_ch_mobile' => 1,
+        'user_agent' => 'Fixture Browser', 'cta_click_count' => 0],
+        'Repeated Page Load retains first and non-empty context');
+
+    $GLOBALS['engagement_test_now'] = '2026-10-12 14:00:00';
+    $writer->upsert_event($context + ['cta_step' => 'cta1'], 'cta_click', '2026-07-06 12:00:00');
+    $writer->upsert_event($context + ['cta_step' => 'cta1'], 'cta_click', '2026-07-06 12:05:00');
+    $writer->upsert_event($context + ['cta_step' => 'cta2'], 'cta_click', '2026-07-06 12:10:00');
+    $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $table . ' WHERE id=%d', $first['id']));
+    et_fields($row, ['updated_at' => '2026-10-12 14:00:00',
+        'last_event_at' => '2026-07-06 12:10:00', 'page_loaded_at' => '2026-07-06 10:00:00',
+        'first_cta_click_at' => '2026-07-06 12:00:00', 'last_cta_click_at' => '2026-07-06 12:10:00',
+        'cta_click_count' => 3, 'first_cta1_click_at' => '2026-07-06 12:00:00',
+        'last_cta1_click_at' => '2026-07-06 12:05:00', 'cta1_click_count' => 2,
+        'first_cta2_click_at' => '2026-07-06 12:10:00',
+        'last_cta2_click_at' => '2026-07-06 12:10:00', 'cta2_click_count' => 1,
+        'first_cta3_click_at' => null, 'cta3_click_count' => 0],
+        'Repeated CTA writes first, last and step counters');
+
+    $GLOBALS['engagement_test_now'] = '2026-10-12 15:00:00';
+    $cta_first = $writer->upsert_event(array_merge($context, ['session_token' => 'cta-first',
+        'cta_step' => 'cta3']), 'cta_click', '2026-07-06 15:05:00');
+    $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $table . ' WHERE id=%d', $cta_first['id']));
+    et_fields($row, ['created_at' => '2026-10-12 15:00:00', 'updated_at' => '2026-10-12 15:00:00',
+        'last_event_at' => '2026-07-06 15:05:00', 'page_loaded_at' => null,
+        'first_cta_click_at' => '2026-07-06 15:05:00', 'last_cta_click_at' => '2026-07-06 15:05:00',
+        'cta_click_count' => 1, 'cta1_click_count' => 0, 'cta2_click_count' => 0,
+        'first_cta3_click_at' => '2026-07-06 15:05:00',
+        'last_cta3_click_at' => '2026-07-06 15:05:00', 'cta3_click_count' => 1,
+        'user_agent' => 'Fixture Browser', 'is_soft_flag' => 1,
+        'soft_flag_evaluated_at' => '2026-10-12 15:00:00'],
+        'Real CTA-first creates its own complete row');
+
+    $wpdb->pdo->exec('DELETE FROM ' . $table . ' WHERE id=' . (int) $first['id']);
+    $GLOBALS['engagement_test_now'] = '2026-10-12 16:00:00';
+    $recreated = $writer->upsert_event(['landing_key' => 'writer-landing', 'session_token' => 'page-first'],
+        'page_loaded', '2026-07-06 16:05:00');
+    $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $table . ' WHERE id=%d', $recreated['id']));
+    et_check((int) $recreated['id'] !== (int) $first['id'], 'Cleanup recreation obtains a new row identity');
+    et_fields($row, ['created_at' => '2026-10-12 16:00:00', 'updated_at' => '2026-10-12 16:00:00',
+        'last_event_at' => '2026-07-06 16:05:00', 'page_loaded_at' => '2026-07-06 16:05:00',
+        'first_cta_click_at' => null, 'cta_click_count' => 0, 'cta1_click_count' => 0,
+        'provider_key' => '', 'service_key' => '', 'user_agent' => '',
+        'ua_ch_brands' => '', 'ua_ch_full_version_list' => '', 'is_soft_flag' => 1,
+        'soft_flag_evaluated_at' => '2026-10-12 16:00:00'],
+        'Page Load after cleanup starts with fresh field values');
+    $GLOBALS['engagement_test_now'] = '2026-10-12 12:00:00';
+}
+
+function et_process_resume_scenario(string $database, string $boundary): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config);
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    if ($boundary === 'receipt') {
+        $fixture['archive']->after_commit = function () { throw new RuntimeException('controlled_after_receipt_commit'); };
+    } else {
+        $wpdb->fail_after_reads = true;
+    }
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $fixture['worker']->run_worker('landing_session_engagements');
+    $open = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    $state = et_state($open);
+    if ($boundary === 'receipt') {
+        $sqlite = new PDO('sqlite:' . $open['archive_db_path']);
+        $receipt_count = (int) $sqlite->query('SELECT COUNT(*) FROM archive_batch_rows')->fetchColumn();
+        $sqlite = null;
+        et_check($open['status'] === 'partial' && $state['phase'] === 'archive'
+            && $receipt_count === 1 && isset($state['pending_batch']['receipt_ids'])
+            && (int) $open['deleted_rows'] === 0
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+            'Receipt is durable while MySQL row and delete cursor remain untouched before restart');
+        $fixture['archive']->after_commit = null;
+    } else {
+        et_check($open['status'] === 'partial' && $state['phase'] === 'archive'
+            && (int) $open['deleted_rows'] === 1 && (int) $open['delete_last_primary_key'] === 1
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 0,
+            'Committed MySQL delete and audit cursor survive interrupted after-count with the prior saved phase');
+        $wpdb->fail_after_reads = false;
+    }
+    et_resume_in_new_process($database, $config->root);
+    $run = $fixture['repo']->find_run_by_id((int) $open['id']);
+    et_check($run['status'] === 'completed' && $run['finished_at'] !== null
+        && (int) $run['archived_rows'] === 1 && (int) $run['deleted_rows'] === 1
+        && (int) $run['delete_last_primary_key'] === 1
+        && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 0,
+        'New-process ' . $boundary . ' resume finishes once without recounting or cursor loss');
+}
+
+function et_mid_day_lookup_scenario(): void
+{
+    $config = new Engagement_Test_Config(); $config->row_limit = 1;
+    $fixture = et_fixture($config);
+    $source = $fixture['registry']->get('landing_session_engagements');
+    $sessions = $fixture['registry']->get('landing_page_sessions');
+    et_full_row($source, et_engagement(1));
+    et_full_row($sessions, et_session(11, 1));
+    et_full_row($sessions, et_session(12, 1));
+    et_summary($config, '2026-07-06', 1, 2);
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $paused = null;
+    for ($attempt = 0; $attempt < 20; $attempt++) {
+        $fixture['worker']->run_worker('landing_session_engagements');
+        $paused = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+        $state = et_state($paused);
+        if (($state['day']['lookup']['id'] ?? 0) === 11) { break; }
+    }
+    et_check($state['phase'] === 'coverage' && $state['day']['stage'] === 'raw'
+        && $state['day']['lookup']['id'] === 11 && $state['day']['lookup']['main']
+        && $state['last_worker_rows'] <= 1,
+        'One-row budget persists a mid-day Session lookup and first matching cursor');
+    $signature = $state['day']['lookup']['signature'];
+    $fixture['worker'] = new Engagement_Test_Worker($config, $fixture['registry'], $fixture['repo'],
+        $fixture['archive'], $fixture['events'], $fixture['lock'], $fixture['gate']);
+    $fixture['worker']->run_worker('landing_session_engagements');
+    $continued = et_state($fixture['repo']->find_open_run_for_source('landing_session_engagements'));
+    et_check(($continued['day']['lookup']['id'] ?? 0) === 12
+        && $continued['day']['lookup']['signature'] === $signature
+        && $continued['last_worker_rows'] <= 1,
+        'Fresh worker continues the saved lookup cursor without spending a second row budget');
+    $run = et_finish($fixture, 80);
+    $modes = et_state($run)['daily_results']['2026-07-06']['modes'];
+    et_check($run['status'] === 'completed' && $run['gate_status'] === 'passed'
+        && $modes['main']['metrics']['page_loaded_sessions']['raw'] === 1
+        && $modes['tkzone']['metrics']['cta1_click_events']['raw'] === 2,
+        'Mid-day continuation counts the engagement pair once after both matching Sessions');
+}
+
+function et_live_corrupt_receipt_scenario(): void
+{
+    global $wpdb;
+    $fixture = et_fixture(new Engagement_Test_Config());
+    $source = $fixture['registry']->get('landing_session_engagements');
+    $live = et_full_row($source, et_engagement(1));
+    $path = $fixture['archive']->resolve_archive_db_path();
+    $fixture['archive']->archive_snapshot_batch($source, [$live], '2026-09-28 00:00:00', 'live-bad-receipt', $path);
+    et_archive_sessions($fixture, [et_session(11, 1)]);
+    et_summary($fixture['config'], '2026-07-06', 1, 2);
+    $sqlite = new PDO('sqlite:' . $path);
+    $sqlite->exec("DELETE FROM archive_batch_rows WHERE archive_batch_id='live-bad-receipt' AND source_pk=1");
+    $sqlite = null;
+    $run = et_finish($fixture);
+    et_check($run['status'] === 'failed' && $run['error_code'] === 'archive_reader_receipt_missing'
+        && (int) $run['archived_rows'] === 0 && (int) $run['deleted_rows'] === 0
+        && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+        'Live Engagement does not hide a corrupt current archive receipt');
+}
+
+function et_error_outcome_scenarios(): void
+{
+    global $wpdb;
+    $fixture = et_fixture(new Engagement_Test_Config());
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1));
+    $run = et_finish($fixture);
+    et_check($run['status'] === 'skipped' && $run['gate_status'] === 'failed'
+        && $run['error_code'] === 'coverage_gate_failed' && $run['finished_at'] !== null
+        && (int) $run['archived_rows'] === 0 && (int) $run['deleted_rows'] === 0,
+        'Business Main/TK coverage miss is terminal skipped without archive or delete');
+
+    $fixture = et_fixture(new Engagement_Test_Config());
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1));
+    et_archive_sessions($fixture, [et_session(11, 1)]);
+    et_summary($fixture['config'], '2026-07-06', 1, 2);
+    $wpdb->fail_summary_reads = true;
+    $run = et_finish($fixture);
+    $wpdb->fail_summary_reads = false;
+    et_check($run['status'] === 'failed' && $run['worker_phase'] === 'failed'
+        && $run['error_code'] === 'engagement_query_failed' && $run['finished_at'] !== null
+        && (int) $run['archived_rows'] === 0 && (int) $run['deleted_rows'] === 0,
+        'Technical pre-gate query failure is terminal failed without archive or delete');
+
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config);
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $fixture['archive']->after_commit = function () { throw new RuntimeException('controlled_after_archive'); };
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $result = $fixture['worker']->run_worker('landing_session_engagements');
+    $open = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    et_check($result['schedule_worker'] && $open['status'] === 'partial'
+        && $open['finished_at'] === null && et_state($open)['phase'] === 'archive'
+        && (int) $open['deleted_rows'] === 0
+        && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+        'Post-receipt archive interruption remains open partial for the same run');
+    $fixture['archive']->after_commit = null;
+    $run = et_finish($fixture);
+    et_check($run['status'] === 'completed' && $run['run_id'] === $open['run_id']
+        && (int) $run['deleted_rows'] === 1,
+        'Partial archive interruption recovers within the same audit run');
+
+    $fixture = et_fixture(new Engagement_Test_Config());
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1));
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $open = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    $wpdb->pdo->exec('UPDATE t72_kiwi_retention_cleanup_runs SET status=\'blocked\', error_code=\'fixture_blocked\' WHERE id=' . (int) $open['id']);
+    $before = $fixture['repo']->find_run_by_id((int) $open['id']);
+    $result = $fixture['worker']->run_worker('landing_session_engagements');
+    et_check($result['status'] === 'blocked' && $result['error_code'] === 'fixture_blocked'
+        && $fixture['repo']->find_run_by_id((int) $open['id']) === $before,
+        'Existing blocked run is returned unchanged rather than newly finalized or resumed');
+}
+
+function et_invalid_checkpoint_scenario(): void
+{
+    global $wpdb;
+    $fixture = et_fixture(new Engagement_Test_Config());
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1));
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $open = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    $wpdb->pdo->exec('UPDATE t72_kiwi_retention_cleanup_runs SET gate_results_json='
+        . $wpdb->pdo->quote('{') . ' WHERE id=' . (int) $open['id']);
+    $before = $fixture['repo']->find_run_by_id((int) $open['id']);
+    $errors = [];
+    for ($attempt = 0; $attempt < 2; $attempt++) {
+        try { $fixture['worker']->run_worker('landing_session_engagements'); }
+        catch (RuntimeException $error) { $errors[] = $error->getMessage(); }
+    }
+    et_check($errors === ['engagement_checkpoint_invalid', 'engagement_checkpoint_invalid']
+        && $fixture['repo']->find_run_by_id((int) $open['id']) === $before,
+        'Invalid saved checkpoint currently escapes twice without a guaranteed status rewrite; finally frees the worker lock');
+}
+
+function et_safety_pause_scenarios(): void
+{
+    global $wpdb;
+    $config = new Engagement_Test_Config(); $config->dry_run = false;
+    $fixture = et_fixture($config);
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $fixture['archive']->after_commit = function () { throw new RuntimeException('controlled_after_receipt_commit'); };
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $fixture['worker']->run_worker('landing_session_engagements');
+    $before = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+    $path = $before['archive_db_path'];
+    $fixture['archive']->after_commit = null;
+    $injected = false;
+    $fixture['archive']->after_receipt_readback = function (string $read_path) use ($path, &$injected) {
+        if ($read_path !== $path || !Kiwi_Retention_Archive_Write_Block::persist($path . '.lock')) {
+            throw new RuntimeException('fixture_corruption_gate_injection_failed');
+        }
+        $injected = true;
+    };
+    $fixture['worker']->run_worker('landing_session_engagements');
+    $paused = $fixture['repo']->find_run_by_id((int) $before['id']);
+    et_check($injected && $paused['status'] === 'partial'
+        && $paused['error_code'] === 'engagement_corruption_gate_blocked'
+        && (int) $paused['delete_last_primary_key'] === (int) $before['delete_last_primary_key']
+        && (int) $paused['deleted_rows'] === 0
+        && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+        'Corruption gate injected after receipt readback prevents MySQL delete and cursor advance');
+    et_check(Kiwi_Retention_Archive_Write_Block::clear($path . '.lock'),
+        'Controlled local corruption marker clears for receipt retry');
+    $run = et_finish($fixture);
+    et_check($run['status'] === 'completed' && (int) $run['archived_rows'] === 1
+        && (int) $run['deleted_rows'] === 1 && (int) $run['delete_last_primary_key'] === 1,
+        'Original committed receipt resumes after the controlled gate clears');
+
+    $config = new Engagement_Test_Config(); $config->dry_run = false; $config->row_limit = 1;
+    $fixture = et_fixture($config);
+    $source = $fixture['registry']->get('landing_session_engagements');
+    et_full_row($source, et_engagement(1, '2026-04-23 12:00:00'));
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $path = $fixture['archive']->resolve_archive_db_path();
+    $held = $fixture['lock']->acquire_for_archive($path);
+    et_check(!empty($held['success']) && !empty($held['acquired']), 'Fixture holds the actual generation lock');
+    try {
+        $result = [];
+        for ($attempt = 0; $attempt < 10; $attempt++) {
+            $result = $fixture['worker']->run_worker('landing_session_engagements');
+            if (($result['error_code'] ?? '') === 'archive_lock_active') { break; }
+        }
+        $before = $fixture['repo']->find_open_run_for_source('landing_session_engagements');
+        et_check(($result['error_code'] ?? '') === 'archive_lock_active' && $before['finished_at'] === null
+            && (int) $before['deleted_rows'] === 0
+            && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+            'Unavailable generation lock pauses archive work without deleting the MySQL row');
+        $result = $fixture['worker']->run_worker('landing_session_engagements');
+        et_check(($result['error_code'] ?? '') === 'archive_lock_active'
+            && $fixture['repo']->find_run_by_id((int) $before['id']) === $before,
+            'Repeated lock deferral does not overwrite the stored audit checkpoint');
+    } finally { $fixture['lock']->release($held['handle'] ?? null); }
+    $run = et_finish($fixture, 80);
+    et_check($run['status'] === 'completed' && (int) $run['deleted_rows'] === 1,
+        'Worker continues after generation lock release');
+    $free = $fixture['lock']->acquire_for_archive($path);
+    et_check(!empty($free['success']) && !empty($free['acquired']),
+        'Generation lock is released after worker completion');
+    $fixture['lock']->release($free['handle'] ?? null);
+}
 
 function et_recovery_scenarios(PDO $other): void
 {
@@ -1148,6 +1531,26 @@ if (($argv[1] ?? '') === '--writer') {
     echo "writer_complete\n";
     exit;
 }
+if (($argv[1] ?? '') === '--resume-existing') {
+    $database = getenv('KIWI_RETENTION_TEST_DATABASE');
+    $root = getenv('KIWI_RETENTION_TEST_ARCHIVE_ROOT');
+    if (preg_match('/^codex_test_72_[a-z0-9_]+$/D', (string) $database) !== 1
+        || !is_string($root) || !is_dir($root . '/sqlite')) {
+        throw new RuntimeException('Invalid private restart fixture.');
+    }
+    $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
+    $config = new Engagement_Test_Config(); $config->dry_run = false; $config->root = $root;
+    $fixture = et_components($config);
+    for ($attempt = 0; $attempt < 40; $attempt++) {
+        $fixture['worker']->run_worker('landing_session_engagements');
+        if ($fixture['repo']->find_open_run_for_source('landing_session_engagements') === null) {
+            echo 'resume_complete pid=', getmypid(), ' connection=',
+                $wpdb->pdo->query('SELECT CONNECTION_ID()')->fetchColumn(), "\n";
+            exit;
+        }
+    }
+    throw new RuntimeException('Restarted worker did not finish.');
+}
 
 $database = 'codex_test_72_' . bin2hex(random_bytes(8));
 $admin = et_connection($settings);
@@ -1155,6 +1558,25 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--baseline=writer', $argv, true)) {
+        et_writer_field_scenario(); echo 'WRITER_BASELINE_PASSED ', $GLOBALS['et_checks'], "\n"; return;
+    }
+    foreach (['receipt', 'after'] as $boundary) {
+        if (in_array('--baseline=restart-' . $boundary, $argv, true)) {
+            et_process_resume_scenario($database, $boundary);
+            echo 'RESTART_BASELINE_PASSED ', $boundary, "\n"; return;
+        }
+    }
+    $baseline_scenarios = ['mid-day' => 'et_mid_day_lookup_scenario',
+        'live-corrupt-receipt' => 'et_live_corrupt_receipt_scenario',
+        'errors' => 'et_error_outcome_scenarios',
+        'invalid-checkpoint' => 'et_invalid_checkpoint_scenario',
+        'safety-pause' => 'et_safety_pause_scenarios'];
+    foreach ($baseline_scenarios as $name => $test) {
+        if (in_array('--baseline=' . $name, $argv, true)) {
+            $test(); echo 'BASELINE_PASSED ', $name, "\n"; return;
+        }
+    }
     foreach (['update', 'insert', 'existing'] as $step) {
         if (in_array('--disabled-audit=' . $step, $argv, true)) {
             et_disabled_audit_scenario($step); echo 'DISABLED_AUDIT_TEST_PASSED ', $step, "\n"; return;
@@ -1649,6 +2071,9 @@ try {
             'NOCASE membership preserves separate ' . $mode . ' higher-deviation cleanup gate');
     }
 
+    et_writer_field_scenario();
+    foreach (['receipt', 'after'] as $boundary) { et_process_resume_scenario($database, $boundary); }
+    foreach ($baseline_scenarios as $test) { $test(); }
     et_recovery_scenarios($other);
     foreach ($boundaries as $test) { $test($other); }
     foreach (['open', 'recheck', 'recovery'] as $step) { et_audit_lookup_scenario($step); }
