@@ -421,24 +421,36 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
 
     private function canonical(array $source, array $row, int $origin, array $files, Kiwi_Retention_Archive_Reader $reader): ?array
     {
-        $session = $source['source_key'] === Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
-        if ($session) {
-            global $wpdb;
-            $live = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $source['source_table'] . ' WHERE id=%d LIMIT 1', $row['id']), ARRAY_A);
-            $this->assert_query_ok();
-            $copies = $reader->session_copies($source, (int) $row['id'], $live);
-        } else {
-            $copies = $reader->copies($source, (int) $row['id']);
-            $live = $this->live_by_id($source, (int) $row['id']);
+        if ($source['source_key'] === Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS) {
+            return $this->canonical_session($source, $row, $origin, $files, $reader);
         }
+        return $this->canonical_engagement($source, $row, $origin, $files, $reader);
+    }
+
+    private function canonical_session(array $source, array $row, int $origin, array $files, Kiwi_Retention_Archive_Reader $reader): ?array
+    {
+        global $wpdb;
+        $live = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $source['source_table'] . ' WHERE id=%d LIMIT 1', $row['id']), ARRAY_A);
+        $this->assert_query_ok();
+        $copies = $reader->session_copies($source, (int) $row['id'], $live);
         if ($origin === 0) {
             return $live;
         }
         if ($live !== null) { return null; }
+        // Immutable Sessions retain the first copy in validated inventory order.
+        return array_key_first($copies) === $files[$origin - 1] ? $row : null;
+    }
+
+    private function canonical_engagement(array $source, array $row, int $origin, array $files, Kiwi_Retention_Archive_Reader $reader): ?array
+    {
+        // Verify every copy and its receipt even when MySQL has a live row.
+        $copies = $reader->copies($source, (int) $row['id']);
+        $live = $this->live_by_id($source, (int) $row['id']);
+        if ($origin === 0) { return $live; }
+        if ($live !== null) { return null; }
         // Inventory is ordered by validated year, then numeric generation.
-        $chosen = $session ? array_key_first($copies) : array_key_last($copies);
-        if ($chosen !== $files[$origin - 1]) { return null; }
-        return $session ? $row : Kiwi_Retention_Archive_Reader::snapshot($source, $row);
+        return array_key_last($copies) === $files[$origin - 1]
+            ? Kiwi_Retention_Archive_Reader::snapshot($source, $row) : null;
     }
 
     public static function compare_day(array $raw, array $summary, bool $coverage_present): array
