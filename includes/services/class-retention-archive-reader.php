@@ -267,7 +267,9 @@ class Kiwi_Retention_Archive_Reader
         }
         $pdo = $this->open($path);
         if (!$this->has_source($pdo, $source)) {
-            throw new RuntimeException('archive_reader_session_day_source_missing');
+            // has_source rejects missing tables with Session batch evidence;
+            // a verified generation containing only other sources is empty.
+            return false;
         }
         $table = self::identifier($source['source_table']);
         $index = self::identifier($table . '_retention_pair');
@@ -275,7 +277,7 @@ class Kiwi_Retention_Archive_Reader
         // All predicate fields are in the existing covering index. Do not scan
         // wide original payloads or create a runtime index for empty days.
         $statement = $pdo->prepare('SELECT 1 FROM "' . $table . '" INDEXED BY "' . $index . '"
-            WHERE created_at>=? AND created_at<? AND pid IN (' . implode(',', array_fill(0, count($pids), '?')) . ')
+            WHERE created_at>=? AND created_at<? AND pid COLLATE NOCASE IN (' . implode(',', array_fill(0, count($pids), '?')) . ')
             AND landing_key<>\'\' AND session_token<>\'\' LIMIT 1');
         $statement->execute(array_merge([$date . ' 00:00:00', $next . ' 00:00:00'], $pids));
         return $statement->fetchColumn() !== false;
@@ -289,7 +291,7 @@ class Kiwi_Retention_Archive_Reader
         }
         $pdo = $this->open($path);
         if (!$this->has_source($pdo, $source)) {
-            throw new RuntimeException('archive_reader_session_day_source_missing');
+            return 0;
         }
         $count = $pdo->query('SELECT COUNT(*) FROM "' . self::identifier($source['source_table']) . '"')->fetchColumn();
         if ($count === false) { throw new RuntimeException('archive_reader_session_count_failed'); }

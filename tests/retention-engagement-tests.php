@@ -535,7 +535,8 @@ function et_tk_zero_day_scenario(string $step): void
     global $wpdb;
     $date = '2026-08-31';
     $config = new Engagement_Test_Config();
-    if (in_array($step, ['resume', 'inventory', 'pid_change', 'late_session', 'late_sale', 'archive_append', 'archive_transfer', 'archive_growth'], true)) { $config->row_limit = 1; }
+    if (in_array($step, ['resume', 'inventory', 'pid_change', 'late_session', 'late_sale', 'archive_append', 'archive_transfer', 'archive_growth', 'source_appears'], true)) { $config->row_limit = 1; }
+    if (in_array($step, ['archive_pid_case', 'live_pid_case', 'sale_pid_case'], true)) { $config->pids = ['AbC']; }
     $fixture = et_fixture($config);
     $source = $fixture['registry']->get('landing_session_engagements');
     $sessions = $fixture['registry']->get('landing_page_sessions');
@@ -543,6 +544,22 @@ function et_tk_zero_day_scenario(string $step): void
     $path = et_archive_sessions($fixture, [et_session(11, 1, $date . ' 12:00:00', ['pid' => '999'])]);
     et_summary($config, $date, 1, 2);
     $wpdb->pdo->exec('DELETE FROM t72_kiwi_landing_funnel_daily_tkzone_summary');
+    if (in_array($step, ['archive_pid_case', 'live_pid_case'], true)) {
+        et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00', ['pid' => 'aBc']));
+        if ($step === 'archive_pid_case') {
+            $fixture['archive']->archive_primary_key_chunk($sessions, '2026-09-28 00:00:00', 'zero-pid-case', 0, 12, 500, 60, $path);
+            $wpdb->pdo->exec('DELETE FROM ' . $sessions['source_table']);
+        }
+    }
+    if ($step === 'sale_pid_case') {
+        $wpdb->insert('t72_kiwi_sales', ['status' => 'completed', 'pid' => 'aBc', 'attribution_metric_date' => $date]);
+    }
+    if (in_array($step, ['other_source', 'source_appears'], true)) {
+        $other_path = dirname($path) . '/kiwi_retention_archive_2027.sqlite';
+        $other_row = et_full_row($source, et_engagement(2, '2026-05-01 12:00:00'));
+        $fixture['archive']->archive_snapshot_batch($source, [$other_row], '2026-09-28 00:00:00', 'zero-other-source', $other_path);
+        $wpdb->pdo->exec('DELETE FROM ' . $source['source_table'] . ' WHERE id=2');
+    }
     if (in_array($step, ['live_session', 'archive_transfer'], true)) { et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00')); }
     if (in_array($step, ['archive_session', 'multi_archive'], true)) {
         et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00', ['pid' => $step === 'archive_session' ? '106' : '999']));
@@ -575,6 +592,11 @@ function et_tk_zero_day_scenario(string $step): void
         if (isset($state['day']['tk_zero'])) {
             $proof_checkpoints++;
             $maximum_probe_budget = max($maximum_probe_budget, (int) ($state['last_worker_rows'] ?? 0));
+            if (!$changed && $step === 'source_appears' && $state['day']['tk_zero']['next_origin'] >= 2) {
+                et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00'));
+                $fixture['archive']->archive_primary_key_chunk($sessions, '2026-09-28 00:00:00', 'zero-source-appears', 0, 12, 500, 60, $other_path);
+                $wpdb->pdo->exec('DELETE FROM ' . $sessions['source_table']); $changed = true;
+            }
             if (!$changed && in_array($step, ['archive_append', 'archive_transfer', 'archive_growth'], true)
                 && $state['day']['tk_zero']['next_origin'] >= 1) {
                 if ($step !== 'archive_transfer') { et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00', ['pid' => $step === 'archive_growth' ? '999' : '106'])); }
@@ -597,7 +619,7 @@ function et_tk_zero_day_scenario(string $step): void
         }
         if ($run['finished_at'] !== null) { break; }
     }
-    $passes = in_array($step, ['empty', 'resume', 'multi_archive', 'other_day', 'other_pid_sale', 'archive_growth'], true);
+    $passes = in_array($step, ['empty', 'resume', 'multi_archive', 'other_day', 'other_pid_sale', 'archive_growth', 'other_source'], true);
     et_check(($passes ? $run['status'] === 'completed' && $run['gate_status'] === 'passed'
             : in_array($run['status'], ['skipped', 'failed'], true) && $run['gate_status'] !== 'passed'),
         'TK zero-day complete-source decision: ' . $step);
@@ -607,7 +629,7 @@ function et_tk_zero_day_scenario(string $step): void
     if ($passes) {
         $tk = $state['daily_results'][$date]['modes']['tkzone'];
         et_check($tk['coverage_present'] === false && $tk['empty_day_proof']['verified'] === true
-            && count($tk['empty_day_proof']['checked_origins']) === ($step === 'multi_archive' ? 4 : 3),
+            && count($tk['empty_day_proof']['checked_origins']) === (in_array($step, ['multi_archive', 'other_source'], true) ? 4 : 3),
             'TK zero-day audit retains absent summary and every independently checked origin: ' . $step);
     }
     if ($step === 'resume') {
@@ -617,6 +639,10 @@ function et_tk_zero_day_scenario(string $step): void
     if ($step === 'archive_growth') {
         et_check($changed && $state['daily_results'][$date]['modes']['tkzone']['empty_day_proof']['restarts'] === 1,
             'Unrelated immutable Session growth restarts the saved absence proof once and then completes');
+    }
+    if ($step === 'source_appears') {
+        et_check($changed && $state['daily_results'][$date]['modes']['tkzone']['empty_day_proof']['restarts'] === 1,
+            'First Session publication into a previously other-source-only generation invalidates absence');
     }
     if (in_array($step, ['inventory', 'pid_change'], true)) {
         et_check($changed && $run['status'] === 'failed' && $run['error_code'] === ($step === 'inventory' ? 'archive_inventory_changed' : 'engagement_pid_policy_changed'),
@@ -629,7 +655,8 @@ function et_tk_zero_day_scenarios(): void
 {
     foreach (['empty', 'resume', 'multi_archive', 'live_session', 'archive_session', 'sale', 'other_day',
         'other_pid_sale', 'main_missing', 'live_error', 'sale_error', 'sale_missing', 'source_missing',
-        'index_missing', 'inventory', 'pid_change', 'late_session', 'late_sale', 'archive_append', 'archive_transfer', 'archive_growth'] as $step) { et_tk_zero_day_scenario($step); }
+        'index_missing', 'inventory', 'pid_change', 'late_session', 'late_sale', 'archive_append', 'archive_transfer', 'archive_growth',
+        'archive_pid_case', 'live_pid_case', 'sale_pid_case', 'other_source', 'source_appears'] as $step) { et_tk_zero_day_scenario($step); }
     foreach (['page_loaded_sessions', 'cta1_sessions', 'cta1_click_events', 'cta2_sessions', 'cta2_click_events', 'cta3_sessions', 'cta3_click_events'] as $metric) {
         et_check(!Kiwi_Retention_Engagement_Worker::compare_day([$metric => 1], [], false, true)['ok']
             && !Kiwi_Retention_Engagement_Worker::compare_day([], [$metric => 1], false, true)['ok'],
@@ -1687,6 +1714,12 @@ try {
     }
     if (in_array('--tk-zero-day-late', $argv, true)) {
         et_tk_zero_day_scenario('late_sale'); et_tk_zero_day_scenario('late_session'); return;
+    }
+    if (in_array('--tk-zero-day-pid', $argv, true)) {
+        foreach (['live_pid_case', 'sale_pid_case', 'archive_pid_case'] as $step) { et_tk_zero_day_scenario($step); } return;
+    }
+    if (in_array('--tk-zero-day-absent', $argv, true)) {
+        foreach (['source_missing', 'other_source', 'source_appears'] as $step) { et_tk_zero_day_scenario($step); } return;
     }
     foreach (['append', 'transfer'] as $transition) {
         if (in_array('--tk-zero-day-' . $transition, $argv, true)) { et_tk_zero_day_scenario('archive_' . $transition); return; }
