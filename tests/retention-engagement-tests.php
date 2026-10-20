@@ -87,6 +87,7 @@ final class Engagement_Test_Wpdb
     public $fail_target_reads = 0;
     public $fail_audit_inserts = 0;
     public $fail_creation_locks = 0;
+    public $fail_zero_query_table = '';
     public function __construct(PDO $pdo) { $this->pdo = $pdo; }
     public function get_charset_collate() { return 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci'; }
     public function prepare(string $sql, ...$args): string
@@ -118,6 +119,10 @@ final class Engagement_Test_Wpdb
         if (preg_match('/LIMIT (\d+)\s*$/i', $sql, $match)) { $this->maximum_limit = max($this->maximum_limit, (int) $match[1]); }
         if ($this->source_page_delay_us > 0 && strpos($sql, 'SELECT e.*') === 0) { usleep($this->source_page_delay_us); }
         $this->last_error = '';
+        if ($this->fail_zero_query_table !== '' && strpos($sql, 'SELECT EXISTS(') === 0
+            && strpos($sql, 'FROM ' . $this->fail_zero_query_table . ' WHERE') !== false) {
+            $this->last_error = 'controlled_zero_day_read_failure'; return [];
+        }
         if ($this->fail_target_reads > 0 && strpos($sql, 'SELECT id FROM t72_kiwi_landing_session_engagements ORDER BY id DESC') === 0) {
             $this->fail_target_reads--; $this->last_error = 'controlled_target_read_failure'; return [];
         }
@@ -291,12 +296,16 @@ function et_fixture(Engagement_Test_Config $config): array
     $GLOBALS['engagement_test_transients'] = [];
     $GLOBALS['engagement_test_cron'] = []; $GLOBALS['engagement_test_actions'] = [];
     foreach (['kiwi_landing_session_engagements', 'kiwi_landing_page_sessions', 'kiwi_retention_cleanup_runs',
-        'kiwi_landing_funnel_daily_summary', 'kiwi_landing_funnel_daily_tkzone_summary'] as $name) { $wpdb->pdo->exec('DROP TABLE IF EXISTS t72_' . $name); }
+        'kiwi_landing_funnel_daily_summary', 'kiwi_landing_funnel_daily_tkzone_summary', 'kiwi_sales'] as $name) { $wpdb->pdo->exec('DROP TABLE IF EXISTS t72_' . $name); }
     (new Kiwi_Landing_Session_Engagement_Repository())->create_table();
     (new Kiwi_Landing_Page_Session_Repository())->create_table();
     (new Kiwi_Retention_Cleanup_Run_Repository())->create_table();
     (new Kiwi_Landing_Funnel_Daily_Summary_Repository())->create_table();
     (new Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository($config))->create_table();
+    $wpdb->pdo->exec('CREATE TABLE t72_kiwi_sales (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+        status VARCHAR(50) NOT NULL, attribution_metric_date DATE NULL, pid VARCHAR(191) NOT NULL,
+        KEY metric_date (attribution_metric_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci');
+    $wpdb->fail_zero_query_table = '';
     $config->root = sys_get_temp_dir() . '/codex-retention-72-' . bin2hex(random_bytes(8));
     mkdir($config->root . '/sqlite', 0700, true);
     return et_components($config);
@@ -520,6 +529,113 @@ function et_finish(array $fixture, int $calls = 200): array
     throw new RuntimeException('fixture_worker_did_not_finish');
 }
 function et_state(array $run): array { return json_decode($run['gate_results_json'], true, 512, JSON_THROW_ON_ERROR); }
+
+function et_tk_zero_day_scenario(string $step): void
+{
+    global $wpdb;
+    $date = '2026-08-31';
+    $config = new Engagement_Test_Config();
+    if (in_array($step, ['resume', 'inventory', 'pid_change', 'late_session', 'late_sale', 'archive_append', 'archive_transfer', 'archive_growth'], true)) { $config->row_limit = 1; }
+    $fixture = et_fixture($config);
+    $source = $fixture['registry']->get('landing_session_engagements');
+    $sessions = $fixture['registry']->get('landing_page_sessions');
+    et_full_row($source, et_engagement(1, $date . ' 12:00:00'));
+    $path = et_archive_sessions($fixture, [et_session(11, 1, $date . ' 12:00:00', ['pid' => '999'])]);
+    et_summary($config, $date, 1, 2);
+    $wpdb->pdo->exec('DELETE FROM t72_kiwi_landing_funnel_daily_tkzone_summary');
+    if (in_array($step, ['live_session', 'archive_transfer'], true)) { et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00')); }
+    if (in_array($step, ['archive_session', 'multi_archive'], true)) {
+        et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00', ['pid' => $step === 'archive_session' ? '106' : '999']));
+        $fixture['archive']->archive_primary_key_chunk($sessions, '2026-09-28 00:00:00', 'zero-second-generation', 0, 12, 500, 60,
+            dirname($path) . '/kiwi_retention_archive_2027.sqlite');
+        $wpdb->pdo->exec('DELETE FROM ' . $sessions['source_table']);
+    }
+    if (in_array($step, ['sale', 'other_pid_sale', 'other_day'], true)) {
+        $wpdb->insert('t72_kiwi_sales', ['status' => 'completed', 'pid' => $step === 'other_pid_sale' ? '999' : '106',
+            'attribution_metric_date' => $step === 'other_day' ? '2026-09-01' : $date]);
+    }
+    if ($step === 'other_day') { et_full_row($sessions, et_session(12, 2, '2026-09-01 00:00:00')); }
+    if ($step === 'main_missing') { $wpdb->pdo->exec('DELETE FROM t72_kiwi_landing_funnel_daily_summary'); }
+    if ($step === 'live_error') { $wpdb->fail_zero_query_table = $sessions['source_table']; }
+    if ($step === 'sale_error') { $wpdb->fail_zero_query_table = 't72_kiwi_sales'; }
+    if ($step === 'sale_missing') { $wpdb->pdo->exec('DROP TABLE t72_kiwi_sales'); }
+    if ($step === 'source_missing') {
+        $sqlite = new PDO('sqlite:' . $path); $sqlite->exec('DROP TABLE ' . $sessions['source_table']); $sqlite = null;
+        $wpdb->pdo->exec('UPDATE t72_kiwi_landing_funnel_daily_summary SET page_loaded_sessions=0,cta1_sessions=0,cta1_click_events=0');
+    }
+    if ($step === 'index_missing') {
+        $sqlite = new PDO('sqlite:' . $path); $sqlite->exec('DROP INDEX ' . $sessions['source_table'] . '_retention_pair'); $sqlite = null;
+    }
+    $fixture['worker']->run_source('landing_session_engagements', 'manual');
+    $changed = false; $proof_checkpoints = 0; $maximum_probe_budget = 0;
+    for ($call = 0; $call < 150; $call++) {
+        $fixture['worker']->run_worker('landing_session_engagements');
+        $run = $wpdb->get_row('SELECT * FROM t72_kiwi_retention_cleanup_runs ORDER BY id DESC LIMIT 1');
+        $state = et_state($run);
+        if (isset($state['day']['tk_zero'])) {
+            $proof_checkpoints++;
+            $maximum_probe_budget = max($maximum_probe_budget, (int) ($state['last_worker_rows'] ?? 0));
+            if (!$changed && in_array($step, ['archive_append', 'archive_transfer', 'archive_growth'], true)
+                && $state['day']['tk_zero']['next_origin'] >= 1) {
+                if ($step !== 'archive_transfer') { et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00', ['pid' => $step === 'archive_growth' ? '999' : '106'])); }
+                $fixture['archive']->archive_primary_key_chunk($sessions, '2026-09-28 00:00:00', 'zero-archive-growth', 0, 12, 500, 60, $path);
+                $wpdb->pdo->exec('DELETE FROM ' . $sessions['source_table']); $changed = true;
+            }
+            if (!$changed && in_array($step, ['late_session', 'late_sale'], true)
+                && $state['day']['tk_zero']['next_origin'] >= 1) {
+                if ($step === 'late_session') { et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00')); }
+                else { $wpdb->insert('t72_kiwi_sales', ['status' => 'completed', 'pid' => '106', 'attribution_metric_date' => $date]); }
+                $changed = true;
+            }
+            if (!$changed && $step === 'pid_change') { $config->pids = ['107']; $changed = true; }
+            if (!$changed && $step === 'inventory') {
+                et_full_row($sessions, et_session(12, 2, $date . ' 15:00:00'));
+                $fixture['archive']->archive_primary_key_chunk($sessions, '2026-09-28 00:00:00', 'zero-changed-inventory', 0, 12, 500, 60,
+                    dirname($path) . '/kiwi_retention_archive_2027.sqlite');
+                $wpdb->pdo->exec('DELETE FROM ' . $sessions['source_table']); $changed = true;
+            }
+        }
+        if ($run['finished_at'] !== null) { break; }
+    }
+    $passes = in_array($step, ['empty', 'resume', 'multi_archive', 'other_day', 'other_pid_sale', 'archive_growth'], true);
+    et_check(($passes ? $run['status'] === 'completed' && $run['gate_status'] === 'passed'
+            : in_array($run['status'], ['skipped', 'failed'], true) && $run['gate_status'] !== 'passed'),
+        'TK zero-day complete-source decision: ' . $step);
+    et_check((int) $run['archived_rows'] === 0 && (int) $run['deleted_rows'] === 0
+        && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+        'TK zero-day Dry-run preserves original rows: ' . $step);
+    if ($passes) {
+        $tk = $state['daily_results'][$date]['modes']['tkzone'];
+        et_check($tk['coverage_present'] === false && $tk['empty_day_proof']['verified'] === true
+            && count($tk['empty_day_proof']['checked_origins']) === ($step === 'multi_archive' ? 4 : 3),
+            'TK zero-day audit retains absent summary and every independently checked origin: ' . $step);
+    }
+    if ($step === 'resume') {
+        et_check($proof_checkpoints >= 1 && $maximum_probe_budget <= 1 && (int) $run['worker_runs'] < 150,
+            'TK zero-day proof resumes across one-probe worker budgets');
+    }
+    if ($step === 'archive_growth') {
+        et_check($changed && $state['daily_results'][$date]['modes']['tkzone']['empty_day_proof']['restarts'] === 1,
+            'Unrelated immutable Session growth restarts the saved absence proof once and then completes');
+    }
+    if (in_array($step, ['inventory', 'pid_change'], true)) {
+        et_check($changed && $run['status'] === 'failed' && $run['error_code'] === ($step === 'inventory' ? 'archive_inventory_changed' : 'engagement_pid_policy_changed'),
+            'TK zero-day checkpoint cannot outlive its inventory or PID policy: ' . $step);
+    }
+    $wpdb->fail_zero_query_table = '';
+}
+
+function et_tk_zero_day_scenarios(): void
+{
+    foreach (['empty', 'resume', 'multi_archive', 'live_session', 'archive_session', 'sale', 'other_day',
+        'other_pid_sale', 'main_missing', 'live_error', 'sale_error', 'sale_missing', 'source_missing',
+        'index_missing', 'inventory', 'pid_change', 'late_session', 'late_sale', 'archive_append', 'archive_transfer', 'archive_growth'] as $step) { et_tk_zero_day_scenario($step); }
+    foreach (['page_loaded_sessions', 'cta1_sessions', 'cta1_click_events', 'cta2_sessions', 'cta2_click_events', 'cta3_sessions', 'cta3_click_events'] as $metric) {
+        et_check(!Kiwi_Retention_Engagement_Worker::compare_day([$metric => 1], [], false, true)['ok']
+            && !Kiwi_Retention_Engagement_Worker::compare_day([], [$metric => 1], false, true)['ok'],
+            'TK zero-day proof cannot bypass a nonzero raw or summary metric: ' . $metric);
+    }
+}
 
 function et_fields(array $row, array $expected, string $label): void
 {
@@ -1566,6 +1682,15 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--tk-zero-day', $argv, true)) {
+        et_tk_zero_day_scenarios(); echo 'TK_ZERO_DAY_TESTS_PASSED ', $GLOBALS['et_checks'], "\n"; return;
+    }
+    if (in_array('--tk-zero-day-late', $argv, true)) {
+        et_tk_zero_day_scenario('late_sale'); et_tk_zero_day_scenario('late_session'); return;
+    }
+    foreach (['append', 'transfer'] as $transition) {
+        if (in_array('--tk-zero-day-' . $transition, $argv, true)) { et_tk_zero_day_scenario('archive_' . $transition); return; }
+    }
     if (in_array('--baseline=writer', $argv, true)) {
         et_writer_field_scenario(); echo 'WRITER_BASELINE_PASSED ', $GLOBALS['et_checks'], "\n"; return;
     }
@@ -2096,6 +2221,7 @@ try {
     foreach (['existing', 'new'] as $step) { et_initial_archive_scenario($step); }
     foreach (['target', 'offday', 'live_conflict', 'archive_conflict'] as $step) { et_session_day_scenario($step); }
     foreach (['update', 'insert', 'existing'] as $step) { et_disabled_audit_scenario($step); }
+    et_tk_zero_day_scenarios();
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

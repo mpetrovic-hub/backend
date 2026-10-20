@@ -306,9 +306,18 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
             $budget['rows'] += $step['rows_used'];
             if (!$step['day_complete']) { continue; }
             $day = $state['day'];
+            if ($day['summary_rows']['tkzone'] === 0 && self::zero_day_metrics($day['raw']['tkzone'], $day['summary']['tkzone'])
+                && self::compare_day($day['raw']['main'], $day['summary']['main'], $day['summary_rows']['main'] > 0)['ok']) {
+                $step = $this->advance_tk_zero_day($sessions, $date, $day, $state['files'], $reader, $budget);
+                $state['day'] = $day = $step['day'];
+                $budget['rows'] += $step['rows_used'];
+                if (!$step['complete']) { return; }
+            }
             $result = ['historical_exception' => false, 'ok' => true, 'modes' => []];
             foreach (['main', 'tkzone'] as $checked_mode) {
-                $comparison = self::compare_day($day['raw'][$checked_mode], $day['summary'][$checked_mode], $day['summary_rows'][$checked_mode] > 0);
+                $comparison = self::compare_day($day['raw'][$checked_mode], $day['summary'][$checked_mode],
+                    $day['summary_rows'][$checked_mode] > 0, $checked_mode === 'tkzone' && !empty($day['tk_zero']['verified']));
+                if ($checked_mode === 'tkzone' && isset($day['tk_zero'])) { $comparison['empty_day_proof'] = $day['tk_zero']; }
                 $result['modes'][$checked_mode] = $comparison;
                 $result['ok'] = $result['ok'] && $comparison['ok'];
             }
@@ -407,6 +416,69 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
         return ['day' => $day, 'rows_used' => $rows_used, 'day_complete' => true];
     }
 
+    /** Return checkpointed absence probes; coverage alone saves day progress. */
+    private function advance_tk_zero_day(array $sessions, string $date, array $day, array $files,
+        Kiwi_Retention_Archive_Reader $reader, array $budget): array
+    {
+        $pids = $this->config->get_landing_funnel_tkzone_summary_pids();
+        if (!$pids) { throw new RuntimeException('engagement_tk_zero_pid_policy_empty'); }
+        $proof = $day['tk_zero'] ?? ['next_origin' => 0, 'checked_origins' => [], 'session_counts' => [], 'verified' => false];
+        $rows_used = 0;
+        $next = (new DateTimeImmutable($date, new DateTimeZone('UTC')))->modify('+1 day')->format('Y-m-d');
+        global $wpdb;
+        while ($this->available($budget) && $proof['next_origin'] <= count($files)) {
+            $origin = $proof['next_origin'];
+            if ($origin < count($files)) {
+                $name = basename($files[$origin]);
+                $present = $reader->session_day_has_pid($sessions, $files[$origin], $date, $pids);
+                $proof['session_counts'][$files[$origin]] = $reader->session_row_count($sessions, $files[$origin]);
+                $proof['checked_origins'][] = $name;
+            } else {
+                // Reacquire every generation lock and keep them until the
+                // final MySQL read. A Session transferred into an already
+                // checked archive must invalidate the saved absence proof.
+                foreach ($files as $path) {
+                    if (!$this->available($budget)) {
+                        $day['tk_zero'] = $proof;
+                        return ['day' => $day, 'rows_used' => $rows_used, 'complete' => false];
+                    }
+                    if ($reader->session_row_count($sessions, $path) !== ($proof['session_counts'][$path] ?? null)) {
+                        $day['tk_zero'] = ['next_origin' => 0, 'checked_origins' => [], 'session_counts' => [],
+                            'verified' => false, 'restarts' => (int) ($proof['restarts'] ?? 0) + 1];
+                        return ['day' => $day, 'rows_used' => $rows_used, 'complete' => false];
+                    }
+                }
+                // Read both mutable MySQL sources in one final statement,
+                // never accept their absence from an earlier worker checkpoint.
+                $in = implode(',', array_fill(0, count($pids), '%s'));
+                $activity = $wpdb->get_row($wpdb->prepare('SELECT EXISTS(SELECT 1 FROM ' . $sessions['source_table']
+                    . ' WHERE created_at>=%s AND created_at<%s AND landing_key<>\'\' AND session_token<>\'\' AND pid IN (' . $in . ')) AS sessions_present,'
+                    . ' EXISTS(SELECT 1 FROM ' . $wpdb->prefix . 'kiwi_sales WHERE attribution_metric_date=%s AND status=%s AND pid IN (' . $in . ')) AS sales_present',
+                    ...array_merge([$date . ' 00:00:00', $next . ' 00:00:00'], $pids, [$date, 'completed'], $pids)), ARRAY_A);
+                $this->assert_query_ok();
+                if (!isset($activity['sessions_present'], $activity['sales_present'])) {
+                    throw new RuntimeException('engagement_tk_zero_result_invalid');
+                }
+                $name = (int) $activity['sessions_present'] !== 0 ? 'mysql_sessions' : 'completed_sales';
+                $present = (int) $activity['sessions_present'] !== 0 || (int) $activity['sales_present'] !== 0;
+                $proof['checked_origins'] = array_merge($proof['checked_origins'], ['mysql_sessions', 'completed_sales']);
+            }
+            // Charge even an empty existence probe so a one-row budget makes
+            // bounded, durable progress across every required source.
+            $budget['rows']++; $rows_used++;
+            $proof['next_origin']++;
+            if ($present) {
+                $proof['blocked_origin'] = $name;
+                $proof['reason'] = $name === 'completed_sales' ? 'tk_sales_present' : 'tk_sessions_present';
+                $day['tk_zero'] = $proof;
+                return ['day' => $day, 'rows_used' => $rows_used, 'complete' => true];
+            }
+        }
+        $proof['verified'] = $proof['next_origin'] > count($files);
+        $day['tk_zero'] = $proof;
+        return ['day' => $day, 'rows_used' => $rows_used, 'complete' => $proof['verified']];
+    }
+
     /** A resumed pair lookup returns its cursor and consumed budget as values. */
     private function lookup_session_pair(array $source, array $engagement, array $lookup, array $files, Kiwi_Retention_Archive_Reader $reader, array $budget): array
     {
@@ -491,9 +563,18 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
             ? Kiwi_Retention_Archive_Reader::snapshot($source, $row) : null;
     }
 
-    public static function compare_day(array $raw, array $summary, bool $coverage_present): array
+    private static function zero_day_metrics(array $raw, array $summary): bool
     {
-        $result = ['ok' => $coverage_present, 'coverage_present' => $coverage_present, 'metrics' => []];
+        foreach (self::METRICS as $metric) {
+            if ((int) ($raw[$metric] ?? 0) !== 0 || (int) ($summary[$metric] ?? 0) !== 0) { return false; }
+        }
+        return true;
+    }
+
+    public static function compare_day(array $raw, array $summary, bool $coverage_present, bool $verified_empty_tk_day = false): array
+    {
+        $covered = $coverage_present || ($verified_empty_tk_day && self::zero_day_metrics($raw, $summary));
+        $result = ['ok' => $covered, 'coverage_present' => $coverage_present, 'metrics' => []];
         foreach (self::METRICS as $metric) {
             $raw_value = (int) ($raw[$metric] ?? 0);
             $summary_value = (int) ($summary[$metric] ?? 0);
@@ -503,7 +584,7 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
             // Exact integer comparison to 2%, without multiplication overflow
             // or a percent-ceiling that would admit an extra event.
             $whole_allowance = intdiv($basis, 100) * 2 + intdiv(($basis % 100) * 2, 100);
-            $ok = $coverage_present && ($difference <= $whole_allowance || ($cta && $difference <= 5));
+            $ok = $covered && ($difference <= $whole_allowance || ($cta && $difference <= 5));
             $result['metrics'][$metric] = ['raw' => $raw_value, 'summary' => $summary_value,
                 'difference' => $difference, 'difference_percent' => $basis === 0 ? 0 : 100 * ($difference / $basis),
                 'allowed_difference' => max($cta ? 5 : 0, 0.02 * $basis), 'ok' => $ok];

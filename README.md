@@ -14,6 +14,8 @@ MySQL/SQLite and a private disposable MariaDB 11.8.9 instance. Set
 `username`, and `password`; enable both drivers with `PHPRC`. It creates and
 drops only its own randomly named `codex_test_72_*` database. It never connects
 to Production. Run `php tests/retention-engagement-tests.php`.
+Use `php tests/retention-engagement-tests.php --tk-zero-day` for the focused
+TK empty-day, missing-source and concurrent-resume regression scenarios.
 
 ## Documentation
 
