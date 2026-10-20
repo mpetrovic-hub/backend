@@ -90,6 +90,59 @@ class Kiwi_Landing_Session_Engagement_Repository
     {
         $landing_key = trim((string) ($context['landing_key'] ?? ''));
         $session_token = trim((string) ($context['session_token'] ?? ''));
+        if ($landing_key === '' || $session_token === ''
+            || !$this->is_supported_event_type(strtolower(trim($event_type)))
+        ) {
+            return [];
+        }
+        if (!$this->engagement_evaluator instanceof Kiwi_Landing_Session_Engagement_Evaluator_Interface) {
+            throw new RuntimeException('A landing-session engagement evaluator is required for write operations.');
+        }
+
+        global $wpdb;
+        if ($wpdb->query('START TRANSACTION') === false) {
+            return [];
+        }
+        try {
+            $now = $this->current_time_mysql();
+            // Acquire the existing unique-key lock before reading, including a
+            // missing row. A concurrent cleanup cannot erase a stale read.
+            if ($wpdb->query($wpdb->prepare(
+                "INSERT INTO {$this->get_table_name()}
+                    (created_at, updated_at, last_event_at, landing_key, session_token,
+                     ua_ch_brands, ua_ch_full_version_list, user_agent)
+                 VALUES (%s, %s, %s, %s, %s, '', '', '')
+                 ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)",
+                $now, $now, $now, $landing_key, $session_token
+            )) === false) {
+                throw new RuntimeException('Landing engagement unique-key lock failed.');
+            }
+            $locked = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$this->get_table_name()}
+                 WHERE landing_key = %s AND session_token = %s LIMIT 1 FOR UPDATE",
+                $landing_key, $session_token
+            ), ARRAY_A);
+            if (!is_array($locked) || (string) ($wpdb->last_error ?? '') !== '') {
+                throw new RuntimeException('Landing engagement locked read failed.');
+            }
+            $result = $this->apply_event($context, $event_type, $occurred_at, $locked);
+            if (empty($result) || (string) ($wpdb->last_error ?? '') !== '') {
+                throw new RuntimeException('Landing engagement transaction readback failed.');
+            }
+            if ($wpdb->query('COMMIT') === false) {
+                throw new RuntimeException('Landing engagement transaction commit failed.');
+            }
+            return $result;
+        } catch (Throwable $error) {
+            $wpdb->query('ROLLBACK');
+            throw $error;
+        }
+    }
+
+    private function apply_event(array $context, string $event_type, string $occurred_at, array $row): array
+    {
+        $landing_key = trim((string) ($context['landing_key'] ?? ''));
+        $session_token = trim((string) ($context['session_token'] ?? ''));
         $event_type = strtolower(trim($event_type));
         $occurred_at = $this->normalize_mysql_datetime($occurred_at);
         $cta_step = $event_type === 'cta_click'
@@ -100,54 +153,7 @@ class Kiwi_Landing_Session_Engagement_Repository
             return [];
         }
 
-        $row = $this->get_by_landing_session($landing_key, $session_token);
         $now = $this->current_time_mysql();
-
-        if (!is_array($row)) {
-            $initial_row = [
-                'created_at' => $now,
-                'updated_at' => $now,
-                'provider_key' => trim((string) ($context['provider_key'] ?? '')),
-                'service_key' => trim((string) ($context['service_key'] ?? '')),
-                'flow_key' => trim((string) ($context['flow_key'] ?? '')),
-                'pid' => $this->sanitize_pid((string) ($context['pid'] ?? '')),
-                'click_id' => $this->sanitize_click_id((string) ($context['click_id'] ?? '')),
-                'tksource' => $this->sanitize_source_value((string) ($context['tksource'] ?? '')),
-                'tkzone' => $this->sanitize_source_value((string) ($context['tkzone'] ?? '')),
-                'landing_key' => $landing_key,
-                'session_token' => $session_token,
-                'page_loaded_at' => null,
-                'first_cta_click_at' => null,
-                'last_cta_click_at' => null,
-                'cta_click_count' => 0,
-                'first_cta1_click_at' => null,
-                'last_cta1_click_at' => null,
-                'cta1_click_count' => 0,
-                'first_cta2_click_at' => null,
-                'last_cta2_click_at' => null,
-                'cta2_click_count' => 0,
-                'first_cta3_click_at' => null,
-                'last_cta3_click_at' => null,
-                'cta3_click_count' => 0,
-                'last_event_at' => $occurred_at,
-            ];
-            $initial_row = array_merge($initial_row, $this->normalize_ua_context($context));
-
-            if ($event_type === 'page_loaded') {
-                $initial_row['page_loaded_at'] = $occurred_at;
-            } elseif ($event_type === 'cta_click') {
-                $initial_row['first_cta_click_at'] = $occurred_at;
-                $initial_row['last_cta_click_at'] = $occurred_at;
-                $initial_row['cta_click_count'] = 1;
-                $this->apply_cta_step_initial_values($initial_row, $cta_step, $occurred_at);
-            }
-
-            $initial_row = array_merge($initial_row, $this->build_soft_flag_data($initial_row, $now));
-
-            $this->insert_row($initial_row);
-
-            return $this->get_by_landing_session($landing_key, $session_token) ?? [];
-        }
 
         $update_data = [
             'updated_at' => $now,
@@ -204,7 +210,9 @@ class Kiwi_Landing_Session_Engagement_Repository
         $candidate_row = array_merge($row, $update_data);
         $update_data = array_merge($update_data, $this->build_soft_flag_data($candidate_row, $now));
 
-        $this->update_by_id((int) ($row['id'] ?? 0), $update_data);
+        if (!$this->update_by_id((int) ($row['id'] ?? 0), $update_data)) {
+            throw new RuntimeException('Landing engagement update failed.');
+        }
 
         return $this->get_by_landing_session($landing_key, $session_token) ?? [];
     }
@@ -568,17 +576,6 @@ class Kiwi_Landing_Session_Engagement_Repository
         $cta_step = strtolower(trim($cta_step));
 
         return in_array($cta_step, self::CTA_STEPS, true) ? $cta_step : '';
-    }
-
-    private function apply_cta_step_initial_values(array &$row, string $cta_step, string $occurred_at): void
-    {
-        if ($cta_step === '') {
-            return;
-        }
-
-        $row['first_' . $cta_step . '_click_at'] = $occurred_at;
-        $row['last_' . $cta_step . '_click_at'] = $occurred_at;
-        $row[$cta_step . '_click_count'] = 1;
     }
 
     private function apply_cta_step_update_values(array &$update_data, array $row, string $cta_step, string $occurred_at): void

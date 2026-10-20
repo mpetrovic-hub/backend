@@ -8,12 +8,14 @@ class Kiwi_Retention_Source_Registry
 {
     public const SOURCE_LANDING_PAGE_SESSIONS = 'landing_page_sessions';
     public const SOURCE_LANDING_HANDOFF_EVENTS = 'landing_handoff_events';
+    public const SOURCE_LANDING_SESSION_ENGAGEMENTS = 'landing_session_engagements';
 
     public function get_source_keys(): array
     {
         return [
             self::SOURCE_LANDING_PAGE_SESSIONS,
             self::SOURCE_LANDING_HANDOFF_EVENTS,
+            self::SOURCE_LANDING_SESSION_ENGAGEMENTS,
         ];
     }
 
@@ -26,6 +28,35 @@ class Kiwi_Retention_Source_Registry
         }
 
         global $wpdb;
+
+        if ($source_key === self::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
+            return [
+                'source_key' => self::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+                'source_table' => Kiwi_Database_Table_Names::landing_session_engagements(),
+                'primary_key' => 'id',
+                'cutoff_column' => 'updated_at',
+                'retention_days_default' => 14,
+                'retention_days_min' => 7,
+                'coverage_gate_required' => true,
+                'mutable_snapshot' => true,
+                'archive_columns' => [
+                    'id' => 'INTEGER', 'created_at' => 'TEXT', 'updated_at' => 'TEXT',
+                    'provider_key' => 'TEXT', 'service_key' => 'TEXT', 'flow_key' => 'TEXT',
+                    'pid' => 'TEXT', 'click_id' => 'TEXT', 'tksource' => 'TEXT', 'tkzone' => 'TEXT',
+                    'landing_key' => 'TEXT', 'session_token' => 'TEXT',
+                    'page_loaded_at' => 'TEXT', 'first_cta_click_at' => 'TEXT', 'last_cta_click_at' => 'TEXT',
+                    'cta_click_count' => 'INTEGER',
+                    'first_cta1_click_at' => 'TEXT', 'last_cta1_click_at' => 'TEXT', 'cta1_click_count' => 'INTEGER',
+                    'first_cta2_click_at' => 'TEXT', 'last_cta2_click_at' => 'TEXT', 'cta2_click_count' => 'INTEGER',
+                    'first_cta3_click_at' => 'TEXT', 'last_cta3_click_at' => 'TEXT', 'cta3_click_count' => 'INTEGER',
+                    'ua_ch_supported' => 'INTEGER', 'ua_ch_mobile' => 'INTEGER',
+                    'ua_ch_platform' => 'TEXT', 'ua_ch_platform_version' => 'TEXT', 'ua_ch_model' => 'TEXT',
+                    'ua_ch_brands' => 'TEXT', 'ua_ch_full_version_list' => 'TEXT', 'user_agent' => 'TEXT',
+                    'last_event_at' => 'TEXT', 'is_soft_flag' => 'INTEGER',
+                    'soft_flag_reason' => 'TEXT', 'soft_flag_rule_key' => 'TEXT', 'soft_flag_evaluated_at' => 'TEXT',
+                ],
+            ];
+        }
 
         if ($source_key === self::SOURCE_LANDING_HANDOFF_EVENTS) {
             return [

@@ -452,7 +452,10 @@ require_once __DIR__ . '/../includes/services/class-retention-archive-check-supe
 require_once __DIR__ . '/../includes/services/class-retention-corruption-safety-gate-coordinator.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-health-controller.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-worker-support.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-archive-reader.php';
+require_once __DIR__ . '/../includes/services/class-retention-engagement-worker.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
@@ -12711,6 +12714,7 @@ kiwi_run_test('Kiwi_Retention_Source_Registry exposes stable session and handoff
         [
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
         ],
         $registry->get_source_keys(),
         'Expected registered retention sources to keep their stable scheduler order.'
@@ -13103,6 +13107,7 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
         [
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
         ],
         array_keys($first['source_results'] ?? []),
         'Expected scheduler results in stable registry order.'
@@ -13111,8 +13116,10 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
         [
             ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
+            ['source_key' => 'landing_session_engagements', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
+            ['source_key' => 'landing_session_engagements', 'triggered_by' => 'cron'],
         ],
         $service->run_source_calls,
         'Expected every daily scheduler pass to dispatch each registered source in order.'
@@ -13128,9 +13135,9 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
             return ($event['hook'] ?? '') === $worker_hook;
         }
     ));
-    kiwi_assert_same(2, count($worker_events), 'Expected source-key deduplication to keep exactly one pending worker per source.');
+    kiwi_assert_same(3, count($worker_events), 'Expected source-key deduplication to keep exactly one pending worker per source.');
     kiwi_assert_same(
-        [['landing_page_sessions'], ['landing_handoff_events']],
+        [['landing_page_sessions'], ['landing_handoff_events'], ['landing_session_engagements']],
         array_column($worker_events, 'args'),
         'Expected every worker event to carry its source key.'
     );
