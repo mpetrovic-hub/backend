@@ -35,6 +35,7 @@ This is the agent-facing map for repository documentation. Human quick-start inf
 | Operational events, open incidents, event cleanup | `operations/operational-events-runbook.md` | `architecture/operational-events.md` for the stable producer contract |
 | Premium SMS fraud monitoring | `operations/premium-sms-fraud-monitoring.md` | `architecture/click-attribution-and-postbacks.md` for attribution propagation |
 | Secrets, environments, non-secret constants | `operations/credentials-and-environments.md` | `operations/configuration-reference.md` |
+| Cloud-workspace GitHub checkout freshness | [GitHub sync helper](../tools/environment/README.md) | Proposed task-start rule and activation status in the helper documentation |
 | Edge/VPS endpoint operations | `operations/vps-endpoint-runbook.md` | `operations/landing-page-runtime.md` |
 | Documentation maintenance | This `INDEX.md` | `../CHANGELOG.md` for durable behavior changes |
 | Domain vocabulary | `../GLOSSARY.md` | Relevant topic doc |
