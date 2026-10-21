@@ -259,6 +259,45 @@ class Kiwi_Retention_Archive_Reader
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    /** A zero-day proof must inspect Sessions even without a matching Engagement. */
+    public function session_day_has_pid(array $source, string $path, string $date, array $pids): bool
+    {
+        if ($source['source_key'] !== Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS || !$pids) {
+            throw new RuntimeException('archive_reader_session_day_policy_invalid');
+        }
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) {
+            // has_source rejects missing tables with Session batch evidence;
+            // a verified generation containing only other sources is empty.
+            return false;
+        }
+        $table = self::identifier($source['source_table']);
+        $index = self::identifier($table . '_retention_pair');
+        $next = (new DateTimeImmutable($date, new DateTimeZone('UTC')))->modify('+1 day')->format('Y-m-d');
+        // All predicate fields are in the existing covering index. Do not scan
+        // wide original payloads or create a runtime index for empty days.
+        $statement = $pdo->prepare('SELECT 1 FROM "' . $table . '" INDEXED BY "' . $index . '"
+            WHERE created_at>=? AND created_at<? AND pid COLLATE NOCASE IN (' . implode(',', array_fill(0, count($pids), '?')) . ')
+            AND landing_key<>\'\' AND session_token<>\'\' LIMIT 1');
+        $statement->execute(array_merge([$date . ' 00:00:00', $next . ' 00:00:00'], $pids));
+        return $statement->fetchColumn() !== false;
+    }
+
+    /** Immutable Session rows only grow through the guarded archive writer. */
+    public function session_row_count(array $source, string $path): int
+    {
+        if ($source['source_key'] !== Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS) {
+            throw new RuntimeException('archive_reader_session_day_policy_invalid');
+        }
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) {
+            return 0;
+        }
+        $count = $pdo->query('SELECT COUNT(*) FROM "' . self::identifier($source['source_table']) . '"')->fetchColumn();
+        if ($count === false) { throw new RuntimeException('archive_reader_session_count_failed'); }
+        return (int) $count;
+    }
+
     public function pair_page(array $source, string $path, array $engagement, array $cursor, int $limit): array
     {
         $pdo = $this->open($path);
