@@ -1,0 +1,5 @@
+# Keep the new Linux archive-health entrypoints/artifacts executable after Windows checkout.
+/tools/database/archive-health-vps/** text eol=lf
+/tests/archive-health-vps-tests.py text eol=lf
+/tests/fixtures/retention-health-runner-peer.py text eol=lf
+/tests/fixtures/retention-health-runner-db.php text eol=lf

@@ -29,6 +29,8 @@ Landing-page definitions are no longer stored in `wp-config.php`. Their source o
 
 Configuration access inside the codebase is currently handled through the shared configuration layer, currently `class-config.php`.
 
+The separate VPS archive-health service reads `/etc/kiwi-archive-health.conf` as strict JSON. The deployment owner controls this root-owned configuration and its independently pinned SSH host-key file; the dedicated nonprivileged `kiwi-archive-health` user owns its service-only private key outside webroots. These are separate from WordPress/Aggregator credentials. Document no actual host, key or secret values here. Settings are in the [configuration reference](configuration-reference.md#vps-archive-health-configuration), and installation/access ownership and manual recovery are in the [Retention runbook](retention-runbook.md#vps-archive-health-runner).
+
 ## Rules
 
 - Never store real secrets, passwords, API keys, tokens, certificates, or shared secret values in repository documentation.

@@ -1,0 +1,4 @@
+# Only this literal command is delegated. No general sudo group or SETENV.
+Cmnd_Alias KIWI_ARCHIVE_HEALTH_START = /usr/bin/env -i PATH\=/usr/bin\:/bin /usr/bin/systemctl --no-block --job-mode\=fail start kiwi-retention-archive-health.service
+Defaults!KIWI_ARCHIVE_HEALTH_START env_reset
+kiwi-archive-health ALL=(root) NOPASSWD: NOSETENV: KIWI_ARCHIVE_HEALTH_START

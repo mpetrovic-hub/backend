@@ -80,7 +80,7 @@ function aht_service(Archive_Health_Test_Database $db, array $f): Kiwi_Retention
 }
 
 // Actual transport/recovery in another PHP process, restricted to this task's artificial database/files.
-if (in_array($argv[1] ?? '', ['--transport', '--recover-paused'], true)) {
+if (in_array($argv[1] ?? '', ['--transport', '--recover-paused', '--operator-abort'], true)) {
     [$database, $path] = array_slice($argv, 2);
     $real = realpath($path);
     if (count($argv) !== 4 || preg_match('/^codex_test_157_[a-f0-9]+$/D', $database) !== 1
@@ -106,6 +106,16 @@ if (in_array($argv[1] ?? '', ['--transport', '--recover-paused'], true)) {
         });
     if ($argv[1] === '--transport') {
         exit((new Kiwi_Retention_Archive_Health_Transport($service))->serve((string) getenv('SSH_ORIGINAL_COMMAND'), STDIN, STDOUT));
+    }
+    if ($argv[1] === '--operator-abort') {
+        $request = json_decode(stream_get_contents(STDIN, 16385), true, 16, JSON_THROW_ON_ERROR);
+        if (!is_array($request) || array_keys($request) !== ['attempt_id', 'confirm'] || $request['confirm'] !== true
+            || !is_string($request['attempt_id']) || preg_match('/^[a-f0-9]{32}$/D', $request['attempt_id']) !== 1) {
+            throw new RuntimeException('Invalid explicit fixture abort.');
+        }
+        $answer = $service->abort($request['attempt_id'], true);
+        echo json_encode($answer), "\n";
+        exit($answer['_exit_code']);
     }
     $db->before = static function (string $sql, $connection) use ($real): void {
         if (!str_starts_with($sql, 'SELECT latest.*')) { return; }
