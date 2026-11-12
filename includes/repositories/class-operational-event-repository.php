@@ -124,7 +124,13 @@ class Kiwi_Operational_Event_Repository
         $sql = 'INSERT INTO ' . $this->get_table_name() . ' (' . implode(', ', array_keys($row)) . ')'
             . ' SELECT ' . implode(', ', $values)
             . ' WHERE IS_USED_LOCK(%s) = CONNECTION_ID() AND CONNECTION_ID() = %d';
-        return $wpdb->query($wpdb->prepare($sql, ...$arguments)) === 1 ? 1 : 0;
+        $result = $wpdb->query($wpdb->prepare($sql, ...$arguments));
+        if ($result === 1) { return (int) ($wpdb->insert_id ?? 0); }
+        if ($result !== false || empty($row['idempotency_key'])) { return 0; }
+        // A duplicate may confirm its original row only while this connection still owns the guard.
+        return (int) $wpdb->get_var($wpdb->prepare('SELECT id FROM ' . $this->get_table_name()
+            . ' WHERE idempotency_key = %s AND IS_USED_LOCK(%s) = CONNECTION_ID() AND CONNECTION_ID() = %d LIMIT 1',
+            $row['idempotency_key'], $guard->name(), $guard->connection_id()));
     }
 
     public function insert_event_if_correlation_open(array $event): int

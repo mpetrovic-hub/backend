@@ -363,7 +363,9 @@ final class Kiwi_Retention_Archive_Health_Controller
         string $started_at,
         string $operation_order,
         ?string $archive_path = null,
-        array $external_context = []
+        array $external_context = [],
+        ?callable $assert_owner = null,
+        ?Kiwi_Database_Lock_Guard $write_guard = null
     ): string {
         $event = [
             'area' => 'retention',
@@ -399,7 +401,8 @@ final class Kiwi_Retention_Archive_Health_Controller
 
         return $this->operational_event_service->record_failure_action_if(
             $event,
-            function (?array $latest) use ($reason_code, $archive_path, $operation_order): bool {
+            function (?array $latest) use ($reason_code, $archive_path, $operation_order, $assert_owner): bool {
+                if ($assert_owner !== null) { $assert_owner(); }
                 if ($reason_code === 'archive_lock_active'
                     && trim((string) $archive_path) !== ''
                 ) {
@@ -423,14 +426,17 @@ final class Kiwi_Retention_Archive_Health_Controller
                     $operation_order,
                     ['raised', 'repeated', 'resolved']
                 );
-            }
+            },
+            $write_guard
         );
     }
 
     private function record_availability_recovery(
         string $archive,
         string $check,
-        string $operation_order
+        string $operation_order,
+        callable $assert_owner,
+        Kiwi_Database_Lock_Guard $write_guard
     ): string {
         $event = [
             'area' => 'retention',
@@ -449,20 +455,23 @@ final class Kiwi_Retention_Archive_Health_Controller
 
         return $this->operational_event_service->record_recovery_action_if(
             $event,
-            function (?array $latest) use ($operation_order): bool {
+            function (?array $latest) use ($operation_order, $assert_owner): bool {
+                $assert_owner();
                 return !$this->later_availability_transition_exists(
                     $latest,
                     $operation_order,
                     ['raised', 'repeated']
                 );
-            }
+            },
+            $write_guard
         );
     }
 
-    public function record_overdue(?array $last_confirmed_attempt, string $checked_at, string $operation_order): string
+    public function record_overdue(?array $last_confirmed_attempt, string $checked_at, string $operation_order,
+        callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard): string
     {
         return $this->record_availability_failure('health_check_overdue', $last_confirmed_attempt['generation'] ?? null,
-            '', $checked_at, $operation_order);
+            '', $checked_at, $operation_order, null, [], $assert_owner, $write_guard);
     }
 
     public function record_external_failure(?array $attempt, string $phase, string $message, string $reason_code): string
@@ -472,9 +481,9 @@ final class Kiwi_Retention_Archive_Health_Controller
             ['attempt_id' => $attempt['attempt_id'] ?? null, 'phase' => $phase, 'message' => $message]);
     }
 
-    public function record_external_recovery(array $attempt): string
+    public function record_external_recovery(array $attempt, callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard): string
     {
-        return $this->record_availability_recovery($attempt['generation'], 'quick', $attempt['operation_order']);
+        return $this->record_availability_recovery($attempt['generation'], 'quick', $attempt['operation_order'], $assert_owner, $write_guard);
     }
 
     private function later_availability_transition_exists(

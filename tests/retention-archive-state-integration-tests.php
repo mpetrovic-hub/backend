@@ -34,6 +34,7 @@ final class Archive_Health_Test_Database {
         try {
             if ($this->before) { ($this->before)($sql, $this); }
             $result = $this->pdo->exec($sql);
+            if (str_starts_with($sql, 'INSERT INTO ')) { $this->insert_id = (int) $this->pdo->lastInsertId(); }
             if ($this->after) { $result = ($this->after)($sql, $result, $this); }
             return $result;
         } catch (Throwable $e) { $this->last_error = 'controlled_probe_fault'; return false; }
@@ -350,6 +351,30 @@ try {
     $previous_wpdb = $GLOBALS['wpdb'];
     $GLOBALS['wpdb'] = $db;
     try {
+        $event_service = new Kiwi_Operational_Event_Service(new Kiwi_Operational_Event_Repository());
+        $event = ['area' => 'retention', 'severity' => 'error', 'event_type' => 'synthetic_guarded_failure',
+            'correlation_key' => 'synthetic_guarded_failure', 'idempotency_key' => 'guarded_failure_1',
+            'message' => 'Synthetic guarded failure.'];
+        $event_lock = 'kiwi_test_failure_' . substr(hash('sha256', $database), 0, 16);
+        $db->get_var($db->prepare('SELECT GET_LOCK(%s, 5)', $event_lock));
+        $guard = new Kiwi_Database_Lock_Guard($event_lock, (int) $db->get_var('SELECT CONNECTION_ID()'));
+        try {
+            $actions = [$event_service->record_failure_action_if($event, static fn() => true, $guard),
+                $event_service->record_failure_action_if($event, static fn() => true, $guard)];
+            $event['idempotency_key'] = 'guarded_failure_2';
+            $actions[] = $event_service->record_failure_action_if($event, static fn() => true, $guard);
+            $actions[] = $event_service->record_failure_action_if($event, static fn() => true, $guard);
+            aht_assert($actions === ['raised', 'raised', 'repeated', 'repeated'],
+                'guarded shared failure retries confirm their original raised and repeated events');
+        } finally { $db->get_var($db->prepare('SELECT RELEASE_LOCK(%s)', $event_lock)); }
+        $events = (new Kiwi_Operational_Event_Repository())->get_recent();
+        aht_assert($event_service->record_failure_action_if($event, static fn() => true, $guard) === '',
+            'an expired guard cannot acknowledge a duplicate failure');
+        $event['idempotency_key'] = 'guarded_failure_3';
+        aht_assert($event_service->record_failure_action_if($event, static fn() => true, $guard) === ''
+            && count($events) === 2 && (new Kiwi_Operational_Event_Repository())->get_recent() === $events,
+            'an expired guard cannot append a new repeated failure');
+        $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
         aht_assert($daily->freshness(true, true)['_exit_code'] === 0, 'real database confirms first freshness activation');
         $clock->now = new DateTimeImmutable('2026-03-09T05:00:00Z');
         $visible_before_completion = false;
@@ -431,6 +456,43 @@ try {
                 aht_assert($actual['state']['revision'] === 99, 'daily completion cannot overwrite a changed pre-transaction state');
             }
         }
+        foreach (['lock', 'raised_insert', 'repeated_insert'] as $fault) {
+            $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+            $clock->now = new DateTimeImmutable('2026-03-01T05:00:00Z');
+            $daily->freshness(true, true);
+            $clock->now = new DateTimeImmutable('2026-03-09T05:00:00Z');
+            if ($fault === 'repeated_insert') { $daily->freshness(); }
+            $id = bin2hex(random_bytes(16));
+            $accepted = $accepted_status = $accepted_events = null;
+            $db->before = static function ($sql, $connection) use ($fault, $settings, $database, $other,
+                $other_daily, $f, $id, &$accepted, &$accepted_status, &$accepted_events): void {
+                $matches = $fault === 'lock'
+                    ? str_starts_with($sql, 'SELECT GET_LOCK(') && str_contains($sql, 'kiwi_oe_lifecycle_')
+                    : str_starts_with($sql, 'INSERT INTO probe_kiwi_operational_events');
+                if (!$matches) { return; }
+                $connection->before = null;
+                $connection->pdo = aht_connection($settings, $database);
+                $GLOBALS['wpdb'] = $other;
+                try {
+                    $proof = kiwi_test_result_export(['service' => $other_daily, 'path' => $f['path']], $id);
+                    $accepted = $other_daily->accept_result($proof);
+                    $accepted_status = $other_daily->status($id);
+                    $accepted_events = (new Kiwi_Operational_Event_Repository())->get_recent();
+                } finally { $GLOBALS['wpdb'] = $connection; }
+            };
+            $failed = $daily->freshness();
+            $db->before = null;
+            $after = $daily->status($id);
+            aht_assert($failed['_exit_code'] === 2 && $accepted['_exit_code'] === 0
+                && $after['state'] === $accepted_status['state'] && $after['attempt'] === $accepted_status['attempt'],
+                'reconnected freshness preserves later accepted result and prior daily completion at ' . $fault);
+            aht_assert($after['open_incidents'] === []
+                && (new Kiwi_Operational_Event_Repository())->get_recent() === $accepted_events,
+                'stale freshness cannot append overdue after a later accepted result at ' . $fault);
+            aht_assert($daily->freshness()['result'] === 'ok'
+                && (new Kiwi_Operational_Event_Repository())->get_recent() === $accepted_events,
+                'freshness retry uses the later result without routine success events at ' . $fault);
+        }
     } finally { $GLOBALS['wpdb'] = $previous_wpdb; }
     $reset();
     $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
@@ -453,6 +515,68 @@ try {
 
     $GLOBALS['wpdb'] = $db;
     try {
+        foreach (['manual_abort', 'technical_failure', 'technical_failure_manual_abort'] as $mode) {
+            $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+            $id = bin2hex(random_bytes(16));
+            $daily->with_new_attempt($id, 'manual', basename($f['path']), filesize($f['path']));
+            $commits = 0;
+            $db->before = static function ($sql) use (&$commits): void {
+                if ($sql === 'COMMIT' && ++$commits === 2) { throw new RuntimeException('controlled_closure_commit_fault'); }
+            };
+            $close = static fn() => $mode === 'manual_abort' ? $daily->abort($id, true)
+                : $daily->fail_attempt($id, 'check', 'Synthetic interrupted check.', 'health_child_timeout');
+            $failed = $close();
+            $db->before = null;
+            $pending = $daily->status($id);
+            $events = (new Kiwi_Operational_Event_Repository())->get_recent();
+            aht_assert($failed['_exit_code'] === 2 && $pending['attempt']['status'] === 'open'
+                && $pending['attempt']['invalidated_at'] !== null && $pending['state']['active_attempt_id'] === $id
+                && count($events) === 1 && $events[0]['lifecycle_action'] === 'raised',
+                'failed final closure retains Pending after durable failure event: ' . $mode);
+            $retry_close = $mode === 'technical_failure_manual_abort' ? static fn() => $daily->abort($id, true) : $close;
+            $retry = $retry_close();
+            aht_assert($retry['_exit_code'] === 0, 'failure closure retry confirms the original raised event: ' . $mode);
+            $closed = $daily->status($id);
+            $expected = array_replace($pending['attempt'], ['status' => 'closed', 'closed_at' => $closed['attempt']['closed_at']]);
+            aht_assert($closed['attempt'] === $expected && $closed['attempt']['closed_at'] !== null
+                && $closed['state']['active_attempt_id'] === null && $closed['state']['last_confirmed_attempt_id'] === null,
+                'failure retry preserves invalidation and cause before clearing Pending: ' . $mode);
+            aht_assert((new Kiwi_Operational_Event_Repository())->get_recent() === $events
+                && $retry_close()['attempt'] === $closed['attempt'],
+                'failure retries preserve the original event and completed closure: ' . $mode);
+        }
+        foreach (['lock', 'insert'] as $fault) {
+            $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+            $daily->fail_attempt(null, 'start', 'Synthetic prior Availability failure.');
+            $proof = kiwi_test_result_export(['service' => $daily, 'path' => $f['path']], bin2hex(random_bytes(16)));
+            $aborted = $aborted_status = $aborted_events = null;
+            $db->before = static function ($sql, $connection) use ($fault, $settings, $database, $other,
+                $other_daily, $proof, &$aborted, &$aborted_status, &$aborted_events): void {
+                $matches = $fault === 'lock'
+                    ? str_starts_with($sql, 'SELECT GET_LOCK(') && str_contains($sql, 'kiwi_oe_lifecycle_')
+                    : str_starts_with($sql, 'INSERT INTO probe_kiwi_operational_events');
+                if (!$matches) { return; }
+                $connection->before = null;
+                // Closing the real PDO connection releases its health lock before the concurrent abort.
+                $connection->pdo = aht_connection($settings, $database);
+                $GLOBALS['wpdb'] = $other;
+                try {
+                    $aborted = $other_daily->abort($proof['attempt_id'], true);
+                    $aborted_status = $other_daily->status($proof['attempt_id']);
+                    $aborted_events = (new Kiwi_Operational_Event_Repository())->get_recent();
+                } finally { $GLOBALS['wpdb'] = $connection; }
+            };
+            $rejected = $daily->accept_result($proof);
+            $db->before = null;
+            $after = $daily->status($proof['attempt_id']);
+            aht_assert($aborted['_exit_code'] === 0 && $rejected['_exit_code'] === 2
+                && $after['attempt']['outcome'] === 'manual_abort' && $after['state']['last_confirmed_attempt_id'] === null,
+                'result loses ownership and yields to a real concurrent abort at ' . $fault);
+            aht_assert($after['state'] === $aborted_status['state'] && $after['attempt'] === $aborted_status['attempt']
+                && count($after['open_incidents']) === 1
+                && (new Kiwi_Operational_Event_Repository())->get_recent() === $aborted_events,
+                'reconnected result cannot resolve the concurrent abort Availability at ' . $fault);
+        }
         foreach (['result_commit_ack', 'closure_commit_ack', 'closure_write', 'event_readback'] as $fault) {
             $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
             $daily->fail_attempt(null, 'start', 'Synthetic result preparation failure.');
