@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 import time
 
@@ -21,9 +22,14 @@ if action == 'result' and mode in ('retry-result', 'uncertain-result'):
         sys.exit(255)
 if action == 'result' and mode == 'result-budget':
     time.sleep(20)
+if action == 'export' and mode in ('target-grew', 'lost-target-rejection'):
+    with sqlite3.connect(archive) as db:
+        db.execute('CREATE TABLE grew_before_export (id INTEGER PRIMARY KEY)')
 response = subprocess.run(['php', fixture, '--transport', database, archive], input=request,
                           capture_output=True, env=dict(os.environ, SSH_ORIGINAL_COMMAND=action))
 wire, exit_code = response.stdout, response.returncode
+if action == 'export' and mode == 'lost-target-rejection':
+    sys.exit(255)
 if action == 'status' and mode == 'malformed-status':
     value = json.loads(wire)
     value['state'] = []

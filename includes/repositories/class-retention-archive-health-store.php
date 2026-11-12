@@ -3,6 +3,7 @@
 if (!defined('ABSPATH')) { exit; }
 
 require_once __DIR__ . '/../services/class-retention-archive-health-json.php';
+require_once __DIR__ . '/class-database-lock-guard.php';
 
 /** Direct raw-JSON storage. Provisioning is deliberately not a runtime operation. */
 class Kiwi_Retention_Archive_Health_Store
@@ -67,7 +68,8 @@ class Kiwi_Retention_Archive_Health_Store
      * Both callbacks hold the short health write lock; neither may transfer or scan an archive.
      * The optional preparation confirms external effects in autocommit before the state transaction
      * (notably Operational Events, whose lifecycle lock must not precede their actual commit).
-     * It must not mutate health state. The same view, raw state and connection are required afterward.
+     * It must not mutate health state. It receives a live ownership assertion and an immutable
+     * SQL-write guard for any protection-releasing effects. The same view, state and connection remain required.
      */
     public function update(?string $attempt_id, callable $change, ?int $expected_revision = null, ?callable $before_transaction = null): array
     {
@@ -101,7 +103,9 @@ class Kiwi_Retention_Archive_Health_Store
                     throw new RuntimeException('health_revision_conflict');
                 }
                 $this->assert_owner($lock_name, $connection);
-                $before_transaction($prepared_view);
+                $before_transaction($prepared_view,
+                    function () use ($lock_name, $connection): void { $this->assert_owner($lock_name, $connection); },
+                    new Kiwi_Database_Lock_Guard($lock_name, $connection));
                 $this->assert_owner($lock_name, $connection);
                 if ($this->row(self::STATE_OPTION) !== $prepared_state || $this->read($attempt_id) !== $prepared_view) {
                     throw new RuntimeException('health_revision_conflict');

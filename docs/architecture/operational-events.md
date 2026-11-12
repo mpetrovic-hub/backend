@@ -83,6 +83,8 @@ The NTH `submitMessage` producer is an Aggregator-boundary producer:
 
 Credential-like keys are masked centrally before size checks and persistence. This includes authorization/authentication values, API keys, access tokens, generic tokens, client secrets, passwords, secrets, digests, signatures, HMACs, nonces, OTPs/PINs, private/signing/encryption keys, key material, complete PEM private-key blocks, cookie headers, and session-cookie/session-ID fields. Structured sensitive values become `[redacted]`; raw text that cannot be safely isolated becomes `[credential content removed]`.
 
+When a producer must persist the same compact diagnostic in its own capability state before recording the event, it first calls `mask_credentials()` on its `Kiwi_Operational_Event_Service` instance with the original text. This shares the complete text-masker; a partial producer regex must not destroy the credential label before central masking. Capability-specific path removal and length limits follow that masking.
+
 Producers must still select small diagnostic context rather than sending full payloads, headers, or object dumps. Business identifiers such as MSISDNs may be retained when operationally required.
 
 ## Extension boundary

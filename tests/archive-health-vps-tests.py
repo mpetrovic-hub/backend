@@ -193,6 +193,27 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual('closed', self.status(result['attempt_id'])['attempt']['status'])
         self.assertTrue((self.data / result['attempt_id'] / 'archive.sqlite.partial').exists())
 
+    def test_confirmed_export_rejection_reports_prestart_failure_and_allows_a_later_run(self):
+        result = health.ArchiveHealthRunner(self.limits, self.runtime, self.peer('target-grew')).run('manual')
+        self.assertEqual('failed', result['result'])
+        self.assertEqual('start', result['phase'])
+        self.assertTrue(result['failure_confirmed'])
+        status = self.status()
+        self.assertEqual(0, status['state']['last_attempt_sequence'])
+        self.assertIsNone(status['state']['active_attempt_id'])
+        self.assertEqual('health_run_failed', status['open_incidents'][0]['reason_code'])
+        self.assertFalse((self.data / result['attempt_id']).exists())
+        next_run = health.ArchiveHealthRunner(self.limits, self.runtime, self.transport).run('manual')
+        self.assertEqual('accepted', next_run['result'])
+        self.assertEqual(1, self.status()['state']['last_attempt_sequence'])
+
+    def test_lost_rejection_does_not_treat_an_absent_attempt_as_proof_no_start_can_follow(self):
+        result = health.ArchiveHealthRunner(self.limits, self.runtime, self.peer('lost-target-rejection')).run('manual')
+        self.assertEqual('uncertain', result['result'])
+        self.assertFalse(result['failure_confirmed'])
+        self.assertTrue((self.data / result['attempt_id'] / 'archive.sqlite.partial').exists())
+        self.assertEqual(0, self.status()['state']['last_attempt_sequence'])
+
     def test_completed_non_ok_sqlite_finding_is_accepted_with_corruption_protection(self):
         contents = bytearray(self.archive.read_bytes())
         self.assertEqual(bytes(8), contents[32:40])
@@ -399,7 +420,8 @@ class RunnerTests(unittest.TestCase):
         with patch.object(health.os, 'statvfs', return_value=SimpleNamespace(f_bavail=40000000000, f_frsize=1)):
             result = health.ArchiveHealthRunner(self.limits, self.runtime, self.peer('above-old-size-ceiling')).run('manual')
         # Only the descriptor is artificial: the real tiny source rejects its mismatching size safely.
-        self.assertEqual('copy', result['phase'])
+        self.assertEqual('start', result['phase'])
+        self.assertTrue(result['failure_confirmed'])
         self.assertEqual(['status', 'export', 'fail'], json.loads((self.root / 'peer-requests.json').read_text()))
         self.assertIsNone(self.status()['state']['last_confirmed_attempt_id'])
 
