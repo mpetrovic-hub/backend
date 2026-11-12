@@ -1,0 +1,35 @@
+[Unit]
+Description=Bounded Kiwi archive health verification
+After=network.target
+
+[Service]
+Type=oneshot
+User=kiwi-archive-health
+Group=kiwi-archive-health
+ExecStart=/usr/local/bin/kiwi-retention-archive-health run --scheduled
+Restart=no
+TimeoutStartSec=infinity
+TimeoutStopSec=15s
+KillMode=control-group
+UMask=0077
+StateDirectory=kiwi-archive-health
+StateDirectoryMode=0700
+LogsDirectory=kiwi-archive-health
+LogsDirectoryMode=0700
+CPUAccounting=yes
+CPUQuota=50%
+CPUWeight=10
+IOAccounting=yes
+IOReadBandwidthMax=/var/lib/kiwi-archive-health 16777216
+IOWriteBandwidthMax=/var/lib/kiwi-archive-health 8388608
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+StandardOutput=null
+StandardError=null

@@ -1,0 +1,10 @@
+/var/log/kiwi-archive-health/run.log {
+    size 1048576
+    rotate 4
+    missingok
+    notifempty
+    compress
+    delaycompress
+    su kiwi-archive-health kiwi-archive-health
+    create 0600 kiwi-archive-health kiwi-archive-health
+}

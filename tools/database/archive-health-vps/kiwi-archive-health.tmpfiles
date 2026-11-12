@@ -1,0 +1,4 @@
+d /var/lib/kiwi-archive-health 0700 kiwi-archive-health kiwi-archive-health -
+d /var/log/kiwi-archive-health 0700 kiwi-archive-health kiwi-archive-health -
+f /var/log/kiwi-archive-health/run.log 0600 kiwi-archive-health kiwi-archive-health -
+d /etc/kiwi-archive-health 0750 root kiwi-archive-health -
