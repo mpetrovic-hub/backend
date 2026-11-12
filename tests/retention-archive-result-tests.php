@@ -15,6 +15,38 @@ function kiwi_test_result_export(array $fixture, string $id): array
         'check' => 'quick_check', 'check_completed' => true, 'outcome' => 'ok'];
 }
 
+kiwi_run_test('Archive results preserve same-second failure identity and recover one Availability lifecycle', function (): void {
+    $f = kiwi_test_freshness_service('2026-03-01T05:00:00Z');
+    kiwi_assert_same('raised', $f['service']->fail_attempt(null, 'start', 'Synthetic first failure.')['incident_action'], 'The first failure raises Availability.');
+    usleep(2000);
+    kiwi_assert_same('repeated', $f['service']->fail_attempt(null, 'start', 'Synthetic second failure.')['incident_action'], 'A distinct failure in the same clock second repeats Availability.');
+    $rows = array_values($f['events']->rows);
+    kiwi_assert_same(2, count($rows), 'Distinct failures must not collapse under one idempotency key.');
+    kiwi_assert_true($rows[0]['idempotency_key'] !== $rows[1]['idempotency_key'], 'Same-second failures retain distinct operation identity.');
+    usleep(2000);
+    $request = kiwi_test_result_export($f, str_repeat('0', 32));
+    kiwi_assert_same(0, $f['service']->accept_result($request)['_exit_code'], 'A later complete source-bound finding recovers monitoring.');
+    kiwi_assert_same(['raised', 'repeated', 'resolved'], array_column(array_values($f['events']->rows), 'lifecycle_action'), 'The lifecycle remains append-only with one recovery.');
+    kiwi_assert_same([], $f['service']->status()['open_incidents'], 'The resolved Availability incident is no longer open.');
+});
+
+kiwi_run_test('Archive results close an older failed attempt without replacing newer Availability evidence', function (): void {
+    $f = kiwi_test_attempt_service();
+    $id = str_repeat('0', 32);
+    $request = kiwi_test_result_export($f, $id);
+    usleep(2000);
+    kiwi_assert_same(0, $f['service']->fail_attempt(null, 'start', 'Newer synthetic start failure.')['_exit_code'], 'A later failed start is confirmed.');
+    $events = $f['events']->rows;
+    kiwi_assert_same(0, $f['service']->fail_attempt($id, 'check', 'Older synthetic timeout.', 'health_child_timeout')['_exit_code'], 'The older attempt can still close safely.');
+    kiwi_assert_same($events, $f['events']->rows, 'A delayed old failure cannot replace the newer failure evidence.');
+    $status = $f['service']->status($id);
+    kiwi_assert_same('technical_failure', $status['attempt']['outcome'], 'The old attempt retains its own failure.');
+    kiwi_assert_same(null, $status['state']['active_attempt_id'], 'Confirmed failure closure releases only its Pending.');
+    kiwi_assert_same(null, $status['state']['last_confirmed_attempt_id'], 'Technical failure is never a confirmed archive finding.');
+    kiwi_assert_same(2, $f['service']->accept_result($request)['_exit_code'], 'Late completed bytes cannot revive the invalidated attempt.');
+    kiwi_assert_same($events, $f['events']->rows, 'Late result cannot resolve the newer failure either.');
+});
+
 kiwi_run_test('Kiwi_Operational_Event_Service confirms recovery readback and retries uncertain closure without duplicate history', function (): void {
     $repository = new Kiwi_Test_Freshness_Event_Repository();
     $service = new Kiwi_Operational_Event_Service($repository);

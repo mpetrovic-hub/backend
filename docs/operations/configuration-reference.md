@@ -103,7 +103,7 @@ Saved per-source settings are not overwritten when defaults change. Every source
   - protected filesystem root for SQLite retention archives, per-generation locks, and corruption write-block sentinels
   - keep outside public content and writable only by the deployment account
 - `KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS`
-  - supervision budget for the external read-only SQLite child and its corruption-gate handoff
+  - supervision budget for the retained Hostinger `diagnose`/confirmed `unblock` read-only child and its corruption-gate handoff; independent of the VPS phase budgets below
   - default and maximum: `7200` (120 minutes)
   - accepted range: `30` to `7200`
   - existing explicit values such as `600` or `3600` remain explicit; adjust them deliberately during an authorized rollout

@@ -597,20 +597,6 @@ final class Kiwi_Retention_Archive_Health_Command
             string $reason_code,
             string $command
         ): ?array {
-            if ($command === 'check'
-                && class_exists('Kiwi_Retention_Archive_Health_Service')
-                && method_exists(
-                    'Kiwi_Retention_Archive_Health_Service',
-                    'record_scheduled_bootstrap_failure'
-                )
-            ) {
-                try {
-                    return (new Kiwi_Retention_Archive_Health_Service())
-                        ->record_scheduled_bootstrap_failure($reason_code);
-                } catch (Throwable $error) {
-                }
-            }
-
             try {
                 return (new Kiwi_Retention_Archive_Health_Bootstrap_Recorder())
                     ->record($reason_code, $command);
@@ -802,7 +788,7 @@ $registered = WP_CLI::add_command(
     new Kiwi_Retention_Archive_Health_Command(),
     [
         'when' => 'before_wp_load',
-        'shortdesc' => 'Run, diagnose, or manually unblock retention archive health.',
+        'shortdesc' => 'Inspect archive health, diagnose, or explicitly recover an archive.',
     ]
 );
 if (!$registered) {
