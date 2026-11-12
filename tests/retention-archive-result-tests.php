@@ -15,6 +15,43 @@ function kiwi_test_result_export(array $fixture, string $id): array
         'check' => 'quick_check', 'check_completed' => true, 'outcome' => 'ok'];
 }
 
+kiwi_run_test('Archive results preserve timeout text and technical failure context through safe closure', function (): void {
+    foreach ([
+        'health_child_timeout' => 'The external read-only retention archive health check did not complete definitively.',
+        'health_run_failed' => 'Archivcheck bei check gescheitert: Synthetic incomplete check.',
+    ] as $reason => $expected_message) {
+        $f = kiwi_test_attempt_service();
+        $id = str_repeat('e', 32);
+        $started = $f['service']->with_new_attempt($id, 'manual', basename($f['path']), filesize($f['path']));
+        kiwi_assert_same(0, $started['_exit_code'], 'The failure belongs to an actual durable attempt.');
+        kiwi_assert_same(true, Kiwi_Retention_Archive_Write_Block::persist($f['path'] . '.lock'), 'An independent file protection remains outside technical closure.');
+        $before = $f['service']->status($id);
+        kiwi_assert_same($id, $before['state']['active_attempt_id'], 'The started attempt must be Pending before failure.');
+
+        $failed = $f['service']->fail_attempt($id, 'check', 'Synthetic incomplete check.', $reason);
+        kiwi_assert_same(0, $failed['_exit_code'], 'The technical failure must be confirmed before Pending ends.');
+        $events = (new Kiwi_Operational_Event_Service($f['events']))->get_open_incidents();
+        kiwi_assert_same(1, count($events), 'Technical closure records one existing Availability incident.');
+        kiwi_assert_same($expected_message, $events[0]['message'], 'The reason code selects the agreed readable event text.');
+        kiwi_assert_same('retention_archive_health_unavailable', $events[0]['event_type'], 'Both failures keep the existing Availability type.');
+        kiwi_assert_same('error', $events[0]['severity'], 'A technical failure never claims corruption severity.');
+        $context = json_decode($events[0]['context_json'], true);
+        kiwi_assert_same($reason, $context['reason_code'], 'The existing failure code is preserved.');
+        kiwi_assert_same($id, $context['attempt_id'], 'The event stays bound to its attempt.');
+        kiwi_assert_same(basename($f['path']), $context['archive'], 'The event stays bound to its generation.');
+        kiwi_assert_same('check', $context['phase'], 'The concrete work phase remains available.');
+        kiwi_assert_same('Synthetic incomplete check.', $context['message'], 'The compact cause remains available independently of the readable text.');
+
+        $after = $f['service']->status($id);
+        kiwi_assert_same('closed', $after['attempt']['status'], 'Confirmed failure durably closes the attempt.');
+        kiwi_assert_same('technical_failure', $after['attempt']['outcome'], 'Technical failure is not an archive finding.');
+        kiwi_assert_true($after['attempt']['invalidated_at'] !== null, 'The failed attempt is invalidated before completion.');
+        kiwi_assert_same(null, $after['state']['active_attempt_id'], 'Confirmed technical closure releases its Pending.');
+        kiwi_assert_same(null, $after['state']['last_confirmed_attempt_id'], 'Failure cannot create freshness evidence.');
+        kiwi_assert_same($before['target']['protection'], $after['target']['protection'], 'Independent archive protection survives the technical closure.');
+    }
+});
+
 kiwi_run_test('Archive results preserve same-second failure identity and recover one Availability lifecycle', function (): void {
     $f = kiwi_test_freshness_service('2026-03-01T05:00:00Z');
     kiwi_assert_same('raised', $f['service']->fail_attempt(null, 'start', 'Synthetic first failure.')['incident_action'], 'The first failure raises Availability.');
