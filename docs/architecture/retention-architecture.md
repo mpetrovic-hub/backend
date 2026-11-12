@@ -74,17 +74,34 @@ Receipt commit, partial MySQL delete, or later finalization failure remains resu
 
 ## Lean archive-health capability
 
-Archive health has one purpose: run an explicitly selected SQLite read-only check under the same generation lock used by cleanup and translate that result into a compact operational outcome. It does not own a calendar, retry campaign, annual campaign, notification policy, archive lifecycle, or replacement workflow.
+Archive health owns the durable protection around a generation-bound verification attempt and translates explicit read-only SQLite checks into compact operational outcomes. The canonical archive, its locks and all three retention writers remain on Production. The capability is independent of Aggregator, country, MNO, Billing and Flow.
 
-The public WP-CLI surface has exactly three modes:
+The public WP-CLI surface includes:
 
 - `check`: automatically schedulable check of the active archive; it may maintain availability and corruption Incidents and the corruption write block.
 - `diagnose`: explicit read-only check of one discovered archive; it never changes safety state or Incidents.
 - `unblock`: explicitly confirmed manual recovery; it runs `integrity_check` before changing any safety state.
+- `status`, optionally `--attempt=<ID>`: read the durable state, attempt, target locks and open Retention Operational Incidents without scanning SQLite or reconciling safety state.
+- `abort --attempt=<ID> --confirm`: invalidate the exact open attempt, persist Availability and only then close its Pending protection.
+
+## Durable verification attempts
+
+`Kiwi_Retention_Archive_Health_Store` uses the existing configured WordPress options table directly. The external deployment process must prepare its initial state in InnoDB before dependent runtime is enabled; runtime never creates missing state or repairs incompatible data. `kiwi_retention_archive_health_state` and `kiwi_retention_archive_health_attempt_<ID>` contain compact raw JSON format version 1, with autoload disabled. Each row is bounded to 16 KiB. Attempt rows remain permanently; there is no weekly marker, history pruning or new table.
+
+The fixed state contains `format_version`, `revision`, `activated_at`, `active_attempt_id`, `last_confirmed_attempt_id`, `last_freshness_completed_at` and `last_attempt_sequence`. An attempt records its random ID, increasing sequence, start kind/time, canonical generation, expected/received bytes, SHA-256 and transfer-end proof. `status` (`open`/`closed`) is separate from `outcome` (unknown, `ok`, `corruption`, `technical_failure`, `manual_abort`). The result fingerprint, receipt/acceptance/invalidation/closure times and bounded reason/phase/message preserve incomplete effects and acknowledgement retries. Timestamps are UTC; the freshness calendar uses Europe/Berlin. A null last-freshness time means no completed daily run has been recorded.
+
+All writes use the same database-scoped MySQL named lock with a five-second maximum wait. The store re-reads raw rows, verifies the revision and exact previous bytes, and checks that the same connection still owns the lock before and after each mutation. State and attempt are committed together in a short transaction. Success requires the commit and exact matching direct readback while ownership is still proved. Options API/cache success, a reconnection or an uncertain commit is insufficient. No database transaction spans archive transfer or scanning.
+
+The internal `with_new_attempt` capability acquires the real generation lock, revalidates the target and size, and commits the attempt and Pending together before invoking the archive operation. There is no separate public start command. At most one attempt is active. An unsuccessful or competing start releases no archive bytes and creates no new Pending. Missing, malformed, contradictory or unreadable state blocks dependent work.
+
+Session, Handoff and Engagement cleanup check Pending under the generation lock before archive writes/receipt repair and immediately before MySQL deletion, including resumed runs with verified receipts. Pending applies to its canonical generation; corrupt/unreadable state fails closed. Raw-data compaction and Operational Event cleanup do not gain a global Health gate. Existing coverage, Source-ID receipts, frozen generations and corruption protections remain independent requirements.
+
+Technical failure and explicit manual abort first persist invalidation, then secure the existing `retention_archive_health_unavailable` error Incident (`area=retention`), then close the attempt and clear Pending. New technical cases use `health_run_failed`; `health_child_timeout` is preserved. Failed persistence leaves Pending intact. Repeating an already completed abort returns its original closure. A stored corruption outcome cannot be overwritten. Neither elapsed time nor source-process death closes an attempt. Conversely, even after a safe abort, a still living source keeps its actual OS lock until it ends. The result/transport and freshness flows extend this common contract in their own implementation slices.
 
 ## Components and boundaries
 
-- `Kiwi_Retention_Archive_Health_Service` is a thin facade over the controller.
+- `Kiwi_Retention_Archive_Health_Service` owns the durable attempt lifecycle/status and delegates existing checks and recovery to the controller.
+- `Kiwi_Retention_Archive_Health_Store` owns direct validated option access, connection-owned locking, exact comparisons and transactional confirmation.
 - `Kiwi_Retention_Archive_Health_Controller` resolves the target, interprets supervised results, and coordinates Operational Incidents and manual recovery.
 - `Kiwi_Retention_Archive_Check_Supervisor` owns the bounded child process and accepts corruption only from a completed non-`ok` PRAGMA result.
 - `Kiwi_Retention_Archive_Health_Read_Brake` proves the child-only native brake through the actual PDO/SQLite path before opening the full target. Two complete synthetic fixture scans at 700/350 covered 4-KiB read units per second share the later target PID. Exact file/VFS identity, counters and elapsed time must agree; the normal target rate is then locked at 700. Missing proof or a lost binding is a technical error, never corruption evidence.
@@ -112,7 +129,7 @@ The corruption transition is fail-closed: persist the generation-specific write-
 
 ## Manual recovery
 
-Recovery is an operator decision outside normal runtime. `unblock` requires explicit confirmation and completes a full read-only `integrity_check` first.
+Recovery is an operator decision outside normal runtime. `unblock` and replacement reject any open attempt before verification and recheck Pending under the generation lock. The operator must safely finish or explicitly abort that attempt first. `unblock` then requires its own explicit confirmation and completes a full read-only `integrity_check` before recovery effects. Clearing Pending never clears a corruption Incident or write block.
 
 - Repaired in place: verify archive `A`, clear `A`'s sentinel, then resolve its corruption Incident.
 - Explicit replacement: require an existing corruption gate on `A`, require explicitly selected `B` to be the distinct generation the cleanup resolver will actually select, verify `B`, and require any independent corruption gate on `B` to be cleared through `B`'s own confirmed recovery first. Persist a distinct replacement-transition block on `B` bound to source `A` before terminalizing unfinished cleanup runs bound to `A`. The source gate is revalidated after acquiring `A`'s generation lock; only an already persisted transition marker bound to `A` permits a final-clear retry after `A`'s gate has resolved. This active-generation rule also permits a frozen prior-year `A` to move to the current active `B` after year rollover without special calendar state. Workers re-read their run under `A`'s generation lock and all ordinary audit updates reject terminal rows, so a worker that loaded stale state cannot resurrect or continue a replaced run. Clear `A`'s sentinel and resolve `A`'s Incident as its final recovery action; `B` remains blocked until that resolution succeeds, and only then is the transition block removed. Health never reconciles this transition marker into corruption evidence for `B`; its source binding permits an idempotent final-clear retry without authorizing replacement of an unrelated healthy archive.
@@ -121,4 +138,4 @@ This order preserves a continuous safety gate. Replacement transfers no cursor o
 
 ## Deliberate exclusions
 
-The capability deliberately contains no central state reducer, state JSON, daily/weekly policy, bounded retry planner, annual snapshot, quarantine marker, automatic successor generation, automatic repair, notification transport, or mutation from `diagnose`. Legacy artifacts may remain on disk during migration, but current code neither reads nor writes them.
+The capability deliberately contains no bounded retry planner, annual snapshot, quarantine marker, automatic successor generation, automatic repair, notification transport, or mutation from `diagnose`. Legacy quarantine artifacts may remain on disk during migration, but current code neither reads nor writes them.

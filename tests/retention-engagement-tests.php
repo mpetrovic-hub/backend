@@ -33,6 +33,7 @@ function wp_schedule_single_event($timestamp, $hook, $args = []): bool
 }
 
 foreach (['core/class-config.php', 'core/class-database-table-names.php',
+    'repositories/class-retention-archive-health-store.php', 'repositories/class-operational-event-repository.php',
     'repositories/interface-statistics-read-repository.php',
     'repositories/class-landing-session-engagement-repository.php', 'repositories/class-landing-page-session-repository.php',
     'repositories/class-landing-funnel-daily-summary-repository.php', 'repositories/class-landing-funnel-daily-tkzone-summary-repository.php',
@@ -42,6 +43,8 @@ foreach (['core/class-config.php', 'core/class-database-table-names.php',
     'services/class-retention-archive-lock.php', 'services/class-retention-sqlite-archive-service.php',
     'services/class-retention-coverage-gate.php', 'services/class-operational-event-service.php',
     'services/class-retention-corruption-safety-gate-coordinator.php', 'services/class-retention-worker-support.php',
+    'services/class-retention-archive-check-supervisor.php', 'services/class-retention-archive-health-controller.php',
+    'services/class-retention-archive-health-service.php',
     'services/class-retention-cleanup-service.php',
     'services/class-retention-archive-reader.php', 'services/class-retention-engagement-worker.php'] as $file) {
     require_once ABSPATH . 'includes/' . $file;
@@ -296,7 +299,12 @@ function et_fixture(Engagement_Test_Config $config): array
     $GLOBALS['engagement_test_transients'] = [];
     $GLOBALS['engagement_test_cron'] = []; $GLOBALS['engagement_test_actions'] = [];
     foreach (['kiwi_landing_session_engagements', 'kiwi_landing_page_sessions', 'kiwi_retention_cleanup_runs',
-        'kiwi_landing_funnel_daily_summary', 'kiwi_landing_funnel_daily_tkzone_summary', 'kiwi_sales'] as $name) { $wpdb->pdo->exec('DROP TABLE IF EXISTS t72_' . $name); }
+        'kiwi_landing_funnel_daily_summary', 'kiwi_landing_funnel_daily_tkzone_summary', 'kiwi_sales', 'options'] as $name) { $wpdb->pdo->exec('DROP TABLE IF EXISTS t72_' . $name); }
+    $wpdb->pdo->exec('CREATE TABLE t72_options (option_name VARCHAR(191) PRIMARY KEY, option_value LONGTEXT NOT NULL, autoload VARCHAR(20) NOT NULL) ENGINE=InnoDB');
+    $wpdb->insert('t72_options', ['option_name' => Kiwi_Retention_Archive_Health_Store::STATE_OPTION,
+        'option_value' => json_encode(['format_version' => 1, 'revision' => 0, 'activated_at' => null,
+            'active_attempt_id' => null, 'last_confirmed_attempt_id' => null,
+            'last_freshness_completed_at' => null, 'last_attempt_sequence' => 0]), 'autoload' => 'no']);
     (new Kiwi_Landing_Session_Engagement_Repository())->create_table();
     (new Kiwi_Landing_Page_Session_Repository())->create_table();
     (new Kiwi_Retention_Cleanup_Run_Repository())->create_table();
@@ -320,6 +328,55 @@ function et_components(Engagement_Test_Config $config): array
     $registry = new Kiwi_Retention_Source_Registry();
     $worker = new Engagement_Test_Worker($config, $registry, $repo, $archive, $events, $lock, $gate);
     return compact('events', 'lock', 'repo', 'gate', 'archive', 'registry', 'worker', 'config');
+}
+
+function et_health_pending_scenario(): void
+{
+    global $wpdb;
+    foreach (['write', 'receipt'] as $boundary) {
+        $config = new Engagement_Test_Config(); $config->dry_run = false;
+        $f = et_fixture($config);
+        $source = $f['registry']->get('landing_session_engagements');
+        et_full_row($source, et_engagement(1, '2026-05-01 12:00:00'));
+        $path = et_archive_sessions($f, [et_session(99, 99, '2026-05-01 12:00:00')]);
+        $wpdb->pdo->exec('DROP TABLE IF EXISTS t72_kiwi_operational_events');
+        (new Kiwi_Operational_Event_Repository())->create_table();
+        $events = new Kiwi_Operational_Event_Service();
+        $health = new Kiwi_Retention_Archive_Health_Service($config, $f['archive'], $f['lock'], $events,
+            run_repository: $f['repo']);
+        $f['worker']->run_source('landing_session_engagements', 'manual');
+        if ($boundary === 'receipt') {
+            $f['archive']->after_receipt_readback = static function (): void { throw new RuntimeException('fixture_pause_after_receipt'); };
+            $f['worker']->run_worker('landing_session_engagements');
+            $sqlite = new PDO('sqlite:' . $path);
+            et_check((int) $sqlite->query("SELECT COUNT(*) FROM archive_batch_rows WHERE source_pk = 1")->fetchColumn() === 1,
+                'Health Pending fixture holds a committed Source-ID receipt before MySQL deletion');
+            $sqlite = null;
+        }
+        $id = bin2hex(random_bytes(16));
+        clearstatcache(true, $path);
+        $started = $health->with_new_attempt($id, 'manual', basename($path), filesize($path));
+        et_check($started['_exit_code'] === 0, 'Health start commits state and attempt in real InnoDB: ' . $boundary);
+        $restarted = et_components($config);
+        $blocked = $restarted['worker']->run_worker('landing_session_engagements');
+        et_check(($blocked['error_code'] ?? '') === 'health_attempt_pending', 'Restarted Engagement worker observes Pending: ' . $boundary);
+        et_check((int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 1,
+            'Pending preserves real MySQL engagement row: ' . $boundary);
+        if ($boundary === 'write') {
+            $sqlite = new PDO('sqlite:' . $path);
+            et_check((int) $sqlite->query("SELECT COUNT(*) FROM archive_batch_rows WHERE source_pk = 1")->fetchColumn() === 0,
+                'Pending prevents actual SQLite archive writes');
+            $sqlite = null;
+        }
+        $aborted = $health->abort($id, true);
+        et_check($aborted['_exit_code'] === 0, 'Safe abort persists real availability before Pending release: ' . $boundary);
+        $again = $health->abort($id, true);
+        et_check($again['_exit_code'] === 0 && $again['attempt']['closed_at'] === $aborted['attempt']['closed_at'],
+            'Real InnoDB abort acknowledgement is idempotent');
+        $run = et_finish($restarted);
+        et_check($run['status'] === 'completed' && (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $source['source_table']) === 0,
+            'Safe abort permits receipt-proven real Engagement deletion: ' . $boundary);
+    }
 }
 function et_initial_archive_scenario(string $step): void
 {
@@ -1709,6 +1766,7 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--health-pending', $argv, true)) { et_health_pending_scenario(); return; }
     if (in_array('--tk-zero-day', $argv, true)) {
         et_tk_zero_day_scenarios(); echo 'TK_ZERO_DAY_TESTS_PASSED ', $GLOBALS['et_checks'], "\n"; return;
     }
@@ -2255,6 +2313,7 @@ try {
     foreach (['target', 'offday', 'live_conflict', 'archive_conflict'] as $step) { et_session_day_scenario($step); }
     foreach (['update', 'insert', 'existing'] as $step) { et_disabled_audit_scenario($step); }
     et_tk_zero_day_scenarios();
+    et_health_pending_scenario();
     echo 'REAL_ENGINE_TESTS_PASSED ', $GLOBALS['et_checks'], "\n";
 } finally {
     $wpdb->query('ROLLBACK');

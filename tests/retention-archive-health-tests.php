@@ -838,7 +838,7 @@ kiwi_run_test('Early bootstrap failure leaves no state and the next controller s
             'name' => basename($archive),
             'path' => $archive,
         ]];
-        $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $controller = kiwi_test_health_controller(
             $archive_service,
             new Kiwi_Retention_Archive_Check_Supervisor(
                 new Kiwi_Config(),
@@ -1153,7 +1153,7 @@ kiwi_run_test('Invalid scheduled checks raise and repeat Availability failures',
         }
     );
     $event_repository = new Kiwi_Test_Operational_Event_Repository();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         new Kiwi_Test_Lean_Safety_Gate(),
@@ -1174,7 +1174,7 @@ kiwi_run_test('Invalid scheduled checks raise and repeat Availability failures',
 
     $failing_repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
     $failing_repository->fail_next_insert = true;
-    $failing_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $failing_controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         new Kiwi_Test_Lean_Safety_Gate(),
@@ -1430,7 +1430,7 @@ kiwi_run_test('Health controller raises repeats and resolves one availability co
     $clock = static function () use (&$times): DateTimeImmutable {
         return array_shift($times) ?? new DateTimeImmutable('2026-08-01T10:00:06+02:00');
     };
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -1470,7 +1470,7 @@ kiwi_run_test('Availability idempotency remains unique for checks in the same se
     $event_repository = new Kiwi_Test_Operational_Event_Repository();
     $events = new Kiwi_Operational_Event_Service($event_repository);
     $fixed_time = new DateTimeImmutable('2026-08-01T10:00:00+02:00');
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         new Kiwi_Test_Lean_Safety_Gate(),
@@ -1528,7 +1528,7 @@ kiwi_run_test('Health controller retries failed Availability resolution from an 
     $event_repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
     $events = new Kiwi_Operational_Event_Service($event_repository);
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -1579,7 +1579,7 @@ kiwi_run_test('Health controller does not resolve Availability from a transition
     $event_repository = new Kiwi_Test_Operational_Event_Repository();
     $events = new Kiwi_Operational_Event_Service($event_repository);
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -1652,7 +1652,7 @@ kiwi_run_test('Health controller resolves Availability when a late corruption ga
         ],
     ]);
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -1687,7 +1687,7 @@ kiwi_run_test('Concurrent deferred health failure cannot reopen a definitive Ava
     $gate = new Kiwi_Test_Lean_Safety_Gate();
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $active_lock = new Kiwi_Test_Archive_Lock_Probe();
-    $opening_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $opening_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1703,7 +1703,7 @@ kiwi_run_test('Concurrent deferred health failure cannot reopen a definitive Ava
         $events,
         $runs
     );
-    $healthy_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $healthy_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1719,7 +1719,7 @@ kiwi_run_test('Concurrent deferred health failure cannot reopen a definitive Ava
         $events,
         $runs
     );
-    $deferred_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $deferred_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1780,7 +1780,7 @@ kiwi_run_test('Concurrent new Availability raise cannot follow a definitive heal
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
     $released_lock = new Kiwi_Test_Archive_Lock_Probe();
     $released_lock->available = true;
-    $healthy_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $healthy_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1797,7 +1797,7 @@ kiwi_run_test('Concurrent new Availability raise cannot follow a definitive heal
         $runs
     );
     $deferred_supervisor_calls = 0;
-    $deferred_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $deferred_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1857,7 +1857,7 @@ kiwi_run_test('Older timeout cannot reopen Availability after a later definitive
     $events = new Kiwi_Operational_Event_Service($repository);
     $gate = new Kiwi_Test_Lean_Safety_Gate();
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
-    $healthy_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $healthy_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1873,7 +1873,7 @@ kiwi_run_test('Older timeout cannot reopen Availability after a later definitive
         $events,
         $runs
     );
-    $timeout_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $timeout_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1926,7 +1926,7 @@ kiwi_run_test('Older definitive check cannot resolve a later Availability failur
         'correlation_key' => 'retention_archive_health_availability',
     ]);
     $events = new Kiwi_Operational_Event_Service($repository);
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -1983,7 +1983,7 @@ kiwi_run_test('Older Availability failure cannot replace newer failure evidence'
     ]];
     $repository = new Kiwi_Test_Interleaved_Operational_Event_Repository();
     $events = new Kiwi_Operational_Event_Service($repository);
-    $older_failure_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $older_failure_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2000,7 +2000,7 @@ kiwi_run_test('Older Availability failure cannot replace newer failure evidence'
         $events,
         new Kiwi_Test_Retention_Cleanup_Run_Repository()
     );
-    $healthy_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $healthy_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2060,7 +2060,7 @@ kiwi_run_test('Completed timeout without a later definitive check still opens Av
         'generation' => 1,
     ]];
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2105,7 +2105,7 @@ kiwi_run_test('Health controller classifies active archive resolution failures a
 
     foreach ($cases as $label => $case) {
         $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-        $controller = new Kiwi_Retention_Archive_Health_Controller(
+        $controller = kiwi_test_health_controller(
             $case['archive_service'],
             new Kiwi_Retention_Archive_Check_Supervisor(),
             new Kiwi_Test_Lean_Safety_Gate(),
@@ -2147,7 +2147,7 @@ kiwi_run_test('Health controller reports unreadable corruption gates as Availabi
         'incident_open' => false,
         'incident_action' => 'none',
     ];
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -2202,7 +2202,7 @@ kiwi_run_test('Health controller never promotes incomplete exceptions to corrupt
         }
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -2237,7 +2237,7 @@ kiwi_run_test('Health controller persists corruption gates only after completed 
         }
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -2268,7 +2268,7 @@ kiwi_run_test('Health controller preserves a child write block when reconciliati
     $competing_lock_service = new Kiwi_Retention_Archive_Lock();
     $competing_lock_handle = null;
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-    $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $gate = kiwi_test_corruption_gate(
         $lock_service,
         $events,
         new Kiwi_Test_Retention_Cleanup_Run_Repository()
@@ -2286,7 +2286,7 @@ kiwi_run_test('Health controller preserves a child write block when reconciliati
             ];
         }
     );
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -2330,12 +2330,12 @@ kiwi_run_test('Successful unblock supersedes an older child corruption result', 
     ]];
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
-    $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $gate = kiwi_test_corruption_gate(
         new Kiwi_Retention_Archive_Lock(),
         $events,
         $runs
     );
-    $unblock_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $unblock_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2352,7 +2352,7 @@ kiwi_run_test('Successful unblock supersedes an older child corruption result', 
         $runs
     );
     $unblocked = null;
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2408,7 +2408,7 @@ kiwi_run_test('Successful unblock supersedes an older corrupt unblock verificati
     ]];
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
-    $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $gate = kiwi_test_corruption_gate(
         new Kiwi_Retention_Archive_Lock(),
         $events,
         $runs
@@ -2419,7 +2419,7 @@ kiwi_run_test('Successful unblock supersedes an older corrupt unblock verificati
         'sqlite_check_reported_corruption'
     );
     kiwi_assert_same(true, $blocked['write_blocked'] ?? false, 'Expected the initial corruption gate fixture.');
-    $recovery_controller = new Kiwi_Retention_Archive_Health_Controller(
+    $recovery_controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2436,7 +2436,7 @@ kiwi_run_test('Successful unblock supersedes an older corrupt unblock verificati
         $runs
     );
     $recovered = null;
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2486,7 +2486,7 @@ kiwi_run_test('Missing child sentinel without unblock remains fail closed', func
     ]];
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
     $runs = new Kiwi_Test_Retention_Cleanup_Run_Repository();
-    $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $gate = kiwi_test_corruption_gate(
         new Kiwi_Retention_Archive_Lock(),
         $events,
         $runs
@@ -2499,7 +2499,7 @@ kiwi_run_test('Missing child sentinel without unblock remains fail closed', func
     $prior_recovery = $gate->unblock($archive, '', '1');
     kiwi_assert_same(true, $prior_corruption['incident_open'] ?? false, 'Expected the older Corruption lifecycle fixture.');
     kiwi_assert_same(true, $prior_recovery['allowed'] ?? false, 'Expected the older verified recovery fixture.');
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2553,7 +2553,7 @@ kiwi_run_test('Sentinel-only unblock fails closed when its Incident audit cannot
     $repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
     $repository->fail_next_insert = true;
     $events = new Kiwi_Operational_Event_Service($repository);
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         $events,
         new Kiwi_Test_Retention_Cleanup_Run_Repository()
@@ -2589,7 +2589,7 @@ kiwi_run_test('Sentinel-only unblock preserves generation-lock deferral', functi
     $competing_handle = $competing['handle'] ?? null;
     kiwi_assert_true($competing_handle instanceof Kiwi_Retention_Archive_Lock_Handle, 'Expected the competing generation lock.');
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-    $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $gate = kiwi_test_corruption_gate(
         $gate_lock,
         $events,
         new Kiwi_Test_Retention_Cleanup_Run_Repository()
@@ -2601,7 +2601,7 @@ kiwi_run_test('Sentinel-only unblock preserves generation-lock deferral', functi
         'year' => '2026',
         'generation' => 1,
     ]];
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),
@@ -2737,7 +2737,7 @@ kiwi_run_test('Health controller reconciles a failed child sentinel from the Inc
             'incident_action' => 'none',
         ],
     ];
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -2778,7 +2778,7 @@ kiwi_run_test('Health controller reports an error when both corruption gates fai
         'incident_open' => false,
         'incident_action' => 'none',
     ];
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -2794,7 +2794,7 @@ kiwi_run_test('Health controller reports an error when both corruption gates fai
 });
 
 kiwi_run_test('Corruption safety gate fails closed when Incident state is unreadable', function (): void {
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         new Kiwi_Retention_Archive_Lock(),
         new Kiwi_Test_Unreadable_Operational_Event_Service(),
         new Kiwi_Test_Manual_Replacement_Run_Repository()
@@ -2813,7 +2813,7 @@ kiwi_run_test('Corruption safety gate rejects malformed replacement transition m
         Kiwi_Retention_Archive_Write_Block::get_replacement_transition_path($archive . '.lock'),
         "truncated-transition-state\n"
     );
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         new Kiwi_Retention_Archive_Lock(),
         new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
         new Kiwi_Test_Manual_Replacement_Run_Repository()
@@ -2939,7 +2939,7 @@ kiwi_run_test('Corruption safety gate rechecks a lone sentinel under the generat
     $lock->release($handle);
     $lock->clear_before_next_acquire = $archive;
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         $events,
         new Kiwi_Test_Manual_Replacement_Run_Repository()
@@ -2965,7 +2965,7 @@ kiwi_run_test('Corruption safety gate writes block before Incident and resolves 
     $event_repository = new Kiwi_Test_Operational_Event_Repository();
     $events = new Kiwi_Operational_Event_Service($event_repository);
     $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         new Kiwi_Retention_Archive_Lock(),
         $events,
         $runs
@@ -3016,7 +3016,7 @@ kiwi_run_test('Sentinel-present corruption recording cannot reopen a concurrent 
     kiwi_assert_same(true, $handle->persist_write_blocked(), 'Expected existing corruption sentinel fixture.');
     $lock->release($handle);
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         $events,
         new Kiwi_Test_Manual_Replacement_Run_Repository()
@@ -3059,7 +3059,7 @@ kiwi_run_test('Incident-only corruption recording cannot reopen a concurrent rec
     file_put_contents($archive, 'fixture');
     $lock = new Kiwi_Test_Gate_Clearing_Archive_Lock();
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         $events,
         new Kiwi_Test_Manual_Replacement_Run_Repository()
@@ -3112,7 +3112,7 @@ kiwi_run_test('Replacement remains blocked until Corruption Incident resolution 
     $events = new Kiwi_Operational_Event_Service($event_repository);
     $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
     $lock = new Kiwi_Retention_Archive_Lock();
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         $events,
         $runs
@@ -3166,7 +3166,7 @@ kiwi_run_test('Replacement requires an existing corruption gate on the source ar
     file_put_contents($replacement, 'archive-b');
     $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
     $lock = new Kiwi_Retention_Archive_Lock();
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
         $runs
@@ -3193,7 +3193,7 @@ kiwi_run_test('Replacement validates the active generation while both transition
     $events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
     $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
     $lock = new Kiwi_Retention_Archive_Lock();
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         $events,
         $runs
@@ -3250,7 +3250,7 @@ kiwi_run_test('Unblock preserves malformed source transition errors before and u
     file_put_contents($archive, 'archive-a');
     $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
     $lock = new Kiwi_Test_Gate_Clearing_Archive_Lock();
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
         $runs
@@ -3295,7 +3295,7 @@ kiwi_run_test('Replacement requires its own corruption gate to be recovered firs
     file_put_contents($archive, 'archive-a');
     file_put_contents($replacement, 'archive-b');
     $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         new Kiwi_Retention_Archive_Lock(),
         new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
         $runs
@@ -3341,7 +3341,7 @@ kiwi_run_test('Replacement revalidates the source corruption gate under its lock
     kiwi_assert_same(true, $setup_handle->persist_write_blocked(), 'Expected initial A corruption sentinel.');
     $lock->release($setup_handle);
     $lock->clear_before_next_acquire = $archive;
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
         $runs
@@ -3372,7 +3372,7 @@ kiwi_run_test('Replacement transition marker permits only its bound recovery ret
     kiwi_assert_true($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle, 'Expected B lock fixture.');
     kiwi_assert_same(true, $replacement_handle->persist_replacement_transition_blocked(basename($archive)), 'Expected bound B transition marker fixture.');
     $lock->release($replacement_handle);
-    $coordinator = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
+    $coordinator = kiwi_test_corruption_gate(
         $lock,
         new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository()),
         $runs
@@ -3405,7 +3405,7 @@ kiwi_run_test('Diagnose is read-only and does not reconcile gates or Incidents',
         }
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3436,7 +3436,7 @@ kiwi_run_test('Diagnose and unblock reject path-like values before archive disco
             return ['result' => 'ok', 'reason_code' => 'sqlite_check_ok', 'check_completed' => true];
         }
     );
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         new Kiwi_Test_Lean_Safety_Gate(),
@@ -3482,7 +3482,7 @@ kiwi_run_test('Manual replacement verifies explicit B before terminalizing A', f
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
     $gate->unblock_result['reason_code'] = 'manual_replacement_unblocked';
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3524,7 +3524,7 @@ kiwi_run_test('Unblock corruption verification persists a gate on the checked ge
         }
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3563,7 +3563,7 @@ kiwi_run_test('Unblock maps persistence failures to exit 2 and deferrals to exit
         'incident_open' => true,
         'incident_action' => 'none',
     ];
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3598,7 +3598,7 @@ kiwi_run_test('Unblock preserves verification errors and expected retry reasons'
         }
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3643,7 +3643,7 @@ kiwi_run_test('Unblock classifies corruption gate reconciliation failures as err
         'incident_open' => false,
         'incident_action' => 'none',
     ];
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3688,7 +3688,7 @@ kiwi_run_test('Manual replacement permits the active generation after year rollo
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
     $gate->unblock_result['reason_code'] = 'manual_replacement_unblocked';
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3725,7 +3725,7 @@ kiwi_run_test('Manual replacement rejects a generation cleanup would not select'
         }
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3766,7 +3766,7 @@ kiwi_run_test('Manual replacement rechecks the active generation after integrity
         }
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3809,7 +3809,7 @@ kiwi_run_test('Manual replacement rechecks the active generation inside the reco
     );
     $gate = new Kiwi_Test_Lean_Safety_Gate();
     $gate->unblock_result['reason_code'] = 'manual_replacement_unblocked';
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         $supervisor,
         $gate,
@@ -3919,7 +3919,7 @@ kiwi_run_test('Bootstrap recorder has no state receipt retry or database fallbac
     kiwi_assert_true(strpos($source, 'receipt') === false, 'Expected no bootstrap receipt path.');
 });
 
-kiwi_run_test('WP-CLI exposes exactly check diagnose and unblock with compact JSON protocol', function (): void {
+kiwi_run_test('WP-CLI preserves diagnosis recovery and exposes durable status and abort', function (): void {
     $source = file_get_contents(__DIR__ . '/../tools/database/kiwi-retention-archive-health.php');
     $public_methods = [];
     if (preg_match_all('/public function ([a-z_]+)\(/', $source, $matches)) {
@@ -3931,7 +3931,7 @@ kiwi_run_test('WP-CLI exposes exactly check diagnose and unblock with compact JS
         )));
     }
 
-    kiwi_assert_same(['check', 'diagnose', 'unblock'], $public_methods, 'Expected exactly three public WP-CLI modes.');
+    kiwi_assert_same(['check', 'diagnose', 'unblock', 'status', 'abort'], $public_methods, 'Expected only the agreed public WP-CLI modes.');
     kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention']), 'Expected the intermediate retention command container.');
     kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention archive-health']), 'Expected the complete Health command path to register.');
     kiwi_assert_true(
@@ -3976,7 +3976,7 @@ kiwi_run_test('Health results use mandatory compact fields without paths or raw 
         'name' => 'kiwi_retention_archive_2026.sqlite',
         'path' => '/secret/path/kiwi_retention_archive_2026.sqlite',
     ]];
-    $controller = new Kiwi_Retention_Archive_Health_Controller(
+    $controller = kiwi_test_health_controller(
         $archive_service,
         new Kiwi_Retention_Archive_Check_Supervisor(
             new Kiwi_Config(),

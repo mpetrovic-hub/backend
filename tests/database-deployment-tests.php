@@ -61,6 +61,7 @@ class WP_CLI
     public static $halt_codes = [];
     public static $allow_hook_registration = true;
     public static $runner;
+    public static $exit_process = false;
 
     public static function add_command($name, $callable, $args = []): bool
     {
@@ -122,6 +123,7 @@ class WP_CLI
     public static function halt($return_code): void
     {
         $return_code = (int) $return_code;
+        if (self::$exit_process) { exit($return_code); }
         self::$halt_codes[] = $return_code;
 
         throw new Kiwi_Test_WP_CLI_Halt_Exception($return_code);
@@ -129,6 +131,7 @@ class WP_CLI
 
     public static function line($message = ''): void
     {
+        if (self::$exit_process) { echo (string) $message, "\n"; return; }
         self::$lines[] = (string) $message;
     }
 
@@ -140,6 +143,7 @@ class WP_CLI
         self::$halt_codes = [];
         self::$allow_hook_registration = true;
         self::$runner = new Kiwi_Test_WP_CLI_Runner();
+        self::$exit_process = false;
         $GLOBALS['kiwi_test_did_actions'] = [];
     }
 }

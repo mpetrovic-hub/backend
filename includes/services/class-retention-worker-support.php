@@ -18,6 +18,7 @@ abstract class Kiwi_Retention_Worker_Support
     protected $archive_lock;
     protected $operational_event_service;
     protected $corruption_safety_gate;
+    protected $health_store;
 
     public function __construct(
         ?Kiwi_Config $config = null,
@@ -26,7 +27,8 @@ abstract class Kiwi_Retention_Worker_Support
         ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
         ?Kiwi_Retention_Archive_Lock $archive_lock = null,
-        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null
+        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null,
+        ?Kiwi_Retention_Archive_Health_Store $health_store = null
     ) {
         $this->config = $config ?? new Kiwi_Config();
         $this->source_registry = $source_registry ?? new Kiwi_Retention_Source_Registry();
@@ -34,10 +36,18 @@ abstract class Kiwi_Retention_Worker_Support
         $this->archive_service = $archive_service ?? new Kiwi_Retention_Sqlite_Archive_Service($this->config);
         $this->archive_lock = $archive_lock ?? new Kiwi_Retention_Archive_Lock();
         $this->operational_event_service = $operational_event_service ?? new Kiwi_Operational_Event_Service();
+        $this->health_store = $health_store ?? new Kiwi_Retention_Archive_Health_Store();
         $this->corruption_safety_gate = $corruption_safety_gate
             ?? new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
                 $this->archive_lock, $this->operational_event_service, $this->run_repository
             );
+    }
+
+    /** Call only at existing generation-locked archive/receipt/delete boundaries. */
+    protected function inspect_archive_write_gate(string $path): array
+    {
+        $pending = $this->health_store->pending_gate(Kiwi_Retention_Archive_Name::normalize(basename($path)));
+        return empty($pending['allowed']) ? $pending : $this->corruption_safety_gate->inspect($path, false);
     }
 
     protected function mark_stale_runs(string $source_key): bool
