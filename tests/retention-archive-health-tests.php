@@ -3919,7 +3919,7 @@ kiwi_run_test('Bootstrap recorder has no state receipt retry or database fallbac
     kiwi_assert_true(strpos($source, 'receipt') === false, 'Expected no bootstrap receipt path.');
 });
 
-kiwi_run_test('WP-CLI preserves diagnosis recovery and exposes durable status and abort', function (): void {
+kiwi_run_test('WP-CLI preserves diagnosis recovery and exposes durable status abort and freshness', function (): void {
     $source = file_get_contents(__DIR__ . '/../tools/database/kiwi-retention-archive-health.php');
     $public_methods = [];
     if (preg_match_all('/public function ([a-z_]+)\(/', $source, $matches)) {
@@ -3931,7 +3931,7 @@ kiwi_run_test('WP-CLI preserves diagnosis recovery and exposes durable status an
         )));
     }
 
-    kiwi_assert_same(['check', 'diagnose', 'unblock', 'status', 'abort'], $public_methods, 'Expected only the agreed public WP-CLI modes.');
+    kiwi_assert_same(['check', 'diagnose', 'unblock', 'status', 'abort', 'freshness'], $public_methods, 'Expected only the agreed public WP-CLI modes.');
     kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention']), 'Expected the intermediate retention command container.');
     kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention archive-health']), 'Expected the complete Health command path to register.');
     kiwi_assert_true(

@@ -17,4 +17,10 @@ if ($case === 'attempt') { $command->status([], ['attempt' => $id]); }
 if ($case === 'abort') { $command->abort([], ['attempt' => $id]); }
 if ($case === 'confirmed') { $command->abort([], ['attempt' => $id, 'confirm' => true]); }
 if ($case === 'unknown_argument') { $command->status([], ['extra' => true]); }
+if ($case === 'freshness_activate') { $command->freshness([], ['activate' => true, 'confirm' => true]); }
+if ($case === 'freshness') { $f['service']->freshness(true, true); $command->freshness([], []); }
+if ($case === 'freshness_unconfirmed') { $command->freshness([], ['activate' => true]); }
+if ($case === 'freshness_unknown') { $command->freshness([], ['extra' => true]); }
+if ($case === 'freshness_flag_value') { $command->freshness([], ['activate' => 'false', 'confirm' => true]); }
+if ($case === 'freshness_confirm_only') { $command->freshness([], ['confirm' => true]); }
 throw new RuntimeException('Unknown command fixture.');

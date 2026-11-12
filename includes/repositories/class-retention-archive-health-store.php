@@ -61,8 +61,13 @@ class Kiwi_Retention_Archive_Health_Store
         }
     }
 
-    /** The callback runs under the shared short write lock, never over a transfer or scan. */
-    public function update(?string $attempt_id, callable $change, ?int $expected_revision = null): array
+    /**
+     * Both callbacks hold the short health write lock; neither may transfer or scan an archive.
+     * The optional preparation confirms external effects in autocommit before the state transaction
+     * (notably Operational Events, whose lifecycle lock must not precede their actual commit).
+     * It must not mutate health state. The same view, raw state and connection are required afterward.
+     */
+    public function update(?string $attempt_id, callable $change, ?int $expected_revision = null, ?callable $before_transaction = null): array
     {
         if ($attempt_id !== null && !self::valid_attempt_id($attempt_id)) { throw new RuntimeException('health_attempt_invalid'); }
         $db = $this->db();
@@ -85,10 +90,26 @@ class Kiwi_Retention_Archive_Health_Store
                 . ' WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s', $this->table()));
             $this->assert_database_ok();
             if (strtolower((string) $engine) !== 'innodb') { throw new RuntimeException('health_options_not_transactional'); }
+            $prepared_view = null;
+            if ($before_transaction !== null) {
+                $prepared_view = $this->read($attempt_id);
+                $prepared_state = $this->row(self::STATE_OPTION);
+                if ($this->decode($prepared_state) !== $prepared_view['state']
+                    || ($expected_revision !== null && $prepared_view['state']['revision'] !== $expected_revision)) {
+                    throw new RuntimeException('health_revision_conflict');
+                }
+                $this->assert_owner($lock_name, $connection);
+                $before_transaction($prepared_view);
+                $this->assert_owner($lock_name, $connection);
+                if ($this->row(self::STATE_OPTION) !== $prepared_state || $this->read($attempt_id) !== $prepared_view) {
+                    throw new RuntimeException('health_revision_conflict');
+                }
+            }
             if ($db->query('START TRANSACTION') === false) { throw new RuntimeException('health_transaction_failed'); }
             $transaction = true;
             $this->assert_owner($lock_name, $connection);
             $view = $this->read($attempt_id);
+            if ($prepared_view !== null && $view !== $prepared_view) { throw new RuntimeException('health_revision_conflict'); }
             $previous_state = $this->row(self::STATE_OPTION);
             $previous_attempt = $attempt_id === null ? null : $this->row(self::ATTEMPT_PREFIX . $attempt_id, true);
             if ($this->decode($previous_state) !== $view['state']

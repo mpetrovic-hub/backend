@@ -717,6 +717,9 @@ final class Kiwi_Retention_Archive_Health_Controller
             $event['context'] = array_merge($event['context'], $external_context);
             $event['message'] = 'Archivcheck bei ' . $external_context['phase'] . ' gescheitert: ' . $external_context['message'];
         }
+        if ($reason_code === 'health_check_overdue') {
+            $event['message'] = 'Seit mindestens acht Kalendertagen liegt kein bestätigter Archivbefund vor.';
+        }
         if ($operation_order === '') {
             return $this->operational_event_service->record_failure_action($event);
         }
@@ -781,6 +784,12 @@ final class Kiwi_Retention_Archive_Health_Controller
                 );
             }
         );
+    }
+
+    public function record_overdue(?array $last_confirmed_attempt, string $checked_at, string $operation_order): string
+    {
+        return $this->record_availability_failure('health_check_overdue', $last_confirmed_attempt['generation'] ?? null,
+            '', $checked_at, $operation_order);
     }
 
     public function record_external_failure(?array $attempt, string $phase, string $message, string $reason_code): string
