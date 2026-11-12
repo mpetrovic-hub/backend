@@ -2,6 +2,7 @@
 
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-name.php';
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-write-block.php';
+require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-health-transport.php';
 require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
 require_once __DIR__ . '/class-retention-archive-health-read-brake.php';
 
@@ -646,6 +647,16 @@ final class Kiwi_Retention_Archive_Health_Command
         $this->run('abort', $assoc_args);
     }
 
+    /** Purpose-bound forced SSH entry; the remote action is never a shell argument. */
+    public function ssh(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || $assoc_args !== []
+            || !in_array(getenv('SSH_ORIGINAL_COMMAND'), ['status', 'export', 'result', 'fail'], true)) {
+            $this->fail_before_service('ssh', 'command_input_invalid');
+        }
+        $this->run('ssh', []);
+    }
+
     private function run(string $mode, array $assoc_args): void
     {
         $runner = WP_CLI::get_runner();
@@ -701,7 +712,16 @@ final class Kiwi_Retention_Archive_Health_Command
         }
 
         try {
-            if ($mode === 'check') {
+            if ($mode === 'ssh') {
+                $limits = [];
+                foreach (['source_bytes_per_second' => 'KIWI_RETENTION_ARCHIVE_HEALTH_SOURCE_BYTES_PER_SECOND',
+                    'copy_seconds' => 'KIWI_RETENTION_ARCHIVE_HEALTH_COPY_SECONDS',
+                    'control_seconds' => 'KIWI_RETENTION_ARCHIVE_HEALTH_CONTROL_SECONDS'] as $key => $constant) {
+                    if (defined($constant)) { $limits[$key] = constant($constant); }
+                }
+                $transport = new Kiwi_Retention_Archive_Health_Transport($service, $limits);
+                WP_CLI::halt($transport->serve((string) getenv('SSH_ORIGINAL_COMMAND'), STDIN, STDOUT));
+            } elseif ($mode === 'check') {
                 $result = $service->check((string) ($assoc_args['check'] ?? ''));
             } elseif ($mode === 'diagnose') {
                 $result = $service->diagnose(

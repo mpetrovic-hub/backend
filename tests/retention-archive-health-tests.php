@@ -3931,7 +3931,7 @@ kiwi_run_test('WP-CLI preserves diagnosis recovery and exposes durable status an
         )));
     }
 
-    kiwi_assert_same(['check', 'diagnose', 'unblock', 'status', 'abort'], $public_methods, 'Expected only the agreed public WP-CLI modes.');
+    kiwi_assert_same(['check', 'diagnose', 'unblock', 'status', 'abort', 'ssh'], $public_methods, 'Expected only the agreed public WP-CLI modes.');
     kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention']), 'Expected the intermediate retention command container.');
     kiwi_assert_true(isset(WP_CLI::$commands['kiwi retention archive-health']), 'Expected the complete Health command path to register.');
     kiwi_assert_true(

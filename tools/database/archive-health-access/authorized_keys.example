@@ -1,0 +1,3 @@
+# Deployment TEMPLATE only: substitute the independently verified VPS egress IP,
+# fixed protected wrapper path and dedicated public key. Never copy a private key.
+from="VPS_EGRESS_IP",restrict,command="/ABSOLUTE/PROTECTED/kiwi-archive-health-ssh" ssh-ed25519 PUBLIC_KEY kiwi-archive-health

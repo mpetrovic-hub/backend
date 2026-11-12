@@ -244,6 +244,26 @@ Emergency stop and restart:
 3. After reviewed code/config remediation, run both explicit `diagnose` modes and one explicit `check`.
 4. Re-enable the one scheduled check only when the read-only checks are definitive and no unreviewed corruption block is being bypassed.
 
+## Restricted SSH export access
+
+The repository prepares access artifacts only; it does not create users/keys, connect to either host or change authorized keys. Deployment, the bounded functional check and weekly activation remain separately approved steps. The full request and stream contract is in the [architecture](../architecture/retention-architecture.md#restricted-ssh-export-protocol).
+
+During a later authorized deployment:
+
+1. Use a dedicated nonprivileged VPS user `kiwi-archive-health` and a dedicated key. Its private key and pinned host-key file must be outside webroots and accessible only to that user and administrators. Do not grant this user general administrator or unrestricted Production access.
+2. Independently confirm the Hostinger host-key fingerprint, then install the exact verified key in the user's configured `known_hosts`. A fresh `ssh-keyscan` alone is not an independent confirmation. Use [ssh_config.example](../../tools/database/archive-health-access/ssh_config.example): strict host-key checking, dedicated identity, batch authentication, no compression, no TTY/forwarding and a 15-second connect budget. Replace all placeholders with verified deployment values.
+3. Install the [fixed forced-command template](../../tools/database/archive-health-access/production-forced-command.sh.example) at a protected absolute Production path, with the verified WordPress root and PHP/WP-CLI paths. Only the deployment owner may modify it. It runs the existing health preload and `kiwi retention archive-health ssh`, before normal WordPress `init`. It never evaluates the requested command. No SSH client environment variables that can alter shell/PHP loading may be accepted by the server; the wrapper also clears loader override variables.
+4. Use the [authorized-key template](../../tools/database/archive-health-access/authorized_keys.example) to restrict this key to the verified VPS egress IP and that exact forced command. `restrict` disables PTY, forwarding and user startup scripts. Check these restrictions through the separately authorized deployment procedure; a template is not proof of a configured key.
+5. Verify compatible deployed code and externally prepared options state first. All three Retention writers must enforce Pending before enabling export. Synchronize the approved source rate/time values with the VPS configuration; remote requests cannot raise them. Keep the weekly timer off until its separate activation approval.
+
+For this access, the SSH remote command is exactly one word (`status`, `export`, `result` or `fail`), with one bounded versioned JSON object on stdin and stdin closed after it. A status request is `{"schema_version":1,"attempt_id":null}`. Specific status replaces null with the exact ID. The ordinary operator `status`, confirmed `abort`, `diagnose` and `unblock` commands remain separate; they cannot be reached through this key. Use only the installed fixed connection options, independently pinned host key and dedicated identity.
+
+The source paces reads at 4 MiB/s, computes SHA-256 during those same reads and holds the real generation lock through the entire stream. The default transfer deadline is 45 minutes. Failed targets, size changes, held locks, protection gates and relevant sidecars produce no valid snapshot. The receiver must verify the saved copy, framing and successful SSH exit before any SQLite check. Production's stored `transfer_complete` proves its own source pass and does not replace receiver verification or the completed `quick_check` result.
+
+For a controlled copy error, `fail` uses the common safe closure of that exact attempt; it does not clear corruption or replace any archive. Failed persistence leaves Pending. A crashed or uncertain predecessor remains protected for manual status/process/file-use reconciliation; no timeout, serial invocation or cleanup job automatically frees it. Stop/reap related receiver processes before removing their copy, and require a confirmed failure/result closure first. A source process can still hold its OS lock after a safe technical closure until that actual process ends.
+
+The one-time activation-failure message from the approved plan is supported unchanged: `{"schema_version":1,"attempt_id":null,"phase":"activation","reason_code":"health_run_failed","message":"Wochenbetrieb nicht aktiviert: <konkreter technischer Grund>"}` via SSH action `fail`. It creates only the existing Availability event and preserves the accepted result, freshness and any Pending/corruption protections. No additional archive is fetched.
+
 ## Landing-session raw-context compaction
 
 Old `wp_kiwi_landing_page_sessions.raw_context` rows can be compacted before they reach retention archive/delete age. This reduces future SQLite archive size because the retention archive keeps copying the existing source `raw_context` column; existing archive files are not rewritten.

@@ -98,9 +98,41 @@ Session, Handoff and Engagement cleanup check Pending under the generation lock 
 
 Technical failure and explicit manual abort first persist invalidation, then secure the existing `retention_archive_health_unavailable` error Incident (`area=retention`), then close the attempt and clear Pending. New technical cases use `health_run_failed`; `health_child_timeout` is preserved. Failed persistence leaves Pending intact. Repeating an already completed abort returns its original closure. A stored corruption outcome cannot be overwritten. Neither elapsed time nor source-process death closes an attempt. Conversely, even after a safe abort, a still living source keeps its actual OS lock until it ends. The result/transport and freshness flows extend this common contract in their own implementation slices.
 
+## Restricted SSH export protocol
+
+The forced command enters the existing early WP-CLI bootstrap through `kiwi retention archive-health ssh`. `SSH_ORIGINAL_COMMAND` must be exactly `status`, `export`, `result` or `fail`; it is never evaluated as shell text or copied into executable arguments. The caller cannot choose a path, SQL, generation replacement, recovery action or resource limit. Access templates and deployment checks are in the [runbook](../operations/retention-runbook.md#restricted-ssh-export-access).
+
+Each request is one UTF-8 JSON object followed by stdin EOF, at most 16,384 bytes including whitespace. All listed fields are required; unknown fields, nested values, duplicate keys (including escaped aliases), incompatible versions and wrong JSON types are rejected. Key order and whitespace are insignificant. `schema_version` is integer `1`; IDs are 32 lowercase hexadecimal characters and SHA-256 values are 64 lowercase hexadecimal characters. Byte counts are positive JSON integers, never booleans or floating-point values. Generation names use the shared canonical basename contract.
+
+| SSH action | Required fields in addition to `schema_version` |
+|---|---|
+| `status` | `attempt_id` (ID or `null`) |
+| `export` | `attempt_id`, `start_kind` (`manual`/`scheduled`), `generation`, `expected_bytes` |
+| `result` | `attempt_id`, `generation`, `received_bytes`, `sha256`, `transfer_complete=true`, `check="quick_check"`, `check_completed=true`, `outcome` (`ok`/`corruption`) |
+| `fail` | `attempt_id` (ID or `null`), `phase`, `reason_code`, `message` (nonblank, at most 300 UTF-8 bytes) |
+
+For `fail`, a null ID permits `start` or `activation`; an ID permits `copy`, `verification`, `check` or `result`. The reason is `health_run_failed`, or the existing `health_child_timeout` specifically for the check phase. The shared capability sanitizes the message and secures invalidation/Availability before closing Pending. A prestart failure creates no attempt. The result action delegates to `accept_result`; a missing acceptance capability rejects the request, never acknowledges a healthy archive.
+
+Small responses are one JSON object plus LF, bounded to 262,144 bytes including LF. This larger response bound accommodates up to 100 open Incidents and independent stored state/attempt records; it is not a larger request allowance. `_exit_code` is removed from JSON and becomes the actual process exit code. Status preserves `target`, `open_incidents`, `state`, `active_attempt`, `last_confirmed_attempt` and the explicitly requested `attempt`. Safe failure returns `result="closed"` with the stored attempt, or `result="failed"` for a prestart event. Rejections use `result="error"`, the existing `health_run_failed` reason and a short sanitized message, with exit 2. A processed corruption acknowledgement is not a healthy result.
+
+Successful export framing is exactly:
+
+1. One UTF-8 JSON line: `{"schema_version":1,"type":"archive","attempt_id":"...","generation":"...","bytes":8192}`.
+2. Exactly `bytes` raw SQLite bytes, without encoding or compression.
+3. Immediately after the last raw byte, one UTF-8 JSON line: `{"schema_version":1,"type":"complete","attempt_id":"...","generation":"...","bytes":8192,"sha256":"..."}`. There is no extra delimiter before this trailer; the exact byte count separates the frames.
+
+Each export JSON line is at most 16,384 bytes including its terminating LF. A receiver must require exact field sets/types and matching ID/generation/bytes, the stored copy's size and SHA-256, one terminal frame, no trailing bytes, and independently successful SSH exit before starting SQLite. A header or successful SSH exit alone is insufficient. Before a header, refusal returns a small error response. After a header, an error truncates the stream and exits unsuccessfully without a successful terminal proof.
+
+Production selects the target again under the real generation lock and confirms durable Pending before the descriptor or any archive byte. The source holds that lock through the stream. Opening and completion compare the regular file's device/inode, mode, size and modification/change timestamps, plus the identities of relevant WAL/journal sidecars. Symlinks, nonregular sidecars and nonempty WAL/journal files are refused. Changed source/sidecar identity or size prevents terminal proof. All cooperating archive writers continue to use the same generation lock.
+
+The source reads at most 64 KiB per block, paying its configured rate interval before each read without accumulating burst credit. SHA-256 is computed in that same pass; no separate full source hash scan or SQLite scan occurs. Default source rate is 4,194,304 bytes/s and copy deadline is 2,700 seconds; capacity is rate multiplied by time, not an independent GB cap. Nonblocking stdin/stdout and bounded readiness waits enforce control/copy deadlines even if the peer stops reading or sending. A controlled source failure uses the shared technical closure while its real OS lock still protects the source; uncertain storage retains Pending.
+
+After the last archive byte and final identity checks, `record_transfer` confirms the source's own bytes/hash/end evidence through the existing short transactional store before the terminal trailer is written. The attempt remains open, without a health outcome. Failed or uncertain proof persistence emits no successful terminal frame. A later lost/truncated trailer or unsuccessful SSH exit remains a failed receiver snapshot, even if source proof was already stored; existing status/fail or result-reconciliation rules decide its disposition.
+
 ## Components and boundaries
 
 - `Kiwi_Retention_Archive_Health_Service` owns the durable attempt lifecycle/status and delegates existing checks and recovery to the controller.
+- `Kiwi_Retention_Archive_Health_Transport` validates the fixed SSH wire contract, bounds protocol I/O and produces the single-pass locked source stream.
 - `Kiwi_Retention_Archive_Health_Store` owns direct validated option access, connection-owned locking, exact comparisons and transactional confirmation.
 - `Kiwi_Retention_Archive_Health_Controller` resolves the target, interprets supervised results, and coordinates Operational Incidents and manual recovery.
 - `Kiwi_Retention_Archive_Check_Supervisor` owns the bounded child process and accepts corruption only from a completed non-`ok` PRAGMA result.

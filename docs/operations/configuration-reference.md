@@ -107,6 +107,17 @@ Saved per-source settings are not overwritten when defaults change. Every source
   - existing explicit values such as `600` or `3600` remain explicit; adjust them deliberately during an authorized rollout
   - the supervisor never kills a running child at this boundary; its generation lock remains held until the child exits
   - a timeout is inconclusive and never evidence of corruption
+- `KIWI_RETENTION_ARCHIVE_HEALTH_SOURCE_BYTES_PER_SECOND`
+  - source-side SSH export read rate; default `4194304` bytes/s (4 MiB/s)
+  - positive integer, enforced before each source read; SHA-256 uses the same pass
+- `KIWI_RETENTION_ARCHIVE_HEALTH_COPY_SECONDS`
+  - source-side SSH export wall-clock budget; default `2700` (45 minutes)
+  - positive finite number; also bounds stalled output and computes capacity as source rate multiplied by time
+- `KIWI_RETENTION_ARCHIVE_HEALTH_CONTROL_SECONDS`
+  - small SSH control-call I/O deadline; default `30` seconds, positive finite number
+  - source rate/time constants are trusted local Production configuration; the remote caller cannot supply them
+  - synchronize deliberately with the approved VPS `/etc/kiwi-archive-health.conf` values during deployment; never raise limits automatically
+  - source export does not change the separate manual diagnosis/recovery native-read-brake configuration
 - `KIWI_RETENTION_WORKER_ROW_LIMIT`
   - maximum source rows archived per worker invocation
   - default: `50000`

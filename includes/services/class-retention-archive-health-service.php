@@ -150,6 +150,32 @@ class Kiwi_Retention_Archive_Health_Service
         }
     }
 
+    /** Source-side proof only; never a health result and never releases Pending. */
+    public function record_transfer(string $attempt_id, int $bytes, string $sha256): array
+    {
+        try {
+            if ($bytes < 1 || preg_match('/^[a-f0-9]{64}$/D', $sha256) !== 1) {
+                throw new RuntimeException('health_transfer_invalid');
+            }
+            $view = $this->health_store->update($attempt_id, function (array $current) use ($attempt_id, $bytes, $sha256): array {
+                $attempt = $current['attempt'];
+                if ($current['state']['active_attempt_id'] !== $attempt_id || !is_array($attempt)
+                    || $attempt['status'] !== 'open' || $attempt['outcome'] !== null
+                    || $attempt['transfer_complete'] || $attempt['expected_bytes'] !== $bytes) {
+                    throw new RuntimeException('health_transfer_attempt_changed');
+                }
+                $attempt['received_bytes'] = $bytes;
+                $attempt['sha256'] = $sha256;
+                $attempt['transfer_complete'] = true;
+                $attempt['transfer_completed_at'] = $this->now_utc();
+                return ['state' => $current['state'], 'attempt' => $attempt];
+            });
+            return ['schema_version' => 1, 'result' => 'transferred', 'attempt' => $view['attempt'], '_exit_code' => 0];
+        } catch (Throwable $error) {
+            return $this->attempt_error('export', $error->getMessage());
+        }
+    }
+
     private function now_utc(): string
     {
         $now = call_user_func($this->clock);
