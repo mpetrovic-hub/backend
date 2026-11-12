@@ -39,12 +39,16 @@ if mode == 'foreign-acknowledgements' and action in ('result', 'status'):
     elif value.get('attempt'):
         value['attempt']['sha256'] = 'f' * 64
     wire = json.dumps(value).encode() + b'\n'
+if action == 'fail' and mode == 'changed-byte-malformed-fail':
+    value = json.loads(wire)
+    value['attempt']['expected_bytes'] = float(value['attempt']['expected_bytes'])
+    wire = json.dumps(value).encode() + b'\n'
 if action == 'result' and mode == 'lost-result-ack' and calls.count('result') == 1:
     sys.exit(255)
 if action == 'export' and response.returncode == 0:
     end = wire.index(b'\n') + 1
     size = json.loads(wire[:end])['bytes']
-    if mode in ('changed-byte', 'changed-byte-fail-unavailable'):
+    if mode in ('changed-byte', 'changed-byte-fail-unavailable', 'changed-byte-malformed-fail'):
         data = bytearray(wire)
         data[end + 100] ^= 1
         wire = bytes(data)

@@ -598,6 +598,7 @@ class ArchiveHealthRunner:
             return ack.get('result') == 'failed' and ack.get('incident_action') in ('raised', 'repeated', 'none')
         attempt = ack.get('attempt', {})
         return ack.get('result') == 'closed' and isinstance(attempt, dict) \
+            and type(attempt.get('expected_bytes')) is int \
             and all(attempt.get(key) == request[key] for key in ('attempt_id', 'generation', 'expected_bytes')) \
             and attempt.get('status') == 'closed' and attempt.get('outcome') == 'technical_failure' \
             and valid_time(attempt.get('invalidated_at')) and valid_time(attempt.get('closed_at')) \
