@@ -86,7 +86,9 @@ class Kiwi_Retention_Archive_Health_Service
                 $state['activated_at'] = $activated_at;
                 $state['last_freshness_completed_at'] = $this->now_utc();
                 return ['state' => $state];
-            }, null, function (array $current) use ($activate, &$activated_at, &$overdue, &$incident_action): void {
+            }, null, function (array $current, callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard)
+                use ($activate, &$activated_at, &$overdue, &$incident_action): void {
+                $assert_owner();
                 $state = $current['state'];
                 $now = $this->now_utc();
                 $activated_at = $state['activated_at'];
@@ -100,7 +102,8 @@ class Kiwi_Retention_Archive_Health_Service
                 $overdue = (new DateTimeImmutable($now))->setTimezone($berlin)->format('Y-m-d') >= $due_date;
                 if ($overdue) {
                     $incident_action = $this->controller->record_overdue($current['last_confirmed_attempt'], $now,
-                        sprintf('%.0F', microtime(true) * 1000000));
+                        sprintf('%.0F', microtime(true) * 1000000), $assert_owner, $write_guard);
+                    $assert_owner();
                     if ($incident_action === '') { throw new RuntimeException('health_availability_unconfirmed'); }
                 }
             });
@@ -275,7 +278,9 @@ class Kiwi_Retention_Archive_Health_Service
                     $state['last_confirmed_attempt_id'] = $id;
                     $state['active_attempt_id'] = null;
                     return ['state' => $state, 'attempt' => $attempt];
-                }, null, function (array $current) use ($result, $fingerprint, $handle, $target): void {
+                }, null, function (array $current, callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard)
+                    use ($result, $fingerprint, $handle, $target): void {
+                    $assert_owner();
                     $this->assert_result_matches($current, $result, $fingerprint);
                     if ($result['outcome'] === 'corruption') {
                         $write_blocked = $handle->persist_write_blocked();
@@ -286,7 +291,10 @@ class Kiwi_Retention_Archive_Health_Service
                             throw new RuntimeException('health_corruption_protection_unconfirmed');
                         }
                     }
-                    if ($this->controller->record_external_recovery($current['attempt']) === '') {
+                    $assert_owner();
+                    $action = $this->controller->record_external_recovery($current['attempt'], $assert_owner, $write_guard);
+                    $assert_owner();
+                    if ($action === '') {
                         throw new RuntimeException('health_availability_unconfirmed');
                     }
                 });
@@ -393,17 +401,18 @@ class Kiwi_Retention_Archive_Health_Service
             $view = $this->health_store->read($attempt_id);
             $attempt = $view['attempt'];
             $outcome = $manual ? 'manual_abort' : 'technical_failure';
+            $completion_outcomes = $manual ? ['manual_abort', 'technical_failure'] : ['technical_failure'];
             if (!is_array($attempt) || $attempt['outcome'] === 'corruption') { throw new RuntimeException('health_attempt_not_abortable'); }
             if ($attempt['status'] === 'closed') {
-                if ($attempt['outcome'] !== $outcome) { throw new RuntimeException('health_attempt_already_closed'); }
+                if (!in_array($attempt['outcome'], $completion_outcomes, true)) { throw new RuntimeException('health_attempt_already_closed'); }
                 return ['schema_version' => 1, 'result' => 'closed', 'attempt' => $attempt, '_exit_code' => 0];
             }
             $now = $this->now_utc();
-            $invalidated = $this->health_store->update($attempt_id, function (array $current) use ($attempt_id, $outcome, $now, $phase, $message, $reason_code): array {
+            $invalidated = $this->health_store->update($attempt_id, function (array $current) use ($attempt_id, $outcome, $completion_outcomes, $now, $phase, $message, $reason_code): array {
                 $attempt = $current['attempt'];
                 if ($current['state']['active_attempt_id'] !== $attempt_id || !is_array($attempt)
                     || $attempt['status'] !== 'open' || $attempt['outcome'] === 'corruption'
-                    || ($attempt['invalidated_at'] !== null && $attempt['outcome'] !== $outcome)) {
+                    || ($attempt['invalidated_at'] !== null && !in_array($attempt['outcome'], $completion_outcomes, true))) {
                     throw new RuntimeException('health_attempt_not_abortable');
                 }
                 if ($attempt['invalidated_at'] === null) {
