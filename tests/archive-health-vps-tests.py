@@ -186,6 +186,13 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result['attempt_id'], self.status()['state']['active_attempt_id'])
         self.assertTrue((self.data / result['attempt_id'] / 'archive.sqlite.partial').exists())
 
+    def test_malformed_failure_acknowledgement_cannot_authorize_copy_deletion(self):
+        result = health.ArchiveHealthRunner(self.limits, self.runtime, self.peer('changed-byte-malformed-fail')).run('manual')
+        self.assertEqual('uncertain', result['result'])
+        self.assertFalse(result['failure_confirmed'])
+        self.assertEqual('closed', self.status(result['attempt_id'])['attempt']['status'])
+        self.assertTrue((self.data / result['attempt_id'] / 'archive.sqlite.partial').exists())
+
     def test_completed_non_ok_sqlite_finding_is_accepted_with_corruption_protection(self):
         contents = bytearray(self.archive.read_bytes())
         self.assertEqual(bytes(8), contents[32:40])
