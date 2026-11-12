@@ -224,6 +224,122 @@ class Kiwi_Retention_Archive_Health_Service
         }
     }
 
+    /** Accepts the normalized proof delivered through the authenticated restricted transport. */
+    public function accept_result(array $result): array
+    {
+        $handle = null;
+        try {
+            $result = $this->normalize_result($result);
+            $id = $result['attempt_id'];
+            $fingerprint = hash('sha256', json_encode($result, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+            $view = $this->health_store->read($id);
+            $this->assert_result_matches($view, $result, $fingerprint, true);
+            $target = $this->controller->generation_target($result['generation']);
+            if ($target === null) { throw new RuntimeException('health_result_generation_unavailable'); }
+            if ($view['attempt']['status'] === 'closed') {
+                return $this->result_acknowledgement($view['attempt'], $target['path']);
+            }
+            $lock = $this->archive_lock->acquire_for_archive($target['path']);
+            $handle = $lock['handle'] ?? null;
+            if (empty($lock['acquired']) || !$handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
+                throw new RuntimeException('health_generation_lock_unavailable');
+            }
+            $locked = $this->health_store->read($id);
+            $this->assert_result_matches($locked, $result, $fingerprint, true);
+            if ($locked['attempt']['status'] === 'closed') {
+                return $this->result_acknowledgement($locked['attempt'], $target['path']);
+            }
+            $this->health_store->update($id, function (array $current) use ($result, $fingerprint): array {
+                $this->assert_result_matches($current, $result, $fingerprint);
+                $attempt = $current['attempt'];
+                if ($attempt['outcome'] === null) {
+                    $attempt['outcome'] = $result['outcome'];
+                    $attempt['result_fingerprint'] = $fingerprint;
+                    $attempt['received_at'] = $this->now_utc();
+                }
+                return ['state' => $current['state'], 'attempt' => $attempt];
+            });
+            $confirmed = $this->health_store->update($id,
+                function (array $current) use ($result, $fingerprint, $id): array {
+                    $this->assert_result_matches($current, $result, $fingerprint);
+                    $state = $current['state'];
+                    $attempt = $current['attempt'];
+                    $attempt['status'] = 'closed';
+                    $attempt['accepted_at'] = $this->now_utc();
+                    $attempt['closed_at'] = $attempt['accepted_at'];
+                    $state['last_confirmed_attempt_id'] = $id;
+                    $state['active_attempt_id'] = null;
+                    return ['state' => $state, 'attempt' => $attempt];
+                }, null, function (array $current) use ($result, $fingerprint, $handle, $target): void {
+                    $this->assert_result_matches($current, $result, $fingerprint);
+                    if ($result['outcome'] === 'corruption') {
+                        $write_blocked = $handle->persist_write_blocked();
+                        $incident = $this->safety_gate->record_corruption_incident_while_generation_locked(
+                            $target['path'], 'quick', 'sqlite_check_reported_corruption'
+                        );
+                        if (!$write_blocked && empty($incident['incident_open'])) {
+                            throw new RuntimeException('health_corruption_protection_unconfirmed');
+                        }
+                    }
+                    if ($this->controller->record_external_recovery($current['attempt']) === '') {
+                        throw new RuntimeException('health_availability_unconfirmed');
+                    }
+                });
+            return $this->result_acknowledgement($confirmed['attempt'], $target['path']);
+        } catch (Throwable $error) {
+            return $this->attempt_error('result', $error->getMessage());
+        } finally {
+            $this->archive_lock->release($handle);
+        }
+    }
+
+    private function normalize_result(array $result): array
+    {
+        $fields = ['schema_version', 'attempt_id', 'generation', 'received_bytes', 'sha256',
+            'transfer_complete', 'check', 'check_completed', 'outcome'];
+        if (count($result) !== count($fields) || array_diff($fields, array_keys($result))
+            || $result['schema_version'] !== 1 || !Kiwi_Retention_Archive_Health_Store::valid_attempt_id($result['attempt_id'])
+            || !is_string($result['generation']) || $result['generation'] === ''
+            || Kiwi_Retention_Archive_Name::normalize($result['generation']) !== $result['generation']
+            || !is_int($result['received_bytes']) || $result['received_bytes'] < 1
+            || !is_string($result['sha256']) || preg_match('/^[a-f0-9]{64}$/D', $result['sha256']) !== 1
+            || $result['transfer_complete'] !== true || $result['check'] !== 'quick_check'
+            || $result['check_completed'] !== true || !in_array($result['outcome'], ['ok', 'corruption'], true)) {
+            throw new RuntimeException('health_result_invalid');
+        }
+        return array_replace(array_fill_keys($fields, null), $result);
+    }
+
+    private function assert_result_matches(array $view, array $result, string $fingerprint, bool $allow_closed = false): void
+    {
+        $attempt = $view['attempt'];
+        if (!is_array($attempt) || (!$allow_closed && $attempt['status'] !== 'open')
+            || ($attempt['status'] === 'open' && $view['state']['active_attempt_id'] !== $result['attempt_id'])
+            || $attempt['generation'] !== $result['generation'] || $attempt['invalidated_at'] !== null
+            || !$attempt['transfer_complete'] || $attempt['received_bytes'] !== $result['received_bytes']
+            || $attempt['sha256'] !== $result['sha256']
+            || ($attempt['outcome'] !== null && $attempt['outcome'] !== $result['outcome'])
+            || ($attempt['result_fingerprint'] !== null && $attempt['result_fingerprint'] !== $fingerprint)
+            || ($attempt['status'] === 'closed' && ($attempt['result_fingerprint'] !== $fingerprint || $attempt['accepted_at'] === null))) {
+            throw new RuntimeException('health_result_conflicts_with_attempt');
+        }
+    }
+
+    private function result_acknowledgement(array $attempt, string $path): array
+    {
+        $gate = $this->safety_gate->inspect($path, false);
+        $pending = $this->health_store->pending_gate($attempt['generation']);
+        if (!isset($gate['corruption_write_blocked'], $gate['replacement_transition_blocked'])
+            || $pending['pending'] === null) { throw new RuntimeException('health_result_protection_unavailable'); }
+        return ['schema_version' => 1, 'command' => 'result', 'result' => 'accepted',
+            'attempt_id' => $attempt['attempt_id'], 'generation' => $attempt['generation'],
+            'result_fingerprint' => $attempt['result_fingerprint'], 'outcome' => $attempt['outcome'],
+            'accepted_at' => $attempt['accepted_at'], 'protection' => [
+                'pending' => $pending['pending'], 'corruption_write_blocked' => $gate['corruption_write_blocked'],
+                'corruption_incident_open' => $gate['incident_open'],
+                'replacement_transition_blocked' => $gate['replacement_transition_blocked']], '_exit_code' => 0];
+    }
+
     private function now_utc(): string
     {
         $now = call_user_func($this->clock);

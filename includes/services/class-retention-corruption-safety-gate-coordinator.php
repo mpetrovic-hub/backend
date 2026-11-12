@@ -421,72 +421,92 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                         !empty($locked_source_gate['incident_open'])
                     );
                 }
-                if (!$replacement_handle->persist_replacement_transition_blocked($archive)) {
-                    return $this->blocked(
-                        'replacement_transition_block_persist_failed',
-                        true,
-                        true
-                    );
-                }
             }
 
-            if ($replacement !== ''
-                && !$this->run_repository->terminalize_open_run_for_manual_replacement(
-                    $archive_path,
-                    $replacement_archive_path
-                )
-            ) {
-                return $this->blocked('replacement_run_terminalize_failed', true, true);
+            // Generation locks alone do not serialize a start on another generation.
+            // Only these short final effects hold the shared health lock; the full
+            // integrity verification has already finished before entering unblock.
+            $completion = null;
+            try {
+                $this->health_store->update(null, static function (array $view): array {
+                    return ['state' => $view['state']];
+                }, null, function (array $view) use ($archive_path, $replacement_archive_path,
+                    $archive, $replacement, $operation_order, $handle, $replacement_handle, &$completion): void {
+                    if ($view['active_attempt'] !== null) { throw new RuntimeException('health_attempt_pending'); }
+                    $completion = $this->complete_unblock_while_generation_locked($archive_path,
+                        $replacement_archive_path, $archive, $replacement, $operation_order, $handle, $replacement_handle);
+                });
+            } catch (Throwable $error) {
+                return $this->blocked($error->getMessage() === 'health_attempt_pending'
+                    ? 'health_attempt_pending' : 'health_state_unavailable', true, true);
             }
-            if (!$handle->clear_write_blocked()) {
-                return $this->blocked('corruption_write_block_clear_failed', true, true);
-            }
-
-            $incident_action = $this->operational_event_service->record_recovery_action([
-                'area' => 'retention',
-                'severity' => 'info',
-                'event_type' => self::EVENT_TYPE,
-                'correlation_key' => $this->correlation_key($archive),
-                'reference_type' => 'retention_archive',
-                'reference_id' => $archive,
-                'message' => $replacement !== ''
-                    ? 'A manually selected replacement archive was fully verified before cleanup resumed.'
-                    : 'The manually repaired archive passed a complete integrity check before cleanup resumed.',
-                'context' => [
-                    'resolution_reason' => $replacement !== ''
-                        ? 'manual_replacement_verified'
-                        : 'manual_repair_verified',
-                    'archive' => $archive,
-                    'replacement_archive' => $replacement !== '' ? $replacement : null,
-                    'operation_order' => $operation_order,
-                ],
-            ]);
-            if ($incident_action === '') {
-                return $this->blocked(
-                    'corruption_incident_resolution_failed',
-                    $replacement !== '',
-                    true
-                );
-            }
-            if ($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle
-                && !$replacement_handle->clear_replacement_transition_blocked()
-            ) {
-                return $this->blocked('replacement_transition_block_clear_failed', true, false);
-            }
-
-            return [
-                'allowed' => true,
-                'reason_code' => $replacement !== ''
-                    ? 'manual_replacement_unblocked'
-                    : 'manual_repair_unblocked',
-                'write_blocked' => false,
-                'incident_open' => false,
-                'incident_action' => $incident_action,
-            ];
+            return $completion;
         } finally {
             $this->lock_service->release($replacement_handle);
             $this->lock_service->release($lock['handle'] ?? null);
         }
+    }
+
+    private function complete_unblock_while_generation_locked(string $archive_path,
+        string $replacement_archive_path, string $archive, string $replacement, string $operation_order,
+        Kiwi_Retention_Archive_Lock_Handle $handle, ?Kiwi_Retention_Archive_Lock_Handle $replacement_handle): array
+    {
+        if ($replacement_handle !== null && !$replacement_handle->persist_replacement_transition_blocked($archive)) {
+            return $this->blocked('replacement_transition_block_persist_failed', true, true);
+        }
+        if ($replacement !== ''
+            && !$this->run_repository->terminalize_open_run_for_manual_replacement(
+                $archive_path,
+                $replacement_archive_path
+            )
+        ) {
+            return $this->blocked('replacement_run_terminalize_failed', true, true);
+        }
+        if (!$handle->clear_write_blocked()) {
+            return $this->blocked('corruption_write_block_clear_failed', true, true);
+        }
+
+        $incident_action = $this->operational_event_service->record_recovery_action([
+            'area' => 'retention',
+            'severity' => 'info',
+            'event_type' => self::EVENT_TYPE,
+            'correlation_key' => $this->correlation_key($archive),
+            'reference_type' => 'retention_archive',
+            'reference_id' => $archive,
+            'message' => $replacement !== ''
+                ? 'A manually selected replacement archive was fully verified before cleanup resumed.'
+                : 'The manually repaired archive passed a complete integrity check before cleanup resumed.',
+            'context' => [
+                'resolution_reason' => $replacement !== ''
+                    ? 'manual_replacement_verified'
+                    : 'manual_repair_verified',
+                'archive' => $archive,
+                'replacement_archive' => $replacement !== '' ? $replacement : null,
+                'operation_order' => $operation_order,
+            ],
+        ]);
+        if ($incident_action === '') {
+            return $this->blocked(
+                'corruption_incident_resolution_failed',
+                $replacement !== '',
+                true
+            );
+        }
+        if ($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle
+            && !$replacement_handle->clear_replacement_transition_blocked()
+        ) {
+            return $this->blocked('replacement_transition_block_clear_failed', true, false);
+        }
+
+        return [
+            'allowed' => true,
+            'reason_code' => $replacement !== ''
+                ? 'manual_replacement_unblocked'
+                : 'manual_repair_unblocked',
+            'write_blocked' => false,
+            'incident_open' => false,
+            'incident_action' => $incident_action,
+        ];
     }
 
     private function record_corruption(string $archive, string $check, string $reason_code): string

@@ -253,7 +253,12 @@ class Kiwi_Operational_Event_Service
                         $correlation_key . ':' . (string) ($latest['id'] ?? '')
                     );
 
-                    return $this->persist($event, $correlation_key) ? 'resolved' : '';
+                    if (!$this->persist($event, $correlation_key)) { return ''; }
+                    $persisted = $this->repository->find_latest_by_correlation_key($correlation_key);
+                    return is_array($persisted)
+                        && ($persisted['lifecycle_action'] ?? '') === 'resolved'
+                        && ($persisted['idempotency_key'] ?? '') === $event['idempotency_key']
+                            ? 'resolved' : '';
                 }
             );
         } catch (Throwable $error) {

@@ -2,6 +2,8 @@
 
 if (!defined('ABSPATH')) { exit; }
 
+require_once __DIR__ . '/../services/class-retention-archive-health-json.php';
+
 /** Direct raw-JSON storage. Provisioning is deliberately not a runtime operation. */
 class Kiwi_Retention_Archive_Health_Store
 {
@@ -301,9 +303,7 @@ class Kiwi_Retention_Archive_Health_Store
             || strlen($row['option_value']) > self::MAX_BYTES
             || !in_array($row['autoload'] ?? null, ['no', 'off', 'auto-off'], true)
         ) { throw new RuntimeException('health_storage_invalid'); }
-        $value = json_decode($row['option_value'], true);
-        if (!is_array($value)) { throw new RuntimeException('health_storage_invalid'); }
-        return $value;
+        return Kiwi_Retention_Archive_Health_Json::decode($row['option_value']);
     }
 
     private function row(string $name, bool $optional = false): ?array

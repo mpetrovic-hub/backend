@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/class-retention-archive-health-json.php';
+
 /** The forced SSH command accepts one small JSON object, never a shell command. */
 final class Kiwi_Retention_Archive_Health_Transport
 {
@@ -46,7 +48,6 @@ final class Kiwi_Retention_Archive_Health_Transport
             elseif ($action === 'fail') {
                 $response = $this->service->fail_attempt($request['attempt_id'], $request['phase'], $request['message'], $request['reason_code']);
             } else {
-                if (!method_exists($this->service, 'accept_result')) { throw new RuntimeException('Result acceptance is unavailable.'); }
                 $response = $this->service->accept_result($request);
             }
             $exit = $response['_exit_code']; unset($response['_exit_code']);
@@ -191,21 +192,7 @@ final class Kiwi_Retention_Archive_Health_Transport
             if (strlen($json) > self::REQUEST_LIMIT) { throw new RuntimeException('Request is too large.'); }
             if ($part === '' && !feof($input)) { $this->wait_ready($input, false, $deadline); }
         }
-        $object = json_decode($json, false, 16, JSON_THROW_ON_ERROR);
-        if (!$object instanceof stdClass) { throw new RuntimeException('A JSON object is required.'); }
-        foreach (get_object_vars($object) as $value) {
-            if (is_array($value) || is_object($value)) { throw new RuntimeException('Flat request fields are required.'); }
-        }
-        // json_decode alone silently accepts duplicates. Tokenize the already valid flat
-        // object, decoding escaped key names as well, so aliases cannot bypass this check.
-        preg_match_all('/"(?:[^"\\\\]|\\\\.)*"|[{}\[\],:]|[^\s{}\[\],:]+/s', $json, $matches);
-        $seen = [];
-        for ($i = 1; $i < count($matches[0]) - 1; $i += 4) {
-            $key = json_decode($matches[0][$i], true, 2, JSON_THROW_ON_ERROR);
-            if (!is_string($key) || isset($seen[$key])) { throw new RuntimeException('Duplicate request field.'); }
-            $seen[$key] = true;
-        }
-        return get_object_vars($object);
+        return Kiwi_Retention_Archive_Health_Json::decode($json);
     }
 
     private function write_json($output, array $value, float $deadline): void

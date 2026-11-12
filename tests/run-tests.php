@@ -18721,5 +18721,6 @@ require_once __DIR__ . '/landing-session-engagements-migration-tests.php';
 require_once __DIR__ . '/retention-archive-attempt-tests.php';
 require_once __DIR__ . '/retention-archive-transport-tests.php';
 require_once __DIR__ . '/retention-archive-freshness-tests.php';
+require_once __DIR__ . '/retention-archive-result-tests.php';
 require_once __DIR__ . '/retention-archive-health-tests.php';
 require_once __DIR__ . '/db-connect-warning-context-diagnostic-tests.php';
