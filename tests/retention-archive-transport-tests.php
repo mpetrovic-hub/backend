@@ -151,7 +151,7 @@ kiwi_run_test('Archive transport actual SSH entry holds the OS lock and Pending 
     kiwi_assert_true(microtime(true) - $started >= 0.4, 'An 8KiB source at16KiB/s cannot be read in an unpaced burst.');
 });
 
-kiwi_run_test('Archive transport fail safely closes only its named attempt and result awaits acceptance capability', function (): void {
+kiwi_run_test('Archive transport fail safely closes only its named attempt and rejects its late result', function (): void {
     $f = kiwi_test_attempt_service(); $id = str_repeat('4', 32);
     $f['service']->with_new_attempt($id, 'manual', basename($f['path']), filesize($f['path']));
     $failure = ['schema_version' => 1, 'attempt_id' => $id, 'phase' => 'copy',

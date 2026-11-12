@@ -653,6 +653,11 @@ final class Kiwi_Retention_Archive_Health_Controller
         return $this->resolve_active_archive();
     }
 
+    public function generation_target(string $generation): ?array
+    {
+        return $this->find_archive($generation);
+    }
+
     private function find_archive(string $archive_name): ?array
     {
         $archive_name = Kiwi_Retention_Archive_Name::normalize($archive_name);
@@ -797,6 +802,11 @@ final class Kiwi_Retention_Archive_Health_Controller
         return $this->record_availability_failure($reason_code, $attempt['generation'] ?? null, '',
             $attempt['started_at'] ?? $this->now(), $attempt['operation_order'] ?? $this->operation_order(microtime(true)), null,
             ['attempt_id' => $attempt['attempt_id'] ?? null, 'phase' => $phase, 'message' => $message]);
+    }
+
+    public function record_external_recovery(array $attempt): string
+    {
+        return $this->record_availability_recovery($attempt['generation'], 'quick', $attempt['operation_order']);
     }
 
     private function later_availability_transition_exists(

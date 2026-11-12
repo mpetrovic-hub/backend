@@ -1,7 +1,9 @@
 <?php
 // Standalone synthetic persistence checks using the existing test boundary and a local MySQL instance.
 putenv('KIWI_TEST_FILTER=__independent_probe_load_only__');
+ob_start();
 require __DIR__ . '/run-tests.php';
+ob_end_clean();
 $credentials = getenv('KIWI_RETENTION_TEST_CREDENTIALS_FILE');
 if (!$credentials || !is_file($credentials)) { throw new RuntimeException('Private local test credentials are required.'); }
 $settings = json_decode(file_get_contents($credentials), true, 512, JSON_THROW_ON_ERROR);
@@ -75,6 +77,58 @@ function aht_service(Archive_Health_Test_Database $db, array $f): Kiwi_Retention
         operational_event_service: new Kiwi_Operational_Event_Service($f['events']),
         run_repository: new Kiwi_Test_Retention_Cleanup_Run_Repository(),
         health_store: new Kiwi_Retention_Archive_Health_Store($db));
+}
+
+// Actual transport/recovery in another PHP process, restricted to this task's artificial database/files.
+if (in_array($argv[1] ?? '', ['--transport', '--recover-paused'], true)) {
+    [$database, $path] = array_slice($argv, 2);
+    $real = realpath($path);
+    if (count($argv) !== 4 || preg_match('/^codex_test_157_[a-f0-9]+$/D', $database) !== 1
+        || $real === false || !is_file($real) || is_link($path)
+        || strpos($real, sys_get_temp_dir() . '/kiwi-attempt-') !== 0
+        || Kiwi_Retention_Archive_Name::normalize(basename($real)) !== basename($real)) {
+        throw new RuntimeException('Invalid local transport fixture.');
+    }
+    $db = new Archive_Health_Test_Database(aht_connection($settings, $database));
+    $GLOBALS['wpdb'] = $db;
+    $archive = new Kiwi_Test_Retention_Sqlite_Archive_Service();
+    foreach (glob(dirname($real) . '/kiwi_retention_archive_*.sqlite') as $file) {
+        $archive->archive_files[] = ['name' => basename($file), 'path' => $file];
+    }
+    $service = new Kiwi_Retention_Archive_Health_Service(archive_service: $archive,
+        operational_event_service: new Kiwi_Operational_Event_Service(new Kiwi_Operational_Event_Repository()),
+        run_repository: new Kiwi_Test_Retention_Cleanup_Run_Repository(), health_store: new Kiwi_Retention_Archive_Health_Store($db),
+        check_runner: static function (string $file): array {
+            $sqlite = new PDO('sqlite:file:' . $file . '?mode=ro');
+            $rows = $sqlite->query('PRAGMA integrity_check')->fetchAll(PDO::FETCH_COLUMN);
+            return ['result' => $rows === ['ok'] ? 'ok' : 'corruption_detected', 'check_completed' => true,
+                'reason_code' => $rows === ['ok'] ? 'sqlite_check_ok' : 'sqlite_check_reported_corruption'];
+        });
+    if ($argv[1] === '--transport') {
+        exit((new Kiwi_Retention_Archive_Health_Transport($service))->serve((string) getenv('SSH_ORIGINAL_COMMAND'), STDIN, STDOUT));
+    }
+    $db->before = static function (string $sql, $connection) use ($real): void {
+        if (!str_starts_with($sql, 'SELECT latest.*')) { return; }
+        $probe = (new Kiwi_Retention_Archive_Lock())->acquire_for_archive($real);
+        if (!empty($probe['acquired'])) { $probe['handle']->release(); return; }
+        $connection->before = null;
+        fwrite(STDERR, "recovery_effects_ready\n"); fflush(STDERR);
+        fgets(STDIN);
+    };
+    $answer = $service->unblock(basename($real), '', true);
+    echo json_encode($answer), "\n";
+    exit($answer['_exit_code']);
+}
+
+function aht_transport(string $database, string $path, string $action, array $request): array {
+    $environment = getenv(); $environment['SSH_ORIGINAL_COMMAND'] = $action;
+    $process = proc_open([PHP_BINARY, __FILE__, '--transport', $database, $path],
+        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
+    if (!is_resource($process)) { throw new RuntimeException('Synthetic transport could not start.'); }
+    fwrite($pipes[0], json_encode($request)); fclose($pipes[0]);
+    $wire = stream_get_contents($pipes[1]); fclose($pipes[1]);
+    $error = stream_get_contents($pipes[2]); fclose($pipes[2]);
+    return [proc_close($process), $wire, $error];
 }
 
 // A separate process holds the real source lock after its durable start. It does not auto-close Pending.
@@ -342,6 +396,144 @@ try {
             if ($fault === 'stale_revision') {
                 aht_assert($actual['state']['revision'] === 99, 'daily completion cannot overwrite a changed pre-transaction state');
             }
+        }
+    } finally { $GLOBALS['wpdb'] = $previous_wpdb; }
+    $reset();
+    $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+    $id = str_repeat('a', 32);
+    [$export_exit, $stream] = aht_transport($database, $f['path'], 'export', ['schema_version' => 1,
+        'attempt_id' => $id, 'start_kind' => 'manual', 'generation' => basename($f['path']), 'expected_bytes' => filesize($f['path'])]);
+    aht_assert($export_exit === 0, 'independent PHP transport exports a small actual SQLite source');
+    $header_end = strpos($stream, "\n");
+    $trailer = json_decode(substr($stream, $header_end + 1 + filesize($f['path'])), true, 512, JSON_THROW_ON_ERROR);
+    $proof = ['schema_version' => 1, 'attempt_id' => $id, 'generation' => basename($f['path']),
+        'received_bytes' => $trailer['bytes'], 'sha256' => $trailer['sha256'], 'transfer_complete' => true,
+        'check' => 'quick_check', 'check_completed' => true, 'outcome' => 'ok'];
+    [$result_exit, $ack] = aht_transport($database, $f['path'], 'result', $proof);
+    $accepted = json_decode($ack, true, 512, JSON_THROW_ON_ERROR);
+    aht_assert($result_exit === 0 && $accepted['outcome'] === 'ok', 'another PHP process accepts the stored source-bound result');
+    [$status_exit, $status_wire] = aht_transport($database, $f['path'], 'status', ['schema_version' => 1, 'attempt_id' => $id]);
+    $status = json_decode($status_wire, true, 512, JSON_THROW_ON_ERROR);
+    aht_assert($status_exit === 0 && $status['attempt']['status'] === 'closed'
+        && $status['attempt']['accepted_at'] === $accepted['accepted_at'], 'third process reads original durable acceptance after response loss');
+
+    $GLOBALS['wpdb'] = $db;
+    try {
+        foreach (['result_commit_ack', 'closure_commit_ack', 'closure_write', 'event_readback'] as $fault) {
+            $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+            $daily->fail_attempt(null, 'start', 'Synthetic result preparation failure.');
+            $proof = kiwi_test_result_export(['service' => $daily, 'path' => $f['path']], bin2hex(random_bytes(16)));
+            $commits = 0;
+            $db->after = static function ($sql, $result, $connection) use ($fault, &$commits) {
+                if ($sql !== 'COMMIT') { return $result; }
+                $commits++;
+                if (($fault === 'result_commit_ack' && $commits === 1)
+                    || ($fault === 'closure_commit_ack' && $commits === 2)) { return false; }
+                return $result;
+            };
+            $event_inserted = false;
+            $db->before = static function ($sql) use ($fault, &$commits, &$event_inserted): void {
+                if (str_starts_with($sql, 'INSERT INTO probe_kiwi_operational_events')) { $event_inserted = true; }
+                if (($fault === 'closure_write' && $commits === 1 && str_starts_with($sql, 'UPDATE probe_options'))
+                    || ($fault === 'event_readback' && $event_inserted && str_starts_with($sql, 'SELECT * FROM probe_kiwi_operational_events'))) {
+                    throw new RuntimeException('controlled_result_persistence_fault');
+                }
+            };
+            $failed = $daily->accept_result($proof);
+            $db->before = $db->after = null;
+            aht_assert($failed['_exit_code'] === 2, 'uncertain real result persistence is never acknowledged: ' . $fault);
+            [$read_exit, $wire] = aht_transport($database, $f['path'], 'status', ['schema_version' => 1, 'attempt_id' => $proof['attempt_id']]);
+            $actual = json_decode($wire, true, 512, JSON_THROW_ON_ERROR);
+            aht_assert($read_exit === 0 && $actual['attempt']['status'] === ($fault === 'closure_commit_ack' ? 'closed' : 'open'),
+                'independent process distinguishes retained Pending and lost final acknowledgement: ' . $fault);
+            $retry = $daily->accept_result($proof);
+            aht_assert($retry['_exit_code'] === 0 && ($actual['attempt']['accepted_at'] === null || $retry['accepted_at'] === $actual['attempt']['accepted_at']),
+                'real-database result retry finishes safely without refreshing accepted time: ' . $fault);
+            aht_assert((int) $db->pdo->query("SELECT COUNT(*) FROM probe_kiwi_operational_events WHERE lifecycle_action='resolved'")->fetchColumn() === 1,
+                'real-database retry appends only one Availability resolution: ' . $fault);
+        }
+
+        foreach (['duplicate', 'abort_ok', 'abort_corruption', 'lifecycle_visibility'] as $race) {
+            $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+            $daily->fail_attempt(null, 'start', 'Synthetic prior Availability failure.');
+            $proof = kiwi_test_result_export(['service' => $daily, 'path' => $f['path']], bin2hex(random_bytes(16)));
+            if ($race === 'abort_corruption') { $proof['outcome'] = 'corruption'; }
+            $competing = null; $visible = false;
+            $db->after = function ($sql, $result, $connection) use ($race, $proof, $database, $f, $other, $other_daily, &$competing, &$visible) {
+                $wanted = $race === 'lifecycle_visibility' ? 'kiwi_oe_lifecycle_' : 'kiwi_health_';
+                if (!str_starts_with($sql, 'SELECT RELEASE_LOCK(') || !str_contains($sql, $wanted)) { return $result; }
+                $connection->after = null;
+                if ($race === 'duplicate') {
+                    $competing = aht_transport($database, $f['path'], 'result', $proof)[0];
+                    return $result;
+                }
+                $GLOBALS['wpdb'] = $other;
+                try {
+                    if ($race === 'lifecycle_visibility') {
+                        $status = $other_daily->status($proof['attempt_id']);
+                        $visible = $status['attempt']['status'] === 'open' && $status['attempt']['outcome'] === 'ok'
+                            && $status['state']['last_confirmed_attempt_id'] === null && $status['open_incidents'] === [];
+                        $competing = $other_daily->fail_attempt(null, 'start', 'A later concurrent Availability failure.')['_exit_code'];
+                    } else { $competing = $other_daily->abort($proof['attempt_id'], true)['_exit_code']; }
+                } finally { $GLOBALS['wpdb'] = $connection; }
+                return $result;
+            };
+            $answer = $daily->accept_result($proof);
+            aht_assert($answer['_exit_code'] === ($race === 'abort_ok' ? 2 : 0), 'result finalization respects concurrent action: ' . $race);
+            aht_assert($competing === (in_array($race, ['duplicate', 'abort_corruption'], true) ? 2 : 0),
+                'independent connection or process observes the actual result guards: ' . $race);
+            if ($race === 'duplicate') {
+                $retry = aht_transport($database, $f['path'], 'result', $proof);
+                aht_assert($retry[0] === 0 && json_decode($retry[1], true)['accepted_at'] === $answer['accepted_at'],
+                    'competing duplicate can later confirm the same original acceptance');
+            }
+            if ($race === 'abort_ok') {
+                aht_assert($daily->status($proof['attempt_id'])['attempt']['outcome'] === 'manual_abort', 'a winning safe abort cannot be overwritten by late ok');
+            }
+            if ($race === 'abort_corruption') { unlink($f['path'] . '.lock.write-blocked'); }
+            if ($race === 'lifecycle_visibility') {
+                aht_assert($visible, 'resolved Availability is committed while the result still keeps Pending');
+                aht_assert(count($daily->status()['open_incidents']) === 1, 'later interleaved failure remains open after older result completion');
+            }
+        }
+    } finally { $db->before = $db->after = null; $GLOBALS['wpdb'] = $previous_wpdb; }
+
+    // Pause repair A after its last optimistic Pending read, while A's real generation flock is held.
+    // A different connection may start B only if repair's final effects have not reserved the global health guard.
+    $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+    $next = $f['root'] . '/kiwi_retention_archive_2027.sqlite'; copy($f['path'], $next);
+    $f['archive']->archive_files[] = ['name' => basename($next), 'path' => $next];
+    $previous_wpdb = $GLOBALS['wpdb']; $GLOBALS['wpdb'] = $db;
+    try {
+        $event_service = new Kiwi_Operational_Event_Service(new Kiwi_Operational_Event_Repository());
+        $gate = new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(new Kiwi_Retention_Archive_Lock(), $event_service,
+            new Kiwi_Test_Retention_Cleanup_Run_Repository(), new Kiwi_Retention_Archive_Health_Store($db));
+        $gate->block_after_corruption($f['path'], 'quick', 'sqlite_check_reported_corruption');
+        $child = proc_open([PHP_BINARY, __FILE__, '--recover-paused', $database, $f['path']],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (!is_resource($child)) { throw new RuntimeException('Synthetic recovery did not start.'); }
+        try {
+            stream_set_timeout($pipes[2], 10);
+            $ready = fgets($pipes[2]);
+            aht_assert($ready === "recovery_effects_ready\n", 'repair A reaches final effects under its actual generation lock');
+            $new_id = str_repeat('b', 32);
+            $started = $daily->with_new_attempt($new_id, 'manual', basename($next), filesize($next));
+            fwrite($pipes[0], "continue\n"); fclose($pipes[0]);
+            $recovered = json_decode(stream_get_contents($pipes[1]), true, 512, JSON_THROW_ON_ERROR);
+            fclose($pipes[1]); fclose($pipes[2]); proc_close($child); $child = null;
+            aht_assert(!($started['_exit_code'] === 0 && $recovered['_exit_code'] === 0),
+                'repair A cannot clear protection while a newly started B attempt is open');
+            if ($started['_exit_code'] === 0) {
+                aht_assert(is_file($f['path'] . '.lock.write-blocked'), 'a concurrent B start leaves A protection in place');
+                $daily->abort($new_id, true);
+            } else {
+                aht_assert($recovered['_exit_code'] === 0, 'short recovery effects can finish before a later B start');
+                aht_assert($daily->with_new_attempt($new_id, 'manual', basename($next), filesize($next))['_exit_code'] === 0,
+                    'a new B attempt can start after the final recovery guard is released');
+                $daily->abort($new_id, true);
+            }
+        } finally {
+            if (is_resource($child)) { proc_terminate($child, 9); foreach ($pipes as $pipe) { if (is_resource($pipe)) { fclose($pipe); } } proc_close($child); }
         }
     } finally { $GLOBALS['wpdb'] = $previous_wpdb; }
     echo 'ARCHIVE_HEALTH_STATE_INTEGRATION_PASSED ', $GLOBALS['aht_checks'], "\n";
