@@ -154,6 +154,11 @@ final class Kiwi_Retention_Archive_Health_Transport
         if (!$header_started) {
             $response = ['schema_version' => 1, 'result' => 'error', 'reason_code' => 'health_run_failed',
                 'message' => 'Archive export could not be started safely.'];
+            if (($result['attempt_started'] ?? null) === false) {
+                $response += ['command' => 'export', 'attempt_id' => $request['attempt_id'],
+                    'generation' => $request['generation'], 'expected_bytes' => $request['expected_bytes'],
+                    'attempt_started' => false];
+            }
             $this->write_json($output, $response, min($deadline, $this->now() + $this->control_seconds));
         }
         return $result['_exit_code'];

@@ -1422,6 +1422,12 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
         return $id;
     }
 
+    public function insert_event_if_lock_owned(array $event, Kiwi_Database_Lock_Guard $guard): int
+    {
+        // This repository is in-memory; the actual atomic SQL guard is covered by the real DB/process suite.
+        return $this->insert_event($event);
+    }
+
     public function find_latest_by_correlation_key(string $correlation_key): ?array
     {
         $matches = array_values(array_filter($this->rows, static function (array $row) use ($correlation_key): bool {

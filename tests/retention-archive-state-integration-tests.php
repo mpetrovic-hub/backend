@@ -80,7 +80,9 @@ function aht_service(Archive_Health_Test_Database $db, array $f): Kiwi_Retention
 }
 
 // Actual transport/recovery in another PHP process, restricted to this task's artificial database/files.
-if (in_array($argv[1] ?? '', ['--transport', '--recover-paused', '--operator-abort'], true)) {
+if (in_array($argv[1] ?? '', ['--transport', '--recover-paused', '--operator-abort',
+    '--recover-reconnect-lock', '--recover-reconnect-insert', '--recover-reconnect-readback',
+    '--recover-reconnect-readback-obstructed'], true)) {
     [$database, $path] = array_slice($argv, 2);
     $real = realpath($path);
     if (count($argv) !== 4 || preg_match('/^codex_test_157_[a-f0-9]+$/D', $database) !== 1
@@ -117,14 +119,36 @@ if (in_array($argv[1] ?? '', ['--transport', '--recover-paused', '--operator-abo
         echo json_encode($answer), "\n";
         exit($answer['_exit_code']);
     }
-    $db->before = static function (string $sql, $connection) use ($real): void {
+    if (str_starts_with($argv[1], '--recover-reconnect-')) {
+        $fault = substr($argv[1], strlen('--recover-reconnect-'));
+        $obstruct_restore = $fault === 'readback-obstructed';
+        if ($obstruct_restore) { $fault = 'readback'; }
+        $health_locked = false; $inserted = false;
+        $db->before = static function (string $sql, $connection) use ($settings, $database, $real, $fault,
+            $obstruct_restore, &$health_locked, &$inserted): void {
+            if (str_starts_with($sql, 'SELECT GET_LOCK(') && str_contains($sql, 'kiwi_health_')) { $health_locked = true; }
+            if (!$health_locked) { return; }
+            $insert = str_starts_with($sql, 'INSERT INTO probe_kiwi_operational_events');
+            $matches = ($fault === 'lock' && str_starts_with($sql, 'SELECT GET_LOCK(') && str_contains($sql, 'kiwi_oe_lifecycle_'))
+                || ($fault === 'insert' && $insert)
+                || ($fault === 'readback' && $inserted && str_starts_with($sql, 'SELECT * FROM probe_kiwi_operational_events'));
+            if ($insert) { $inserted = true; }
+            if (!$matches) { return; }
+            $connection->before = null;
+            // Drop the actual old PDO connection: MariaDB releases its connection-owned health lock.
+            $connection->pdo = aht_connection($settings, $database);
+            if ($obstruct_restore) { mkdir($real . '.lock.write-blocked', 0700); }
+            fwrite(STDERR, "recovery_reconnected\n"); fflush(STDERR);
+            fgets(STDIN);
+        };
+    } else { $db->before = static function (string $sql, $connection) use ($real): void {
         if (!str_starts_with($sql, 'SELECT latest.*')) { return; }
         $probe = (new Kiwi_Retention_Archive_Lock())->acquire_for_archive($real);
         if (!empty($probe['acquired'])) { $probe['handle']->release(); return; }
         $connection->before = null;
         fwrite(STDERR, "recovery_effects_ready\n"); fflush(STDERR);
         fgets(STDIN);
-    };
+    }; }
     $answer = $service->unblock(basename($real), '', true);
     echo json_encode($answer), "\n";
     exit($answer['_exit_code']);
@@ -546,6 +570,69 @@ try {
             if (is_resource($child)) { proc_terminate($child, 9); foreach ($pipes as $pipe) { if (is_resource($pipe)) { fclose($pipe); } } proc_close($child); }
         }
     } finally { $GLOBALS['wpdb'] = $previous_wpdb; }
+    foreach (['lock', 'insert', 'readback', 'sole_sentinel', 'readback-obstructed'] as $fault) {
+        $reset(); $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+        $previous_wpdb = $GLOBALS['wpdb']; $GLOBALS['wpdb'] = $db;
+        try {
+            if ($fault === 'sole_sentinel') {
+                $fixture_lock = (new Kiwi_Retention_Archive_Lock())->acquire_for_archive($f['path']);
+                aht_assert($fixture_lock['handle']->persist_write_blocked(), 'sole-sentinel recovery fixture has durable file protection');
+                $fixture_lock['handle']->release();
+            } else {
+                $gate->block_after_corruption($f['path'], 'quick', 'sqlite_check_reported_corruption');
+            }
+            $child = proc_open([PHP_BINARY, __FILE__, '--recover-reconnect-' . ($fault === 'sole_sentinel' ? 'lock' : $fault),
+                $database, $f['path']], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            if (!is_resource($child)) { throw new RuntimeException('Synthetic reconnect recovery did not start.'); }
+            try {
+                stream_set_timeout($pipes[2], 10);
+                aht_assert(fgets($pipes[2]) === "recovery_reconnected\n", 'recovery child loses its actual health-lock connection at ' . $fault);
+                $new_id = bin2hex(random_bytes(16));
+                $started = $daily->with_new_attempt($new_id, 'manual', basename($next), filesize($next));
+                aht_assert($started['_exit_code'] === 0, 'independent process can acquire the released health lock for B at ' . $fault);
+                fwrite($pipes[0], "continue\n"); fclose($pipes[0]);
+                if ($fault === 'readback-obstructed') {
+                    $diagnostic = (string) fgets($pipes[2]);
+                    aht_assert((int) $db->pdo->query("SELECT COUNT(*) FROM probe_kiwi_operational_events WHERE event_type='retention_archive_corruption_detected' AND lifecycle_action IN ('raised','repeated')")->fetchColumn() === 1,
+                        'technical recovery failure creates no new completed-non-ok corruption finding');
+                    aht_assert(str_contains($diagnostic, 'retaining generation lock'),
+                        'unavailable file restoration reports locally while retaining the existing lock');
+                    $busy = (new Kiwi_Retention_Archive_Lock())->acquire_for_archive($f['path']);
+                    aht_assert(empty($busy['acquired']), 'other processes cannot use A while its file protection is unconfirmed');
+                    rmdir($f['path'] . '.lock.write-blocked');
+                }
+                $recovered = json_decode(stream_get_contents($pipes[1]), true, 512, JSON_THROW_ON_ERROR);
+                fclose($pipes[1]); fclose($pipes[2]); proc_close($child); $child = null;
+                aht_assert($recovered['_exit_code'] === 2, 'lost recovery ownership never reports success at ' . $fault);
+                clearstatcache(true, $f['path'] . '.lock.write-blocked');
+                $open = $event_service->get_open_incidents(['event_type' => 'retention_archive_corruption_detected']);
+                aht_assert(is_file($f['path'] . '.lock.write-blocked') || !empty($open),
+                    'A keeps effective corruption protection while B is Pending after ' . $fault);
+                if (!str_starts_with($fault, 'readback')) {
+                    aht_assert(!empty($open), 'the critical Incident INSERT cannot resolve protection after ownership loss at ' . $fault);
+                } else {
+                    aht_assert(is_file($f['path'] . '.lock.write-blocked'), 'unconfirmed post-INSERT recovery restores the source file gate');
+                }
+                aht_assert($daily->status()['state']['active_attempt_id'] === $new_id, 'failed recovery preserves the independently started B attempt');
+                $daily->abort($new_id, true);
+            } finally {
+                if (is_resource($child)) { proc_terminate($child, 9); foreach ($pipes as $pipe) { if (is_resource($pipe)) { fclose($pipe); } } proc_close($child); }
+            }
+            // After explicit resolution of B, a new operator recovery must succeed through the same guarded SQL path.
+            $retry = proc_open([PHP_BINARY, __FILE__, '--recover-paused', $database, $f['path']],
+                [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $retry_pipes);
+            if (!is_resource($retry)) { throw new RuntimeException('Synthetic recovery retry did not start.'); }
+            fwrite($retry_pipes[0], "continue\n"); fclose($retry_pipes[0]);
+            $answer = json_decode(stream_get_contents($retry_pipes[1]), true, 512, JSON_THROW_ON_ERROR);
+            fclose($retry_pipes[1]); stream_get_contents($retry_pipes[2]); fclose($retry_pipes[2]);
+            $retry_exit = proc_close($retry);
+            aht_assert($retry_exit === 0 && $answer['_exit_code'] === 0, 'explicit retry completes the guarded recovery after ' . $fault);
+            clearstatcache(true, $f['path'] . '.lock.write-blocked');
+            aht_assert(!is_file($f['path'] . '.lock.write-blocked')
+                && $event_service->get_open_incidents(['event_type' => 'retention_archive_corruption_detected']) === [],
+                'only confirmed retry clears both source protections after ' . $fault);
+        } finally { $GLOBALS['wpdb'] = $previous_wpdb; }
+    }
     echo 'ARCHIVE_HEALTH_STATE_INTEGRATION_PASSED ', $GLOBALS['aht_checks'], "\n";
 } finally {
     $admin->exec('DROP DATABASE ' . $database);

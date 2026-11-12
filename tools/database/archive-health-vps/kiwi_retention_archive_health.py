@@ -36,9 +36,16 @@ START_COMMAND = ['/usr/bin/sudo', '-n', '--', '/usr/bin/env', '-i', 'PATH=/usr/b
 
 
 class HealthError(Exception):
-    def __init__(self, message, phase='start', reason='health_run_failed', uncertain=False):
+    def __init__(self, message, phase='start', reason='health_run_failed', uncertain=False, not_started=False):
         super().__init__(message)
         self.phase, self.reason, self.uncertain = phase, reason, uncertain
+        self.not_started = not_started
+
+
+class TransportExit(HealthError):
+    def __init__(self, code):
+        super().__init__('SSH operation did not finish successfully.')
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -349,8 +356,11 @@ class ProcessTransport:
                             receive(block)
                         # stderr is drained and discarded, never an unbounded diagnostic buffer.
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or process.wait(timeout=remaining) != 0:
+            if remaining <= 0:
                 raise HealthError('SSH operation did not finish successfully.')
+            exit_code = process.wait(timeout=remaining)
+            if exit_code != 0:
+                raise TransportExit(exit_code)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise HealthError('SSH operation could not complete.') from None
         finally:
@@ -548,6 +558,8 @@ class ArchiveHealthRunner:
             return acknowledgement
         except (HealthError, OSError, ValueError) as caught:
             error = caught if isinstance(caught, HealthError) else HealthError('A required local operation failed.', phase)
+            if error.not_started:
+                export_requested, phase = False, 'start'
             return self.failure(attempt, phase, error, request if export_requested else None, directory, result_ready)
         finally:
             if lock is not None:
@@ -616,6 +628,10 @@ class ArchiveHealthRunner:
         self.transport.in_worker = True
         expected = {'schema_version': 1, 'type': 'archive', 'attempt_id': request['attempt_id'],
                     'generation': request['generation'], 'bytes': request['expected_bytes']}
+        rejection = {'schema_version': 1, 'result': 'error', 'reason_code': 'health_run_failed',
+                     'message': 'Archive export could not be started safely.', 'command': 'export',
+                     'attempt_id': request['attempt_id'], 'generation': request['generation'],
+                     'expected_bytes': request['expected_bytes'], 'attempt_started': False}
         buffer = bytearray()
         stage, remaining, trailer = 'header', request['expected_bytes'], None
         descriptor = open_private(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
@@ -641,6 +657,10 @@ class ArchiveHealthRunner:
                         frame = decode_object(buffer[:end + 1], REQUEST_LIMIT)
                         del buffer[:end + 1]
                         if stage == 'header':
+                            if frame == rejection and type(frame.get('schema_version')) is int \
+                                    and type(frame.get('expected_bytes')) is int and frame.get('attempt_started') is False:
+                                stage = 'rejected'
+                                continue
                             if frame != expected or type(frame.get('bytes')) is not int or type(frame.get('schema_version')) is not int:
                                 raise HealthError('Export descriptor does not match the requested attempt.', 'copy')
                             stage = 'bytes'
@@ -654,7 +674,13 @@ class ArchiveHealthRunner:
                             trailer, stage = frame, 'done'
                     else:
                         raise HealthError('Export has unexpected trailing data.', 'copy')
-            self.transport.exchange('export', request, self.limits.copy_seconds, consume)
+            try:
+                self.transport.exchange('export', request, self.limits.copy_seconds, consume)
+            except TransportExit as error:
+                # Only a complete matching rejection, EOF and the defined remote exit prove no creation was attempted.
+                if error.code == 2 and stage == 'rejected' and not buffer:
+                    raise HealthError('Export was rejected before attempt creation.', not_started=True) from None
+                raise
             if stage != 'done' or buffer or remaining:
                 raise HealthError('Export ended without its complete proof.', 'copy')
             stream.flush()
@@ -758,7 +784,8 @@ class ArchiveHealthRunner:
             try:
                 response = {'ok': True, 'value': operation()}
             except HealthError as error:
-                response = {'ok': False, 'message': str(error), 'reason': error.reason, 'uncertain': error.uncertain}
+                response = {'ok': False, 'message': str(error), 'reason': error.reason, 'uncertain': error.uncertain,
+                            'not_started': error.not_started}
             except BaseException:
                 response = {'ok': False, 'message': 'The phase could not complete.', 'reason': 'health_run_failed', 'uncertain': False}
             try:
@@ -800,7 +827,8 @@ class ArchiveHealthRunner:
             response = decode_object(data, REQUEST_LIMIT)
             if response.get('ok') is not True:
                 raise HealthError(response.get('message', 'Phase did not complete.'), phase,
-                                  response.get('reason', 'health_run_failed'), response.get('uncertain') is True)
+                                  response.get('reason', 'health_run_failed'), response.get('uncertain') is True,
+                                  response.get('not_started') is True)
             return response['value']
         finally:
             selector.close()

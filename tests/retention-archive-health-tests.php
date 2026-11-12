@@ -1906,13 +1906,77 @@ kiwi_run_test('Incident-only corruption recording cannot reopen a concurrent rec
     }
 });
 
+kiwi_run_test('Unblock restores the file gate after a lost clear acknowledgement', function (): void {
+    $root = kiwi_create_temp_directory('kiwi_retention_lost_clear_ack');
+    $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
+    $child = $root . DIRECTORY_SEPARATOR . 'lost-clear-ack.php';
+    file_put_contents($archive, 'fixture');
+    file_put_contents($child, <<<'PHP'
+<?php
+// Replace only the process-local fsync boundary; marker unlink/restore and flock remain real.
+function fsync($resource): bool {
+    $target = $GLOBALS['clear_ack_target'] ?? '';
+    if ($target !== '' && (stream_get_meta_data($resource)['uri'] ?? '') === dirname($target)) {
+        clearstatcache(true, $target);
+        if (!file_exists($target)) {
+            $GLOBALS['clear_ack_target'] = '';
+            $GLOBALS['clear_ack_lost_after_unlink'] = true;
+            return false;
+        }
+    }
+    return true;
+}
+putenv('KIWI_TEST_FILTER=__lost_clear_ack_child_load_only__');
+ob_start(); require $argv[1]; ob_end_clean();
+$archive = $argv[2];
+$lock = new Kiwi_Retention_Archive_Lock();
+$events = new Kiwi_Operational_Event_Service(new Kiwi_Test_Operational_Event_Repository());
+$coordinator = kiwi_test_corruption_gate($lock, $events, new Kiwi_Test_Manual_Replacement_Run_Repository());
+Kiwi_Retention_Archive_Write_Block::persist($archive . '.lock');
+$GLOBALS['clear_ack_target'] = $archive . '.lock.write-blocked';
+$failed = $coordinator->unblock($archive);
+$restored = $lock->is_write_blocked_for_archive($archive);
+$open = $events->get_open_incidents(['event_type' => 'retention_archive_corruption_detected']);
+$retried = $coordinator->unblock($archive);
+echo json_encode(['failed' => $failed, 'lost_after_unlink' => $GLOBALS['clear_ack_lost_after_unlink'] ?? false,
+    'restored' => $restored, 'open' => count($open), 'retried' => $retried,
+    'blocked_after_retry' => $lock->is_write_blocked_for_archive($archive)]);
+PHP
+    );
+    try {
+        $result = kiwi_run_retention_process([PHP_BINARY, '-d', 'disable_functions=fsync',
+            $child, __DIR__ . '/run-tests.php', $archive]);
+        kiwi_assert_same(0, $result['exit_code'], 'Expected the isolated fsync fault fixture to complete.');
+        $answer = json_decode($result['stdout'], true);
+        kiwi_assert_same(true, $answer['lost_after_unlink'] ?? false, 'Expected a real removed marker before its failed directory-sync acknowledgement.');
+        kiwi_assert_same('corruption_write_block_clear_failed', $answer['failed']['reason_code'] ?? '', 'Expected the unconfirmed clear to remain a failed recovery.');
+        kiwi_assert_same(true, $answer['restored'] ?? false, 'Expected the original file gate to be restored before releasing the generation lock.');
+        kiwi_assert_same(1, $answer['open'] ?? 0, 'Expected the existing corruption incident to remain unresolved.');
+        kiwi_assert_same(true, $answer['retried']['allowed'] ?? false, 'Expected an explicit healthy retry to complete.');
+        kiwi_assert_same(false, $answer['blocked_after_retry'] ?? true, 'Expected only the confirmed retry to release protection.');
+    } finally {
+        kiwi_remove_directory($root);
+    }
+});
+
 kiwi_run_test('Replacement remains blocked until Corruption Incident resolution succeeds', function (): void {
     $root = kiwi_create_temp_directory('kiwi_retention_replacement_gate');
     $archive = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026.sqlite';
     $replacement = $root . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2026_part_2.sqlite';
     file_put_contents($archive, 'archive-a');
     file_put_contents($replacement, 'archive-b');
-    $event_repository = new Kiwi_Test_One_Failure_Operational_Event_Repository();
+    $event_repository = new class($archive) extends Kiwi_Test_One_Failure_Operational_Event_Repository {
+        public $sentinel_during_resolution = [];
+        private $archive_path;
+        public function __construct(string $path) { $this->archive_path = $path; }
+        public function insert_event(array $event): int {
+            if (($event['lifecycle_action'] ?? '') === 'resolved') {
+                clearstatcache(true, $this->archive_path . '.lock.write-blocked');
+                $this->sentinel_during_resolution[] = file_exists($this->archive_path . '.lock.write-blocked');
+            }
+            return parent::insert_event($event);
+        }
+    };
     $events = new Kiwi_Operational_Event_Service($event_repository);
     $runs = new Kiwi_Test_Manual_Replacement_Run_Repository();
     $lock = new Kiwi_Retention_Archive_Lock();
@@ -1941,7 +2005,8 @@ kiwi_run_test('Replacement remains blocked until Corruption Incident resolution 
         );
         kiwi_assert_same(false, $failed['allowed'], 'Expected failed Incident resolution to block replacement recovery.');
         kiwi_assert_same('corruption_incident_resolution_failed', $failed['reason_code'], 'Expected explicit resolution failure.');
-        kiwi_assert_same(false, $lock->is_write_blocked_for_archive($archive), 'Expected A sentinel to clear before the final Incident action.');
+        kiwi_assert_same([false], $event_repository->sentinel_during_resolution, 'A sentinel clears before the actual final Incident action.');
+        kiwi_assert_same(true, $lock->is_write_blocked_for_archive($archive), 'Unconfirmed completion restores A protection after that failed action.');
         kiwi_assert_same(false, $lock->is_write_blocked_for_archive($replacement), 'Expected B transition state not to masquerade as corruption.');
         kiwi_assert_same(true, $lock->is_replacement_transition_blocked_for_archive($replacement), 'Expected distinct B transition sentinel to remain fail-closed.');
         kiwi_assert_same(basename($archive), $lock->get_replacement_transition_source_for_archive($replacement), 'Expected B transition state to remain bound to source A.');

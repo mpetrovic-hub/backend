@@ -2,6 +2,31 @@
 
 require_once __DIR__ . '/fixtures/retention-health-state-wpdb.php';
 
+foreach ([
+    'authorization' => ['Authorization: Bearer SYNTHETIC_BEARER_VALUE', ['SYNTHETIC_BEARER_VALUE']],
+    'cookie' => ['Cookie: fixture=SYNTHETIC_COOKIE_VALUE; PHPSESSID=SYNTHETIC_SESSION_VALUE',
+        ['SYNTHETIC_COOKIE_VALUE', 'SYNTHETIC_SESSION_VALUE']],
+    'quoted password' => ['password="SYNTHETIC_ALPHA SYNTHETIC_BETA"', ['SYNTHETIC_ALPHA', 'SYNTHETIC_BETA']],
+] as $case => [$message, $secrets]) {
+    kiwi_run_test('Archive attempts centrally mask failure credentials before persistence: ' . $case,
+        function () use ($message, $secrets): void {
+            $f = kiwi_test_attempt_service();
+            $id = str_repeat('d', 32);
+            $f['service']->with_new_attempt($id, 'manual', basename($f['path']), filesize($f['path']));
+            $failed = $f['service']->fail_attempt($id, 'copy', 'Copy /private/fixture.sqlite failed. ' . $message);
+            kiwi_assert_same(0, $failed['_exit_code'], 'Safe failure still completes.');
+            $status = $f['service']->status($id);
+            kiwi_assert_same('closed', $status['attempt']['status'], 'Status reads the persisted safe closure.');
+            kiwi_assert_same(1, count($f['events']->rows), 'The same failure persists its Availability event.');
+            $stored = json_encode([$failed, $status, $f['events']->rows], JSON_UNESCAPED_SLASHES);
+            foreach ($secrets as $secret) {
+                kiwi_assert_same(false, strpos($stored, $secret), 'No credential fragment may survive in attempt/status/event.');
+            }
+            kiwi_assert_same(false, strpos($stored, '/private/fixture.sqlite'), 'Path removal remains separate from credential masking.');
+            kiwi_assert_contains('[redacted]', $status['attempt']['message'], 'Stored diagnostics use the central masking result.');
+        });
+}
+
 kiwi_run_test('Archive attempts operator commands preserve status abort and process exit contract', function (): void {
     foreach (['status' => 0, 'attempt' => 0, 'abort' => 2, 'confirmed' => 0, 'unknown_argument' => 2] as $case => $exit) {
         $process = proc_open([PHP_BINARY, __DIR__ . '/fixtures/retention-health-command.php', $case],

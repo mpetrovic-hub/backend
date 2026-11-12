@@ -427,18 +427,25 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             // Only these short final effects hold the shared health lock; the full
             // integrity verification has already finished before entering unblock.
             $completion = null;
+            $source_cleared = false;
             try {
                 $this->health_store->update(null, static function (array $view): array {
                     return ['state' => $view['state']];
-                }, null, function (array $view) use ($archive_path, $replacement_archive_path,
-                    $archive, $replacement, $operation_order, $handle, $replacement_handle, &$completion): void {
+                }, null, function (array $view, callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard)
+                    use ($archive_path, $replacement_archive_path, $archive, $replacement, $operation_order,
+                        $handle, $replacement_handle, &$completion, &$source_cleared): void {
                     if ($view['active_attempt'] !== null) { throw new RuntimeException('health_attempt_pending'); }
                     $completion = $this->complete_unblock_while_generation_locked($archive_path,
-                        $replacement_archive_path, $archive, $replacement, $operation_order, $handle, $replacement_handle);
+                        $replacement_archive_path, $archive, $replacement, $operation_order, $handle, $replacement_handle,
+                        $assert_owner, $write_guard, $source_cleared);
                 });
             } catch (Throwable $error) {
+                if ($source_cleared) { $this->restore_recovery_protection($archive_path, $archive, $handle, $replacement_handle); }
                 return $this->blocked($error->getMessage() === 'health_attempt_pending'
                     ? 'health_attempt_pending' : 'health_state_unavailable', true, true);
+            }
+            if ($source_cleared && empty($completion['allowed'])) {
+                $this->restore_recovery_protection($archive_path, $archive, $handle, $replacement_handle);
             }
             return $completion;
         } finally {
@@ -449,8 +456,10 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
 
     private function complete_unblock_while_generation_locked(string $archive_path,
         string $replacement_archive_path, string $archive, string $replacement, string $operation_order,
-        Kiwi_Retention_Archive_Lock_Handle $handle, ?Kiwi_Retention_Archive_Lock_Handle $replacement_handle): array
+        Kiwi_Retention_Archive_Lock_Handle $handle, ?Kiwi_Retention_Archive_Lock_Handle $replacement_handle,
+        callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard, bool &$source_cleared): array
     {
+        $assert_owner();
         if ($replacement_handle !== null && !$replacement_handle->persist_replacement_transition_blocked($archive)) {
             return $this->blocked('replacement_transition_block_persist_failed', true, true);
         }
@@ -462,11 +471,15 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         ) {
             return $this->blocked('replacement_run_terminalize_failed', true, true);
         }
+        // terminalize may execute database queries, including a transparent reconnect.
+        $assert_owner();
+        // clear may unlink successfully yet fail to confirm the parent-directory sync.
+        $source_cleared = true;
         if (!$handle->clear_write_blocked()) {
             return $this->blocked('corruption_write_block_clear_failed', true, true);
         }
 
-        $incident_action = $this->operational_event_service->record_recovery_action([
+        $incident_action = $this->operational_event_service->record_recovery_action_if([
             'area' => 'retention',
             'severity' => 'info',
             'event_type' => self::EVENT_TYPE,
@@ -484,7 +497,12 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 'replacement_archive' => $replacement !== '' ? $replacement : null,
                 'operation_order' => $operation_order,
             ],
-        ]);
+        ], static function () use ($assert_owner): bool {
+            // This predicate runs after acquiring the event lock and reading the latest event.
+            $assert_owner();
+            return true;
+        }, $write_guard);
+        $assert_owner();
         if ($incident_action === '') {
             return $this->blocked(
                 'corruption_incident_resolution_failed',
@@ -507,6 +525,29 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             'incident_open' => false,
             'incident_action' => $incident_action,
         ];
+    }
+
+    /** Unconfirmed release must leave a durable gate before the existing generation locks are released. */
+    private function restore_recovery_protection(string $archive_path, string $archive,
+        Kiwi_Retention_Archive_Lock_Handle $handle, ?Kiwi_Retention_Archive_Lock_Handle $replacement_handle): void
+    {
+        if ($replacement_handle !== null) {
+            $reported = false;
+            while (!$replacement_handle->persist_replacement_transition_blocked($archive)) {
+                if (!$reported) { error_log('Archive recovery transition protection unconfirmed; retaining generation lock.'); $reported = true; }
+                usleep(250000);
+            }
+        }
+        $reported = false;
+        while (true) {
+            if ($handle->persist_write_blocked()) { return; }
+            $gate = $this->inspect($archive_path, false);
+            if (!empty($gate['incident_open'])) { return; }
+            // Keep the already-held generation lock if both durable protection destinations are unavailable.
+            // A technical restoration failure is not a new completed non-ok SQLite finding.
+            if (!$reported) { error_log('Archive recovery protection unconfirmed; retaining generation lock.'); $reported = true; }
+            usleep(250000);
+        }
     }
 
     private function record_corruption(string $archive, string $check, string $reason_code): string

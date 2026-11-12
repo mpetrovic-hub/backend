@@ -158,6 +158,7 @@ class Kiwi_Retention_Archive_Health_Service
     public function with_new_attempt(string $attempt_id, string $start_kind, string $generation, int $expected_bytes, ?callable $operation = null): array
     {
         $handle = null;
+        $creation_attempted = false;
         try {
             if (!Kiwi_Retention_Archive_Health_Store::valid_attempt_id($attempt_id)
                 || !in_array($start_kind, ['manual', 'scheduled'], true) || $expected_bytes < 1) {
@@ -174,6 +175,8 @@ class Kiwi_Retention_Archive_Health_Service
                 || filesize($target['path']) !== $expected_bytes) { throw new RuntimeException('health_target_changed'); }
             if (empty($this->safety_gate->inspect($target['path'], false)['allowed'])) { throw new RuntimeException('health_archive_protected'); }
             $now = $this->now_utc();
+            // Once storage is invoked, even a lost commit acknowledgement must remain uncertain.
+            $creation_attempted = true;
             $view = $this->health_store->update($attempt_id, function (array $view) use ($attempt_id, $start_kind, $generation, $expected_bytes, $now): array {
                 if ($view['active_attempt'] !== null || $view['attempt'] !== null) { throw new RuntimeException('health_attempt_exists'); }
                 $state = $view['state'];
@@ -192,7 +195,9 @@ class Kiwi_Retention_Archive_Health_Service
             return $operation !== null ? $operation($view['attempt'], $target['path'], $handle)
                 : ['schema_version' => 1, 'result' => 'started', 'attempt' => $view['attempt'], '_exit_code' => 0];
         } catch (Throwable $error) {
-            return $this->attempt_error('start', $error->getMessage());
+            $failure = $this->attempt_error('start', $error->getMessage());
+            if (!$creation_attempted) { $failure['attempt_started'] = false; }
+            return $failure;
         } finally {
             $this->archive_lock->release($handle);
         }
@@ -376,8 +381,8 @@ class Kiwi_Retention_Archive_Health_Service
                 || !in_array($reason_code, ['health_run_failed', 'health_child_timeout'], true)) {
                 throw new RuntimeException('health_failure_input_invalid');
             }
+            $message = $this->operational_event_service->mask_credentials($message);
             $message = preg_replace('~(?:[A-Za-z]:)?[/\\\\][^\s]+|(?:https?://)\S+~', '[redacted]', $message);
-            $message = preg_replace('/(?:password|secret|token|authorization|key)\s*[:=]\s*\S+/i', '[redacted]', $message);
             $message = substr(preg_replace('/[\x00-\x1f\x7f]/', ' ', $message), 0, 300);
             if ($attempt_id === null) {
                 $this->health_store->read();
