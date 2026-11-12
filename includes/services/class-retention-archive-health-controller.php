@@ -386,7 +386,9 @@ final class Kiwi_Retention_Archive_Health_Controller
         ];
         if ($external_context !== []) {
             $event['context'] = array_merge($event['context'], $external_context);
-            $event['message'] = 'Archivcheck bei ' . $external_context['phase'] . ' gescheitert: ' . $external_context['message'];
+            if ($reason_code === 'health_run_failed') {
+                $event['message'] = 'Archivcheck bei ' . $external_context['phase'] . ' gescheitert: ' . $external_context['message'];
+            }
         }
         if ($reason_code === 'health_check_overdue') {
             $event['message'] = 'Seit mindestens acht Kalendertagen liegt kein bestätigter Archivbefund vor.';
