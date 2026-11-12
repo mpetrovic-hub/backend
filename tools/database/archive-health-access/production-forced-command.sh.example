@@ -1,0 +1,20 @@
+#!/bin/sh
+# Deployment TEMPLATE only. Install at a fixed protected path after approval.
+# Replace WORDPRESS_ROOT with the independently verified installed root.
+set -eu
+if [ "$#" -ne 0 ]; then exit 2; fi
+case "${SSH_ORIGINAL_COMMAND-}" in
+    status|export|result|fail) ;;
+    *) exit 2 ;;
+esac
+
+# No SSH-supplied command text is executed or inserted into an argument list.
+unset ENV BASH_ENV CDPATH PHPRC PHP_INI_SCAN_DIR LD_PRELOAD LD_LIBRARY_PATH
+PATH=/usr/bin:/bin
+export PATH
+WORDPRESS_ROOT='/ABSOLUTE/WORDPRESS_ROOT'
+exec /usr/bin/php -d log_errors=1 -d display_errors=0 \
+    -d "error_log=$WORDPRESS_ROOT/wp-content/debug.log" /usr/local/bin/wp \
+    --path="$WORDPRESS_ROOT" \
+    --require="$WORDPRESS_ROOT/wp-content/plugins/backend/tools/database/kiwi-retention-archive-health.php" \
+    kiwi retention archive-health ssh
