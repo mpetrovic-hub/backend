@@ -19,6 +19,7 @@ final class Archive_Health_Test_Database {
     public $pdo;
     public $before = null;
     public $after = null;
+    public $insert_id = 0;
     public function __construct(PDO $pdo) { $this->pdo = $pdo; }
     public function prepare(string $sql, ...$args): string {
         return preg_replace_callback('/%[sd]/', function ($m) use (&$args) {
@@ -40,10 +41,29 @@ final class Archive_Health_Test_Database {
         try {
             if ($this->before) { ($this->before)($sql, $this); }
             $row = $this->pdo->query($sql)->fetch(PDO::FETCH_ASSOC);
+            if ($this->after) { $row = ($this->after)($sql, $row, $this); }
             return $row === false ? null : $row;
         } catch (Throwable $e) { $this->last_error = 'controlled_probe_fault'; return null; }
     }
     public function get_var(string $sql) { $row = $this->get_row($sql); return $row === null ? null : reset($row); }
+    public function get_results(string $sql, $format = ARRAY_A): array {
+        $this->last_error = '';
+        try {
+            if ($this->before) { ($this->before)($sql, $this); }
+            return $this->pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $this->last_error = 'controlled_probe_fault'; return []; }
+    }
+    public function insert(string $table, array $row, array $format): bool {
+        $this->last_error = '';
+        try {
+            $sql = 'INSERT INTO ' . $table . ' (' . implode(',', array_keys($row)) . ') VALUES ('
+                . implode(',', array_fill(0, count($row), '?')) . ')';
+            if ($this->before) { ($this->before)($sql, $this); }
+            $result = $this->pdo->prepare($sql)->execute(array_values($row));
+            $this->insert_id = (int) $this->pdo->lastInsertId();
+            return $result;
+        } catch (Throwable $e) { $this->last_error = 'controlled_probe_fault'; return false; }
+    }
 }
 function aht_assert(bool $condition, string $label): void {
     if (!$condition) { throw new RuntimeException('FAIL ' . $label); }
@@ -223,6 +243,107 @@ try {
         aht_assert($next['_exit_code'] === 0 && $next['attempt']['attempt_sequence'] === 2,
             'new work starts only after Pending and the actual process lock end: ' . $case);
     }
+    $reset();
+    $db->pdo->exec('CREATE TABLE probe_kiwi_operational_events (
+        id bigint unsigned AUTO_INCREMENT PRIMARY KEY, occurred_at datetime NOT NULL, created_at datetime NOT NULL,
+        area varchar(64) NOT NULL, severity varchar(20) NOT NULL, event_type varchar(100) NOT NULL,
+        lifecycle_action varchar(20) NOT NULL, idempotency_key varchar(191) UNIQUE, correlation_key varchar(191) NOT NULL,
+        reference_type varchar(64) NOT NULL, reference_id varchar(191) NOT NULL, message varchar(500) NOT NULL,
+        raw_error_text text, context_json longtext) ENGINE=InnoDB');
+    $clock = (object) ['now' => new DateTimeImmutable('2026-03-01T05:00:00Z')];
+    $freshness_service = static function ($connection) use ($f, $clock): Kiwi_Retention_Archive_Health_Service {
+        return new Kiwi_Retention_Archive_Health_Service(archive_service: $f['archive'],
+            operational_event_service: new Kiwi_Operational_Event_Service(new Kiwi_Operational_Event_Repository()),
+            run_repository: new Kiwi_Test_Retention_Cleanup_Run_Repository(),
+            health_store: new Kiwi_Retention_Archive_Health_Store($connection), clock: static fn() => $clock->now);
+    };
+    $daily = $freshness_service($db);
+    $other_daily = $freshness_service($other);
+    $previous_wpdb = $GLOBALS['wpdb'];
+    $GLOBALS['wpdb'] = $db;
+    try {
+        aht_assert($daily->freshness(true, true)['_exit_code'] === 0, 'real database confirms first freshness activation');
+        $clock->now = new DateTimeImmutable('2026-03-09T05:00:00Z');
+        $visible_before_completion = false;
+        $interleaved_failure = null;
+        $db->after = function ($sql, $result, $connection) use ($other, $other_daily, &$visible_before_completion, &$interleaved_failure) {
+            if (str_starts_with($sql, 'SELECT RELEASE_LOCK(') && str_contains($sql, 'kiwi_oe_lifecycle_')) {
+                $connection->after = null;
+                $GLOBALS['wpdb'] = $other;
+                try {
+                    $status = $other_daily->status();
+                    $visible_before_completion = count($status['open_incidents']) === 1
+                        && $status['open_incidents'][0]['reason_code'] === 'health_check_overdue'
+                        && $status['state']['last_freshness_completed_at'] === '2026-03-01T05:00:00.000000Z';
+                    $interleaved_failure = $other_daily->fail_attempt(null, 'start', 'Concurrent synthetic start failure.');
+                } finally { $GLOBALS['wpdb'] = $connection; }
+            }
+            return $result;
+        };
+        $completed = $daily->freshness();
+        aht_assert($visible_before_completion, 'overdue event is committed before lifecycle unlock and daily completion');
+        aht_assert($interleaved_failure['_exit_code'] === 0 && $interleaved_failure['incident_action'] === 'repeated',
+            'concurrent prestart failure observes the already durable overdue lifecycle');
+        aht_assert($completed['_exit_code'] === 0, 'daily completion safely follows the committed event');
+        $status = $daily->status();
+        aht_assert(count($status['open_incidents']) === 1 && $status['open_incidents'][0]['reason_code'] === 'health_run_failed',
+            'later interleaved failure remains the current open incident');
+
+        foreach (['event_write', 'event_readback', 'state_write', 'lost_lock', 'reconnect', 'stale_revision', 'commit_ack', 'readback'] as $fault) {
+            $reset();
+            $db->pdo->exec('DELETE FROM probe_kiwi_operational_events');
+            $clock->now = new DateTimeImmutable('2026-03-01T05:00:00Z');
+            $daily->freshness(true, true);
+            $clock->now = new DateTimeImmutable('2026-03-09T05:00:00Z');
+            if (in_array($fault, ['event_write', 'event_readback', 'state_write'], true)) {
+                $inserted = false;
+                $db->before = function ($sql, $connection) use ($fault, &$inserted): void {
+                    if (str_starts_with($sql, 'INSERT INTO probe_kiwi_operational_events')) {
+                        if ($fault === 'event_write') { throw new RuntimeException('controlled_event_write_fault'); }
+                        $inserted = true;
+                    }
+                    if (($fault === 'event_readback' && $inserted && str_starts_with($sql, 'SELECT * FROM probe_kiwi_operational_events'))
+                        || ($fault === 'state_write' && str_starts_with($sql, 'UPDATE probe_options'))) {
+                        throw new RuntimeException('controlled_persistence_fault');
+                    }
+                };
+            } else {
+                $db->after = function ($sql, $result, $connection) use ($fault, $settings, $database, $other) {
+                    if (in_array($fault, ['lost_lock', 'reconnect', 'stale_revision'], true)
+                        && str_starts_with($sql, 'SELECT RELEASE_LOCK(') && str_contains($sql, 'kiwi_oe_lifecycle_')) {
+                        $connection->after = null;
+                        if ($fault === 'lost_lock') { $connection->pdo->query('SELECT RELEASE_ALL_LOCKS()'); }
+                        if ($fault === 'reconnect') { $connection->pdo = aht_connection($settings, $database); }
+                        if ($fault === 'stale_revision') {
+                            $other->pdo->exec("UPDATE probe_options SET option_value = REPLACE(option_value, '\"revision\":1', '\"revision\":99') WHERE option_name='kiwi_retention_archive_health_state'");
+                        }
+                    }
+                    if ($sql === 'COMMIT' && in_array($fault, ['commit_ack', 'readback'], true)) {
+                        $connection->after = null;
+                        if ($fault === 'commit_ack') { return false; }
+                        $connection->before = static function ($query, $c): void {
+                            if (str_starts_with($query, 'SELECT option_value')) {
+                                $c->before = null; throw new RuntimeException('controlled_readback_fault');
+                            }
+                        };
+                    }
+                    return $result;
+                };
+            }
+            $failed = $daily->freshness();
+            $db->before = $db->after = null;
+            aht_assert($failed['_exit_code'] === 2, 'freshness never acknowledges uncertain persistence: ' . $fault);
+            $GLOBALS['wpdb'] = $other;
+            try { $actual = $other_daily->status(); } finally { $GLOBALS['wpdb'] = $db; }
+            $expected_completion = in_array($fault, ['commit_ack', 'readback'], true)
+                ? '2026-03-09T05:00:00.000000Z' : '2026-03-01T05:00:00.000000Z';
+            aht_assert($actual['state']['last_freshness_completed_at'] === $expected_completion,
+                'independent read distinguishes unchanged completion from lost post-commit acknowledgement: ' . $fault);
+            if ($fault === 'stale_revision') {
+                aht_assert($actual['state']['revision'] === 99, 'daily completion cannot overwrite a changed pre-transaction state');
+            }
+        }
+    } finally { $GLOBALS['wpdb'] = $previous_wpdb; }
     echo 'ARCHIVE_HEALTH_STATE_INTEGRATION_PASSED ', $GLOBALS['aht_checks'], "\n";
 } finally {
     $admin->exec('DROP DATABASE ' . $database);

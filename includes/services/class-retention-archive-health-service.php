@@ -74,13 +74,61 @@ class Kiwi_Retention_Archive_Health_Service
         return $this->controller->check($check);
     }
 
+    public function freshness(bool $activate = false, bool $confirmed = false): array
+    {
+        try {
+            if ($activate && !$confirmed) { throw new RuntimeException('health_activation_confirmation_required'); }
+            $overdue = false;
+            $incident_action = 'none';
+            $activated_at = null;
+            $view = $this->health_store->update(null, function (array $current) use (&$activated_at): array {
+                $state = $current['state'];
+                $state['activated_at'] = $activated_at;
+                $state['last_freshness_completed_at'] = $this->now_utc();
+                return ['state' => $state];
+            }, null, function (array $current) use ($activate, &$activated_at, &$overdue, &$incident_action): void {
+                $state = $current['state'];
+                $now = $this->now_utc();
+                $activated_at = $state['activated_at'];
+                if ($activated_at === null) {
+                    if (!$activate) { throw new RuntimeException('health_freshness_not_activated'); }
+                    $activated_at = $now;
+                }
+                $berlin = new DateTimeZone('Europe/Berlin');
+                $anchor = new DateTimeImmutable($current['last_confirmed_attempt']['accepted_at'] ?? $activated_at);
+                $due_date = $anchor->setTimezone($berlin)->setTime(0, 0)->modify('+8 days')->format('Y-m-d');
+                $overdue = (new DateTimeImmutable($now))->setTimezone($berlin)->format('Y-m-d') >= $due_date;
+                if ($overdue) {
+                    $incident_action = $this->controller->record_overdue($current['last_confirmed_attempt'], $now,
+                        sprintf('%.0F', microtime(true) * 1000000));
+                    if ($incident_action === '') { throw new RuntimeException('health_availability_unconfirmed'); }
+                }
+            });
+            return ['schema_version' => 1, 'command' => 'freshness', 'result' => $overdue ? 'overdue' : 'ok',
+                'state' => $view['state'], 'incident_action' => $incident_action, '_exit_code' => 0];
+        } catch (Throwable $error) {
+            $result = $this->attempt_error('freshness', $error->getMessage());
+            error_log('Archive health freshness did not complete: ' . $result['message']);
+            return $result;
+        }
+    }
+
     public function status(?string $attempt_id = null): array
     {
         try {
             $view = $this->health_store->read($attempt_id);
             if ($attempt_id !== null && $view['attempt'] === null) { throw new RuntimeException('health_attempt_unknown'); }
-            $incidents = $this->operational_event_service->get_open_incidents(['area' => 'retention'], 100);
-            if ($incidents === null) { throw new RuntimeException('health_incident_lookup_failed'); }
+            $incidents = [];
+            foreach (['error', 'critical'] as $severity) {
+                $open = $this->operational_event_service->get_open_incidents(['area' => 'retention', 'severity' => $severity], 100);
+                if ($open === null) { throw new RuntimeException('health_incident_lookup_failed'); }
+                $incidents = array_merge($incidents, $open);
+            }
+            usort($incidents, static function (array $left, array $right): int {
+                return strcmp((string) ($right['occurred_at'] ?? ''), (string) ($left['occurred_at'] ?? ''))
+                    ?: (int) ($right['id'] ?? 0) <=> (int) ($left['id'] ?? 0);
+            });
+            $incidents = array_slice($incidents, 0, 100);
             $target = $this->controller->active_target();
             $target_status = ['available' => false];
             if (!empty($target['success'])) {
@@ -95,7 +143,7 @@ class Kiwi_Retention_Archive_Health_Service
                 $context = $event['context_json'] ?? [];
                 if (is_string($context)) { $context = json_decode($context, true); }
                 return array_merge(array_intersect_key($event, array_flip(['id', 'event_type', 'severity', 'lifecycle_action',
-                    'correlation_key', 'reference_type', 'reference_id', 'occurred_at'])),
+                    'correlation_key', 'reference_type', 'reference_id', 'occurred_at', 'message'])),
                     ['reason_code' => is_array($context) ? ($context['reason_code'] ?? null) : null]);
             }, $incidents);
             return array_merge(['schema_version' => 1, 'command' => 'status', 'result' => 'ok',

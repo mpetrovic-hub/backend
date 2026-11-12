@@ -657,6 +657,16 @@ final class Kiwi_Retention_Archive_Health_Command
         $this->run('ssh', []);
     }
 
+    public function freshness(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || array_diff(array_keys($assoc_args), ['activate', 'confirm'])
+            || array_filter($assoc_args, static fn($value): bool => $value !== true)
+            || (isset($assoc_args['confirm']) && !isset($assoc_args['activate']))) {
+            $this->fail_before_service('freshness', 'command_input_invalid');
+        }
+        $this->run('freshness', $assoc_args);
+    }
+
     private function run(string $mode, array $assoc_args): void
     {
         $runner = WP_CLI::get_runner();
@@ -741,6 +751,8 @@ final class Kiwi_Retention_Archive_Health_Command
                 $result = $service->status(isset($assoc_args['attempt']) ? (string) $assoc_args['attempt'] : null);
             } elseif ($mode === 'abort') {
                 $result = $service->abort((string) ($assoc_args['attempt'] ?? ''), ($assoc_args['confirm'] ?? null) === true);
+            } elseif ($mode === 'freshness') {
+                $result = $service->freshness(($assoc_args['activate'] ?? null) === true, ($assoc_args['confirm'] ?? null) === true);
             } else {
                 $this->fail_before_service($mode, 'command_mode_invalid');
             }
@@ -764,6 +776,9 @@ final class Kiwi_Retention_Archive_Health_Command
 
     private function fail_before_service(string $mode, string $reason_code): void
     {
+        if ($mode === 'freshness') {
+            error_log('Archive health freshness did not complete: ' . $reason_code);
+        }
         $durable_result = null;
         try {
             $candidate = call_user_func(
