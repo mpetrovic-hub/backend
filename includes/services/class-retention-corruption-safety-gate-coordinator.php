@@ -11,12 +11,15 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
     private $lock_service;
     private $operational_event_service;
     private $run_repository;
+    private $health_store;
 
     public function __construct(
         ?Kiwi_Retention_Archive_Lock $lock_service = null,
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
-        ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null
+        ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
+        ?Kiwi_Retention_Archive_Health_Store $health_store = null
     ) {
+        $this->health_store = $health_store ?? new Kiwi_Retention_Archive_Health_Store();
         $this->lock_service = $lock_service instanceof Kiwi_Retention_Archive_Lock
             ? $lock_service
             : new Kiwi_Retention_Archive_Lock();
@@ -263,6 +266,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         string $operation_order = '',
         ?callable $replacement_active_validator = null
     ): array {
+        $pending = $this->health_store->pending_gate();
+        if (empty($pending['allowed'])) { return $this->blocked($pending['reason_code'], false, false); }
         $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
         $replacement = $replacement_archive_path !== ''
             ? Kiwi_Retention_Archive_Name::normalize(basename($replacement_archive_path))
@@ -327,6 +332,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             if (!$handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
                 return $this->blocked('archive_lock_failed', false, false);
             }
+            $pending = $this->health_store->pending_gate();
+            if (empty($pending['allowed'])) { return $this->blocked($pending['reason_code'], false, false); }
 
             $locked_transition_source = $replacement !== ''
                 ? $this->lock_service->get_replacement_transition_source_for_archive(
@@ -374,6 +381,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 if (!$replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
                     return $this->blocked('replacement_archive_lock_failed', true, true);
                 }
+                $pending = $this->health_store->pending_gate();
+                if (empty($pending['allowed'])) { return $this->blocked($pending['reason_code'], false, false); }
                 $replacement_gate = $this->inspect($replacement_archive_path, false);
                 if (in_array((string) ($replacement_gate['reason_code'] ?? ''), [
                     'archive_gate_path_invalid',

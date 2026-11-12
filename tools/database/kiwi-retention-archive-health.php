@@ -580,6 +580,7 @@ final class Kiwi_Retention_Archive_Health_Command
                 'Kiwi_Retention_Corruption_Safety_Gate_Coordinator',
                 'Kiwi_Retention_Archive_Health_Controller',
                 'Kiwi_Retention_Archive_Health_Service',
+                'Kiwi_Retention_Archive_Health_Store',
                 'Kiwi_Operational_Event_Service',
                 'Kiwi_Retention_Cleanup_Run_Repository',
             ];
@@ -631,6 +632,18 @@ final class Kiwi_Retention_Archive_Health_Command
     public function unblock(array $args, array $assoc_args): void
     {
         $this->run('unblock', $assoc_args);
+    }
+
+    public function status(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || array_diff(array_keys($assoc_args), ['attempt'])) { $this->fail_before_service('status', 'command_input_invalid'); }
+        $this->run('status', $assoc_args);
+    }
+
+    public function abort(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || array_diff(array_keys($assoc_args), ['attempt', 'confirm'])) { $this->fail_before_service('abort', 'command_input_invalid'); }
+        $this->run('abort', $assoc_args);
     }
 
     private function run(string $mode, array $assoc_args): void
@@ -704,6 +717,10 @@ final class Kiwi_Retention_Archive_Health_Command
                     (string) ($assoc_args['replacement'] ?? ''),
                     $confirmed
                 );
+            } elseif ($mode === 'status') {
+                $result = $service->status(isset($assoc_args['attempt']) ? (string) $assoc_args['attempt'] : null);
+            } elseif ($mode === 'abort') {
+                $result = $service->abort((string) ($assoc_args['attempt'] ?? ''), ($assoc_args['confirm'] ?? null) === true);
             } else {
                 $this->fail_before_service($mode, 'command_mode_invalid');
             }

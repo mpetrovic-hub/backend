@@ -16,6 +16,7 @@ final class Kiwi_Retention_Archive_Health_Controller
     private $run_repository;
     private $clock;
     private $archive_lock;
+    private $health_store;
 
     public function __construct(
         ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
@@ -24,8 +25,10 @@ final class Kiwi_Retention_Archive_Health_Controller
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
         ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
         ?callable $clock = null,
-        ?Kiwi_Retention_Archive_Lock $archive_lock = null
+        ?Kiwi_Retention_Archive_Lock $archive_lock = null,
+        ?Kiwi_Retention_Archive_Health_Store $health_store = null
     ) {
+        $this->health_store = $health_store ?? new Kiwi_Retention_Archive_Health_Store();
         $this->archive_service = $archive_service instanceof Kiwi_Retention_Sqlite_Archive_Service
             ? $archive_service
             : new Kiwi_Retention_Sqlite_Archive_Service();
@@ -43,7 +46,8 @@ final class Kiwi_Retention_Archive_Health_Controller
             : new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
                 null,
                 $this->operational_event_service,
-                $this->run_repository
+                $this->run_repository,
+                $this->health_store
             );
         $this->clock = $clock ?? static function (): DateTimeImmutable {
             return new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin'));
@@ -467,6 +471,11 @@ final class Kiwi_Retention_Archive_Health_Controller
             }
         }
 
+        $pending = $this->health_store->pending_gate();
+        if (empty($pending['allowed'])) {
+            return $this->result('unblock', 'error', $pending['reason_code'], (string) $archive['name'],
+                'integrity', $started_at, $started, 2);
+        }
         $verification_target = is_array($replacement) ? $replacement : $archive;
         $verification = $this->supervisor->run(
             (string) $verification_target['path'],
@@ -639,6 +648,11 @@ final class Kiwi_Retention_Archive_Health_Controller
         ];
     }
 
+    public function active_target(): array
+    {
+        return $this->resolve_active_archive();
+    }
+
     private function find_archive(string $archive_name): ?array
     {
         $archive_name = Kiwi_Retention_Archive_Name::normalize($archive_name);
@@ -677,7 +691,8 @@ final class Kiwi_Retention_Archive_Health_Controller
         string $check,
         string $started_at,
         string $operation_order,
-        ?string $archive_path = null
+        ?string $archive_path = null,
+        array $external_context = []
     ): string {
         $event = [
             'area' => 'retention',
@@ -698,6 +713,10 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'operation_order' => $operation_order,
             ],
         ];
+        if ($external_context !== []) {
+            $event['context'] = array_merge($event['context'], $external_context);
+            $event['message'] = 'Archivcheck bei ' . $external_context['phase'] . ' gescheitert: ' . $external_context['message'];
+        }
         if ($operation_order === '') {
             return $this->operational_event_service->record_failure_action($event);
         }
@@ -762,6 +781,13 @@ final class Kiwi_Retention_Archive_Health_Controller
                 );
             }
         );
+    }
+
+    public function record_external_failure(?array $attempt, string $phase, string $message, string $reason_code): string
+    {
+        return $this->record_availability_failure($reason_code, $attempt['generation'] ?? null, '',
+            $attempt['started_at'] ?? $this->now(), $attempt['operation_order'] ?? $this->operation_order(microtime(true)), null,
+            ['attempt_id' => $attempt['attempt_id'] ?? null, 'phase' => $phase, 'message' => $message]);
     }
 
     private function later_availability_transition_exists(

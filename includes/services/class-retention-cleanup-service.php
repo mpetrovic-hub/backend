@@ -18,11 +18,12 @@ class Kiwi_Retention_Cleanup_Service extends Kiwi_Retention_Worker_Support
         ?Kiwi_Retention_Coverage_Gate $coverage_gate = null,
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
         ?Kiwi_Retention_Archive_Lock $archive_lock = null,
-        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null
+        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null,
+        ?Kiwi_Retention_Archive_Health_Store $health_store = null
     ) {
         parent::__construct(
             $config, $source_registry, $run_repository, $archive_service,
-            $operational_event_service, $archive_lock, $corruption_safety_gate
+            $operational_event_service, $archive_lock, $corruption_safety_gate, $health_store
         );
         $this->snapshot_repository = $snapshot_repository ?? new Kiwi_Retention_Table_Growth_Snapshot_Repository();
         $this->coverage_gate = $coverage_gate ?? new Kiwi_Retention_Coverage_Gate($this->config);
@@ -1180,34 +1181,37 @@ class Kiwi_Retention_Cleanup_Service extends Kiwi_Retention_Worker_Support
         array $run,
         string $archive_db_path
     ): ?array {
-        $gate = $this->corruption_safety_gate->inspect($archive_db_path, false);
+        $gate = $this->inspect_archive_write_gate($archive_db_path);
         if (!empty($gate['allowed'])) {
             return null;
         }
 
         $reason_code = (string) ($gate['reason_code'] ?? 'corruption_incident_lookup_failed');
+        $health_wait = strpos($reason_code, 'health_') === 0;
         $progress = [
             'status' => 'partial',
-            'worker_phase' => 'archive_corruption_blocked',
+            'worker_phase' => $health_wait ? 'archive_health_pending' : 'archive_corruption_blocked',
             'archive_db_path' => $archive_db_path,
-            'archive_integrity_check' => $reason_code === 'corruption_incident_lookup_failed'
+            'archive_integrity_check' => $health_wait ? $reason_code : ($reason_code === 'corruption_incident_lookup_failed'
                 ? 'corruption_gate_unreadable'
-                : 'corruption_blocked',
+                : 'corruption_blocked'),
             'worker_last_finished_at' => $this->current_time_mysql(),
         ];
         if (!$this->update_run_progress($run_db_id, $progress)) {
             return $this->audit_retry_result(
                 $run,
-                'Retention worker observed a corruption safety gate but could not persist that audit phase.'
+                'Retention worker observed an archive safety gate but could not persist that audit phase.'
             );
         }
 
         return $this->reschedule_worker_result($run, $progress, [
             'success' => false,
             'error_code' => $reason_code,
-            'error_message' => $reason_code === 'corruption_incident_lookup_failed'
+            'error_message' => $health_wait
+                ? 'Retention waits for safely confirmed archive health state and completion or explicit abort of the pending attempt.'
+                : ($reason_code === 'corruption_incident_lookup_failed'
                 ? 'Retention cleanup stopped because the corruption Incident state could not be read reliably.'
-                : 'Retention archive writes and MySQL deletes remain blocked pending manual verification and unblock.',
+                : 'Retention archive writes and MySQL deletes remain blocked pending manual verification and unblock.'),
         ]);
     }
 
@@ -1822,7 +1826,7 @@ class Kiwi_Retention_Cleanup_Service extends Kiwi_Retention_Worker_Support
         return new Kiwi_Retention_Engagement_Worker(
             $this->config, $this->source_registry, $this->run_repository,
             $this->archive_service, $this->operational_event_service,
-            $this->archive_lock, $this->corruption_safety_gate
+            $this->archive_lock, $this->corruption_safety_gate, $this->health_store
         );
     }
 }
