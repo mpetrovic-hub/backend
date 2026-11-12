@@ -451,9 +451,4 @@ class Kiwi_Retention_Archive_Health_Service
             $confirmed
         );
     }
-
-    public function record_scheduled_bootstrap_failure(string $reason_code): array
-    {
-        return $this->controller->bootstrap_failure($reason_code);
-    }
 }

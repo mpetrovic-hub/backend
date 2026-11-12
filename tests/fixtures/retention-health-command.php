@@ -23,4 +23,9 @@ if ($case === 'freshness_unconfirmed') { $command->freshness([], ['activate' => 
 if ($case === 'freshness_unknown') { $command->freshness([], ['extra' => true]); }
 if ($case === 'freshness_flag_value') { $command->freshness([], ['activate' => 'false', 'confirm' => true]); }
 if ($case === 'freshness_confirm_only') { $command->freshness([], ['confirm' => true]); }
+if ($case === 'retired_quick') { $command->check([], ['check' => 'quick']); }
+if ($case === 'retired_integrity') { $command->check([], ['check' => 'integrity']); }
+if ($case === 'retired_missing') { $command->check([], []); }
+if ($case === 'retired_invalid') { $command->check([], ['check' => 'unsupported']); }
+if ($case === 'retired_missing_class') { (new Kiwi_Retention_Archive_Health_Command(['Missing_Retirement_Fixture_Class']))->check([], ['check' => 'quick']); }
 throw new RuntimeException('Unknown command fixture.');

@@ -78,7 +78,7 @@ Archive health owns the durable protection around a generation-bound verificatio
 
 The public WP-CLI surface includes:
 
-- `check`: automatically schedulable check of the active archive; it may maintain availability and corruption Incidents and the corruption write block.
+- `check`: retained compatibility refusal (exit `2`) directing an explicit start to `kiwi-retention-archive-health run --manual`; it scans nothing and changes no durable state or Incidents. Regular scheduled/manual verification runs only through the controlled VPS service.
 - `diagnose`: explicit read-only check of one discovered archive; it never changes safety state or Incidents.
 - `unblock`: explicitly confirmed manual recovery; it runs `integrity_check` before changing any safety state.
 - `status`, optionally `--attempt=<ID>`: read the durable state, attempt, target locks and open Retention Operational Incidents without scanning SQLite or reconciling safety state.
@@ -170,7 +170,7 @@ After the last archive byte and final identity checks, `record_transfer` confirm
 
 ## Components and boundaries
 
-- `Kiwi_Retention_Archive_Health_Service` owns the durable attempt lifecycle/status and delegates existing checks and recovery to the controller.
+- `Kiwi_Retention_Archive_Health_Service` owns the durable attempt lifecycle/status and delegates explicit diagnosis and confirmed recovery to the controller.
 - `Kiwi_Retention_Archive_Health_Transport` validates the fixed SSH wire contract, bounds protocol I/O and produces the single-pass locked source stream.
 - `Kiwi_Retention_Archive_Health_Store` owns direct validated option access, connection-owned locking, exact comparisons and transactional confirmation.
 - `Kiwi_Retention_Archive_Health_Controller` resolves the target, interprets supervised results, and coordinates Operational Incidents and manual recovery.
@@ -181,22 +181,19 @@ After the last archive byte and final identity checks, `record_transfer` confirm
 - `Kiwi_Retention_Archive_Name` provides the shared strict archive filename and generation contract.
 - `Kiwi_Retention_Archive_Health_Bootstrap_Recorder` emits only compact sanitized output when normal bootstrap is unavailable. It owns no state file, receipt, Incident spool, or database fallback.
 
-External scheduling owns frequency, retries, alerts, and escalation. The runtime never manufactures a replacement archive or silently chooses another generation after corruption.
+The VPS timer owns the weekly start; the independent Production cron owns daily freshness. There is no full retry, catch-up, automatic notification or escalation. Only the bounded result acknowledgement retry described above is automatic. The runtime never manufactures a replacement archive or silently chooses another generation after corruption.
 
 The repository ships one source/manifest/library/fixture bundle under `tools/database/archive-health-read-brake/`. The supervisor sets `LD_PRELOAD` only in its child's inherited environment snapshot; parent PHP and web requests remain unchanged. Foreign preload configuration is rejected. The Linux x86_64 library paces each covered 4-KiB section of `pread`/`pread64` through one monotonic ledger, requires random read advice, denies mappings of the bound files, and rejects an unsupported read path. There is no unbraked fallback or public rate switch. Non-empty WAL/journal gates run before the fixture proof and again before target opening. The 30-second fixture deadline is separate from the `30..7200` supervision budget; neither a supervisor timeout nor a technical brake failure permits archive writes or MySQL deletes while the child owns the generation lock.
 
-## Result and safety transitions
+## Retained diagnosis and recovery safety
 
-A definitive `ok` check resolves the shared availability Incident. A lock deferral, timeout, discovery failure, bootstrap failure, or other non-definitive scheduled check raises or repeats that Incident when the normal controller and Operational Event service are available. Each controller operation carries an internal microsecond ordering value only in existing event context. Under the Availability lifecycle lock, a non-definitive result is suppressed if the latest persisted `resolved` belongs to a later-started check; conversely, a definitive recovery is suppressed if the latest open failure belongs to a later-started check. Without such a later recovery, including a completed timeout whose child has ended, Availability still opens normally. Immediately before an `archive_lock_active` transition, the controller additionally probes the generation lock once without waiting: if the lock is still active, it persists the failure; if the lock has become available, it briefly acquires and releases it and suppresses only the stale Availability transition. The command remains one-shot and never waits or reruns SQLite. These outcomes do not prove corruption. If a definitive corruption result established a durable corruption gate but Availability resolution failed, the next gated controller call retries only that idempotent resolution effect without rerunning PRAGMA.
+Regular findings and Availability ordering now follow the [accepted result contract](#accepted-external-results-and-acknowledgements). Merely invoking the retired Production `check`, encountering an existing corruption gate or failing its bootstrap provides no new completed finding and cannot recover Availability. Diagnosis is read-only and cannot refresh monitoring or mutate Incidents. The shared bootstrap recorder remains a sanitized output boundary; its former check-only durable Availability producer is removed.
 
-Only this evidence proves corruption:
+The retained native child is necessary for explicit diagnosis and confirmed recovery. Only a completed non-`ok` PRAGMA on the exact read-only file under its generation lock is corruption evidence. A timeout, exception, lost read-brake proof or unavailable protection is not. A corrupt recovery verification persists the generation write block before the Incident; if the sentinel fails, the child keeps the lock until the parent confirms the durable Incident fallback. If both writes fail, the command fails and never reports success. A living timed-out child continues to own its OS lock.
 
-1. the child acquired the exclusive generation lock;
-2. it opened the exact archive read-only;
-3. the requested PRAGMA completed;
-4. its result was not exactly `ok`.
+Cleanup evaluates Pending and both corruption sources after lock acquisition, before every SQLite write/receipt repair and immediately before each MySQL delete. Unreadable or contradictory protection blocks destructive work. Reconciliation rechecks the gates under the lock and preserves the child's evidence. Only a later persisted resolution from verified manual recovery may supersede an older corrupt recovery result; a missing gate without that proof is restored fail-closed. Sentinel-only recovery first reconciles its Corruption Incident and cannot clear protection when that audit fails. Replacement-transition protection stays independent.
 
-The corruption transition is fail-closed: persist the generation-specific write-block while the exclusive child lock is still held, then raise the corruption Incident. If sentinel persistence fails, the child keeps the generation lock while the parent persists the Corruption Incident and releases only after the parent acknowledges that durable fallback gate. If both gate writes fail, the command returns non-zero and never reports success. Cleanup evaluates both durable gates after lock acquisition, before every SQLite write or receipt repair, and immediately before every MySQL delete. An unreadable or contradictory gate blocks destructive work. A later call may idempotently add one missing gate without rerunning PRAGMA. Parent reconciliation preserves the gate evidence reported by its child. If both gates later disappear, only a later persisted `resolved` from verified manual `unblock` may supersede that old result; missing gates without this proof are restored fail-closed. A sentinel-only `unblock` therefore first reconciles the Corruption Incident and cannot report success if that audit write fails.
+The [retirement evidence](../operations/retention-runbook.md#regular-hostinger-check-retirement-evidence) identifies removed entry logic and retained artifacts. Host-owned wrappers/processes/cron and historical evidence require separate operational review; code retirement does not authorize their deletion or live activation. A rollback must retain awareness of all effective gates, including Pending.
 
 ## Manual recovery
 
