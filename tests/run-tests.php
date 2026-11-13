@@ -5297,6 +5297,36 @@ class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
     }
 }
 
+kiwi_run_test('Backend bootstrap emits no output before CLI JSON', function (): void {
+    $script = <<<'PHP'
+define('ABSPATH', getcwd() . '/');
+function plugin_dir_url($file): string { return 'https://example.invalid/backend/'; }
+function add_action($hook, $callback, ...$args): void {}
+require 'includes/bootstrap.php';
+echo json_encode(['schema_version' => 1, 'command' => 'status', 'result' => 'ok']);
+PHP;
+    $process = proc_open(
+        [PHP_BINARY, '-r', $script],
+        [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']],
+        $pipes,
+        dirname(__DIR__)
+    );
+    kiwi_assert_true(is_resource($process), 'The real backend bootstrap starts in a fresh PHP process.');
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    kiwi_assert_same(0, proc_close($process), 'Bootstrap completes without invoking registered WordPress hooks.');
+    kiwi_assert_same('', $stderr, 'Bootstrap emits no PHP diagnostics.');
+    kiwi_assert_same(
+        '{"schema_version":1,"command":"status","result":"ok"}',
+        $stdout,
+        'Loading the backend must not add bytes before a CLI JSON response.'
+    );
+});
+
 kiwi_run_test('Kiwi_Config exposes NTH service and landing page configuration', function (): void {
     $config = new Kiwi_Test_Config(
         100,
