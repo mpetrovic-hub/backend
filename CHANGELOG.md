@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-11-12:
+- [DB Retention Archive Health] Implement the weekly VPS copy-verification capability with bounded restricted SSH export, durable generation-bound Pending/results, safe abort, idempotent acceptance and independent daily freshness monitoring. Prepare the controlled runner, limits and inactive scheduling artifacts; retire the regular Hostinger check while retaining explicit diagnosis, confirmed recovery, native read brake and all retention protection. Deployment, live functional checks and activation remain separate pending operations. (#157, #160–#165)
+
 2026-10-20:
 - [Engagement Retention] Accept a missing TK-zone daily summary only after a separate complete empty-day proof across live/archived Sessions and completed Sales. Preserve rejection for Sessions without Engagement/Page Load, missing or failed sources, Main coverage and existing Session cleanup. Checkpoint bounded probes and revalidate archive growth before the final live query so resumed proofs cannot overlook Sessions transferred into an archive. Keep the absent-summary evidence and proof result in the existing daily audit. (#72)
 

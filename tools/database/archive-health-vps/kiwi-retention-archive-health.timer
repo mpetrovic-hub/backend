@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly Kiwi archive health verification
+
+[Timer]
+OnCalendar=Wed *-*-* 04:00:00 Europe/Berlin
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=kiwi-retention-archive-health.service
+
+[Install]
+WantedBy=timers.target

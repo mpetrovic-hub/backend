@@ -21,7 +21,7 @@ final class Kiwi_Retention_Archive_Health_Bootstrap_Recorder
         if (preg_match('/^[a-z0-9_]{1,100}$/', $reason_code) !== 1) {
             $reason_code = 'health_bootstrap_failed';
         }
-        if (!in_array($command, ['check', 'diagnose', 'unblock'], true)) {
+        if (!in_array($command, ['check', 'diagnose', 'unblock', 'status', 'abort', 'ssh', 'freshness'], true)) {
             $command = 'check';
         }
 

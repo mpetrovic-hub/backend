@@ -451,6 +451,8 @@ require_once __DIR__ . '/../includes/services/class-operational-event-cleanup-se
 require_once __DIR__ . '/../includes/services/class-retention-archive-check-supervisor.php';
 require_once __DIR__ . '/../includes/services/class-retention-corruption-safety-gate-coordinator.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-health-controller.php';
+require_once __DIR__ . '/../includes/repositories/class-retention-archive-health-store.php';
+require_once __DIR__ . '/fixtures/retention-health-state-wpdb.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-worker-support.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
@@ -643,6 +645,10 @@ function kiwi_write_variant_agent_fixture(
 
 function kiwi_run_test(string $name, callable $test): void
 {
+    $filter = getenv('KIWI_TEST_FILTER');
+    if (is_string($filter) && $filter !== '' && stripos($name, $filter) === false) {
+        return;
+    }
     $test();
     echo "[PASS] {$name}\n";
 }
@@ -1414,6 +1420,12 @@ class Kiwi_Test_Operational_Event_Repository extends Kiwi_Operational_Event_Repo
         $this->rows[$id] = array_merge(['id' => $id], $event);
 
         return $id;
+    }
+
+    public function insert_event_if_lock_owned(array $event, Kiwi_Database_Lock_Guard $guard): int
+    {
+        // This repository is in-memory; the actual atomic SQL guard is covered by the real DB/process suite.
+        return $this->insert_event($event);
     }
 
     public function find_latest_by_correlation_key(string $correlation_key): ?array
@@ -2200,7 +2212,8 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
         ?Kiwi_Retention_Coverage_Gate $coverage_gate = null,
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
         ?Kiwi_Retention_Archive_Lock $archive_lock = null,
-        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null
+        ?Kiwi_Retention_Corruption_Safety_Gate_Coordinator $corruption_safety_gate = null,
+        ?Kiwi_Retention_Archive_Health_Store $health_store = null
     ) {
         parent::__construct(
             $config,
@@ -2213,7 +2226,8 @@ class Kiwi_Test_Retention_Cleanup_Service extends Kiwi_Retention_Cleanup_Service
             $archive_lock,
             $corruption_safety_gate instanceof Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 ? $corruption_safety_gate
-                : new Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator()
+                : new Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator(),
+            $health_store ?? new Kiwi_Retention_Archive_Health_Store(new Kiwi_Test_Health_State_Wpdb())
         );
     }
 
@@ -18710,5 +18724,10 @@ kiwi_run_test('Kiwi_Config exposes bounded operational-event cleanup defaults', 
 
 require_once __DIR__ . '/database-deployment-tests.php';
 require_once __DIR__ . '/landing-session-engagements-migration-tests.php';
+require_once __DIR__ . '/retention-archive-attempt-tests.php';
+require_once __DIR__ . '/retention-archive-transport-tests.php';
+require_once __DIR__ . '/retention-archive-freshness-tests.php';
+require_once __DIR__ . '/retention-archive-result-tests.php';
 require_once __DIR__ . '/retention-archive-health-tests.php';
+require_once __DIR__ . '/retention-archive-retirement-tests.php';
 require_once __DIR__ . '/db-connect-warning-context-diagnostic-tests.php';

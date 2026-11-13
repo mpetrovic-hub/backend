@@ -1,0 +1,21 @@
+{
+  "source_bytes_per_second": 4194304,
+  "copy_seconds": 2700,
+  "copy_verification_seconds": 5400,
+  "check_seconds": 900,
+  "result_seconds": 300,
+  "connect_seconds": 15,
+  "control_seconds": 30,
+  "cpu_quota_percent": 50,
+  "cpu_weight": 10,
+  "read_bytes_per_second": 16777216,
+  "write_bytes_per_second": 8388608,
+  "buffer_bytes": 1073741824,
+  "reserve_bytes": 20000000000,
+  "max_archive_bytes": 0,
+  "ssh_host": "production.example.invalid",
+  "ssh_user": "archive_health",
+  "ssh_port": 22,
+  "identity_file": "/etc/kiwi-archive-health/id_ed25519",
+  "known_hosts_file": "/etc/kiwi-archive-health/known_hosts"
+}

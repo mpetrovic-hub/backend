@@ -2,6 +2,7 @@
 
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-name.php';
 require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-write-block.php';
+require_once dirname(__DIR__, 2) . '/includes/services/class-retention-archive-health-transport.php';
 require_once __DIR__ . '/class-retention-archive-health-bootstrap-recorder.php';
 require_once __DIR__ . '/class-retention-archive-health-read-brake.php';
 
@@ -580,6 +581,7 @@ final class Kiwi_Retention_Archive_Health_Command
                 'Kiwi_Retention_Corruption_Safety_Gate_Coordinator',
                 'Kiwi_Retention_Archive_Health_Controller',
                 'Kiwi_Retention_Archive_Health_Service',
+                'Kiwi_Retention_Archive_Health_Store',
                 'Kiwi_Operational_Event_Service',
                 'Kiwi_Retention_Cleanup_Run_Repository',
             ];
@@ -595,20 +597,6 @@ final class Kiwi_Retention_Archive_Health_Command
             string $reason_code,
             string $command
         ): ?array {
-            if ($command === 'check'
-                && class_exists('Kiwi_Retention_Archive_Health_Service')
-                && method_exists(
-                    'Kiwi_Retention_Archive_Health_Service',
-                    'record_scheduled_bootstrap_failure'
-                )
-            ) {
-                try {
-                    return (new Kiwi_Retention_Archive_Health_Service())
-                        ->record_scheduled_bootstrap_failure($reason_code);
-                } catch (Throwable $error) {
-                }
-            }
-
             try {
                 return (new Kiwi_Retention_Archive_Health_Bootstrap_Recorder())
                     ->record($reason_code, $command);
@@ -631,6 +619,38 @@ final class Kiwi_Retention_Archive_Health_Command
     public function unblock(array $args, array $assoc_args): void
     {
         $this->run('unblock', $assoc_args);
+    }
+
+    public function status(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || array_diff(array_keys($assoc_args), ['attempt'])) { $this->fail_before_service('status', 'command_input_invalid'); }
+        $this->run('status', $assoc_args);
+    }
+
+    public function abort(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || array_diff(array_keys($assoc_args), ['attempt', 'confirm'])) { $this->fail_before_service('abort', 'command_input_invalid'); }
+        $this->run('abort', $assoc_args);
+    }
+
+    /** Purpose-bound forced SSH entry; the remote action is never a shell argument. */
+    public function ssh(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || $assoc_args !== []
+            || !in_array(getenv('SSH_ORIGINAL_COMMAND'), ['status', 'export', 'result', 'fail'], true)) {
+            $this->fail_before_service('ssh', 'command_input_invalid');
+        }
+        $this->run('ssh', []);
+    }
+
+    public function freshness(array $args, array $assoc_args): void
+    {
+        if ($args !== [] || array_diff(array_keys($assoc_args), ['activate', 'confirm'])
+            || array_filter($assoc_args, static fn($value): bool => $value !== true)
+            || (isset($assoc_args['confirm']) && !isset($assoc_args['activate']))) {
+            $this->fail_before_service('freshness', 'command_input_invalid');
+        }
+        $this->run('freshness', $assoc_args);
     }
 
     private function run(string $mode, array $assoc_args): void
@@ -688,7 +708,16 @@ final class Kiwi_Retention_Archive_Health_Command
         }
 
         try {
-            if ($mode === 'check') {
+            if ($mode === 'ssh') {
+                $limits = [];
+                foreach (['source_bytes_per_second' => 'KIWI_RETENTION_ARCHIVE_HEALTH_SOURCE_BYTES_PER_SECOND',
+                    'copy_seconds' => 'KIWI_RETENTION_ARCHIVE_HEALTH_COPY_SECONDS',
+                    'control_seconds' => 'KIWI_RETENTION_ARCHIVE_HEALTH_CONTROL_SECONDS'] as $key => $constant) {
+                    if (defined($constant)) { $limits[$key] = constant($constant); }
+                }
+                $transport = new Kiwi_Retention_Archive_Health_Transport($service, $limits);
+                WP_CLI::halt($transport->serve((string) getenv('SSH_ORIGINAL_COMMAND'), STDIN, STDOUT));
+            } elseif ($mode === 'check') {
                 $result = $service->check((string) ($assoc_args['check'] ?? ''));
             } elseif ($mode === 'diagnose') {
                 $result = $service->diagnose(
@@ -704,6 +733,12 @@ final class Kiwi_Retention_Archive_Health_Command
                     (string) ($assoc_args['replacement'] ?? ''),
                     $confirmed
                 );
+            } elseif ($mode === 'status') {
+                $result = $service->status(isset($assoc_args['attempt']) ? (string) $assoc_args['attempt'] : null);
+            } elseif ($mode === 'abort') {
+                $result = $service->abort((string) ($assoc_args['attempt'] ?? ''), ($assoc_args['confirm'] ?? null) === true);
+            } elseif ($mode === 'freshness') {
+                $result = $service->freshness(($assoc_args['activate'] ?? null) === true, ($assoc_args['confirm'] ?? null) === true);
             } else {
                 $this->fail_before_service($mode, 'command_mode_invalid');
             }
@@ -727,6 +762,9 @@ final class Kiwi_Retention_Archive_Health_Command
 
     private function fail_before_service(string $mode, string $reason_code): void
     {
+        if ($mode === 'freshness') {
+            error_log('Archive health freshness did not complete: ' . $reason_code);
+        }
         $durable_result = null;
         try {
             $candidate = call_user_func(
@@ -750,7 +788,7 @@ $registered = WP_CLI::add_command(
     new Kiwi_Retention_Archive_Health_Command(),
     [
         'when' => 'before_wp_load',
-        'shortdesc' => 'Run, diagnose, or manually unblock retention archive health.',
+        'shortdesc' => 'Inspect archive health, diagnose, or explicitly recover an archive.',
     ]
 );
 if (!$registered) {

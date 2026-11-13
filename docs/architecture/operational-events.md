@@ -46,6 +46,10 @@ Required event fields:
 
 Recovery idempotency is derived from the open correlation row, so concurrent attempts to resolve the same observed incident cannot persist duplicate `resolved` rows.
 
+A newly inserted recovery is confirmed by reading back its `resolved` action and idempotency identity before releasing the lifecycle lock. An unreadable or contradictory confirmation returns persistence failure. A later retry can observe the actually stored resolution and return the existing no-op success without appending another close event; recovery with no open incident remains a no-op.
+
+A conditional failure retry may deduplicate to its original `raised` or `repeated` row. Confirmation requires that exact persisted row identity, preserving its original lifecycle action without appending a duplicate. Conditional failures and recoveries can carry an immutable connection-owned lock guard; the SQL write itself checks that ownership, including after a transparent reconnect. A duplicate guarded failure can be confirmed only while the original guard remains owned.
+
 The closed-to-`raised` decision and recovery read/write are serialized by one short, bounded MySQL advisory lock derived from a hash of the `correlation_key`. A producer may attach a current-state predicate to a failure or recovery transition; the predicate receives the latest correlation event, and the predicate plus its accepted lifecycle write run while the lifecycle lock is held. This lets a producer suppress evidence superseded by a later persisted transition without adding a mutable incident row, state file, or routine `resolved` rows while no incident is open. Without such a predicate, an already-open correlation releases the lock before the existing conditional `repeated` append. Lock acquisition, release, predicate, or accepted-write failure is a persistence failure; it is never treated as a successful lifecycle change.
 
 The latest event for a correlation decides whether the incident is open. The repository exposes bounded internal reads for recent events, the latest correlation event, and open incidents.
@@ -80,6 +84,8 @@ The NTH `submitMessage` producer is an Aggregator-boundary producer:
 ## Data safety
 
 Credential-like keys are masked centrally before size checks and persistence. This includes authorization/authentication values, API keys, access tokens, generic tokens, client secrets, passwords, secrets, digests, signatures, HMACs, nonces, OTPs/PINs, private/signing/encryption keys, key material, complete PEM private-key blocks, cookie headers, and session-cookie/session-ID fields. Structured sensitive values become `[redacted]`; raw text that cannot be safely isolated becomes `[credential content removed]`.
+
+When a producer must persist the same compact diagnostic in its own capability state before recording the event, it first calls `mask_credentials()` on its `Kiwi_Operational_Event_Service` instance with the original text. This shares the complete text-masker; a partial producer regex must not destroy the credential label before central masking. Capability-specific path removal and length limits follow that masking.
 
 Producers must still select small diagnostic context rather than sending full payloads, headers, or object dumps. Business identifiers such as MSISDNs may be retained when operationally required.
 

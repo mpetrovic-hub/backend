@@ -19,6 +19,8 @@
 
 Configuration is currently stored in `wp-config.php` and read through the shared configuration layer, currently `class-config.php`.
 
+The separate VPS archive-health runner reads strict JSON from `/etc/kiwi-archive-health.conf`; it does not load WordPress or source a shell file. Its settings and ownership are described below.
+
 Do not store real secret values in repository docs.
 
 ## Landing-page loading
@@ -101,12 +103,23 @@ Saved per-source settings are not overwritten when defaults change. Every source
   - protected filesystem root for SQLite retention archives, per-generation locks, and corruption write-block sentinels
   - keep outside public content and writable only by the deployment account
 - `KIWI_RETENTION_ARCHIVE_HEALTH_TIMEOUT_SECONDS`
-  - supervision budget for the external read-only SQLite child and its corruption-gate handoff
+  - supervision budget for the retained Hostinger `diagnose`/confirmed `unblock` read-only child and its corruption-gate handoff; independent of the VPS phase budgets below
   - default and maximum: `7200` (120 minutes)
   - accepted range: `30` to `7200`
   - existing explicit values such as `600` or `3600` remain explicit; adjust them deliberately during an authorized rollout
   - the supervisor never kills a running child at this boundary; its generation lock remains held until the child exits
   - a timeout is inconclusive and never evidence of corruption
+- `KIWI_RETENTION_ARCHIVE_HEALTH_SOURCE_BYTES_PER_SECOND`
+  - source-side SSH export read rate; default `4194304` bytes/s (4 MiB/s)
+  - positive integer, enforced before each source read; SHA-256 uses the same pass
+- `KIWI_RETENTION_ARCHIVE_HEALTH_COPY_SECONDS`
+  - source-side SSH export wall-clock budget; default `2700` (45 minutes)
+  - positive finite number; also bounds stalled output and computes capacity as source rate multiplied by time
+- `KIWI_RETENTION_ARCHIVE_HEALTH_CONTROL_SECONDS`
+  - small SSH control-call I/O deadline; default `30` seconds, positive finite number
+  - source rate/time constants are trusted local Production configuration; the remote caller cannot supply them
+  - synchronize deliberately with the approved VPS `/etc/kiwi-archive-health.conf` values during deployment; never raise limits automatically
+  - source export does not change the separate manual diagnosis/recovery native-read-brake configuration
 - `KIWI_RETENTION_WORKER_ROW_LIMIT`
   - maximum source rows archived per worker invocation
   - default: `50000`
@@ -123,6 +136,33 @@ Saved per-source settings are not overwritten when defaults change. Every source
   - transient lock TTL for the retention worker hook
   - default: `300`
   - minimum: `60`
+
+## VPS archive-health configuration
+
+The complete [configuration example](../../tools/database/archive-health-vps/kiwi-archive-health.conf.example) is the required schema: unknown, duplicate, missing or wrongly typed keys are rejected. The file is root-owned, mode `0640`, group `kiwi-archive-health`. It is separate from WordPress configuration. Changes are deliberate deployment changes, never automatic limit increases.
+
+| Key | Initial value | Meaning |
+|---|---:|---|
+| `source_bytes_per_second` | `4194304` | Source read rate used to calculate admissible copy capacity; synchronize with Production's source-rate constant. |
+| `copy_seconds` | `2700` | 45-minute source-copy deadline; synchronize with Production's copy constant. |
+| `copy_verification_seconds` | `5400` | 90 minutes for copy plus verification of the stored file, including the copy time. |
+| `check_seconds` | `900` | Complete read-only SQLite `quick_check` budget. |
+| `result_seconds` | `300` | Total result/confirmation/status/one-identical-resend budget. |
+| `connect_seconds` | `15` | SSH connection timeout. |
+| `control_seconds` | `30` | Each small SSH call and bounded local service-start handoff; synchronize the Production control constant. |
+| `cpu_quota_percent` | `50` | Combined maximum of half one CPU core for the entire service. |
+| `cpu_weight` | `10` | Relative CPU priority for that same service. |
+| `read_bytes_per_second` | `16777216` | Combined read cap on the actual destination device. |
+| `write_bytes_per_second` | `8388608` | Combined write cap on that device. |
+| `buffer_bytes` | `1073741824` | Additional free space before copying. |
+| `reserve_bytes` | `20000000000` | Reserve before copy, stored verification and SQLite. |
+| `max_archive_bytes` | `0` | No independent weekly size ceiling. A positive value can narrow the separately authorized functional check to `6000000000` bytes using ordinary settings. |
+
+`ssh_host`, `ssh_user` and `ssh_port` identify the separately verified restricted endpoint; no real values belong in the repository. `identity_file` names the dedicated user's private regular key file (owner `kiwi-archive-health`, mode `0600`); `known_hosts_file` names the independently pinned root-owned regular host-key file (mode `0640`, group `kiwi-archive-health`). Symlinks, hardlinks and unsafe ownership/permissions are rejected. SSH uses only the four fixed protocol actions, an empty client config, pinned identity/host key, batch authentication, no agent, compression, control master, TTY or forwarding, and a sanitized environment.
+
+The defaults allow a mathematical copy capacity of `11324620800` bytes (`4194304 × 2700`), without promising that size finishes in time. There is no 6.5-GB weekly ceiling. Initial free space must cover actual target bytes plus buffer plus reserve; the later two observations require the reserve alone. The configured source limit is also enforced independently by Production.
+
+Systemd cannot substitute this JSON into its resource directives. During an authorized deployment, run the [offline renderer](../../tools/database/archive-health-vps/render_resources.py) as the dedicated user, review its output, and install that output as the service's resource drop-in. The renderer only prints configuration. The prepared unit contains the initial defaults; any unapplied change is refused by the runner's actual cgroup/device readback. Never use a runtime privileged setter or weaken the check. Details are in the [VPS runbook](retention-runbook.md#vps-archive-health-runner).
 
 ## Operational events
 

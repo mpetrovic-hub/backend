@@ -895,8 +895,10 @@ class Kiwi_Retention_Engagement_Worker extends Kiwi_Retention_Worker_Support
 
     private function check_safety(string $path): void
     {
-        if (empty($this->corruption_safety_gate->inspect($path, false)['allowed'])) {
-            throw new RuntimeException('engagement_corruption_gate_blocked');
+        $gate = $this->inspect_archive_write_gate($path);
+        if (empty($gate['allowed'])) {
+            throw new RuntimeException(strpos((string) ($gate['reason_code'] ?? ''), 'health_') === 0
+                ? (string) $gate['reason_code'] : 'engagement_corruption_gate_blocked');
         }
     }
 

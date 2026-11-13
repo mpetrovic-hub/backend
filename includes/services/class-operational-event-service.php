@@ -61,14 +61,16 @@ class Kiwi_Operational_Event_Service
         return $this->record_failure_action_conditionally($event, null);
     }
 
-    public function record_failure_action_if(array $event, callable $should_persist): string
+    public function record_failure_action_if(array $event, callable $should_persist,
+        ?Kiwi_Database_Lock_Guard $required_lock = null): string
     {
-        return $this->record_failure_action_conditionally($event, $should_persist);
+        return $this->record_failure_action_conditionally($event, $should_persist, $required_lock);
     }
 
     private function record_failure_action_conditionally(
         array $event,
-        ?callable $should_persist
+        ?callable $should_persist,
+        ?Kiwi_Database_Lock_Guard $required_lock = null
     ): string
     {
         $correlation_key = $this->normalize_key((string) ($event['correlation_key'] ?? ''), 191);
@@ -79,7 +81,7 @@ class Kiwi_Operational_Event_Service
         try {
             $transition = $this->repository->with_correlation_lifecycle_lock(
                 $correlation_key,
-                function () use ($event, $correlation_key, $should_persist): array {
+                function () use ($event, $correlation_key, $should_persist, $required_lock): array {
                     $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
                     if (is_callable($should_persist) && !$should_persist($latest)) {
                         return ['action' => 'none', 'row' => null];
@@ -110,7 +112,9 @@ class Kiwi_Operational_Event_Service
                     }
                     if ($lifecycle_action === 'repeated') {
                         if (is_callable($should_persist)) {
-                            if ($this->repository->insert_event($row) <= 0) {
+                            $persisted_id = $required_lock === null ? $this->repository->insert_event($row)
+                                : $this->repository->insert_event_if_lock_owned($row, $required_lock);
+                            if ($persisted_id <= 0) {
                                 return ['action' => '', 'row' => null];
                             }
                             $persisted = $this->repository->find_latest_by_correlation_key(
@@ -121,7 +125,10 @@ class Kiwi_Operational_Event_Service
                                 : '';
 
                             return [
-                                'action' => $persisted_action === 'repeated' ? 'repeated' : '',
+                                // A retry may deduplicate to its original raised event.
+                                'action' => is_array($persisted) && (int) $persisted['id'] === $persisted_id
+                                    && in_array($persisted_action, ['raised', 'repeated'], true)
+                                        ? $persisted_action : '',
                                 'row' => null,
                                 'persisted' => true,
                             ];
@@ -129,7 +136,8 @@ class Kiwi_Operational_Event_Service
 
                         return ['action' => 'repeated', 'row' => $row];
                     }
-                    if ($this->repository->insert_event($row) <= 0) {
+                    if (($required_lock === null ? $this->repository->insert_event($row)
+                        : $this->repository->insert_event_if_lock_owned($row, $required_lock)) <= 0) {
                         return ['action' => '', 'row' => null];
                     }
 
@@ -218,14 +226,16 @@ class Kiwi_Operational_Event_Service
         return $this->record_recovery_action_conditionally($event, null);
     }
 
-    public function record_recovery_action_if(array $event, callable $should_persist): string
+    public function record_recovery_action_if(array $event, callable $should_persist,
+        ?Kiwi_Database_Lock_Guard $required_lock = null): string
     {
-        return $this->record_recovery_action_conditionally($event, $should_persist);
+        return $this->record_recovery_action_conditionally($event, $should_persist, $required_lock);
     }
 
     private function record_recovery_action_conditionally(
         array $event,
-        ?callable $should_persist
+        ?callable $should_persist,
+        ?Kiwi_Database_Lock_Guard $required_lock = null
     ): string
     {
         $correlation_key = $this->normalize_key((string) ($event['correlation_key'] ?? ''), 191);
@@ -236,7 +246,7 @@ class Kiwi_Operational_Event_Service
         try {
             return (string) $this->repository->with_correlation_lifecycle_lock(
                 $correlation_key,
-                function () use ($event, $correlation_key, $should_persist): string {
+                function () use ($event, $correlation_key, $should_persist, $required_lock): string {
                     $latest = $this->repository->find_latest_by_correlation_key($correlation_key);
                     if (is_callable($should_persist) && !$should_persist($latest)) {
                         return 'none';
@@ -253,7 +263,12 @@ class Kiwi_Operational_Event_Service
                         $correlation_key . ':' . (string) ($latest['id'] ?? '')
                     );
 
-                    return $this->persist($event, $correlation_key) ? 'resolved' : '';
+                    if (!$this->persist($event, $correlation_key, $required_lock)) { return ''; }
+                    $persisted = $this->repository->find_latest_by_correlation_key($correlation_key);
+                    return is_array($persisted)
+                        && ($persisted['lifecycle_action'] ?? '') === 'resolved'
+                        && ($persisted['idempotency_key'] ?? '') === $event['idempotency_key']
+                            ? 'resolved' : '';
                 }
             );
         } catch (Throwable $error) {
@@ -272,11 +287,11 @@ class Kiwi_Operational_Event_Service
         }
     }
 
-    private function persist(array $event, string $correlation_key): bool
+    private function persist(array $event, string $correlation_key, ?Kiwi_Database_Lock_Guard $required_lock = null): bool
     {
         $row = $this->build_row($event, $correlation_key);
-
-        return is_array($row) && $this->repository->insert_event($row) > 0;
+        return is_array($row) && ($required_lock === null ? $this->repository->insert_event($row)
+            : $this->repository->insert_event_if_lock_owned($row, $required_lock)) > 0;
     }
 
     private function build_row(array $event, string $correlation_key): ?array
@@ -354,7 +369,8 @@ class Kiwi_Operational_Event_Service
         return $this->truncate($this->mask_credentials($text), 4000);
     }
 
-    private function mask_credentials(string $text): string
+    /** Also protects compact diagnostics stored by a producer before its event is recorded. */
+    public function mask_credentials(string $text): string
     {
         if ($text === '') {
             return '';

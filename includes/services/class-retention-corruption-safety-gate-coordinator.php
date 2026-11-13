@@ -11,12 +11,15 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
     private $lock_service;
     private $operational_event_service;
     private $run_repository;
+    private $health_store;
 
     public function __construct(
         ?Kiwi_Retention_Archive_Lock $lock_service = null,
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
-        ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null
+        ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
+        ?Kiwi_Retention_Archive_Health_Store $health_store = null
     ) {
+        $this->health_store = $health_store ?? new Kiwi_Retention_Archive_Health_Store();
         $this->lock_service = $lock_service instanceof Kiwi_Retention_Archive_Lock
             ? $lock_service
             : new Kiwi_Retention_Archive_Lock();
@@ -263,6 +266,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
         string $operation_order = '',
         ?callable $replacement_active_validator = null
     ): array {
+        $pending = $this->health_store->pending_gate();
+        if (empty($pending['allowed'])) { return $this->blocked($pending['reason_code'], false, false); }
         $archive = Kiwi_Retention_Archive_Name::normalize(basename($archive_path));
         $replacement = $replacement_archive_path !== ''
             ? Kiwi_Retention_Archive_Name::normalize(basename($replacement_archive_path))
@@ -327,6 +332,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
             if (!$handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
                 return $this->blocked('archive_lock_failed', false, false);
             }
+            $pending = $this->health_store->pending_gate();
+            if (empty($pending['allowed'])) { return $this->blocked($pending['reason_code'], false, false); }
 
             $locked_transition_source = $replacement !== ''
                 ? $this->lock_service->get_replacement_transition_source_for_archive(
@@ -374,6 +381,8 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                 if (!$replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle) {
                     return $this->blocked('replacement_archive_lock_failed', true, true);
                 }
+                $pending = $this->health_store->pending_gate();
+                if (empty($pending['allowed'])) { return $this->blocked($pending['reason_code'], false, false); }
                 $replacement_gate = $this->inspect($replacement_archive_path, false);
                 if (in_array((string) ($replacement_gate['reason_code'] ?? ''), [
                     'archive_gate_path_invalid',
@@ -412,71 +421,132 @@ class Kiwi_Retention_Corruption_Safety_Gate_Coordinator
                         !empty($locked_source_gate['incident_open'])
                     );
                 }
-                if (!$replacement_handle->persist_replacement_transition_blocked($archive)) {
-                    return $this->blocked(
-                        'replacement_transition_block_persist_failed',
-                        true,
-                        true
-                    );
-                }
             }
 
-            if ($replacement !== ''
-                && !$this->run_repository->terminalize_open_run_for_manual_replacement(
-                    $archive_path,
-                    $replacement_archive_path
-                )
-            ) {
-                return $this->blocked('replacement_run_terminalize_failed', true, true);
+            // Generation locks alone do not serialize a start on another generation.
+            // Only these short final effects hold the shared health lock; the full
+            // integrity verification has already finished before entering unblock.
+            $completion = null;
+            $source_cleared = false;
+            try {
+                $this->health_store->update(null, static function (array $view): array {
+                    return ['state' => $view['state']];
+                }, null, function (array $view, callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard)
+                    use ($archive_path, $replacement_archive_path, $archive, $replacement, $operation_order,
+                        $handle, $replacement_handle, &$completion, &$source_cleared): void {
+                    if ($view['active_attempt'] !== null) { throw new RuntimeException('health_attempt_pending'); }
+                    $completion = $this->complete_unblock_while_generation_locked($archive_path,
+                        $replacement_archive_path, $archive, $replacement, $operation_order, $handle, $replacement_handle,
+                        $assert_owner, $write_guard, $source_cleared);
+                });
+            } catch (Throwable $error) {
+                if ($source_cleared) { $this->restore_recovery_protection($archive_path, $archive, $handle, $replacement_handle); }
+                return $this->blocked($error->getMessage() === 'health_attempt_pending'
+                    ? 'health_attempt_pending' : 'health_state_unavailable', true, true);
             }
-            if (!$handle->clear_write_blocked()) {
-                return $this->blocked('corruption_write_block_clear_failed', true, true);
+            if ($source_cleared && empty($completion['allowed'])) {
+                $this->restore_recovery_protection($archive_path, $archive, $handle, $replacement_handle);
             }
-
-            $incident_action = $this->operational_event_service->record_recovery_action([
-                'area' => 'retention',
-                'severity' => 'info',
-                'event_type' => self::EVENT_TYPE,
-                'correlation_key' => $this->correlation_key($archive),
-                'reference_type' => 'retention_archive',
-                'reference_id' => $archive,
-                'message' => $replacement !== ''
-                    ? 'A manually selected replacement archive was fully verified before cleanup resumed.'
-                    : 'The manually repaired archive passed a complete integrity check before cleanup resumed.',
-                'context' => [
-                    'resolution_reason' => $replacement !== ''
-                        ? 'manual_replacement_verified'
-                        : 'manual_repair_verified',
-                    'archive' => $archive,
-                    'replacement_archive' => $replacement !== '' ? $replacement : null,
-                    'operation_order' => $operation_order,
-                ],
-            ]);
-            if ($incident_action === '') {
-                return $this->blocked(
-                    'corruption_incident_resolution_failed',
-                    $replacement !== '',
-                    true
-                );
-            }
-            if ($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle
-                && !$replacement_handle->clear_replacement_transition_blocked()
-            ) {
-                return $this->blocked('replacement_transition_block_clear_failed', true, false);
-            }
-
-            return [
-                'allowed' => true,
-                'reason_code' => $replacement !== ''
-                    ? 'manual_replacement_unblocked'
-                    : 'manual_repair_unblocked',
-                'write_blocked' => false,
-                'incident_open' => false,
-                'incident_action' => $incident_action,
-            ];
+            return $completion;
         } finally {
             $this->lock_service->release($replacement_handle);
             $this->lock_service->release($lock['handle'] ?? null);
+        }
+    }
+
+    private function complete_unblock_while_generation_locked(string $archive_path,
+        string $replacement_archive_path, string $archive, string $replacement, string $operation_order,
+        Kiwi_Retention_Archive_Lock_Handle $handle, ?Kiwi_Retention_Archive_Lock_Handle $replacement_handle,
+        callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard, bool &$source_cleared): array
+    {
+        $assert_owner();
+        if ($replacement_handle !== null && !$replacement_handle->persist_replacement_transition_blocked($archive)) {
+            return $this->blocked('replacement_transition_block_persist_failed', true, true);
+        }
+        if ($replacement !== ''
+            && !$this->run_repository->terminalize_open_run_for_manual_replacement(
+                $archive_path,
+                $replacement_archive_path
+            )
+        ) {
+            return $this->blocked('replacement_run_terminalize_failed', true, true);
+        }
+        // terminalize may execute database queries, including a transparent reconnect.
+        $assert_owner();
+        // clear may unlink successfully yet fail to confirm the parent-directory sync.
+        $source_cleared = true;
+        if (!$handle->clear_write_blocked()) {
+            return $this->blocked('corruption_write_block_clear_failed', true, true);
+        }
+
+        $incident_action = $this->operational_event_service->record_recovery_action_if([
+            'area' => 'retention',
+            'severity' => 'info',
+            'event_type' => self::EVENT_TYPE,
+            'correlation_key' => $this->correlation_key($archive),
+            'reference_type' => 'retention_archive',
+            'reference_id' => $archive,
+            'message' => $replacement !== ''
+                ? 'A manually selected replacement archive was fully verified before cleanup resumed.'
+                : 'The manually repaired archive passed a complete integrity check before cleanup resumed.',
+            'context' => [
+                'resolution_reason' => $replacement !== ''
+                    ? 'manual_replacement_verified'
+                    : 'manual_repair_verified',
+                'archive' => $archive,
+                'replacement_archive' => $replacement !== '' ? $replacement : null,
+                'operation_order' => $operation_order,
+            ],
+        ], static function () use ($assert_owner): bool {
+            // This predicate runs after acquiring the event lock and reading the latest event.
+            $assert_owner();
+            return true;
+        }, $write_guard);
+        $assert_owner();
+        if ($incident_action === '') {
+            return $this->blocked(
+                'corruption_incident_resolution_failed',
+                $replacement !== '',
+                true
+            );
+        }
+        if ($replacement_handle instanceof Kiwi_Retention_Archive_Lock_Handle
+            && !$replacement_handle->clear_replacement_transition_blocked()
+        ) {
+            return $this->blocked('replacement_transition_block_clear_failed', true, false);
+        }
+
+        return [
+            'allowed' => true,
+            'reason_code' => $replacement !== ''
+                ? 'manual_replacement_unblocked'
+                : 'manual_repair_unblocked',
+            'write_blocked' => false,
+            'incident_open' => false,
+            'incident_action' => $incident_action,
+        ];
+    }
+
+    /** Unconfirmed release must leave a durable gate before the existing generation locks are released. */
+    private function restore_recovery_protection(string $archive_path, string $archive,
+        Kiwi_Retention_Archive_Lock_Handle $handle, ?Kiwi_Retention_Archive_Lock_Handle $replacement_handle): void
+    {
+        if ($replacement_handle !== null) {
+            $reported = false;
+            while (!$replacement_handle->persist_replacement_transition_blocked($archive)) {
+                if (!$reported) { error_log('Archive recovery transition protection unconfirmed; retaining generation lock.'); $reported = true; }
+                usleep(250000);
+            }
+        }
+        $reported = false;
+        while (true) {
+            if ($handle->persist_write_blocked()) { return; }
+            $gate = $this->inspect($archive_path, false);
+            if (!empty($gate['incident_open'])) { return; }
+            // Keep the already-held generation lock if both durable protection destinations are unavailable.
+            // A technical restoration failure is not a new completed non-ok SQLite finding.
+            if (!$reported) { error_log('Archive recovery protection unconfirmed; retaining generation lock.'); $reported = true; }
+            usleep(250000);
         }
     }
 

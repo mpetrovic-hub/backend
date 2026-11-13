@@ -111,7 +111,8 @@ with tempfile.TemporaryDirectory(prefix="kiwi-brake-integration-") as directory:
                 shutil.copyfile(REPO / "tools/database" / name, tools / name)
             services = package / "includes/services"
             services.mkdir(parents=True)
-            for name in ["class-retention-archive-name.php", "class-retention-archive-write-block.php"]:
+            for name in ["class-retention-archive-name.php", "class-retention-archive-write-block.php",
+                         "class-retention-archive-health-transport.php", "class-retention-archive-health-json.php"]:
                 shutil.copyfile(REPO / "includes/services" / name, services / name)
             module = tools / "archive-health-read-brake"
             shutil.copytree(REPO / "tools/database/archive-health-read-brake", module)

@@ -1,0 +1,17 @@
+# Deployment TEMPLATE only. Use solely as the unprivileged kiwi-archive-health user.
+Host kiwi-archive-health-production
+    HostName VERIFIED_HOSTINGER_HOST
+    Port VERIFIED_SSH_PORT
+    User HOSTINGER_ACCOUNT
+    IdentityFile /ABSOLUTE/PRIVATE/health_ed25519
+    UserKnownHostsFile /ABSOLUTE/INDEPENDENTLY_VERIFIED/known_hosts
+    StrictHostKeyChecking yes
+    UpdateHostKeys no
+    IdentitiesOnly yes
+    BatchMode yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    Compression no
+    RequestTTY no
+    ClearAllForwardings yes
+    ConnectTimeout 15

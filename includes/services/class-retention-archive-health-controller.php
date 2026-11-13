@@ -16,6 +16,7 @@ final class Kiwi_Retention_Archive_Health_Controller
     private $run_repository;
     private $clock;
     private $archive_lock;
+    private $health_store;
 
     public function __construct(
         ?Kiwi_Retention_Sqlite_Archive_Service $archive_service = null,
@@ -24,8 +25,10 @@ final class Kiwi_Retention_Archive_Health_Controller
         ?Kiwi_Operational_Event_Service $operational_event_service = null,
         ?Kiwi_Retention_Cleanup_Run_Repository $run_repository = null,
         ?callable $clock = null,
-        ?Kiwi_Retention_Archive_Lock $archive_lock = null
+        ?Kiwi_Retention_Archive_Lock $archive_lock = null,
+        ?Kiwi_Retention_Archive_Health_Store $health_store = null
     ) {
+        $this->health_store = $health_store ?? new Kiwi_Retention_Archive_Health_Store();
         $this->archive_service = $archive_service instanceof Kiwi_Retention_Sqlite_Archive_Service
             ? $archive_service
             : new Kiwi_Retention_Sqlite_Archive_Service();
@@ -43,7 +46,8 @@ final class Kiwi_Retention_Archive_Health_Controller
             : new Kiwi_Retention_Corruption_Safety_Gate_Coordinator(
                 null,
                 $this->operational_event_service,
-                $this->run_repository
+                $this->run_repository,
+                $this->health_store
             );
         $this->clock = $clock ?? static function (): DateTimeImmutable {
             return new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin'));
@@ -56,316 +60,9 @@ final class Kiwi_Retention_Archive_Health_Controller
     public function check(string $check): array
     {
         $started = microtime(true);
-        $started_at = $this->now();
-        $operation_order = $this->operation_order($started);
-        $check = $this->normalize_check($check);
-        if ($check === '') {
-            $incident_action = $this->record_availability_failure(
-                'check_input_invalid',
-                null,
-                '',
-                $started_at,
-                $operation_order
-            );
-
-            return $this->result(
-                'check',
-                'error',
-                $incident_action === '' ? 'availability_incident_persist_failed' : 'check_input_invalid',
-                null,
-                null,
-                $started_at,
-                $started,
-                2,
-                ['incident_action' => $incident_action]
-            );
-        }
-
-        $active = $this->resolve_active_archive();
-        if (empty($active['success'])) {
-            $reason_code = (string) ($active['reason_code'] ?? 'active_archive_lookup_failed');
-            $incident_action = $this->record_availability_failure(
-                $reason_code,
-                null,
-                $check,
-                $started_at,
-                $operation_order
-            );
-
-            return $this->result(
-                'check',
-                'error',
-                $incident_action === '' ? 'availability_incident_persist_failed' : $reason_code,
-                null,
-                $check,
-                $started_at,
-                $started,
-                2,
-                ['incident_action' => $incident_action]
-            );
-        }
-
-        $archive_path = (string) $active['path'];
-        $archive = (string) $active['name'];
-        $gate = $this->safety_gate->inspect($archive_path, true);
-        if (empty($gate['allowed'])) {
-            $gate_reason = (string) ($gate['reason_code'] ?? 'archive_corruption_blocked');
-            if (in_array($gate_reason, [
-                'archive_gate_path_invalid',
-                'corruption_incident_lookup_failed',
-                'replacement_transition_state_invalid',
-            ], true)) {
-                $incident_action = $this->record_availability_failure(
-                    $gate_reason,
-                    $archive,
-                    $check,
-                    $started_at,
-                    $operation_order
-                );
-
-                return $this->result(
-                    'check',
-                    'error',
-                    $incident_action === ''
-                        ? 'availability_incident_persist_failed'
-                        : $gate_reason,
-                    $archive,
-                    $check,
-                    $started_at,
-                    $started,
-                    2,
-                    array_merge($gate, ['incident_action' => $incident_action])
-                );
-            }
-
-            $availability_action = '';
-            if (!empty($gate['corruption_write_blocked']) || !empty($gate['incident_open'])) {
-                $availability_action = $this->record_availability_recovery(
-                    $archive,
-                    $check,
-                    $operation_order
-                );
-                if ($availability_action === '') {
-                    return $this->result(
-                        'check',
-                        'error',
-                        'availability_incident_resolution_failed',
-                        $archive,
-                        $check,
-                        $started_at,
-                        $started,
-                        2,
-                        $gate
-                    );
-                }
-            }
-            $gate_action = (string) ($gate['incident_action'] ?? '');
-            $reported_action = in_array($gate_action, ['raised', 'repeated', 'resolved'], true)
-                ? $gate_action
-                : $availability_action;
-
-            return $this->result(
-                'check',
-                'blocked',
-                $gate_reason,
-                $archive,
-                $check,
-                $started_at,
-                $started,
-                1,
-                array_merge($gate, ['incident_action' => $reported_action])
-            );
-        }
-
-        $outcome = $this->supervisor->run(
-            $archive_path,
-            $check,
-            true,
-            function (string $path, string $mode, string $reason_code): array {
-                return $this->safety_gate->record_corruption_incident_while_generation_locked(
-                    $path,
-                    $mode,
-                    $reason_code
-                );
-            }
-        );
-        $outcome_result = (string) ($outcome['result'] ?? 'error');
-        $check_completed = !empty($outcome['check_completed']);
-        if ($outcome_result === 'ok' && $check_completed) {
-            $post_check_gate = $this->safety_gate->inspect($archive_path, false);
-            if (empty($post_check_gate['allowed'])) {
-                $post_check_reason = (string) (
-                    $post_check_gate['reason_code'] ?? 'corruption_gate_state_invalid'
-                );
-                if (in_array($post_check_reason, [
-                    'archive_gate_path_invalid',
-                    'corruption_incident_lookup_failed',
-                    'replacement_transition_state_invalid',
-                ], true)) {
-                    $incident_action = $this->record_availability_failure(
-                        $post_check_reason,
-                        $archive,
-                        $check,
-                        $started_at,
-                        $operation_order
-                    );
-
-                    return $this->result(
-                        'check',
-                        'error',
-                        $incident_action === ''
-                            ? 'availability_incident_persist_failed'
-                            : $post_check_reason,
-                        $archive,
-                        $check,
-                        $started_at,
-                        $started,
-                        2,
-                        array_merge($outcome, $post_check_gate, [
-                            'incident_action' => $incident_action,
-                        ])
-                    );
-                }
-
-                $availability_action = '';
-                if (!empty($post_check_gate['corruption_write_blocked'])
-                    || !empty($post_check_gate['incident_open'])
-                ) {
-                    $availability_action = $this->record_availability_recovery(
-                        $archive,
-                        $check,
-                        $operation_order
-                    );
-                    if ($availability_action === '') {
-                        return $this->result(
-                            'check',
-                            'error',
-                            'availability_incident_resolution_failed',
-                            $archive,
-                            $check,
-                            $started_at,
-                            $started,
-                            2,
-                            array_merge($outcome, $post_check_gate)
-                        );
-                    }
-                }
-                $gate_action = (string) ($post_check_gate['incident_action'] ?? '');
-                $reported_action = in_array($gate_action, ['raised', 'repeated', 'resolved'], true)
-                    ? $gate_action
-                    : $availability_action;
-
-                return $this->result(
-                    'check',
-                    'blocked',
-                    $post_check_reason,
-                    $archive,
-                    $check,
-                    $started_at,
-                    $started,
-                    1,
-                    array_merge($outcome, $post_check_gate, [
-                        'incident_action' => $reported_action,
-                    ])
-                );
-            }
-            $incident_action = $this->record_availability_recovery(
-                $archive,
-                $check,
-                $operation_order
-            );
-
-            return $this->result(
-                'check',
-                $incident_action === '' ? 'error' : 'ok',
-                $incident_action === '' ? 'availability_incident_resolution_failed' : 'sqlite_check_ok',
-                $archive,
-                $check,
-                $started_at,
-                $started,
-                $incident_action === '' ? 2 : 0,
-                array_merge($outcome, ['incident_action' => $incident_action])
-            );
-        }
-
-        if ($outcome_result === 'corruption_detected' && $check_completed) {
-            $gate = !empty($outcome['incident_open'])
-                ? $this->safety_gate->inspect($archive_path, true)
-                : $this->safety_gate->block_after_corruption(
-                    $archive_path,
-                    $check,
-                    (string) ($outcome['reason_code'] ?? 'sqlite_check_reported_corruption'),
-                    [
-                        'write_blocked' => !empty($outcome['write_blocked']),
-                        'incident_open' => !empty($outcome['incident_open']),
-                        'operation_order' => $operation_order,
-                    ]
-                );
-            $availability_action = $this->record_availability_recovery(
-                $archive,
-                $check,
-                $operation_order
-            );
-            $gate_persisted = !empty($gate['write_blocked']) || !empty($gate['incident_open']);
-            $corruption_action = (string) ($gate['incident_action'] ?? '');
-            $handoff_action = (string) ($outcome['incident_action'] ?? '');
-            $reported_action = in_array($corruption_action, ['raised', 'repeated', 'resolved'], true)
-                ? $corruption_action
-                : (in_array($handoff_action, ['raised', 'repeated', 'resolved'], true)
-                    ? $handoff_action
-                    : $availability_action);
-
-            return $this->result(
-                'check',
-                $gate_persisted && $availability_action !== '' ? 'corruption_detected' : 'error',
-                !$gate_persisted
-                    ? ((string) ($gate['reason_code'] ?? '') === 'corruption_gate_recovered_concurrently'
-                        ? 'corruption_gate_recovered_concurrently'
-                        : 'corruption_gate_persist_failed')
-                    : ($availability_action === ''
-                        ? 'availability_incident_resolution_failed'
-                        : (string) ($gate['reason_code'] ?? 'sqlite_check_reported_corruption')),
-                $archive,
-                $check,
-                $started_at,
-                $started,
-                $gate_persisted && $availability_action !== '' ? 1 : 2,
-                array_merge($outcome, $gate, [
-                    'incident_action' => $reported_action,
-                ])
-            );
-        }
-
-        $reason_code = (string) ($outcome['reason_code'] ?? 'sqlite_readonly_check_failed');
-        $incident_action = $this->record_availability_failure(
-            $reason_code,
-            $archive,
-            $check,
-            $started_at,
-            $operation_order,
-            $archive_path
-        );
-        $result = $outcome_result === 'deferred'
-            ? 'deferred'
-            : ($outcome_result === 'inconclusive' ? 'inconclusive' : 'error');
-        $exit_code = in_array($result, ['deferred', 'inconclusive'], true) ? 1 : 2;
-        if ($incident_action === '') {
-            $result = 'error';
-            $reason_code = 'availability_incident_persist_failed';
-            $exit_code = 2;
-        }
-
-        return $this->result(
-            'check',
-            $result,
-            $reason_code,
-            $archive,
-            $check,
-            $started_at,
-            $started,
-            $exit_code,
-            array_merge($outcome, ['incident_action' => $incident_action])
-        );
+        $result = $this->result('check', 'error', 'health_run_failed', null, null, $this->now(), $started, 2);
+        $result['message'] = 'Der reguläre Archivcheck läuft auf dem VPS: kiwi-retention-archive-health run --manual.';
+        return $result;
     }
 
     public function diagnose(string $archive_name, string $check): array
@@ -467,6 +164,11 @@ final class Kiwi_Retention_Archive_Health_Controller
             }
         }
 
+        $pending = $this->health_store->pending_gate();
+        if (empty($pending['allowed'])) {
+            return $this->result('unblock', 'error', $pending['reason_code'], (string) $archive['name'],
+                'integrity', $started_at, $started, 2);
+        }
         $verification_target = is_array($replacement) ? $replacement : $archive;
         $verification = $this->supervisor->run(
             (string) $verification_target['path'],
@@ -569,33 +271,6 @@ final class Kiwi_Retention_Archive_Health_Controller
         );
     }
 
-    public function bootstrap_failure(string $reason_code): array
-    {
-        $started = microtime(true);
-        $started_at = $this->now();
-        $operation_order = $this->operation_order($started);
-        $reason_code = $this->normalize_reason($reason_code, 'health_bootstrap_failed');
-        $incident_action = $this->record_availability_failure(
-            $reason_code,
-            null,
-            '',
-            $started_at,
-            $operation_order
-        );
-
-        return $this->result(
-            'check',
-            'error',
-            $incident_action === '' ? 'availability_incident_persist_failed' : $reason_code,
-            null,
-            null,
-            $started_at,
-            $started,
-            2,
-            ['incident_action' => $incident_action]
-        );
-    }
-
     private function resolve_active_archive(): array
     {
         try {
@@ -639,6 +314,16 @@ final class Kiwi_Retention_Archive_Health_Controller
         ];
     }
 
+    public function active_target(): array
+    {
+        return $this->resolve_active_archive();
+    }
+
+    public function generation_target(string $generation): ?array
+    {
+        return $this->find_archive($generation);
+    }
+
     private function find_archive(string $archive_name): ?array
     {
         $archive_name = Kiwi_Retention_Archive_Name::normalize($archive_name);
@@ -677,7 +362,10 @@ final class Kiwi_Retention_Archive_Health_Controller
         string $check,
         string $started_at,
         string $operation_order,
-        ?string $archive_path = null
+        ?string $archive_path = null,
+        array $external_context = [],
+        ?callable $assert_owner = null,
+        ?Kiwi_Database_Lock_Guard $write_guard = null
     ): string {
         $event = [
             'area' => 'retention',
@@ -698,13 +386,23 @@ final class Kiwi_Retention_Archive_Health_Controller
                 'operation_order' => $operation_order,
             ],
         ];
+        if ($external_context !== []) {
+            $event['context'] = array_merge($event['context'], $external_context);
+            if ($reason_code === 'health_run_failed') {
+                $event['message'] = 'Archivcheck bei ' . $external_context['phase'] . ' gescheitert: ' . $external_context['message'];
+            }
+        }
+        if ($reason_code === 'health_check_overdue') {
+            $event['message'] = 'Seit mindestens acht Kalendertagen liegt kein bestätigter Archivbefund vor.';
+        }
         if ($operation_order === '') {
             return $this->operational_event_service->record_failure_action($event);
         }
 
         return $this->operational_event_service->record_failure_action_if(
             $event,
-            function (?array $latest) use ($reason_code, $archive_path, $operation_order): bool {
+            function (?array $latest) use ($reason_code, $archive_path, $operation_order, $assert_owner): bool {
+                if ($assert_owner !== null) { $assert_owner(); }
                 if ($reason_code === 'archive_lock_active'
                     && trim((string) $archive_path) !== ''
                 ) {
@@ -728,14 +426,17 @@ final class Kiwi_Retention_Archive_Health_Controller
                     $operation_order,
                     ['raised', 'repeated', 'resolved']
                 );
-            }
+            },
+            $write_guard
         );
     }
 
     private function record_availability_recovery(
         string $archive,
         string $check,
-        string $operation_order
+        string $operation_order,
+        callable $assert_owner,
+        Kiwi_Database_Lock_Guard $write_guard
     ): string {
         $event = [
             'area' => 'retention',
@@ -754,14 +455,35 @@ final class Kiwi_Retention_Archive_Health_Controller
 
         return $this->operational_event_service->record_recovery_action_if(
             $event,
-            function (?array $latest) use ($operation_order): bool {
+            function (?array $latest) use ($operation_order, $assert_owner): bool {
+                $assert_owner();
                 return !$this->later_availability_transition_exists(
                     $latest,
                     $operation_order,
                     ['raised', 'repeated']
                 );
-            }
+            },
+            $write_guard
         );
+    }
+
+    public function record_overdue(?array $last_confirmed_attempt, string $checked_at, string $operation_order,
+        callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard): string
+    {
+        return $this->record_availability_failure('health_check_overdue', $last_confirmed_attempt['generation'] ?? null,
+            '', $checked_at, $operation_order, null, [], $assert_owner, $write_guard);
+    }
+
+    public function record_external_failure(?array $attempt, string $phase, string $message, string $reason_code): string
+    {
+        return $this->record_availability_failure($reason_code, $attempt['generation'] ?? null, '',
+            $attempt['started_at'] ?? $this->now(), $attempt['operation_order'] ?? $this->operation_order(microtime(true)), null,
+            ['attempt_id' => $attempt['attempt_id'] ?? null, 'phase' => $phase, 'message' => $message]);
+    }
+
+    public function record_external_recovery(array $attempt, callable $assert_owner, Kiwi_Database_Lock_Guard $write_guard): string
+    {
+        return $this->record_availability_recovery($attempt['generation'], 'quick', $attempt['operation_order'], $assert_owner, $write_guard);
     }
 
     private function later_availability_transition_exists(

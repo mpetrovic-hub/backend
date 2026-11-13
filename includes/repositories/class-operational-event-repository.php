@@ -4,6 +4,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once __DIR__ . '/class-database-lock-guard.php';
+
 class Kiwi_Operational_Event_Repository
 {
     private const LIFECYCLE_LOCK_TIMEOUT_SECONDS = 5;
@@ -52,10 +54,8 @@ class Kiwi_Operational_Event_Repository
         dbDelta($sql);
     }
 
-    public function insert_event(array $event): int
+    private function insert_row(array $event): array
     {
-        global $wpdb;
-
         $row = [];
         foreach ([
             'occurred_at',
@@ -76,6 +76,14 @@ class Kiwi_Operational_Event_Repository
                 $row[$field] = $event[$field];
             }
         }
+
+        return $row;
+    }
+
+    public function insert_event(array $event): int
+    {
+        global $wpdb;
+        $row = $this->insert_row($event);
 
         $result = $wpdb->insert(
             $this->get_table_name(),
@@ -98,6 +106,31 @@ class Kiwi_Operational_Event_Repository
                 $idempotency_key
             )
         );
+    }
+
+    /** Atomic guard also covers wpdb reconnecting while executing this INSERT. */
+    public function insert_event_if_lock_owned(array $event, Kiwi_Database_Lock_Guard $guard): int
+    {
+        global $wpdb;
+        $row = $this->insert_row($event);
+        if ($row === []) { return 0; }
+        $values = []; $arguments = [];
+        foreach ($row as $value) {
+            $values[] = $value === null ? 'NULL' : '%s';
+            if ($value !== null) { $arguments[] = (string) $value; }
+        }
+        $arguments[] = $guard->name();
+        $arguments[] = $guard->connection_id();
+        $sql = 'INSERT INTO ' . $this->get_table_name() . ' (' . implode(', ', array_keys($row)) . ')'
+            . ' SELECT ' . implode(', ', $values)
+            . ' WHERE IS_USED_LOCK(%s) = CONNECTION_ID() AND CONNECTION_ID() = %d';
+        $result = $wpdb->query($wpdb->prepare($sql, ...$arguments));
+        if ($result === 1) { return (int) ($wpdb->insert_id ?? 0); }
+        if ($result !== false || empty($row['idempotency_key'])) { return 0; }
+        // A duplicate may confirm its original row only while this connection still owns the guard.
+        return (int) $wpdb->get_var($wpdb->prepare('SELECT id FROM ' . $this->get_table_name()
+            . ' WHERE idempotency_key = %s AND IS_USED_LOCK(%s) = CONNECTION_ID() AND CONNECTION_ID() = %d LIMIT 1',
+            $row['idempotency_key'], $guard->name(), $guard->connection_id()));
     }
 
     public function insert_event_if_correlation_open(array $event): int
