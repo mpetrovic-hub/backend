@@ -1,25 +1,24 @@
-# Graph Report - .  (2026-11-19)
+# Graph Report - kiwi-backend_codex  (2026-11-19)
 
 ## Corpus Check
-- 243 files · ~351,353 words
-- 2 potentially sensitive files skipped
+- 230 files · ~330,702 words
+- Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 4386 nodes · 9370 edges · 319 communities (178 shown, 141 thin omitted)
-- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 740 edges (avg confidence: 0.84)
-- Token usage: unavailable (subagent usage was not reported to Graphify)
+- 4458 nodes · 9426 edges · 312 communities (168 shown, 144 thin omitted)
+- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 737 edges (avg confidence: 0.84)
+- Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `fec7590d`
-- Also includes the preserved, uncommitted local Markdown changes.
+- Built from commit: `117ff6eb`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - [[_COMMUNITY_retention-engagement-tests.php|retention-engagement-tests.php]]
 - [[_COMMUNITY_run-tests.php|run-tests.php]]
-- [[_COMMUNITY_Kiwi_Test_Config|Kiwi_Test_Config]]
-- [[_COMMUNITY_retention-archive-attempt-tests.php|retention-archive-attempt-tests.php]]
+- [[_COMMUNITY_kiwi_assert_true|kiwi_assert_true]]
+- [[_COMMUNITY_kiwi_test_attempt_service|kiwi_test_attempt_service]]
 - [[_COMMUNITY_Kiwi_Device_Context_Normalizer|Kiwi_Device_Context_Normalizer]]
 - [[_COMMUNITY_Kiwi_Landing_Page_Router|Kiwi_Landing_Page_Router]]
 - [[_COMMUNITY_Kiwi_Config|Kiwi_Config]]
@@ -30,9 +29,9 @@
 - [[_COMMUNITY_Kiwi_Retention_Engagement_Worker|Kiwi_Retention_Engagement_Worker]]
 - [[_COMMUNITY_Kiwi_Retention_Cleanup_Service|Kiwi_Retention_Cleanup_Service]]
 - [[_COMMUNITY_Kiwi_Landing_Kpi_Rest_Routes|Kiwi_Landing_Kpi_Rest_Routes]]
-- [[_COMMUNITY_Kiwi_Traffic_Source_Funnel_Statistics_Repository|Kiwi_Traffic_Source_Funnel_Statistics_Repository]]
+- [[_COMMUNITY_Kiwi_Landing_Funnel_Daily_Summary_Repository|Kiwi_Landing_Funnel_Daily_Summary_Repository]]
 - [[_COMMUNITY_WP_REST_Request|WP_REST_Request]]
-- [[_COMMUNITY_retention-archive-health-tests.php|retention-archive-health-tests.php]]
+- [[_COMMUNITY_AGENTS_backup_before_Matt_Pocock|AGENTS_backup_before_Matt_Pocock.md]]
 - [[_COMMUNITY_Kiwi_Test_Premium_Sms_Fraud_Signal_Repository|Kiwi_Test_Premium_Sms_Fraud_Signal_Repository]]
 - [[_COMMUNITY_kiwi_retention_archive_health.py|kiwi_retention_archive_health.py]]
 - [[_COMMUNITY_kiwi_assert_contains|kiwi_assert_contains]]
@@ -41,7 +40,7 @@
 - [[_COMMUNITY_RunnerTests|RunnerTests]]
 - [[_COMMUNITY_NTH General API — Premium SMS|NTH General API — Premium SMS]]
 - [[_COMMUNITY_Kiwi_Retention_Archive_Write_Block|Kiwi_Retention_Archive_Write_Block]]
-- [[_COMMUNITY_kiwi_assert_true|kiwi_assert_true]]
+- [[_COMMUNITY_retention-archive-health-tests.php|retention-archive-health-tests.php]]
 - [[_COMMUNITY_TODO|TODO]]
 - [[_COMMUNITY_Lily Mobile General API — MT Platform (JSON)|Lily Mobile General API — MT Platform (JSON)]]
 - [[_COMMUNITY_archive-health-read-brake-integration.py|archive-health-read-brake-integration.py]]
@@ -50,19 +49,19 @@
 - [[_COMMUNITY_Database Migrations|Database Migrations]]
 - [[_COMMUNITY_Kiwi_Plugin|Kiwi_Plugin]]
 - [[_COMMUNITY_Kiwi_Landing_Session_Engagements_Migration_Service|Kiwi_Landing_Session_Engagements_Migration_Service]]
-- [[_COMMUNITY_Kiwi_Test_Operational_Event_Repository|Kiwi_Test_Operational_Event_Repository]]
-- [[_COMMUNITY_Kiwi_Database_Deployment_Service|Kiwi_Database_Deployment_Service]]
-- [[_COMMUNITY_Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service|Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service]]
+- [[_COMMUNITY_Kiwi_Test_Plugin_Operational_Event_Cleanup|Kiwi_Test_Plugin_Operational_Event_Cleanup]]
+- [[_COMMUNITY_AGENTS_backup_before_Update_2026-11-12|AGENTS_backup_before_Update_2026-11-12.md]]
+- [[_COMMUNITY_Kiwi_Click_Attribution_Repository|Kiwi_Click_Attribution_Repository]]
 - [[_COMMUNITY_Kiwi_Retention_Archive_Check_Supervisor|Kiwi_Retention_Archive_Check_Supervisor]]
 - [[_COMMUNITY_class-retention-archive-health-service.php|class-retention-archive-health-service.php]]
 - [[_COMMUNITY_database-deployment-tests.php|database-deployment-tests.php]]
 - [[_COMMUNITY_Kiwi_Nth_Fr_One_Off_Service|Kiwi_Nth_Fr_One_Off_Service]]
-- [[_COMMUNITY_kiwi_test_corruption_gate|kiwi_test_corruption_gate]]
+- [[_COMMUNITY_Kiwi_Traffic_Source_Funnel_Statistics_Repository|Kiwi_Traffic_Source_Funnel_Statistics_Repository]]
 - [[_COMMUNITY_MOBIVAS  LILY MOBILE Greece PSMS Subscription Integration|MOBIVAS / LILY MOBILE Greece PSMS Subscription Integration]]
 - [[_COMMUNITY_Kiwi_Retention_Archive_Health_Controller|Kiwi_Retention_Archive_Health_Controller]]
 - [[_COMMUNITY_Kiwi_Landing_Session_Engagement_Repository|Kiwi_Landing_Session_Engagement_Repository]]
 - [[_COMMUNITY_Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service|Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service]]
-- [[_COMMUNITY_Kiwi_Dimoco_Blacklister_Shortcode|Kiwi_Dimoco_Blacklister_Shortcode]]
+- [[_COMMUNITY_Kiwi_Dimoco_Refunder_Shortcode|Kiwi_Dimoco_Refunder_Shortcode]]
 - [[_COMMUNITY_retention-archive-state-integration-tests.php|retention-archive-state-integration-tests.php]]
 - [[_COMMUNITY_Kiwi_Test_Database_Deployment_Wpdb|Kiwi_Test_Database_Deployment_Wpdb]]
 - [[_COMMUNITY_Kiwi_Test_Hlr_Lookup_Shortcode|Kiwi_Test_Hlr_Lookup_Shortcode]]
@@ -89,21 +88,21 @@
 - [[_COMMUNITY_landing-session-engagements-migration-tests.php|landing-session-engagements-migration-tests.php]]
 - [[_COMMUNITY_Configuration Reference|Configuration Reference]]
 - [[_COMMUNITY_Kiwi_Nth_Premium_Sms_Normalizer|Kiwi_Nth_Premium_Sms_Normalizer]]
-- [[_COMMUNITY_Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository|Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository]]
+- [[_COMMUNITY_Codex Planner Report|Codex Planner Report]]
 - [[_COMMUNITY_Kiwi_Landing_Handoff_Event_Repository|Kiwi_Landing_Handoff_Event_Repository]]
 - [[_COMMUNITY_Kiwi_Retention_Archive_Health_Store|Kiwi_Retention_Archive_Health_Store]]
 - [[_COMMUNITY_Kiwi_Sales_Attribution_Snapshot_Builder|Kiwi_Sales_Attribution_Snapshot_Builder]]
-- [[_COMMUNITY_Kiwi_Dimoco_Refunder_Shortcode|Kiwi_Dimoco_Refunder_Shortcode]]
+- [[_COMMUNITY_Kiwi_Dimoco_Blacklister_Shortcode|Kiwi_Dimoco_Blacklister_Shortcode]]
 - [[_COMMUNITY_Kiwi_Test_Dimoco_Blacklist_Batch_Service|Kiwi_Test_Dimoco_Blacklist_Batch_Service]]
 - [[_COMMUNITY_Dimoco AT Subscription|Dimoco AT Subscription]]
 - [[_COMMUNITY_archive-health-read-brake-measure.py|archive-health-read-brake-measure.py]]
-- [[_COMMUNITY_Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service|Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service]]
+- [[_COMMUNITY_Kiwi_Premium_Sms_Fraud_Monitor_Service|Kiwi_Premium_Sms_Fraud_Monitor_Service]]
 - [[_COMMUNITY_Kiwi_Premium_Sms_Fraud_Shortcode|Kiwi_Premium_Sms_Fraud_Shortcode]]
 - [[_COMMUNITY_Dimoco General API|Dimoco General API]]
 - [[_COMMUNITY_Landing Page Runtime Runbook|Landing Page Runtime Runbook]]
 - [[_COMMUNITY_Kiwi_Dimoco_Client|Kiwi_Dimoco_Client]]
-- [[_COMMUNITY_{closure205}|{closure#205}]]
-- [[_COMMUNITY_Kiwi_Retention_Archive_Read_Indexes_Migration_Service|Kiwi_Retention_Archive_Read_Indexes_Migration_Service]]
+- [[_COMMUNITY_Tiny Worlds Issue 1 Tracking mit Odin|Tiny Worlds Issue #1: Tracking mit Odin]]
+- [[_COMMUNITY_Kiwi_Nth_Primary_Cta_Adapter|Kiwi_Nth_Primary_Cta_Adapter]]
 - [[_COMMUNITY_NTH FR One-off|NTH FR One-off]]
 - [[_COMMUNITY_Kiwi_Retention_Source_Registry|Kiwi_Retention_Source_Registry]]
 - [[_COMMUNITY_wp_json_encode|wp_json_encode]]
@@ -111,24 +110,23 @@
 - [[_COMMUNITY_Click Attribution and Conversion Postbacks|Click Attribution and Conversion Postbacks]]
 - [[_COMMUNITY_Landing Page Architecture|Landing Page Architecture]]
 - [[_COMMUNITY_Actions|Actions]]
-- [[_COMMUNITY_.run_landing_funnel_daily_summary_refresh_job|.run_landing_funnel_daily_summary_refresh_job]]
 - [[_COMMUNITY_Kiwi_Operational_Event_Repository|Kiwi_Operational_Event_Repository]]
 - [[_COMMUNITY_Kiwi_Landing_Page_Gallery_Service|Kiwi_Landing_Page_Gallery_Service]]
 - [[_COMMUNITY_Kiwi_Test_Sms_Migration_Wpdb|Kiwi_Test_Sms_Migration_Wpdb]]
-- [[_COMMUNITY_Archive_Health_Test_Database|Archive_Health_Test_Database]]
+- [[_COMMUNITY_.run_landing_session_raw_context_compaction_worker|.run_landing_session_raw_context_compaction_worker]]
 - [[_COMMUNITY_Capability Matrix|Capability Matrix]]
 - [[_COMMUNITY_Credentials and Environments|Credentials and Environments]]
-- [[_COMMUNITY_dbDelta|dbDelta]]
-- [[_COMMUNITY_current_time|current_time]]
+- [[_COMMUNITY_Kiwi_Dimoco_Callback_Refund_Repository|Kiwi_Dimoco_Callback_Refund_Repository]]
+- [[_COMMUNITY_Kiwi_Landing_Kpi_Service|Kiwi_Landing_Kpi_Service]]
 - [[_COMMUNITY_Kiwi_Landing_Page_Registry|Kiwi_Landing_Page_Registry]]
 - [[_COMMUNITY_Kiwi_Dimoco_Blacklist_Batch_Service|Kiwi_Dimoco_Blacklist_Batch_Service]]
 - [[_COMMUNITY_Kiwi_Msisdn_Normalizer|Kiwi_Msisdn_Normalizer]]
-- [[_COMMUNITY_Agent collaboration and architecture instructions|Agent collaboration and architecture instructions]]
+- [[_COMMUNITY_.__construct|.__construct]]
 - [[_COMMUNITY_archive-health-vps-tests.py|archive-health-vps-tests.py]]
 - [[_COMMUNITY_Kiwi_Dimoco_Response_Parser|Kiwi_Dimoco_Response_Parser]]
 - [[_COMMUNITY_Kiwi_Lily_Response_Parser|Kiwi_Lily_Response_Parser]]
 - [[_COMMUNITY_Kiwi_Nth_Client|Kiwi_Nth_Client]]
-- [[_COMMUNITY_.__construct|.__construct]]
+- [[_COMMUNITY_Kiwi_Shared_Sales_Recorder|Kiwi_Shared_Sales_Recorder]]
 - [[_COMMUNITY_general-api-dimoco|general-api-dimoco.md]]
 - [[_COMMUNITY_Retention Runbook|Retention Runbook]]
 - [[_COMMUNITY_class-plugin.php|class-plugin.php]]
@@ -136,8 +134,8 @@
 - [[_COMMUNITY_Kiwi_Conversion_Attribution_Resolver|Kiwi_Conversion_Attribution_Resolver]]
 - [[_COMMUNITY_Kiwi_Operational_Event_Cleanup_Service|Kiwi_Operational_Event_Cleanup_Service]]
 - [[_COMMUNITY_KIWI Primary CTA Href|KIWI Primary CTA Href]]
-- [[_COMMUNITY_Kiwi_Test_Health_State_Wpdb|Kiwi_Test_Health_State_Wpdb]]
-- [[_COMMUNITY_{closure280}|{closure#280}]]
+- [[_COMMUNITY_{closure202}|{closure#202}]]
+- [[_COMMUNITY_Kiwi_Test_Wpdb_Landing_Handoff_Event|Kiwi_Test_Wpdb_Landing_Handoff_Event]]
 - [[_COMMUNITY_Kiwi_Landing_Session_Engagements_Migration_Command|Kiwi_Landing_Session_Engagements_Migration_Command]]
 - [[_COMMUNITY_Documentation Index|Documentation Index]]
 - [[_COMMUNITY_Operational Events|Operational Events]]
@@ -156,7 +154,7 @@
 - [[_COMMUNITY_Runtime Flow Summary|Runtime Flow Summary]]
 - [[_COMMUNITY_codex-task|codex-task.md]]
 - [[_COMMUNITY_Kiwi_Routed_Operator_Lookup_Provider|Kiwi_Routed_Operator_Lookup_Provider]]
-- [[_COMMUNITY_Kiwi_Landing_Kpi_Summary_Repository|Kiwi_Landing_Kpi_Summary_Repository]]
+- [[_COMMUNITY_current_time|current_time]]
 - [[_COMMUNITY_{closure272}|{closure#272}]]
 - [[_COMMUNITY_Operator lookup (async)|Operator lookup (async)]]
 - [[_COMMUNITY_Generic action parameters|Generic action parameters]]
@@ -179,7 +177,7 @@
 - [[_COMMUNITY_Callback Contract for This Flow|Callback Contract for This Flow]]
 - [[_COMMUNITY_codex-quick-task|codex-quick-task.md]]
 - [[_COMMUNITY_Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository|Kiwi_Test_Traffic_Source_Funnel_Statistics_Repository]]
-- [[_COMMUNITY_Kiwi Backend overview|Kiwi Backend overview]]
+- [[_COMMUNITY_Operations documentation index|Operations documentation index]]
 - [[_COMMUNITY_Landing-Page Folder Contract|Landing-Page Folder Contract]]
 - [[_COMMUNITY_CLICK subscription flow|CLICK subscription flow]]
 - [[_COMMUNITY_WEB TAN subscription flow|WEB TAN subscription flow]]
@@ -203,8 +201,7 @@
 - [[_COMMUNITY_.__construct|.__construct]]
 - [[_COMMUNITY_Kiwi Backend (mVAS)|Kiwi Backend (mVAS)]]
 - [[_COMMUNITY_Archive health read brake bundle|Archive health read brake bundle]]
-- [[_COMMUNITY_.release|.release]]
-- [[_COMMUNITY_Confirmed Sale notification for Tiny Worlds|Confirmed Sale notification for Tiny Worlds]]
+- [[_COMMUNITY_Kiwi_Test_Lean_Archive_Config|Kiwi_Test_Lean_Archive_Config]]
 - [[_COMMUNITY_PROTOTYPE — Retention-Recovery-Zustandsmodell|PROTOTYPE — Retention-Recovery-Zustandsmodell]]
 - [[_COMMUNITY_Example Landing Page|Example Landing Page]]
 - [[_COMMUNITY_Goals|Goals]]
@@ -219,9 +216,7 @@
 - [[_COMMUNITY_Enduser return|Enduser return]]
 - [[_COMMUNITY_DIMOCO Austria ClickTAN Subscription Flow|DIMOCO Austria Click/TAN Subscription Flow]]
 - [[_COMMUNITY_NTH FR MT-billed One-off Flow|NTH FR MT-billed One-off Flow]]
-- [[_COMMUNITY_Issue 72 engagement retention planning|Issue 72 engagement retention planning]]
 - [[_COMMUNITY_retention-recovery-tui.php|retention-recovery-tui.php]]
-- [[_COMMUNITY_Agent instructions backup before Matt Pocock|Agent instructions backup before Matt Pocock]]
 - [[_COMMUNITY_CHANGELOG|CHANGELOG.md]]
 - [[_COMMUNITY_FR-Specific Technical Rules|FR-Specific Technical Rules]]
 - [[_COMMUNITY_premium-sms-APU-documentation|premium-sms-APU-documentation.md]]
@@ -300,16 +295,12 @@
 - [[_COMMUNITY_Retention Recovery Prototype README|Retention Recovery Prototype README]]
 - [[_COMMUNITY_Memory-only Recovery Prototype|Memory-only Recovery Prototype]]
 - [[_COMMUNITY_Retention Recovery State Model|Retention Recovery State Model]]
-- [[_COMMUNITY_kiwi_test_attempt_service|kiwi_test_attempt_service]]
+- [[_COMMUNITY_retention-archive-result-tests.php|retention-archive-result-tests.php]]
 - [[_COMMUNITY_Kiwi_Retention_Archive_Health_Service|Kiwi_Retention_Archive_Health_Service]]
 - [[_COMMUNITY_Kiwi_Database_Command|Kiwi_Database_Command]]
 - [[_COMMUNITY_kiwi_test_health_transport|kiwi_test_health_transport]]
-- [[_COMMUNITY_Kiwi_Retention_Archive_Read_Indexes_Command|Kiwi_Retention_Archive_Read_Indexes_Command]]
-- [[_COMMUNITY_Kiwi_Database_Lock_Guard|Kiwi_Database_Lock_Guard]]
 - [[_COMMUNITY_.__construct|.__construct]]
 - [[_COMMUNITY_.build_operational_event_cleanup_service|.build_operational_event_cleanup_service]]
-- [[_COMMUNITY_Kiwi_Test_Freshness_Event_Repository|Kiwi_Test_Freshness_Event_Repository]]
-- [[_COMMUNITY_retention-archive-retirement-tests.php|retention-archive-retirement-tests.php]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `kiwi_assert_same()` - 380 edges
@@ -328,12 +319,12 @@
   CHANGELOG.md → docs/architecture/retention-architecture.md
 - `{closure#3}()` --calls--> `Kiwi_Retention_Archive_Health_Service`  [INFERRED]
   tools/database/kiwi-retention-archive-health.php → includes/services/class-retention-archive-health-service.php
-- `Glossary and architecture decision navigation` --semantically_similar_to--> `Agent documentation navigation`  [INFERRED] [semantically similar]
-  docs/agents/domain.md → AGENTS.md
-- `Agent instructions backup before Matt Pocock` --semantically_similar_to--> `Agent instructions backup before update`  [INFERRED] [semantically similar]
-  AGENTS_backup_before_Matt_Pocock.md → AGENTS_backup_before_Update_2026-11-12.md
-- `Engagement retention` --semantically_similar_to--> `Mutable engagement retention boundary`  [INFERRED] [semantically similar]
-  Issue-72-Planung.md → docs/architecture/retention-architecture.md
+- `et_initial_archive_scenario()` --calls--> `Kiwi_Retention_Archive_Reader`  [INFERRED]
+  tests/retention-engagement-tests.php → includes/services/class-retention-archive-reader.php
+- `et_live_session_copy_scenario()` --calls--> `Kiwi_Retention_Archive_Reader`  [INFERRED]
+  tests/retention-engagement-tests.php → includes/services/class-retention-archive-reader.php
+- `et_mutable_receipt_scenario()` --calls--> `Kiwi_Retention_Archive_Reader`  [INFERRED]
+  tests/retention-engagement-tests.php → includes/services/class-retention-archive-reader.php
 
 ## Import Cycles
 - None detected.
@@ -342,7 +333,7 @@
 - **DIMOCO Austria Click/TAN Subscription Flow** — docs_integrations_dimoco_source_2025_at_kiwi_mobile_starbabes_115512_getstronger_115510_integration_guide_click_tan_subscription_flow, docs_integrations_dimoco_source_dimoco_specification_paysmart_paysmart_payment_api, docs_integrations_dimoco_source_2025_at_kiwi_mobile_starbabes_115512_getstronger_115510_integration_guide_asynchronous_payment_callback [EXTRACTED 1.00]
 - **French MyJoyplay Primary CTA Pattern** — landing_pages_lp2_fr_index_document, landing_pages_lp3_fr_index_document, landing_pages_lp4_fr_img_preload_responsive_test_index_document, landing_pages_lp4_fr_index_document, landing_pages_lp5_fr_v2_index_document, landing_pages_lp5_fr_index_document, landing_pages_lp6_fr_v2_index_document, landing_pages_lp6_fr_index_document, landing_pages_lp2_fr_index_kiwi_primary_cta_href [INFERRED 0.85]
 
-## Communities (319 total, 141 thin omitted)
+## Communities (312 total, 144 thin omitted)
 
 ### Community 0 - "retention-engagement-tests.php"
 Cohesion: 0.06
@@ -350,67 +341,63 @@ Nodes (64): Kiwi_Landing_Session_Engagement_Evaluator_Interface, {closure#12}(),
 
 ### Community 1 - "run-tests.php"
 Cohesion: 0.02
-Nodes (22): Kiwi_Device_Model_Brand_Map_Repository, {closure#134}(), {closure#183}(), {closure#202}(), {closure#268}(), {closure#269}(), {closure#270}(), {closure#279}() (+14 more)
+Nodes (36): Kiwi_Device_Model_Brand_Map_Repository, {closure#134}(), {closure#183}(), {closure#200}(), {closure#258}(), {closure#259}(), {closure#268}(), {closure#269}() (+28 more)
 
-### Community 2 - "Kiwi_Test_Config"
-Cohesion: 0.06
-Nodes (49): Kiwi_Nth_Client, Kiwi_Nth_Event_Repository, Kiwi_Nth_Flow_Transaction_Repository, Kiwi_Nth_Fr_One_Off_Service, Kiwi_Shared_Sales_Recorder, {closure#109}(), {closure#114}(), {closure#115}() (+41 more)
+### Community 2 - "kiwi_assert_true"
+Cohesion: 0.05
+Nodes (68): Kiwi_Nth_Client, Kiwi_Nth_Event_Repository, Kiwi_Nth_Flow_Transaction_Repository, Kiwi_Nth_Fr_One_Off_Service, Kiwi_Shared_Sales_Recorder, {closure#18}(), {closure#46}(), {closure#2}() (+60 more)
 
-### Community 3 - "retention-archive-attempt-tests.php"
-Cohesion: 0.09
-Nodes (15): acquire_for_archive(), {closure#1}(), {closure#14}(), {closure#16}(), {closure#17}(), {closure#18}(), {closure#19}(), {closure#2}() (+7 more)
+### Community 3 - "kiwi_test_attempt_service"
+Cohesion: 0.12
+Nodes (14): acquire_for_archive(), {closure#1}(), {closure#14}(), {closure#16}(), {closure#17}(), {closure#18}(), {closure#19}(), {closure#21}() (+6 more)
 
 ### Community 4 - "Kiwi_Device_Context_Normalizer"
 Cohesion: 0.05
 Nodes (6): Kiwi_Device_Model_Brand_Map_Repository, Kiwi_Landing_Page_Session_Repository, Kiwi_Client_Ip_Resolver, Kiwi_Device_Context_Normalizer, Kiwi_Device_Model_Brand_Harvest_Service, Kiwi_Landing_Primary_Cta_Resolver
 
 ### Community 5 - "Kiwi_Landing_Page_Router"
-Cohesion: 0.05
-Nodes (5): Kiwi_Landing_Page_Router, Kiwi_Click_Attribution_Repository, Kiwi_Tracking_Capture_Service, rest_url(), wp_generate_uuid4()
+Cohesion: 0.06
+Nodes (4): Kiwi_Landing_Page_Router, Kiwi_Retention_Worker_Support, rest_url(), wp_generate_uuid4()
 
 ### Community 7 - "Kiwi_Test_Retention_Cleanup_Run_Repository"
-Cohesion: 0.10
-Nodes (48): {closure#8}(), {closure#77}(), Kiwi_Test_Failing_Archive_State_Run_Repository, {closure#21}(), {closure#5}(), {closure#221}(), {closure#222}(), {closure#223}() (+40 more)
+Cohesion: 0.07
+Nodes (51): {closure#3}(), {closure#8}(), {closure#77}(), Kiwi_Test_Interleaved_Operational_Event_Repository, {closure#21}(), {closure#221}(), {closure#222}(), {closure#223}() (+43 more)
 
 ### Community 8 - "Kiwi_Test_Click_Attribution_Repository"
-Cohesion: 0.06
-Nodes (24): Kiwi_Affiliate_Postback_Dispatcher, Kiwi_Click_Attribution_Repository, Kiwi_Sales_Repository, Kiwi_Tracking_Capture_Service, {closure#68}(), {closure#69}(), {closure#70}(), {closure#71}() (+16 more)
+Cohesion: 0.05
+Nodes (26): Kiwi_Affiliate_Postback_Dispatcher, Kiwi_Click_Attribution_Repository, Kiwi_Sales_Repository, Kiwi_Tracking_Capture_Service, {closure#136}(), {closure#68}(), {closure#69}(), {closure#70}() (+18 more)
 
 ### Community 9 - "kiwi-retention-archive-health.php"
 Cohesion: 0.05
-Nodes (26): Kiwi_Retention_Archive_Health_Json, {closure#1}(), Kiwi_Retention_Archive_Health_Transport, {closure#2}(), {closure#4}(), {closure#1}(), Kiwi_Retention_Archive_Health_Bootstrap_Recorder, DateTimeImmutable (+18 more)
+Nodes (24): Kiwi_Retention_Archive_Health_Json, {closure#1}(), Kiwi_Retention_Archive_Health_Transport, {closure#1}(), Kiwi_Retention_Archive_Health_Bootstrap_Recorder, DateTimeImmutable, Kiwi_Retention_Archive_Health_Read_Brake, PDO (+16 more)
 
 ### Community 10 - "limit-archive-reads.c"
 Cohesion: 0.06
 Nodes (64): clockid_t, dlfcn, errno, fcntl, inttypes, libc_version, limits, mman (+56 more)
 
 ### Community 11 - "Kiwi_Retention_Engagement_Worker"
-Cohesion: 0.08
-Nodes (6): Kiwi_Retention_Archive_Reader, Kiwi_Retention_Archive_Lock_Handle, PDO, Kiwi_Retention_Engagement_Worker, Kiwi_Retention_Archive_Lock_Handle, Engagement_Test_Cleanup_Dispatcher
-
-### Community 12 - "Kiwi_Retention_Cleanup_Service"
-Cohesion: 0.07
-Nodes (3): Kiwi_Retention_Cleanup_Service, Kiwi_Retention_Worker_Support, Kiwi_Test_Plugin_Retention_Cleanup
+Cohesion: 0.06
+Nodes (11): Kiwi_Retention_Archive_Reader, Kiwi_Retention_Archive_Lock_Handle, PDO, Kiwi_Retention_Engagement_Worker, Kiwi_Retention_Archive_Lock_Handle, Engagement_Test_Cleanup_Dispatcher, Kiwi_Retention_Archive_Read_Indexes_Migration_Service, Kiwi_Retention_Archive_Lock (+3 more)
 
 ### Community 13 - "Kiwi_Landing_Kpi_Rest_Routes"
 Cohesion: 0.07
 Nodes (6): Kiwi_Dimoco_Rest_Routes, Kiwi_Landing_Kpi_Rest_Routes, Kiwi_Nth_Rest_Routes, add_action(), register_rest_route(), WP_REST_Response
 
-### Community 14 - "Kiwi_Traffic_Source_Funnel_Statistics_Repository"
-Cohesion: 0.07
-Nodes (4): Kiwi_Landing_Funnel_Daily_Summary_Repository, Kiwi_Traffic_Source_Funnel_Statistics_Repository, Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service, Kiwi_Statistics_Read_Repository_Interface
+### Community 14 - "Kiwi_Landing_Funnel_Daily_Summary_Repository"
+Cohesion: 0.06
+Nodes (5): Kiwi_Landing_Funnel_Daily_Summary_Repository, Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository, Kiwi_Landing_Funnel_Daily_Summary_Aggregation_Service, Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service, Kiwi_Statistics_Read_Repository_Interface
 
 ### Community 15 - "WP_REST_Request"
 Cohesion: 0.06
-Nodes (32): Kiwi_Device_Context_Normalizer, Kiwi_Landing_Handoff_Event_Repository, Kiwi_Landing_Kpi_Summary_Repository, Kiwi_Landing_Page_Session_Repository, {closure#105}(), {closure#106}(), {closure#107}(), {closure#108}() (+24 more)
+Nodes (36): Kiwi_Device_Context_Normalizer, Kiwi_Landing_Handoff_Event_Repository, Kiwi_Landing_Kpi_Summary_Repository, Kiwi_Landing_Page_Session_Repository, {closure#105}(), {closure#106}(), {closure#108}(), {closure#125}() (+28 more)
 
-### Community 16 - "retention-archive-health-tests.php"
-Cohesion: 0.06
-Nodes (11): {closure#1}(), {closure#18}(), {closure#25}(), {closure#30}(), {closure#41}(), {closure#43}(), {closure#6}(), {closure#79}() (+3 more)
+### Community 16 - "AGENTS_backup_before_Matt_Pocock.md"
+Cohesion: 0.07
+Nodes (27): 1. Role & Collaboration Contract, 2.1 No temporary patches, 2.2 Think reusable before specific, 2.3 Normalize data and concepts, 2.4 Separate business logic from aggregator details, 2.5 Minimize context usage, 2.6 Do not assume, 2. Core Principles (+19 more)
 
 ### Community 17 - "Kiwi_Test_Premium_Sms_Fraud_Signal_Repository"
-Cohesion: 0.05
-Nodes (39): Kiwi_Premium_Sms_Fraud_Monitor_Service, Kiwi_Premium_Sms_Fraud_Signal_Repository, Kiwi_Sms_Body_Variant_Repository, {closure#47}(), {closure#100}(), {closure#101}(), {closure#102}(), {closure#103}() (+31 more)
+Cohesion: 0.07
+Nodes (30): Kiwi_Premium_Sms_Fraud_Monitor_Service, Kiwi_Premium_Sms_Fraud_Signal_Repository, Kiwi_Sms_Body_Variant_Repository, {closure#47}(), {closure#100}(), {closure#101}(), {closure#102}(), {closure#103}() (+22 more)
 
 ### Community 18 - "kiwi_retention_archive_health.py"
 Cohesion: 0.08
@@ -418,7 +405,7 @@ Nodes (34): contextlib, datetime, Exception, ipaddress, math, pwd, re, selectors
 
 ### Community 19 - "kiwi_assert_contains"
 Cohesion: 0.07
-Nodes (35): Kiwi_Landing_Funnel_Daily_Summary_Repository, {closure#110}(), {closure#113}(), {closure#130}(), {closure#131}(), {closure#132}(), {closure#133}(), {closure#137}() (+27 more)
+Nodes (37): Kiwi_Landing_Funnel_Daily_Summary_Repository, {closure#3}(), {closure#110}(), {closure#113}(), {closure#130}(), {closure#131}(), {closure#132}(), {closure#133}() (+29 more)
 
 ### Community 21 - "Kiwi_Retention_Sqlite_Archive_Service"
 Cohesion: 0.11
@@ -436,9 +423,9 @@ Nodes (41): Callback acknowledgement rule, Callback payload summary, closeSessio
 Cohesion: 0.07
 Nodes (4): Kiwi_Retention_Archive_Lock, Kiwi_Retention_Archive_Lock_Handle, Kiwi_Retention_Archive_Name, Kiwi_Retention_Archive_Write_Block
 
-### Community 25 - "kiwi_assert_true"
-Cohesion: 0.12
-Nodes (40): {closure#15}(), {closure#17}(), {closure#20}(), {closure#21}(), {closure#22}(), {closure#3}(), {closure#31}(), {closure#35}() (+32 more)
+### Community 25 - "retention-archive-health-tests.php"
+Cohesion: 0.04
+Nodes (83): kiwi_test_corruption_gate(), {closure#1}(), {closure#10}(), {closure#13}(), {closure#14}(), {closure#15}(), {closure#16}(), {closure#17}() (+75 more)
 
 ### Community 26 - "TODO"
 Cohesion: 0.05
@@ -454,27 +441,27 @@ Nodes (32): base64, collections, csv, gzip, hashlib, json, os, pathlib (+24 more
 
 ### Community 30 - "Kiwi_Db_Connect_Warning_Context_Diagnostic"
 Cohesion: 0.06
-Nodes (9): DateTimeInterface, {closure#1}(), {closure#10}(), {closure#11}(), {closure#2}(), {closure#3}(), {closure#8}(), Kiwi_Db_Connect_Warning_Context_Diagnostic (+1 more)
+Nodes (8): DateTimeInterface, {closure#1}(), {closure#10}(), {closure#11}(), {closure#2}(), {closure#8}(), Kiwi_Db_Connect_Warning_Context_Diagnostic, DateTimeImmutable
 
 ### Community 31 - "Database Migrations"
 Cohesion: 0.05
 Nodes (36): Additive change, Database Migrations, Deployment ordering, Destructive change, Failure handling, Hard runtime boundary, Issue #103 historical event, Landing-session engagement table rename (+28 more)
 
-### Community 32 - "Kiwi_Plugin"
-Cohesion: 0.09
-Nodes (7): Kiwi_Plugin, Kiwi_Frontend_Auth_Gate, Kiwi_Landing_Session_Raw_Context_Compaction_Service, {closure#200}(), {closure#258}(), {closure#259}(), Kiwi_Test_Plugin_Performance_Gates
+### Community 33 - "Kiwi_Landing_Session_Engagements_Migration_Service"
+Cohesion: 0.06
+Nodes (5): get_option(), update_option(), Kiwi_Database_Deployment_Service, Kiwi_Landing_Session_Engagements_Migration_Service, Kiwi_Sms_Body_Variant_Allocation_Version_Migration_Service
 
-### Community 34 - "Kiwi_Test_Operational_Event_Repository"
+### Community 35 - "AGENTS_backup_before_Update_2026-11-12.md"
 Cohesion: 0.07
-Nodes (19): {closure#3}(), Kiwi_Test_Interleaved_Operational_Event_Repository, {closure#129}(), {closure#323}(), {closure#327}(), {closure#328}(), {closure#329}(), {closure#330}() (+11 more)
+Nodes (27): 1. Role & Collaboration Contract, 2.1 No temporary patches, 2.2 Think reusable before specific, 2.3 Normalize data and concepts, 2.4 Separate business logic from aggregator details, 2.5 Minimize context usage, 2.6 Do not assume, 2. Core Principles (+19 more)
 
-### Community 35 - "Kiwi_Database_Deployment_Service"
-Cohesion: 0.13
-Nodes (3): get_option(), Kiwi_Database_Deployment_Service, Kiwi_Sms_Body_Variant_Allocation_Version_Migration_Service
+### Community 36 - "Kiwi_Click_Attribution_Repository"
+Cohesion: 0.07
+Nodes (3): Kiwi_Click_Attribution_Repository, Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service, Kiwi_Tracking_Capture_Service
 
 ### Community 37 - "Kiwi_Retention_Archive_Check_Supervisor"
-Cohesion: 0.16
-Nodes (19): Kiwi_Retention_Archive_Check_Supervisor, kiwi_test_health_controller(), {closure#11}(), {closure#23}(), {closure#27}(), {closure#55}(), {closure#57}(), {closure#59}() (+11 more)
+Cohesion: 0.10
+Nodes (21): Kiwi_Retention_Archive_Check_Supervisor, kiwi_test_health_controller(), Kiwi_Test_Health_State_Wpdb, {closure#11}(), {closure#25}(), {closure#41}(), {closure#43}(), {closure#55}() (+13 more)
 
 ### Community 38 - "class-retention-archive-health-service.php"
 Cohesion: 0.18
@@ -482,55 +469,51 @@ Nodes (9): {closure#1}(), {closure#10}(), {closure#12}(), {closure#2}(), {closur
 
 ### Community 39 - "database-deployment-tests.php"
 Cohesion: 0.10
-Nodes (9): {closure#18}(), {closure#19}(), {closure#21}(), {closure#24}(), {closure#27}(), {closure#30}(), {closure#33}(), {closure#6}() (+1 more)
-
-### Community 41 - "kiwi_test_corruption_gate"
-Cohesion: 0.20
-Nodes (14): kiwi_test_corruption_gate(), {closure#33}(), {closure#34}(), {closure#38}(), {closure#39}(), {closure#40}(), {closure#42}(), {closure#45}() (+6 more)
+Nodes (10): {closure#19}(), {closure#21}(), {closure#24}(), {closure#27}(), {closure#30}(), {closure#33}(), {closure#43}(), {closure#45}() (+2 more)
 
 ### Community 42 - "MOBIVAS / LILY MOBILE Greece PSMS Subscription Integration"
 Cohesion: 0.06
 Nodes (31): 1) Subscription initiation, 2) Outbound MT sending, 3) MO callback handling, 4) Delivery reports, 5) Unsubscription, 6) HLR lookup, Concrete flow for this setup, Credentials and configuration (+23 more)
 
 ### Community 43 - "Kiwi_Retention_Archive_Health_Controller"
-Cohesion: 0.14
-Nodes (7): {closure#1}(), {closure#3}(), {closure#4}(), {closure#5}(), Kiwi_Retention_Archive_Health_Controller, DateTimeImmutable, Kiwi_Retention_Archive_Lock
+Cohesion: 0.12
+Nodes (7): Kiwi_Database_Lock_Guard, {closure#1}(), {closure#3}(), {closure#4}(), {closure#5}(), Kiwi_Retention_Archive_Health_Controller, DateTimeImmutable
 
 ### Community 45 - "Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service"
 Cohesion: 0.09
 Nodes (14): Kiwi_Landing_Session_Raw_Context_Compaction_Service, {closure#188}(), {closure#189}(), {closure#190}(), {closure#191}(), {closure#192}(), {closure#193}(), {closure#194}() (+6 more)
 
-### Community 46 - "Kiwi_Dimoco_Blacklister_Shortcode"
-Cohesion: 0.13
-Nodes (9): Kiwi_Dimoco_Blacklister_Shortcode, esc_textarea(), get_transient(), sanitize_text_field(), selected(), set_transient(), wp_nonce_field(), wp_unslash() (+1 more)
+### Community 46 - "Kiwi_Dimoco_Refunder_Shortcode"
+Cohesion: 0.15
+Nodes (9): Kiwi_Dimoco_Refunder_Shortcode, esc_textarea(), get_transient(), sanitize_text_field(), selected(), set_transient(), wp_nonce_field(), wp_unslash() (+1 more)
 
 ### Community 47 - "retention-archive-state-integration-tests.php"
-Cohesion: 0.07
-Nodes (9): aht_connection(), aht_spawn_source(), aht_stop_source(), aht_transport(), {closure#27}(), {closure#3}(), {closure#31}(), {closure#34}() (+1 more)
+Cohesion: 0.06
+Nodes (16): aht_connection(), aht_service(), aht_spawn_source(), aht_stop_source(), aht_transport(), Archive_Health_Test_Database, {closure#2}(), {closure#25}() (+8 more)
 
 ### Community 48 - "Kiwi_Test_Database_Deployment_Wpdb"
-Cohesion: 0.18
-Nodes (21): Kiwi_Database_Deployment_Service, {closure#10}(), {closure#11}(), {closure#12}(), {closure#13}(), {closure#14}(), {closure#15}(), {closure#16}() (+13 more)
+Cohesion: 0.20
+Nodes (19): Kiwi_Database_Deployment_Service, {closure#10}(), {closure#11}(), {closure#12}(), {closure#13}(), {closure#14}(), {closure#15}(), {closure#16}() (+11 more)
 
 ### Community 49 - "Kiwi_Test_Hlr_Lookup_Shortcode"
-Cohesion: 0.11
-Nodes (17): Kiwi_Dimoco_Callback_Operator_Lookup_Repository, Kiwi_Hlr_Lookup_Shortcode, Kiwi_Operator_Lookup_Batch_Service, {closure#289}(), {closure#291}(), {closure#293}(), {closure#294}(), {closure#295}() (+9 more)
+Cohesion: 0.05
+Nodes (29): Kiwi_Dimoco_Callback_Blacklist_Repository, Kiwi_Dimoco_Callback_Operator_Lookup_Repository, Kiwi_Hlr_Lookup_Shortcode, Kiwi_Operator_Lookup_Batch_Service, {closure#280}(), {closure#281}(), {closure#287}(), {closure#288}() (+21 more)
 
 ### Community 50 - "manifest.json"
 Cohesion: 0.07
 Nodes (28): architecture, sha256, binutils_version, build_id, build_script_sha256, sha256, compiler, compiler_executable_sha256 (+20 more)
 
 ### Community 51 - "AGENTS.md"
-Cohesion: 0.07
-Nodes (27): 1. Role & Collaboration Contract, 2.1 No temporary patches, 2.2 Think reusable before specific, 2.3 Normalize data and concepts, 2.4 Separate business logic from aggregator details, 2.5 Minimize context usage, 2.6 Do not assume, 2. Core Principles (+19 more)
+Cohesion: 0.06
+Nodes (30): 1. Role & Collaboration Contract, 2.1 No temporary patches, 2.2 Think reusable before specific, 2.3 Normalize data and concepts, 2.4 Separate business logic from aggregator details, 2.5 Minimize context usage, 2.6 Do not assume, 2. Core Principles (+22 more)
 
 ### Community 53 - "Kiwi_Operational_Event_Service"
-Cohesion: 0.16
+Cohesion: 0.15
 Nodes (3): {closure#1}(), {closure#2}(), Kiwi_Operational_Event_Service
 
 ### Community 54 - "Kiwi_Retention_Corruption_Safety_Gate_Coordinator"
-Cohesion: 0.17
-Nodes (6): Kiwi_Retention_Archive_Lock, {closure#2}(), Kiwi_Retention_Corruption_Safety_Gate_Coordinator, Kiwi_Retention_Archive_Lock, Kiwi_Retention_Archive_Lock_Handle, Kiwi_Retention_Archive_Lock
+Cohesion: 0.15
+Nodes (7): Kiwi_Retention_Archive_Lock, Kiwi_Retention_Archive_Lock, {closure#2}(), Kiwi_Retention_Corruption_Safety_Gate_Coordinator, Kiwi_Retention_Archive_Lock, Kiwi_Retention_Archive_Lock_Handle, Kiwi_Retention_Archive_Lock
 
 ### Community 55 - "Kiwi_Landing_Pages_Gallery_Shortcode"
 Cohesion: 0.15
@@ -546,27 +529,19 @@ Nodes (12): copyTextToClipboard(), {closure#20}(), {closure#23}(), {closure#25}(
 
 ### Community 59 - "Kiwi_Test_Dimoco_Refunder_Shortcode"
 Cohesion: 0.10
-Nodes (9): Kiwi_Dimoco_Callback_Refund_Repository, Kiwi_Dimoco_Refund_Batch_Service, Kiwi_Dimoco_Refunder_Shortcode, {closure#288}(), {closure#292}(), Kiwi_Test_Dimoco_Refund_Batch_Service, Kiwi_Test_Dimoco_Refunder_Shortcode, Kiwi_Test_Noop_Refund_Batch_Service (+1 more)
+Nodes (6): Kiwi_Dimoco_Callback_Refund_Repository, Kiwi_Dimoco_Refund_Batch_Service, Kiwi_Dimoco_Refunder_Shortcode, Kiwi_Test_Dimoco_Refund_Batch_Service, Kiwi_Test_Dimoco_Refunder_Shortcode, Kiwi_Test_Refund_Callback_Repository
 
 ### Community 62 - "retention-archive-freshness-tests.php"
-Cohesion: 0.16
-Nodes (13): {closure#10}(), {closure#12}(), {closure#13}(), {closure#14}(), {closure#4}(), {closure#5}(), {closure#7}(), {closure#8}() (+5 more)
-
-### Community 63 - "Kiwi_Test_Dimoco_Blacklister_Shortcode"
-Cohesion: 0.10
-Nodes (7): Kiwi_Dimoco_Blacklister_Shortcode, Kiwi_Dimoco_Callback_Blacklist_Repository, {closure#287}(), {closure#290}(), Kiwi_Test_Blacklist_Callback_Repository, Kiwi_Test_Dimoco_Blacklister_Shortcode, Kiwi_Test_Noop_Blacklist_Batch_Service
+Cohesion: 0.14
+Nodes (14): {closure#10}(), {closure#12}(), {closure#14}(), {closure#4}(), {closure#5}(), {closure#7}(), {closure#8}(), {closure#9}() (+6 more)
 
 ### Community 64 - ".run"
 Cohesion: 0.20
 Nodes (8): ArchiveHealthRunner, file_identity(), fingerprint(), json_bytes(), live_process_group(), open_private(), valid_time(), write_handoff()
 
 ### Community 65 - "Retention Architecture"
-Cohesion: 0.12
-Nodes (20): Validated external archive health results, Archive-before-delete and Source-ID receipts, Archive-before-delete contract, Components and boundaries, Deliberate exclusions, Generation-bound archive health pending protection, Lean archive-health capability, Manual recovery (+12 more)
-
-### Community 68 - "Kiwi_Sms_Body_Variant_Service"
-Cohesion: 0.17
-Nodes (3): Kiwi_Nth_Primary_Cta_Adapter, Kiwi_Sms_Body_Variant_Service, Kiwi_Landing_Primary_Cta_Adapter_Interface
+Cohesion: 0.13
+Nodes (19): Validated external archive health results, Archive-before-delete and Source-ID receipts, Archive-before-delete contract, Components and boundaries, Deliberate exclusions, Generation-bound archive health pending protection, Lean archive-health capability, Manual recovery (+11 more)
 
 ### Community 70 - "landing-session-engagements-migration-tests.php"
 Cohesion: 0.13
@@ -575,6 +550,10 @@ Nodes (4): Kiwi_Test_Landing_Session_Engagements_Migration_Command_Service, kiwi
 ### Community 71 - "Configuration Reference"
 Cohesion: 0.11
 Nodes (18): Attribution and postbacks, Configuration location, Configuration Reference, Frontend tools auth, Landing-page loading, Landing telemetry, SMS variants, and analytics, Not here, NTH callback observability (+10 more)
+
+### Community 73 - "Codex Planner Report"
+Cohesion: 0.12
+Nodes (16): Abnahme nach erfolgreichem Merge, Codex Planner Report, Dokumentation, Empfohlene Tests, Empfohlener Implementierungsplan, Entscheidungen, Ergebnis, Issue #72 – Planung: sichere Retention für Engagement-Daten (+8 more)
 
 ### Community 78 - "Kiwi_Test_Dimoco_Blacklist_Batch_Service"
 Cohesion: 0.20
@@ -600,20 +579,16 @@ Nodes (15): Adding a landing route, Conversion and attribution behavior, Deploym
 Cohesion: 0.26
 Nodes (6): Kiwi_Dimoco_Client, is_wp_error(), WP_Error, wp_remote_post(), wp_remote_retrieve_body(), wp_remote_retrieve_response_code()
 
-### Community 86 - "{closure#205}"
-Cohesion: 0.17
-Nodes (7): {closure#186}(), {closure#205}(), {closure#206}(), {closure#209}(), Kiwi_Test_Retention_Sqlite_Archive_Config, Kiwi_Test_Wpdb_Retention_Sqlite_Archive, query()
+### Community 86 - "Tiny Worlds Issue #1: Tracking mit Odin"
+Cohesion: 0.15
+Nodes (12): 1. Neukunde über eine Odin-Landing-Page, 2. Top-up aus Tiny Worlds, Ausgangspunkt und Leitplanken des Nutzers, Beabsichtigte Nutzerwege, Geprüfter Ist-Zustand im Repository, Idee: Tiny Worlds bei neuen Issue-Kommentaren gezielt ansprechen, Im Issue veröffentlichte Odin-Fragen, Nächster Schritt (+4 more)
 
 ### Community 88 - "NTH FR One-off"
 Cohesion: 0.13
 Nodes (15): Billing Rules, Implementation Checklist, Mandatory content-message rule, Not here, NTH FR One-off, Open Questions, Operator / NWC Mapping, Read when (+7 more)
 
-### Community 90 - "wp_json_encode"
-Cohesion: 0.25
-Nodes (5): Kiwi_Nth_Flow_Transaction_Repository, {closure#274}(), {closure#275}(), {closure#277}(), wp_json_encode()
-
 ### Community 91 - "Entscheidungen und ihre Gründe"
-Cohesion: 0.14
+Cohesion: 0.13
 Nodes (14): D-001 — User-Flow und Sales vor perfekter abgeleiteter Statistik, D-002 — Assignment/Event und Summary hier nicht gemeinsam neu absichern, D-003 — Französische Verteilung an der NTH-Integration konfigurieren, D-004 — Einmalige Migration und dauerhafte Zielprüfung trennen, D-005 — Detailprüfungen gezielt aktivieren, D-006 — Vorbereitung und neue Verteilung in zwei Stufen, D-007 — Online vorbereiten, bei belegter Sperre abbrechen, D-008 — Backup bereithalten, nicht routinemäßig zurückspielen (+6 more)
 
 ### Community 92 - "Click Attribution and Conversion Postbacks"
@@ -632,10 +607,6 @@ Nodes (14): Actions, add-blocklist, check-blocklist, close-subscription, custome
 Cohesion: 0.20
 Nodes (8): Kiwi_Sms_Body_Variant_Allocation_Version_Migration_Service, {closure#36}(), {closure#37}(), {closure#38}(), {closure#40}(), kiwi_test_sms_contract(), Kiwi_Test_Sms_Migration_Service, Kiwi_Test_Sms_Migration_Wpdb
 
-### Community 99 - "Archive_Health_Test_Database"
-Cohesion: 0.22
-Nodes (7): aht_service(), Archive_Health_Test_Database, {closure#2}(), {closure#25}(), {closure#6}(), {closure#8}(), PDO
-
 ### Community 100 - "Capability Matrix"
 Cohesion: 0.15
 Nodes (12): Capability Matrix, Current matrix, Dimoco, Lily, Maintenance rules, Not here, Notes, NTH (+4 more)
@@ -644,21 +615,13 @@ Nodes (12): Capability Matrix, Current matrix, Dimoco, Lily, Maintenance rules, 
 Cohesion: 0.15
 Nodes (12): Agent support for new setups, Configuration ownership, Credentials and Environments, Current setup, Environment pattern, Landing-page multi-domain operations, No real secrets in repository documentation, Not here (+4 more)
 
-### Community 102 - "dbDelta"
-Cohesion: 0.22
-Nodes (3): Kiwi_Dimoco_Callback_Verifier, Kiwi_Dimoco_Callback_Refund_Repository, dbDelta()
-
 ### Community 105 - "Kiwi_Dimoco_Blacklist_Batch_Service"
 Cohesion: 0.19
 Nodes (6): Kiwi_Dimoco_Blacklist_Batch_Service, Kiwi_Dimoco_Callback_Operator_Lookup_Repository, Kiwi_Dimoco_Client, Kiwi_Dimoco_Response_Parser, Kiwi_Msisdn_Normalizer, Kiwi_Operator_Lookup_Service
 
 ### Community 106 - "Kiwi_Msisdn_Normalizer"
-Cohesion: 0.17
-Nodes (4): Kiwi_Msisdn_Normalizer, Kiwi_Operator_Lookup_Service, Kiwi_Hlr_Service, Kiwi_Lily_Hlr_Provider
-
-### Community 107 - "Agent collaboration and architecture instructions"
-Cohesion: 0.21
-Nodes (12): Aggregator integration boundary, Agent collaboration and architecture instructions, Agent documentation navigation, GitHub flow mode, Reusable internal capability contracts, Local coding mode, Matt Pocock workflow, Agent domain documentation conventions (+4 more)
+Cohesion: 0.12
+Nodes (5): Kiwi_Msisdn_Normalizer, Kiwi_Operator_Lookup_Batch_Service, Kiwi_Operator_Lookup_Service, Kiwi_Hlr_Service, Kiwi_Lily_Hlr_Provider
 
 ### Community 108 - "archive-health-vps-tests.py"
 Cohesion: 0.17
@@ -684,13 +647,9 @@ Nodes (6): {closure#1}(), {closure#2}(), {closure#3}(), {closure#4}(), Kiwi_Land
 Cohesion: 0.35
 Nodes (11): MyJoyplay FR 2 Landing Page, KIWI Primary CTA Href, MyJoyplay FR 3 Landing Page, JPLAY One-off SMS Activation, MyJoyplay FR 4 Responsive Image Preload Test Landing Page, MyJoyplay FR 4 Landing Page, MyJoyplay FR 5 Landing Page, MyJoyplay FR 5 V2 Landing Page (+3 more)
 
-### Community 121 - "{closure#280}"
-Cohesion: 0.22
-Nodes (5): {closure#280}(), {closure#281}(), Kiwi_Test_Insert_Blacklist_Callback_Repository, Kiwi_Test_Insert_Operator_Lookup_Callback_Repository, Kiwi_Test_Insert_Refund_Callback_Repository
-
 ### Community 123 - "Documentation Index"
-Cohesion: 0.20
-Nodes (9): docs/INDEX.md, Documentation areas, Documentation Index, Documentation maintenance rules, Not here, Read when, Retention documentation routing, Source of truth for (+1 more)
+Cohesion: 0.14
+Nodes (11): Domain docs, Grundoperationen, Issue tracker: GitHub, Wayfinder, Documentation areas, Documentation Index, Documentation maintenance rules, Not here (+3 more)
 
 ### Community 124 - "Operational Events"
 Cohesion: 0.20
@@ -723,6 +682,10 @@ Nodes (9): 1. Landing-page discovery and CTA, 2. MO keyword submission, 3. MO ca
 ### Community 138 - "codex-task.md"
 Cohesion: 0.22
 Nodes (8): Akzeptanzkriterien, Empfohlene Issue Projekt-custom-fields:, Erwartetes Verhalten, Hintergrund, Hinweise für Codex, Manuelle Tests, Nicht-Ziele, Ziel
+
+### Community 140 - "current_time"
+Cohesion: 0.29
+Nodes (3): Kiwi_Landing_Kpi_Summary_Repository, current_time(), dbDelta()
 
 ### Community 141 - "{closure#272}"
 Cohesion: 0.25
@@ -788,7 +751,7 @@ Nodes (6): Attribution and affiliate postback boundary, Callback Contract for Th
 Cohesion: 0.33
 Nodes (5): Akzeptanzkriterien, Aufgabe, Kontext / relevante Dateien, Nicht ändern, Validierung
 
-### Community 164 - "Kiwi Backend overview"
+### Community 164 - "Operations documentation index"
 Cohesion: 0.40
 Nodes (5): Backend changelog, VPS archive health verification capability, Operations documentation index, Backend regression tests, Kiwi Backend overview
 
@@ -821,8 +784,8 @@ Cohesion: 0.40
 Nodes (4): Kiwi_Dimoco_Client, Kiwi_Dimoco_Response_Parser, Kiwi_Msisdn_Normalizer, Kiwi_Operator_Lookup_Service
 
 ### Community 174 - "kiwi_assert_same"
-Cohesion: 0.10
-Nodes (32): {closure#19}(), {closure#111}(), {closure#135}(), {closure#184}(), {closure#210}(), {closure#211}(), {closure#212}(), {closure#213}() (+24 more)
+Cohesion: 0.08
+Nodes (34): Kiwi_Test_Failing_Archive_Discovery_Service, Kiwi_Test_Failing_Archive_State_Run_Repository, {closure#1}(), {closure#2}(), {closure#3}(), {closure#4}(), {closure#5}(), {closure#111}() (+26 more)
 
 ### Community 175 - "Documentation Model"
 Cohesion: 0.50
@@ -871,14 +834,6 @@ Nodes (3): Documentation, Kiwi Backend (mVAS), Quick test
 ### Community 188 - "Archive health read brake bundle"
 Cohesion: 0.67
 Nodes (4): Local archive-copy read brake measurements, Archive health read brake local evidence, Archive health read brake bundle, Linux native archive health read brake
-
-### Community 189 - ".release"
-Cohesion: 0.15
-Nodes (18): Kiwi_Retention_Archive_Lock, {closure#10}(), {closure#13}(), {closure#14}(), {closure#16}(), {closure#26}(), {closure#29}(), {closure#49}() (+10 more)
-
-### Community 190 - "Confirmed Sale notification for Tiny Worlds"
-Cohesion: 0.83
-Nodes (4): Confirmed Sale notification for Tiny Worlds, Tiny Worlds tracking with Odin planning, NTH France one-off Premium SMS flow, Top-up tracking reference
 
 ### Community 191 - "PROTOTYPE — Retention-Recovery-Zustandsmodell"
 Cohesion: 0.50
@@ -936,45 +891,37 @@ Nodes (3): DIMOCO Asynchronous Payment Callback, DIMOCO Austria Click/TAN Subscr
 Cohesion: 1.00
 Nodes (3): NTH FR MT-billed One-off Flow, NTH FR One-off Compliance Requirements, NTH FR One-off Service Program Rules
 
-### Community 206 - "Issue 72 engagement retention planning"
-Cohesion: 0.67
-Nodes (3): Main and TK-zone daily engagement coverage, Issue 72 engagement retention planning, Live session protection
-
-### Community 309 - "kiwi_test_attempt_service"
-Cohesion: 0.21
-Nodes (14): kiwi_test_attempt_service(), {closure#1}(), {closure#10}(), {closure#12}(), {closure#13}(), {closure#14}(), {closure#15}(), {closure#3}() (+6 more)
+### Community 309 - "retention-archive-result-tests.php"
+Cohesion: 0.18
+Nodes (12): {closure#1}(), {closure#10}(), {closure#12}(), {closure#13}(), {closure#14}(), {closure#19}(), {closure#3}(), {closure#5}() (+4 more)
 
 ### Community 312 - "kiwi_test_health_transport"
-Cohesion: 0.31
-Nodes (9): {closure#1}(), {closure#2}(), {closure#3}(), {closure#4}(), {closure#5}(), {closure#6}(), {closure#7}(), {closure#8}() (+1 more)
-
-### Community 313 - "Kiwi_Retention_Archive_Read_Indexes_Command"
-Cohesion: 0.39
-Nodes (3): {closure#1}(), Kiwi_Retention_Archive_Read_Indexes_Command, Kiwi_Retention_Archive_Read_Indexes_Command_Namespace
+Cohesion: 0.36
+Nodes (8): {closure#15}(), {closure#1}(), {closure#2}(), {closure#3}(), {closure#6}(), {closure#7}(), {closure#8}(), kiwi_test_health_transport()
 
 ### Community 315 - ".__construct"
-Cohesion: 0.33
-Nodes (3): Kiwi_Retention_Coverage_Gate, Kiwi_Retention_Table_Growth_Snapshot_Repository, Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator
+Cohesion: 0.22
+Nodes (5): Kiwi_Retention_Archive_Lock, Kiwi_Retention_Coverage_Gate, Kiwi_Retention_Table_Growth_Snapshot_Repository, Kiwi_Test_Archive_Lock_Probe, Kiwi_Test_Retention_Corruption_Safety_Gate_Coordinator
 
 ## Knowledge Gaps
-- **685 isolated node(s):** `WP_REST_Server`, `Kiwi_Retention_Archive_Read_Indexes_Command_Namespace`, `Kiwi_WP_CLI_Command_Namespace`, `Current matrix`, `Dimoco` (+680 more)
+- **749 isolated node(s):** `1. Role & Collaboration Contract`, `2.1 No temporary patches`, `2.2 Think reusable before specific`, `2.3 Normalize data and concepts`, `2.4 Separate business logic from aggregator details` (+744 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **141 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **144 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Kiwi_Config` connect `Kiwi_Config` to `retention-engagement-tests.php`, `Kiwi_Test_Config`, `Kiwi_Device_Context_Normalizer`, `Kiwi_Landing_Page_Router`, `Kiwi_Test_Retention_Cleanup_Run_Repository`, `Kiwi_Routed_Operator_Lookup_Provider`, `Kiwi_Landing_Kpi_Rest_Routes`, `Kiwi_Affiliate_Postback_Dispatcher`, `kiwi_assert_true`, `Kiwi_Plugin`, `Kiwi_Test_Operational_Event_Repository`, `Kiwi_Premium_Sms_Mo_Engagement_Evaluator_Service`, `Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service`, `.__construct`, `Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service`, `Kiwi_Landing_Session_Raw_Context_Compaction_Service`, `Kiwi_Retention_Corruption_Safety_Gate_Coordinator`, `.__construct`, `.__construct`, `Kiwi_Test_Dimoco_Refunder_Shortcode`, `.__construct`, `.release`, `Kiwi_Test_Dimoco_Blacklister_Shortcode`, `Kiwi_Sms_Body_Variant_Service`, `Kiwi_Nth_Premium_Sms_Normalizer`, `Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Repository`, `Kiwi_Landing_Funnel_Daily_Tkzone_Summary_Aggregation_Service`, `Kiwi_Premium_Sms_Fraud_Shortcode`, `{closure#205}`, `Kiwi_Landing_Page_Gallery_Service`, `dbDelta`, `current_time`, `Kiwi_Dimoco_Blacklist_Batch_Service`, `Kiwi_Msisdn_Normalizer`, `Kiwi_Dimoco_Response_Parser`, `Kiwi_Lily_Response_Parser`, `Kiwi_Nth_Client`, `.__construct`, `Kiwi_Operational_Event_Cleanup_Service`?**
-  _High betweenness centrality (0.143) - this node is a cross-community bridge._
-- **Why does `kiwi_assert_same()` connect `kiwi_assert_same` to `run-tests.php`, `Kiwi_Test_Config`, `retention-archive-attempt-tests.php`, `Kiwi_Test_Wpdb_Sms_Body_Variant`, `Kiwi_Test_Retention_Cleanup_Run_Repository`, `Kiwi_Test_Click_Attribution_Repository`, `kiwi-retention-archive-health.php`, `{closure#272}`, `WP_REST_Request`, `retention-archive-health-tests.php`, `Kiwi_Test_Premium_Sms_Fraud_Signal_Repository`, `kiwi_assert_contains`, `Kiwi_Retention_Sqlite_Archive_Service`, `kiwi_assert_true`, `Kiwi_Db_Connect_Warning_Context_Diagnostic`, `Kiwi_Plugin`, `Kiwi_Test_Operational_Event_Repository`, `Kiwi_Retention_Archive_Check_Supervisor`, `database-deployment-tests.php`, `kiwi_test_corruption_gate`, `Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service`, `Kiwi_Test_Database_Deployment_Wpdb`, `Kiwi_Test_Hlr_Lookup_Shortcode`, `kiwi_test_attempt_service`, `kiwi_test_health_transport`, `WP_CLI`, `Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh`, `Kiwi_Test_Dimoco_Refunder_Shortcode`, `Kiwi_Test_Freshness_Event_Repository`, `retention-archive-freshness-tests.php`, `.release`, `retention-archive-retirement-tests.php`, `Kiwi_Test_Dimoco_Blacklister_Shortcode`, `Kiwi_Test_Dimoco_Blacklist_Batch_Service`, `{closure#205}`, `Kiwi_Retention_Source_Registry`, `wp_json_encode`, `Kiwi_Test_Sms_Migration_Wpdb`, `{closure#280}`?**
-  _High betweenness centrality (0.102) - this node is a cross-community bridge._
-- **Why does `wp_json_encode()` connect `wp_json_encode` to `run-tests.php`, `Kiwi_Dimoco_Callback_Operator_Lookup_Repository`, `Kiwi_Device_Context_Normalizer`, `Kiwi_Landing_Page_Router`, `Kiwi_Sms_Body_Variant_Allocation_Version_Migration_Command`, `Kiwi_Test_Retention_Cleanup_Run_Repository`, `Kiwi_Landing_Kpi_Rest_Routes`, `Kiwi_Dimoco_Callback_Blacklist_Repository`, `Kiwi_Nth_Event_Repository`, `Kiwi_Nth_Fr_One_Off_Service`, `Kiwi_Database_Command`, `Kiwi_Sms_Body_Variant_Repository`, `Kiwi_Sales_Repository`, `Kiwi_Premium_Sms_Fraud_Signal_Repository`, `Kiwi_Nth_Premium_Sms_Normalizer`, `Kiwi_Landing_Handoff_Event_Repository`, `dbDelta`, `Kiwi_Nth_Client`, `.__construct`, `Kiwi_Landing_Session_Engagements_Migration_Command`?**
-  _High betweenness centrality (0.028) - this node is a cross-community bridge._
+- **Why does `Kiwi_Config` connect `Kiwi_Config` to `retention-engagement-tests.php`, `run-tests.php`, `kiwi_assert_true`, `Kiwi_Device_Context_Normalizer`, `Kiwi_Test_Retention_Cleanup_Run_Repository`, `Kiwi_Routed_Operator_Lookup_Provider`, `Kiwi_Landing_Kpi_Rest_Routes`, `Kiwi_Landing_Funnel_Daily_Summary_Repository`, `Kiwi_Dimoco_Callback_Blacklist_Repository`, `Kiwi_Retention_Coverage_Gate`, `Kiwi_Affiliate_Postback_Dispatcher`, `retention-archive-health-tests.php`, `Kiwi_Plugin`, `Kiwi_Click_Attribution_Repository`, `Kiwi_Premium_Sms_Landing_Engagement_Soft_Flag_Service`, `.__construct`, `Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service`, `Kiwi_Test_Hlr_Lookup_Shortcode`, `Kiwi_Landing_Session_Raw_Context_Compaction_Service`, `Kiwi_Retention_Corruption_Safety_Gate_Coordinator`, `.__construct`, `.__construct`, `Kiwi_Test_Dimoco_Refunder_Shortcode`, `.__construct`, `Kiwi_Test_Lean_Archive_Config`, `Kiwi_Sms_Body_Variant_Service`, `Kiwi_Nth_Premium_Sms_Normalizer`, `Kiwi_Premium_Sms_Fraud_Monitor_Service`, `Kiwi_Premium_Sms_Fraud_Shortcode`, `Kiwi_Landing_Page_Gallery_Service`, `Kiwi_Landing_Kpi_Service`, `Kiwi_Dimoco_Blacklist_Batch_Service`, `Kiwi_Msisdn_Normalizer`, `.__construct`, `Kiwi_Dimoco_Response_Parser`, `Kiwi_Lily_Response_Parser`, `Kiwi_Nth_Client`, `Kiwi_Operational_Event_Cleanup_Service`?**
+  _High betweenness centrality (0.180) - this node is a cross-community bridge._
+- **Why does `kiwi_assert_same()` connect `kiwi_assert_same` to `run-tests.php`, `kiwi_assert_true`, `kiwi_test_attempt_service`, `Kiwi_Test_Wpdb_Sms_Body_Variant`, `Kiwi_Test_Retention_Cleanup_Run_Repository`, `Kiwi_Test_Click_Attribution_Repository`, `{closure#272}`, `WP_REST_Request`, `Kiwi_Test_Premium_Sms_Fraud_Signal_Repository`, `kiwi_assert_contains`, `Kiwi_Retention_Sqlite_Archive_Service`, `retention-archive-health-tests.php`, `Kiwi_Db_Connect_Warning_Context_Diagnostic`, `Kiwi_Retention_Archive_Check_Supervisor`, `database-deployment-tests.php`, `Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service`, `Kiwi_Test_Database_Deployment_Wpdb`, `Kiwi_Test_Hlr_Lookup_Shortcode`, `retention-archive-result-tests.php`, `Kiwi_Retention_Archive_Health_Service`, `kiwi_test_health_transport`, `WP_CLI`, `Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh`, `retention-archive-freshness-tests.php`, `Kiwi_Test_Dimoco_Blacklist_Batch_Service`, `Kiwi_Test_Sms_Migration_Wpdb`, `{closure#202}`?**
+  _High betweenness centrality (0.092) - this node is a cross-community bridge._
+- **Why does `Kiwi_Plugin` connect `Kiwi_Plugin` to `.run_device_model_brand_harvest`, `Kiwi_Retention_Source_Registry`, `.header`, `.run_landing_session_raw_context_compaction_worker`, `Kiwi_Landing_Session_Engagements_Migration_Service`, `retention-engagement-tests.php`, `run-tests.php`, `Kiwi_Test_Plugin_Operational_Event_Cleanup`, `Kiwi_Test_Landing_Session_Raw_Context_Compaction_Service`, `Kiwi_Test_Database_Deployment_Wpdb`, `class-plugin.php`, `wp_schedule_event`, `{closure#202}`, `.enqueue_script_asset`, `Kiwi_Test_Plugin_Landing_Funnel_Daily_Summary_Refresh`, `.build_operational_event_cleanup_service`, `.run_landing_funnel_daily_summary_refresh_job`?**
+  _High betweenness centrality (0.043) - this node is a cross-community bridge._
 - **Are the 139 inferred relationships involving `kiwi_assert_same()` (e.g. with `{closure#10}()` and `{closure#11}()`) actually correct?**
   _`kiwi_assert_same()` has 139 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 56 inferred relationships involving `kiwi_assert_true()` (e.g. with `{closure#10}()` and `{closure#15}()`) actually correct?**
   _`kiwi_assert_true()` has 56 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `Kiwi_Config` (e.g. with `{closure#8}()` and `{closure#21}()`) actually correct?**
   _`Kiwi_Config` has 2 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `WP_REST_Server`, `Kiwi_Retention_Archive_Read_Indexes_Command_Namespace`, `Kiwi_WP_CLI_Command_Namespace` to the rest of the system?**
-  _706 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **What connects `1. Role & Collaboration Contract`, `2.1 No temporary patches`, `2.2 Think reusable before specific` to the rest of the system?**
+  _770 weakly-connected nodes found - possible documentation gaps or missing edges._
