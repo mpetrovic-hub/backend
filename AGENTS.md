@@ -307,3 +307,23 @@ Before handing work back to the user, summarize:
 
 Do not mark work as complete on behalf of the user.
 The user decides when a GitHub issue or implementation task is done.
+
+## Agent skills
+
+Bei einem ausdrücklich gestarteten Matt-Pocock-Workflow gelten die Schritte des
+aufgerufenen Skills und die Konfiguration unten. Für diesen Weg ist kein Kiwi
+Planner Report erforderlich. Die übrigen Sicherheits- und Freigaberegeln
+dieser Datei gelten weiterhin.
+
+### Issue tracker
+
+Wayfinder-Maps, Specs und Tickets liegen als GitHub Issues in
+`mpetrovic-hub/backend` und werden dem Projekt
+[@mpetrovic-hub's Odin (Matt Pocock Flow)](https://github.com/users/mpetrovic-hub/projects/3)
+zugeordnet. Siehe `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Das Repo nutzt ein gemeinsames `GLOSSARY.md`. Die Dokumentation wird über
+`docs/INDEX.md` erschlossen; bestehende Entscheidungen stehen in
+`DECISIONS.md`. Siehe `docs/agents/domain.md`.

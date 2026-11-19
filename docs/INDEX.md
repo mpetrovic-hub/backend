@@ -38,12 +38,14 @@ This is the agent-facing map for repository documentation. Human quick-start inf
 | Edge/VPS endpoint operations | `operations/vps-endpoint-runbook.md` | `operations/landing-page-runtime.md` |
 | Documentation maintenance | This `INDEX.md` | `../CHANGELOG.md` for durable behavior changes |
 | Domain vocabulary | `../GLOSSARY.md` | Relevant topic doc |
+| Matt Pocock agent workflow | [Agent issue tracker](agents/issue-tracker.md) | [Domain docs](agents/domain.md) |
 
 ## Documentation areas
 
 - `architecture/INDEX.md`: stable system contracts, boundaries, cross-cutting architecture.
 - `operations/INDEX.md`: production behavior, runbooks, configuration, troubleshooting.
 - `integrations/INDEX.md`: external Aggregator docs and Aggregator-specific setup references.
+- `agents/`: issue tracker and domain-documentation conventions for the Matt Pocock skills.
 
 ## Documentation maintenance rules
 
