@@ -108,6 +108,17 @@ Default sequence:
 4. Implement locally or prepare the GitHub flow.
 5. Validate, document, and hand off.
 
+### Cloud checkout freshness
+
+At the start of each new coding task, before detailed code reads or planning,
+run `bash tools/environment/sync-main.sh --update`.
+Read the reported base commit, GitHub main commit, and status.
+If the update is blocked or fails, preserve local work and report the reason;
+do not discard, stash, commit, rebase, or merge local work automatically.
+Keep the checkout stable while the task is in progress.
+Before final validation or handoff, run the script with `--check` and record the
+tested commit; report if GitHub main has advanced without changing the tested code.
+
 ### 5.1 Brainstorming
 
 Use brainstorming for unclear, non-trivial, architectural, domain-heavy, or workflow-sensitive tasks.
