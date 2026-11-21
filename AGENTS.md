@@ -56,6 +56,7 @@ Use these primary navigation entry points before planning or changing code:
 - Domain language or unclear domain terms: read `GLOSSARY.md`.
 - General documentation navigation: start with `docs/INDEX.md`.
 - Area-specific work: follow the relevant area `INDEX.md` file before opening individual documentation files.
+- Read the relevant entries in [`DECISIONS.md`](DECISIONS.md) before planning non-trivial work or revisiting an existing design, business rule, or operational practice. Verify whether the recorded decisions still apply to the current task.
 
 Do not duplicate the full documentation map inside `AGENTS.md`.
 
@@ -64,130 +65,15 @@ Do not duplicate the full documentation map inside `AGENTS.md`.
 ## 4. Domain Language & Glossary Rules
 
 Use repository-defined domain language consistently.
-When a domain term is unclear, check `GLOSSARY.md` before interpreting, planning, naming, or coding.
+When a domain term is unclear, check [`GLOSSARY.md`](GLOSSARY.md) before interpreting, planning, naming, or coding.
 `Aggregator` is the standard term for a partner/provider integrating with one or more MNOs.
 Do not use `provider`, `partner`, `carrier`, or `operator` as synonyms for `Aggregator` unless the distinction is intentional, already present in existing code/docs, or explicitly documented.
-
-Important domain terms include:
-
-- mVAS
-- MSISDN
-- Aggregator
-- MNO
-- Carrier
-- Operator
-- Billing
-- Flow
-- PIN-flow
-- Click-flow
-- Web2sms-flow
-- Click2sms-flow
-- Carrier Billing
-- Premium-SMS
-- One-off
-- Dimoco
-- Lily
-- NTH
-
-Do not invent new domain terms when an existing glossary term fits.
-
-If a name or concept might be aggregator-specific, country-specific, operator-specific, billing-specific, or flow-specific, verify that distinction before using it in table names, column names, contracts, services, docs, or user-facing explanations.
 
 ---
 
 ## 5. Workflow
 
-Use the workflow that matches the size, risk, and uncertainty of the task.
-Do not jump directly from a vague request to implementation.
-
-Default sequence:
-
-1. Brainstorm.
-2. Choose implementation mode.
-3. Plan according to the selected mode.
-4. Implement locally or prepare the GitHub flow.
-5. Validate, document, and hand off.
-
-### 5.1 Brainstorming
-
-Use brainstorming for unclear, non-trivial, architectural, domain-heavy, or workflow-sensitive tasks.
-
-During brainstorming:
-
-- discuss the problem, feature, bug, or code change with the user before planning implementation,
-- explain tradeoffs in plain language,
-- identify whether the change is generic or specific to an aggregator, country, operator, billing type, or flow,
-- call out assumptions, risks, open questions, and possible long-term consequences,
-- keep track of important decisions.
-
-For longer brainstorming sessions, keep key decisions in a short temporary Markdown file in the repository root.
-The temporary file should be clearly named, should not become permanent documentation by default, and should either be deleted, moved into proper documentation, or converted into follow-up work after the task is complete.
-
-### 5.2 Choose Implementation Mode
-
-After brainstorming and before detailed planning, clarify which implementation mode should be used.
-
-Use one of these modes:
-
-- Local coding mode
-- GitHub flow mode
-
-If the correct mode is unclear, ask the user before planning.
-
-### 5.3 Local Coding Mode
-
-Use local coding mode for small, low-risk, well-understood changes.
-
-In local coding mode:
-
-1. Enter planning mode.
-2. Produce a concise local implementation plan.
-3. Wait for user approval.
-4. Implement in the local checkout.
-5. Keep the diff focused.
-6. Update or create focused documentation where needed.
-7. Run relevant validation.
-8. Summarize what changed, what was validated, and what remains.
-9. Create a GitHub PR or issue + PR record after local implementation.
-
-When available, use `kiwi-github-code-record-v2` for recording the local code change on GitHub.
-If `kiwi-github-code-record-v2` is not available, use `kiwi-github-code-record`.
-
-### 5.4 GitHub Flow Mode
-
-Use GitHub flow mode for new capabilities, aggregator work, refactors, cross-module changes, architecture-sensitive work, or changes requiring external review or automation.
-
-In GitHub flow mode:
-
-1. Create the GitHub issue first using `kiwi-issues-in-github-creator`.
-2. Enter deeper planning after the issue exists.
-3. Run an interview-style planning round based on:
-   - the brainstorming decisions,
-   - unresolved questions,
-   - architecture risks,
-   - data-modeling risks,
-   - aggregator/country/operator/billing/flow boundaries,
-   - edge cases the agent identifies,
-   - testing strategy,
-   - documentation impact.
-4. Where possible and useful, validate assumptions with a small prototype or targeted test before finalizing the plan.
-5. Record the implementation plan using `kiwi-github-implementation-plan-record`.
-6. Let the designated GitHub/Codex automation or reviewer continue from the issue and recorded plan when applicable.
-
-If required GitHub skills are unavailable, ask the user for tool access or an alternative workflow before proceeding.
-
-### 5.5 Implementation Discipline
-
-During implementation:
-
-- follow the approved plan,
-- do not silently expand scope,
-- do not silently switch implementation mode,
-- do not introduce unrelated refactors,
-- stop and ask if the codebase contradicts the plan,
-- stop and ask if a better approach would materially change the approved plan.
-
-After implementation, follow the validation and handoff rules in this file.
+Use the workflow agreed for the task. For the Kiwi GitHub workflow, use `kiwi-issue-plan-code-review-deploy-flow`. For the Matt Pocock workflow, follow the applicable skills and the configuration under [Agent skills](#agent-skills).
 
 ---
 
@@ -202,7 +88,8 @@ Choose the right destination:
 - `GLOSSARY.md` for domain terms and language definitions.
 - `AGENTS.md` for agent behavior, workflow rules, architecture principles, and recurring mistakes agents must avoid.
 - `TODO.md` for known follow-up work, accepted debt, or deferred cleanup.
-- `docs/architecture/` for design decisions, contracts, capability behavior, and architectural rationale.
+- [`DECISIONS.md`](DECISIONS.md) for major, user-approved decisions with lasting consequences and the reasoning behind them.
+- `docs/architecture/` for the current design, contracts, and capability behavior, with links to relevant decision records.
 - `docs/integrations/` for aggregator-specific behavior, assumptions, callbacks, API quirks, and country/flow details.
 - `docs/operations/` for runtime behavior, credentials, environments, troubleshooting, retention, and runbooks.
 
@@ -212,6 +99,14 @@ Keep documentation files focused. If new content does not clearly belong in an e
 When creating a new documentation file, update the relevant documentation index so future agents can find it.
 Only add new files to the `AGENTS.md` Start Index when they become primary navigation entry points for agents.
 If the learning exposes a code issue that should not be fixed immediately, record it as follow-up work rather than ignoring it.
+
+### 6.1 Recording decisions
+
+Propose an entry only when a decision sets a lasting direction for the project or a major capability, would be costly to reverse, or commits future work to a significant trade-off. Keep one concise entry per decision. Capture implementation details in the current issue, plan, or spec when needed.
+
+Add the entry during the same task once the user has confirmed the choice and agreed to record it. Record decisions settled during planning at that point and later decisions before handoff.
+
+Use the existing entry format to capture the date, status, decision, rationale, relevant alternatives, scope, accepted trade-offs, source, and when to reconsider it. When a new decision replaces an earlier one, delete the earlier entry once the new decision is recorded.
 
 ---
 
@@ -321,9 +216,3 @@ Wayfinder-Maps, Specs und Tickets liegen als GitHub Issues in
 `mpetrovic-hub/backend` und werden dem Projekt
 [@mpetrovic-hub's Odin (Matt Pocock Flow)](https://github.com/users/mpetrovic-hub/projects/3)
 zugeordnet. Siehe `docs/agents/issue-tracker.md`.
-
-### Domain docs
-
-Das Repo nutzt ein gemeinsames `GLOSSARY.md`. Die Dokumentation wird über
-`docs/INDEX.md` erschlossen; bestehende Entscheidungen stehen in
-`DECISIONS.md`. Siehe `docs/agents/domain.md`.

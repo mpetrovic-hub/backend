@@ -21,3 +21,6 @@ Key domain terms:
 - Carrier-Billing = When users are billed directly via their MNO via API, usually the case for click- or PIN-flows
 - Premium-SMS = When users are billed via paid SMS, usually the case for Web2sms-flows or Click2sms-flows
 - One-off = When a user pays only once. In general the opposite of "subscription"
+- Dimoco = An Aggregator offering Carrier-Billing (DCB) in Austria and other European markets. [Dimoco integration docs](docs/integrations/dimoco/INDEX.md)
+- Lily = An Aggregator supporting Premium-SMS subscriptions through the Web2sms-flow in Greece. [Lily integration docs](docs/integrations/lily/INDEX.md)
+- NTH = An Aggregator offering Premium-SMS and Carrier-Billing. [NTH integration docs](docs/integrations/nth/INDEX.md)

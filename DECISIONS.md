@@ -9,7 +9,7 @@ Erstfassung: 21.09.2026, aus der gemeinsamen Planung von #122/#126 und der ansch
 - Bei Planung passende Einträge lesen, nicht pauschal die ganze Historie.
 - Bereits abgedeckte Entscheidungen nicht erneut abfragen. Bei einem nur ähnlichen Fall die Begründung für eine Empfehlung nutzen, nicht als automatische Zustimmung.
 - Aktuelle ausdrückliche Entscheidungen haben Vorrang. Widersprüche und veränderte Voraussetzungen benennen.
-- Eine ersetzte Entscheidung als ersetzt kennzeichnen und auf ihren Nachfolger verweisen; nicht zwei widersprechende Regeln als gültig stehen lassen.
+- Wenn eine neue Entscheidung eine frühere ersetzt, zuerst die neue Entscheidung eintragen und anschließend den früheren Eintrag löschen.
 - Nur folgenreiche Abwägungen aufnehmen. Umsetzungsschritte, vollständige Tests und Deployment-Checklisten bleiben im Planner-Report. Kritische Vorgaben müssen dort selbst enthalten sein.
 
 ## D-001 — User-Flow und Sales vor perfekter abgeleiteter Statistik
