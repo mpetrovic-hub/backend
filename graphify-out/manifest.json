@@ -510,9 +510,9 @@
     "semantic_hash": "d32b2c8e19639a8c97ff357365226156"
   },
   "AGENTS.md": {
-    "mtime": 1795089005.388857,
-    "ast_hash": "7abaf5fae723a027d27df2598aa67970",
-    "semantic_hash": "7abaf5fae723a027d27df2598aa67970"
+    "mtime": 1795276267.133322,
+    "ast_hash": "3f947c2b69ad7a68bc55579c293b22aa",
+    "semantic_hash": ""
   },
   "CHANGELOG.md": {
     "mtime": 1795088992.0951698,
@@ -520,9 +520,9 @@
     "semantic_hash": "028bbb5f199c6d297eaf85ff3f742a07"
   },
   "GLOSSARY.md": {
-    "mtime": 1784104012.9467535,
-    "ast_hash": "abe11b233578f350a391c78ab1e902c6",
-    "semantic_hash": "abe11b233578f350a391c78ab1e902c6"
+    "mtime": 1795275531.5481062,
+    "ast_hash": "1017090d2979451c7b8b2f1f5ab42b1c",
+    "semantic_hash": ""
   },
   "README.md": {
     "mtime": 1794207135.3443818,
@@ -915,9 +915,9 @@
     "semantic_hash": "d32d31734e57c93bd5147688f75fcd1d"
   },
   "DECISIONS.md": {
-    "mtime": 1789989007.4183483,
-    "ast_hash": "997af0542588507e8580228823d4ff2f",
-    "semantic_hash": "997af0542588507e8580228823d4ff2f"
+    "mtime": 1795272704.6038232,
+    "ast_hash": "da17b114be7179c8e98faac4d22f710f",
+    "semantic_hash": ""
   },
   "docs/architecture/retention-architecture.md": {
     "mtime": 1795088992.0971699,
