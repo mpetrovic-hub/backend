@@ -183,3 +183,51 @@ Erstfassung: 21.09.2026, aus der gemeinsamen Planung von #122/#126 und der ansch
 **Neu bewerten, wenn:** reale nächste Planungsrunden zeigen, dass wesentliche Fragen weiter übersehen oder bereits geklärte Punkte erneut abgefragt werden. Gezielt nachbessern, nicht für jeden Einzelfall eine neue allgemeine Pflicht hinzufügen.
 
 **Quelle:** Nutzerfreigabe zur Überführung der Auswertung in `kiwi-github-planner-round_v2` im Gespräch vom 21.09.2026. Die ausführbare Skill-Anleitung liegt in der jeweiligen Codex-Skill-Installation; dieses Protokoll benötigt sie zum Verständnis der Begründung nicht.
+
+## D-013 — Regelmäßigen Archivcheck auf einer VPS-Kopie ausführen
+
+**Bezug:** #145/#157. **Status:** gültig. **Dokumentiert:** 21.11.2026.
+
+**Entscheidung:** Der regelmäßige vollständige Archivcheck läuft auf einer konsistenten Kopie auf dem bestehenden VPS. Das Originalarchiv und die Retention-Worker bleiben auf Hostinger. Production verwaltet den Prüfversuch und hält die betroffenen Archivierungs- und Löschschritte durch Pending gesperrt, bis das Ergebnis sicher verarbeitet wurde.
+
+**Warum:** Der vollständige Scan auf Hostinger verursachte hohe Festplattenlast und lieferte im bisherigen Cron-Ablauf keinen zuverlässigen Abschluss. Der VPS übernimmt die aufwendige Prüfung und ermöglicht einen Betrieb unabhängig vom Nutzerrechner.
+
+**Alternativen:** Den regelmäßigen Vollscan auf Hostinger fortsetzen oder den Nutzerrechner dauerhaft für Kopie und Prüfung benötigen.
+
+**Akzeptierte Folge und Grenze:** Kopieraufwand und zeitweilig wartende Retentions werden akzeptiert. Ein unbekannter Abschluss gibt keine Archivierungs- oder Löschschritte frei. Ein gesundes VPS-Ergebnis ersetzt keine Archivierungsnachweise und hebt bestehende Korruptionssperren nicht auf. Manuelle Diagnose und bestätigte Reparaturfreigabe auf Production bleiben erhalten.
+
+**Neu bewerten, wenn:** sich Hostingmodell oder Anforderungen an den Archivbetrieb wesentlich ändern.
+
+**Quelle:** [Abgenommene Spezifikation #157 einschließlich ihrer Ergänzungen](https://github.com/mpetrovic-hub/backend/issues/157).
+
+## D-014 — Archivprüfstatus in bestehenden WordPress-Optionen speichern
+
+**Bezug:** #157. **Status:** gültig. **Dokumentiert:** 21.11.2026.
+
+**Entscheidung:** Der dauerhafte Betriebsstatus der Archivprüfung wird in kleinen JSON-Einträgen der bestehenden WordPress-Optionstabelle (`wp_options`) gespeichert. Dazu gehören Prüfversuche, Pending, letzter bestätigter Befund und letzte abgeschlossene Tagesprüfung. Die Einträge werden nur bei Bedarf geladen. Für Betriebsfehlermeldungen und deren Behebung werden die vorhandenen Operational Events weiterverwendet.
+
+**Warum:** Für diese kleinen Betriebsangaben wird die vorhandene Speicherung genutzt. Der Nutzer wollte neue Tabellen für Einzelfälle möglichst vermeiden. Die Fehlerhistorie enthält keine vollständige Aufzeichnung aller Prüfversuche und eignet sich deshalb nicht als alleinige Grundlage für den aktuellen Prüfstatus.
+
+**Alternativen:** Eine zusätzliche Statustabelle anlegen oder den Prüfstatus vollständig aus Operational Events ableiten.
+
+**Akzeptierte Folge und Grenze:** Gleichzeitige Änderungen müssen gegen gegenseitiges Überschreiben geschützt werden. Als Speicherbestätigung zählt der tatsächlich gespeicherte und direkt zurückgelesene Datenbankstand; der Rückgabewert eines WordPress-Speicheraufrufs allein genügt nicht.
+
+**Neu bewerten, wenn:** Datenumfang oder Abfragebedarf wesentlich über diese kleinen Betriebsangaben hinauswachsen.
+
+**Quelle:** [Abgenommene Speicherentscheidung in #157](https://github.com/mpetrovic-hub/backend/issues/157#issuecomment-6739401880).
+
+## D-015 — Ungeklärte Archivprüfversuche manuell klären
+
+**Bezug:** #157. **Status:** gültig. **Dokumentiert:** 21.11.2026.
+
+**Entscheidung:** Der normale Ablauf übernimmt den sicheren Abschluss erkannter Kopier- und Prüffehler sowie das reguläre Aufräumen. Bei einem Absturz der Steuerung oder einem nicht sicher bestätigbaren Abschluss erfolgt die Klärung manuell. Dafür wird keine eigene automatische Wiederherstellung gebaut.
+
+**Warum:** Der Nutzer akzeptiert für diese Ausnahmefälle einen manuellen Eingriff. Er möchte die Lösung bewusst schlank halten und nicht mit zahlreichen zusätzlichen Absicherungen gegen sehr unwahrscheinliche Ereignisse überfrachten. Ein zusätzlicher Ablauf zum automatischen Fortsetzen und Aufräumen nach Abstürzen würde Entwicklung und Wartung der unterstützenden Archivprüfung unnötig ausweiten.
+
+**Alternative:** Ungeklärte Versuche beim nächsten Lauf automatisch fortsetzen oder bereinigen.
+
+**Akzeptierte Folge und Grenze:** Ein unklarer Zustand berechtigt weder zum Aufheben bestehender Schutzsperren noch zum Löschen ungeklärter Prüfkopien. Betroffene Retentions können bis zur sicheren Klärung länger warten. Zeitablauf allein erlaubt keine Freigabe.
+
+**Neu bewerten, wenn:** solche Ausnahmefälle häufig auftreten oder die manuelle Klärung den Betrieb unverhältnismäßig lange aufhält.
+
+**Quelle:** [Abgenommene Fehlerbehandlung in #157](https://github.com/mpetrovic-hub/backend/issues/157#issuecomment-6773358981).
