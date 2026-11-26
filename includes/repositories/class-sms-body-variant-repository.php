@@ -7,6 +7,9 @@ if (!defined('ABSPATH')) {
 class Kiwi_Sms_Body_Variant_Repository
 {
     public const SUMMARY_GROUP_COLUMNS = ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'];
+    private const SUMMARY_COUNTERS = ['assignments', 'cta1', 'handoff_attempted', 'handoff_hidden',
+        'handoff_no_hide', 'handoff_returned', 'conv'];
+    private const MAX_SUMMARY_COUNT = 4294967295; // Summary columns are INT UNSIGNED.
 
     private function get_assignments_table_name(): string
     {
@@ -432,6 +435,97 @@ class Kiwi_Sms_Body_Variant_Repository
         return $this->increment_summary_counter($assignment, 'conv', false);
     }
 
+    /** Correct only deficits from the recorded group assessment, preserving intervening increments. */
+    public function correct_summary_counters(array $group, array $before, ?string $source_lock = null): array
+    {
+        $values = array_map(static fn ($field) => $group[$field] ?? null, self::SUMMARY_GROUP_COLUMNS);
+        $summary_id = filter_var($before['summary_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $skip = null;
+        if (count(array_filter($values, 'is_string')) !== count(self::SUMMARY_GROUP_COLUMNS)) {
+            $skip = 'group_key_incomplete';
+        } elseif ($summary_id === false) {
+            $skip = 'summary_row_missing';
+        } elseif (!in_array($before['status'] ?? '', ['passed', 'outside_tolerance'], true) || ($before['reasons'] ?? null) !== []) {
+            $skip = 'group_incomplete';
+        }
+        if ($skip !== null) {
+            return ['status' => 'skipped', 'counters' => array_fill_keys(self::SUMMARY_COUNTERS,
+                ['status' => 'skipped', 'reason' => $skip])];
+        }
+
+        $outcomes = [];
+        foreach (self::SUMMARY_COUNTERS as $counter) {
+            $measure = $before['counters'][$counter] ?? [];
+            $outcomes[$counter] = $this->correct_summary_counter($summary_id, $values, $counter,
+                is_array($measure) ? $measure : [], $source_lock);
+        }
+        $statuses = array_column($outcomes, 'status');
+        $status = in_array('corrected', $statuses, true) ? 'corrected' : 'skipped';
+        if (in_array('failed', $statuses, true)) { $status = 'failed'; }
+        return ['status' => $status, 'counters' => $outcomes];
+    }
+
+    private function correct_summary_counter(int $summary_id, array $group_values, string $counter, array $measure, ?string $source_lock): array
+    {
+        global $wpdb;
+        if ($counter === 'conv' && isset($measure['possible_expected'])) {
+            return ['status' => 'skipped', 'reason' => 'sale_time_uncertain'];
+        }
+        $actual = $measure['actual'] ?? null;
+        $expected = $measure['expected'] ?? null;
+        if (!in_array($measure['status'] ?? '', ['passed', 'outside_tolerance'], true)
+            || !is_int($actual) || !is_int($expected) || $actual < 0 || $expected < 0) {
+            return ['status' => 'skipped', 'reason' => 'counter_unproven'];
+        }
+        if ($expected <= $actual) { return ['status' => 'skipped', 'reason' => 'no_deficit']; }
+        if ($expected > self::MAX_SUMMARY_COUNT) { return ['status' => 'failed', 'reason' => 'counter_out_of_range']; }
+
+        $table = $this->get_summary_table_name();
+        $where = implode(' AND ', array_map(static fn ($field) => $field . ' = %s', self::SUMMARY_GROUP_COLUMNS));
+        // Substitute the target in the rates so evaluation order inside SET cannot change them.
+        $rates = $this->summary_rate_assignments([$counter => (string) $expected]);
+        $sql = "UPDATE {$table} SET {$counter} = %d, updated_at = %s, {$rates}
+                WHERE id = %d AND {$where} AND {$counter} = %d";
+        $args = array_merge([$expected, $this->current_time_mysql(), $summary_id], $group_values, [$actual]);
+        if ($source_lock !== null) {
+            $sql .= ' AND IS_USED_LOCK(%s) = CONNECTION_ID()';
+            $args[] = $source_lock;
+        }
+        try {
+            $written = $wpdb->query($wpdb->prepare($sql, ...$args));
+            if ($written === 1) { return ['status' => 'corrected']; }
+            if ($written === 0) {
+                if ($source_lock !== null && (int) $wpdb->get_var($wpdb->prepare(
+                    'SELECT IS_USED_LOCK(%s) = CONNECTION_ID()', $source_lock
+                )) !== 1) {
+                    return ['status' => 'failed', 'reason' => 'source_lock_lost'];
+                }
+                return ['status' => 'skipped', 'reason' => 'summary_changed'];
+            }
+        } catch (Throwable $error) {
+            // The worker records a failed attempt and obtains a fresh assessment.
+        }
+        return ['status' => 'failed', 'reason' => 'summary_write_failed'];
+    }
+
+    private function summary_rate_assignments(array $values = []): string
+    {
+        $ratios = [
+            'cta1_cr' => ['cta1', 'assignments'],
+            'handoff_hidden_cr' => ['handoff_hidden', 'handoff_attempted'],
+            'conv_cr' => ['conv', 'assignments'],
+            'conv_per_cta1_cr' => ['conv', 'cta1'],
+            'conv_per_hidden_cr' => ['conv', 'handoff_hidden'],
+        ];
+        $assignments = [];
+        foreach ($ratios as $rate => [$numerator, $denominator]) {
+            $top = $values[$numerator] ?? $numerator;
+            $bottom = $values[$denominator] ?? $denominator;
+            $assignments[] = "{$rate} = CASE WHEN {$bottom} > 0 THEN ROUND(({$top} / {$bottom}) * 100, 2) ELSE 0 END";
+        }
+        return implode(', ', $assignments);
+    }
+
     private function increment_summary_counter(array $assignment, string $counter, bool $create_missing = true): bool
     {
         global $wpdb;
@@ -549,15 +643,11 @@ class Kiwi_Sms_Body_Variant_Repository
             return false;
         }
 
+        $rates = $this->summary_rate_assignments();
         $rate_result = $wpdb->query(
             $wpdb->prepare(
                 "UPDATE {$table_name}
-                 SET updated_at = %s,
-                     cta1_cr = CASE WHEN assignments > 0 THEN ROUND((cta1 / assignments) * 100, 2) ELSE 0 END,
-                     handoff_hidden_cr = CASE WHEN handoff_attempted > 0 THEN ROUND((handoff_hidden / handoff_attempted) * 100, 2) ELSE 0 END,
-                     conv_cr = CASE WHEN assignments > 0 THEN ROUND((conv / assignments) * 100, 2) ELSE 0 END,
-                     conv_per_cta1_cr = CASE WHEN cta1 > 0 THEN ROUND((conv / cta1) * 100, 2) ELSE 0 END,
-                     conv_per_hidden_cr = CASE WHEN handoff_hidden > 0 THEN ROUND((conv / handoff_hidden) * 100, 2) ELSE 0 END
+                 SET updated_at = %s, {$rates}
                  WHERE landing_key = %s
                    AND service_key = %s
                    AND variant_key = %s
@@ -607,15 +697,7 @@ class Kiwi_Sms_Body_Variant_Repository
     {
         $counter = strtolower(trim($counter));
 
-        return in_array($counter, [
-            'assignments',
-            'cta1',
-            'handoff_attempted',
-            'handoff_hidden',
-            'handoff_no_hide',
-            'handoff_returned',
-            'conv',
-        ], true) ? $counter : '';
+        return in_array($counter, self::SUMMARY_COUNTERS, true) ? $counter : '';
     }
 
     private function is_supported_variant_key(string $variant_key): bool
