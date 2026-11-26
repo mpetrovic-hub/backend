@@ -8,7 +8,8 @@ if (!defined('ABSPATH')) {
 final class Kiwi_Retention_Sms_Deletion_Evidence
 {
     private const GROUP_COLUMNS = ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'];
-    private const AUDIT_FIELDS = 'id,run_id,source_key,source_table,dry_run,status,started_at,finished_at,archive_db_path,deleted_rows,gate_results_json';
+    private const AUDIT_FIELDS = 'id,run_id,source_key,source_table,dry_run,status,started_at,finished_at,archive_db_path,deleted_rows';
+    private const MANIFEST = "JSON_EXTRACT(IF(JSON_VALID(gate_results_json),gate_results_json,'{}'),'$.deleted_batches')";
     private const PAGE_SIZE = 8;
     private $runs;
 
@@ -25,7 +26,7 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
         }
     }
 
-    /** The opaque cursor can be persisted between worker calls. Limit counts run rows. */
+    /** A persisted cursor bounds visits to individual batches, including inside a large run. */
     public function visit_page(array &$cursor, int $limit, callable $visitor, ?callable $incomplete = null): bool
     {
         global $wpdb;
@@ -46,18 +47,42 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
             throw new RuntimeException('sms_deletion_audit_cursor_invalid');
         }
         if ($cursor['last_id'] === $cursor['max_id']) { return true; }
-        $limit = min($limit, self::PAGE_SIZE);
-        $page = $this->read_rows($wpdb->prepare('SELECT ' . self::AUDIT_FIELDS . " FROM {$table}
+        $row_limit = min($limit, self::PAGE_SIZE);
+        $page = $this->read_rows($wpdb->prepare('SELECT ' . self::AUDIT_FIELDS . ',' . self::MANIFEST . " AS manifest FROM {$table}
             WHERE source_key=%s AND dry_run=0 AND id>%d AND id<=%d
                 AND (deleted_rows>0 OR JSON_LENGTH(IF(JSON_VALID(gate_results_json),gate_results_json,'{}'),'$.deleted_batches')>0)
             ORDER BY id LIMIT %d",
-            $source, $cursor['last_id'], $cursor['max_id'], $limit
+            $source, $cursor['last_id'], $cursor['max_id'], $row_limit
         ));
+        $resume = $cursor['active'] ?? null;
+        if ($resume !== null && (!is_array($resume) || (int) ($page[0]['id'] ?? 0) !== ($resume['id'] ?? null))) {
+            throw new RuntimeException('sms_deletion_audit_changed');
+        }
         foreach ($page as $run) {
-            $this->visit_run($run, $visitor, $incomplete);
+            if ($limit === 0) { return false; }
+            $manifest = (string) $run['manifest'];
+            unset($run['manifest']);
+            $offset = $resume['offset'] ?? 0;
+            $signature = hash('sha256', json_encode($run, JSON_THROW_ON_ERROR) . hash('sha256', $manifest));
+            if ($resume !== null && (($resume['signature'] ?? null) !== $signature || !is_int($offset) || $offset < 1)) {
+                throw new RuntimeException('sms_deletion_audit_changed');
+            }
+            $entries = $this->entries($run, $manifest);
+            if ($offset >= count($entries)) { throw new RuntimeException('sms_deletion_audit_cursor_invalid'); }
+            foreach (array_slice($entries, $offset, $limit) as $entry) {
+                $this->deliver($run, $entry, $visitor, $incomplete);
+                $offset++;
+                $limit--;
+            }
+            if ($offset < count($entries)) {
+                $cursor['active'] = ['id' => (int) $run['id'], 'offset' => $offset, 'signature' => $signature];
+                return false;
+            }
+            unset($cursor['active']);
+            $resume = null;
             $cursor['last_id'] = (int) $run['id'];
         }
-        if (count($page) < $limit) { $cursor['last_id'] = $cursor['max_id']; }
+        if (count($page) < $row_limit) { $cursor['last_id'] = $cursor['max_id']; }
         return $cursor['last_id'] === $cursor['max_id'];
     }
 
@@ -71,14 +96,11 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
         return $rows;
     }
 
-    private function visit_run(array $run, callable $visitor, ?callable $incomplete): void
+    private function entries(array $run, string $manifest): array
     {
-        $state = json_decode($run['gate_results_json'] ?? '', true);
-        unset($run['gate_results_json']);
-        $batches = $state['deleted_batches'] ?? null;
+        $batches = json_decode($manifest, true);
         if (!is_array($batches) || array_values($batches) !== $batches || !$batches) {
-            $this->incomplete($run, null, 'sms_deletion_manifest_missing', $incomplete);
-            return;
+            return [['group' => null, 'error' => 'sms_deletion_manifest_missing']];
         }
         $valid = [];
         $issues = [];
@@ -129,11 +151,14 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
                 $issues[$this->group_key($batch['group'])] = [$batch['group'], 'sms_deletion_count_mismatch'];
             }
         }
-        foreach ($issues as [$group, $reason]) { $this->incomplete($run, $group, $reason, $incomplete); }
-        if (isset($issues[''])) { return; }
+        if (!$issues) { return $valid; }
+        $entries = [];
+        foreach ($issues as [$group, $reason]) { $entries[] = ['group' => $group, 'error' => $reason]; }
+        if (isset($issues[''])) { return $entries; }
         foreach ($valid as $batch) {
-            if (!isset($issues[$this->group_key($batch['group'])])) { $visitor($run, $batch); }
+            if (!isset($issues[$this->group_key($batch['group'])])) { $entries[] = $batch; }
         }
+        return $entries;
     }
 
     private function group($row): ?array
@@ -159,10 +184,11 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
         return (int) $value;
     }
 
-    private function incomplete(array $run, ?array $group, string $reason, ?callable $report): void
+    private function deliver(array $run, array $entry, callable $visitor, ?callable $report): void
     {
-        if ($report === null) { throw new RuntimeException($reason); }
-        $report($run, $group, $reason);
+        if (!isset($entry['error'])) { $visitor($run, $entry); return; }
+        if ($report === null) { throw new RuntimeException($entry['error']); }
+        $report($run, $entry['group'], $entry['error']);
     }
 
     /** The caller supplies the newest row already verified by the archive reader. */
@@ -189,14 +215,18 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
         $last_id = 0;
         do {
             // Interactive lookup selects only the requested file and batch. The worker can join all rows in a single visit.
-            $rows = $this->read_rows($wpdb->prepare('SELECT ' . self::AUDIT_FIELDS . " FROM {$this->runs->get_table_name()}
+            $rows = $this->read_rows($wpdb->prepare('SELECT ' . self::AUDIT_FIELDS . ',' . self::MANIFEST . " AS manifest FROM {$this->runs->get_table_name()}
                 WHERE source_key=%s AND dry_run=0 AND BINARY archive_db_path=BINARY %s AND id>%d
                     AND JSON_CONTAINS(IF(JSON_VALID(gate_results_json),gate_results_json,'{}'),
                         JSON_OBJECT('batch_id',%s),'$.deleted_batches')=1 ORDER BY id LIMIT %d",
                 Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS, $archive_path, $last_id, $batch_id, self::PAGE_SIZE
             ));
             foreach ($rows as $run) {
-                $this->visit_run($run, $match, $incomplete);
+                $manifest = (string) $run['manifest'];
+                unset($run['manifest']);
+                foreach ($this->entries($run, $manifest) as $entry) {
+                    $this->deliver($run, $entry, $match, $incomplete);
+                }
                 $last_id = (int) $run['id'];
             }
         } while (count($rows) === self::PAGE_SIZE);

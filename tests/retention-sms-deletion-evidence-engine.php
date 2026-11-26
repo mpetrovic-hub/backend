@@ -119,6 +119,33 @@ function et_sms_deletion_evidence(): void
         try { $history->finished_after_deletion($verified, $path, $group); }
         catch (RuntimeException $error) { $reason = $error->getMessage(); }
         et_check($reason === 'sms_deletion_conflicting_runs', 'Two different runs cannot own the same exact deletion receipt');
+        $wpdb->pdo->exec('DELETE FROM ' . $runs->get_table_name());
+        $many = [];
+        foreach ([20, 21, 23, 28, 29] as $id) {
+            $many[] = ['batch_id' => 'packet-' . $id, 'group' => $group, 'ids' => [$id]];
+        }
+        $runs->create_run(array_replace($run, ['deleted_rows' => 5, 'gate_results_json' => ['deleted_batches' => $many]]));
+        $cursor = [];
+        $ids = [];
+        $remember = static function (array $historical_run, array $packet) use (&$ids): void {
+            $ids[] = $packet['ids'][0];
+        };
+        et_check(!$history->visit_page($cursor, 2, $remember) && $ids === [20, 21],
+            'Two deletion batches bound the work even when one run contains many packets');
+        $cursor = json_decode(json_encode($cursor), true);
+        et_check(!(new Kiwi_Retention_Sms_Deletion_Evidence())->visit_page($cursor, 2, $remember) && $ids === [20, 21, 23, 28],
+            'A new worker continues inside the same run using its persisted packet offset');
+        et_check($history->visit_page($cursor, 2, $remember) && $ids === [20, 21, 23, 28, 29],
+            'The final audit page emits each exact packet once');
+        $cursor = [];
+        $ids = [];
+        $history->visit_page($cursor, 1, $remember);
+        $wpdb->pdo->exec("UPDATE {$runs->get_table_name()} SET gate_results_json='{}' WHERE run_id='real-186'");
+        $reason = '';
+        try { $history->visit_page($cursor, 2, $remember); }
+        catch (RuntimeException $error) { $reason = $error->getMessage(); }
+        et_check($reason === 'sms_deletion_audit_changed' && $ids === [20],
+            'A changed run manifest stops a resumed page before another original can be accepted');
         $wpdb->pdo->exec('DROP TABLE ' . $runs->get_table_name());
         $reason = '';
         try { $history->visit($visit, $collect); }
