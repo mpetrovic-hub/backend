@@ -31,6 +31,8 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             if (!empty($state['recheck_groups'])) {
                 return $this->recheck(array_values($state['recheck_groups']));
             }
+            // An incomplete audit is run-wide even when this page contains only other groups.
+            foreach (array_keys($state['groups']) as $group) { $this->released($state, $group); }
             $this->assert_required_files($run, $state);
             if (is_file($path) && empty($state['archive_target_existed'])) {
                 $state['archive_target_existed'] = true;

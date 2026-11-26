@@ -358,3 +358,36 @@ et_check((int)$recovered['archived_rows']===1 && (int)$recovered['deleted_rows']
 $done = et_sms_batch_complete($f,1);
 et_check((int)$done['archived_rows']===4 && (int)$done['deleted_rows']===4 && (int)$done['archive_inserted_rows']===4,
     'The remaining capped prefixes recover the same four SQLite receipts and delete each original once');
+
+$f = et_sms_batch_fixture();
+$groupThree = array_replace($f['passed_group'], ['allocation_version'=>'third-group']);
+et_sms_batch_insert($f,2,$f['passed_group']);
+et_sms_batch_insert($f,12,$groupThree);
+$row = $f['repo']->find_run_by_id($f['run_id']);
+$state = json_decode($row['gate_results_json'],true,512,JSON_THROW_ON_ERROR);
+$gid = Kiwi_Retention_Sms_Statistics::group_id($groupThree);
+$state['groups'][$gid] = array_replace($state['groups'][Kiwi_Retention_Sms_Statistics::group_id($f['passed_group'])],['key'=>$groupThree]);
+unset($state['groups'][$gid]['after']['counters']['assignments']);
+$f['repo']->update_run($f['run_id'],['gate_results_json'=>$state]);
+$invalid = et_sms_batch_step($f,1);
+et_check($invalid['status']==='failed' && !is_file($f['path']) && (int)$other->query('SELECT COUNT(*) FROM '.$f['source']['source_table'])->fetchColumn()===2,
+    'An unconfirmable saved release in a later group stops the whole run before archiving an earlier passed group');
+
+$f = et_sms_batch_fixture();
+et_sms_batch_insert($f,2,$f['passed_group']);
+et_sms_batch_insert($f,3,$f['passed_group']);
+et_sms_batch_step($f);
+$nosql = new PDO('sqlite:'.$f['path']);
+$nosql->exec('DELETE FROM archive_batch_rows WHERE source_pk=2');
+$nosql->exec('DELETE FROM '.$f['source']['source_table'].' WHERE _source_pk=3');
+$nosql = null;
+et_sms_batch_step($f);
+et_check((int)$other->query('SELECT COUNT(*) FROM '.$f['source']['source_table'])->fetchColumn()===2,
+    'Neither a missing single-ID receipt nor a missing archive row authorizes DELETE');
+$repaired = et_sms_batch_complete($f);
+$nosql = new PDO('sqlite:'.$f['path']);
+$repairedCount = $nosql->query('SELECT COUNT(*) FROM '.$f['source']['source_table'].' s JOIN archive_batch_rows r
+    ON r.archive_batch_id=s._archive_batch_id AND r.source_pk=s._source_pk')->fetchColumn();
+et_check((int)$repairedCount===2 && (int)$repaired['archived_rows']===2 && (int)$repaired['deleted_rows']===2,
+    'A fresh snapshot transaction restores both missing individual proofs in the chosen generation before deletion');
+$nosql = null;
