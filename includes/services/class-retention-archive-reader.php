@@ -35,7 +35,10 @@ class Kiwi_Retention_Archive_Reader
             return [$table . '_retention_day' => ['created_at', '_source_pk']];
         }
         if (($source['source_key'] ?? '') === Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS) {
-            return [$table . '_retention_visible_token' => ['visible_token', '_source_pk']];
+            return [
+                $table . '_retention_visible_token' => ['visible_token', '_source_pk'],
+                $table . '_retention_transaction_id' => ['transaction_id', '_source_pk'],
+            ];
         }
         return [];
     }
@@ -74,7 +77,7 @@ class Kiwi_Retention_Archive_Reader
     /** MySQL pair and SMS-token lookups fold ASCII case; snapshots retain original bytes. */
     private static function read_index_collation(string $column): string
     {
-        return in_array($column, ['landing_key', 'session_token', 'visible_token'], true) ? 'NOCASE' : 'BINARY';
+        return in_array($column, ['landing_key', 'session_token', 'visible_token', 'transaction_id'], true) ? 'NOCASE' : 'BINARY';
     }
 
     public static function read_index_columns_sql(array $columns): string

@@ -105,23 +105,35 @@ class Kiwi_Sms_Body_Variant_Service
     /** A failed read must remain distinguishable from a successful lookup without a match. */
     public function resolve_assignment_from_visible_token(string $visible_token): array
     {
-        if (preg_match('/^[A-Za-z0-9_-]{1,140}$/D', $visible_token) !== 1) {
+        return $this->resolve_assignment('visible_token', $visible_token);
+    }
+
+    public function resolve_assignment_from_transaction_id(string $transaction_id): array
+    {
+        return $this->resolve_assignment('transaction_id', $transaction_id);
+    }
+
+    private function resolve_assignment(string $column, string $code): array
+    {
+        if (preg_match('/^[A-Za-z0-9_-]{1,140}$/D', $code) !== 1) {
             return ['status' => 'not_found'];
         }
         try {
-            $live = $this->repository->find_visible_token_matches($visible_token);
+            $rows = $column === 'visible_token'
+                ? $this->repository->find_visible_token_matches($code)
+                : $this->repository->find_transaction_id_matches($code);
         } catch (Throwable $error) {
             return ['status' => 'read_error', 'source' => 'mysql'];
         }
-        if ($live) {
-            return $this->assignment_lookup_result($live, 'mysql');
+        if ($rows) {
+            return $this->assignment_lookup_result($rows, 'mysql');
         }
         $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
         $reader = $this->archive_reader ?? new Kiwi_Retention_Archive_Reader(new Kiwi_Retention_Sqlite_Archive_Service($this->config));
         try {
             $matches = [];
             $match_source = 'archive';
-            foreach ($reader->matching_source_ids($source, 'visible_token', $visible_token) as $id) {
+            foreach ($reader->matching_source_ids($source, $column, $code) as $id) {
                 try {
                     $live_row = $this->repository->find_assignment_by_id($id);
                 } catch (Throwable $error) {
@@ -135,7 +147,7 @@ class Kiwi_Sms_Body_Variant_Service
                     if (!$copies) { throw new RuntimeException('sms_assignment_archive_copy_missing'); }
                     $row = $copies[array_key_last($copies)];
                 }
-                if (strcasecmp((string) $row['visible_token'], $visible_token) === 0) {
+                if (strcasecmp((string) $row[$column], $code) === 0) {
                     $matches[] = $row;
                     $match_source = $live_row === null ? 'archive' : 'mysql';
                     if (count($matches) === 2) { break; }
@@ -147,6 +159,28 @@ class Kiwi_Sms_Body_Variant_Service
         } finally {
             $reader->close();
         }
+    }
+
+    public function observe_sale_insert(array $code): array
+    {
+        if (!$code) {
+            return [];
+        }
+        $field = array_key_first($code);
+        return $this->repository->lock_original_for_sale($field, $code[$field]);
+    }
+
+    public function record_confirmed_sale(array $proof, array $observation): bool
+    {
+        if (($proof['status'] ?? '') !== 'found' || ($observation['code'] ?? null) !== $proof['original_code']) {
+            return false;
+        }
+        if ($proof['source'] === 'mysql') {
+            return $observation['live_id'] === (int) $proof['assignment']['id']
+                && $this->repository->mark_event_for_original($proof['assignment'], 'conv');
+        }
+        return $proof['source'] === 'archive' && $observation['live_id'] === null
+            && $this->repository->increment_archived_conversion($proof['assignment']);
     }
 
     private function assignment_lookup_result(array $matches, string $source): array

@@ -45,7 +45,9 @@ class Kiwi_Landing_Kpi_Summary_Repository
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 

@@ -96,6 +96,7 @@ require_once __DIR__ . '/services/class-premium-sms-completed-sale-cooldown-serv
 require_once __DIR__ . '/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';
+require_once __DIR__ . '/providers/nth/class-nth-sms-sale-evidence.php';
 require_once __DIR__ . '/services/class-nth-fr-one-off-service.php';
 
 /**

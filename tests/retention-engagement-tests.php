@@ -1728,10 +1728,21 @@ if (!is_string($settings['dsn'] ?? null)
     || (int) $dsn_match[1] > 65535
 ) { throw new RuntimeException('Only an explicit loopback TCP test instance is allowed.'); }
 
-if (($argv[1] ?? '') === '--writer') {
+if (in_array($argv[1] ?? '', ['--writer', '--sms-sale-writer'], true)) {
     $database = getenv('KIWI_RETENTION_TEST_DATABASE');
     if (preg_match('/^codex_test_72_[a-z0-9_]+$/D', $database) !== 1) { throw new RuntimeException('Invalid private test database.'); }
     $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
+    if ($argv[1] === '--sms-sale-writer') {
+        require_once ABSPATH . 'includes/repositories/class-sales-repository.php';
+        echo (int) $wpdb->get_var('SELECT CONNECTION_ID()'), "\n";
+        flush();
+        $write = (new Kiwi_Sales_Repository())->upsert_with_result(
+            ['sale_reference' => 'parallel-sms-185', 'status' => 'completed', 'sale_type' => 'premium_sms_one_off'],
+            static fn () => true
+        );
+        echo json_encode(['id' => (int) ($write['row']['id'] ?? 0), 'inserted' => $write['inserted']]), "\n";
+        exit;
+    }
     try {
         (new Kiwi_Landing_Session_Engagement_Repository(new Engagement_Test_Evaluator()))
             ->upsert_event(['landing_key' => 'fixture-landing', 'session_token' => 'fixture-1', 'cta_step' => 'cta1'], 'cta_click');
@@ -1766,6 +1777,10 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--sms-sale-booking', $argv, true)) {
+        require __DIR__ . '/retention-sms-sale-booking-engine.php';
+        return;
+    }
     if (in_array('--sms-assignment-lookup', $argv, true)) {
         require __DIR__ . '/retention-sms-assignment-lookup-engine.php';
         return;

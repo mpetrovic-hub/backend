@@ -246,10 +246,36 @@ class Kiwi_Sms_Body_Variant_Repository
 
     public function find_visible_token_matches(string $token): array
     {
+        return $this->find_code_matches('visible_token', $token);
+    }
+
+    public function find_transaction_id_matches(string $transaction_id): array
+    {
+        return $this->find_code_matches('transaction_id', $transaction_id);
+    }
+
+    /** Called after an INSERT and before its COMMIT, on the same connection. */
+    public function lock_original_for_sale(string $column, string $code): array
+    {
+        global $wpdb;
+        if (!in_array($column, ['transaction_id', 'visible_token'], true) || preg_match('/^[A-Za-z0-9_-]{1,140}$/D', $code) !== 1) {
+            return [];
+        }
+        $rows = $wpdb->get_col($wpdb->prepare(
+            "SELECT id FROM {$this->get_assignments_table_name()} WHERE {$column} = %s LIMIT 2 FOR UPDATE NOWAIT", $code
+        ));
+        if (!is_array($rows) || !empty($wpdb->last_error) || count($rows) > 1) {
+            return [];
+        }
+        return ['code' => [$column => $code], 'live_id' => $rows ? (int) $rows[0] : null];
+    }
+
+    private function find_code_matches(string $column, string $value): array
+    {
         global $wpdb;
 
         $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM {$this->get_assignments_table_name()} WHERE visible_token = %s LIMIT 2", $token
+            "SELECT * FROM {$this->get_assignments_table_name()} WHERE {$column} = %s LIMIT 2", $value
         ), ARRAY_A);
         if (!is_array($rows) || (string) ($wpdb->last_error ?? '') !== '') {
             throw new RuntimeException('sms_assignment_mysql_read_failed');
@@ -272,44 +298,61 @@ class Kiwi_Sms_Body_Variant_Repository
 
     public function find_latest_by_landing_session(string $landing_key, string $session_token): ?array
     {
+        return $this->landing_session_matches($landing_key, $session_token, 1)[0] ?? null;
+    }
+
+    private function landing_session_matches(string $landing_key, string $session_token, int $limit): array
+    {
         global $wpdb;
 
         $landing_key = $this->sanitize_key($landing_key, 100);
         $session_token = $this->sanitize_session_token($session_token);
 
         if ($landing_key === '' || $session_token === '') {
-            return null;
+            return [];
         }
 
-        $row = $wpdb->get_row(
+        $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT *
                  FROM {$this->get_assignments_table_name()}
                  WHERE landing_key = %s
                    AND session_token = %s
                  ORDER BY id DESC
-                 LIMIT 1",
+                 LIMIT %d",
                 $landing_key,
-                $session_token
+                $session_token,
+                $limit
             ),
             ARRAY_A
         );
 
-        return is_array($row) ? $row : null;
+        return is_array($rows) && empty($wpdb->last_error) ? $rows : [];
     }
 
     public function mark_event_by_landing_session(string $landing_key, string $session_token, string $event_key): bool
     {
-        $assignment = $this->find_latest_by_landing_session($landing_key, $session_token);
+        $matches = $this->landing_session_matches($landing_key, $session_token, 2);
 
-        if (!is_array($assignment)) {
+        if (count($matches) !== 1) {
             return false;
         }
 
-        return $this->mark_event_by_transaction_id((string) ($assignment['transaction_id'] ?? ''), $event_key);
+        return $this->mark_event_for_original($matches[0], $event_key);
+    }
+
+    public function mark_event_for_original(array $assignment, string $event_key): bool
+    {
+        $id = (int) ($assignment['id'] ?? 0);
+        return $id > 0 && $this->mark_event((string) $assignment['transaction_id'], $event_key, $id);
     }
 
     public function mark_event_by_transaction_id(string $transaction_id, string $event_key): bool
+    {
+        return $this->mark_event($transaction_id, $event_key);
+    }
+
+    private function mark_event(string $transaction_id, string $event_key, ?int $original_id = null): bool
     {
         global $wpdb;
 
@@ -328,7 +371,7 @@ class Kiwi_Sms_Body_Variant_Repository
                  SET updated_at = %s,
                      {$field} = %s
                  WHERE transaction_id = %s
-                   AND {$field} IS NULL",
+                   AND {$field} IS NULL" . ($original_id === null ? '' : ' AND id = ' . $original_id),
                 $now,
                 $now,
                 $transaction_id
@@ -341,7 +384,7 @@ class Kiwi_Sms_Body_Variant_Repository
 
         $row = $this->find_by_transaction_id($transaction_id);
 
-        if (!is_array($row)) {
+        if (!is_array($row) || ($original_id !== null && (int) $row['id'] !== $original_id)) {
             return false;
         }
 
@@ -382,7 +425,12 @@ class Kiwi_Sms_Body_Variant_Repository
         return is_array($rows) ? $rows : [];
     }
 
-    private function increment_summary_counter(array $assignment, string $counter): bool
+    public function increment_archived_conversion(array $assignment): bool
+    {
+        return $this->increment_summary_counter($assignment, 'conv', false);
+    }
+
+    private function increment_summary_counter(array $assignment, string $counter, bool $create_missing = true): bool
     {
         global $wpdb;
 
@@ -407,71 +455,73 @@ class Kiwi_Sms_Body_Variant_Repository
         $now = $this->current_time_mysql();
         $table_name = $this->get_summary_table_name();
 
-        $upsert_result = $wpdb->query(
-            $wpdb->prepare(
-                "INSERT INTO {$table_name} (
-                    created_at,
-                    updated_at,
-                    landing_key,
-                    service_key,
-                    provider_key,
-                    flow_key,
-                    variant_key,
-                    seed,
-                    allocation_version,
-                    assignments,
-                    cta1,
-                    handoff_attempted,
-                    handoff_hidden,
-                    handoff_no_hide,
-                    handoff_returned,
-                    conv,
-                    cta1_cr,
-                    handoff_hidden_cr,
-                    conv_cr,
-                    conv_per_cta1_cr,
-                    conv_per_hidden_cr
-                ) VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0
+        if ($create_missing) {
+            $upsert_result = $wpdb->query(
+                $wpdb->prepare(
+                    "INSERT INTO {$table_name} (
+                        created_at,
+                        updated_at,
+                        landing_key,
+                        service_key,
+                        provider_key,
+                        flow_key,
+                        variant_key,
+                        seed,
+                        allocation_version,
+                        assignments,
+                        cta1,
+                        handoff_attempted,
+                        handoff_hidden,
+                        handoff_no_hide,
+                        handoff_returned,
+                        conv,
+                        cta1_cr,
+                        handoff_hidden_cr,
+                        conv_cr,
+                        conv_per_cta1_cr,
+                        conv_per_hidden_cr
+                    ) VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        updated_at = VALUES(updated_at),
+                        provider_key = IF(provider_key = '', VALUES(provider_key), provider_key),
+                        flow_key = IF(flow_key = '', VALUES(flow_key), flow_key)",
+                    $now,
+                    $now,
+                    $landing_key,
+                    $service_key,
+                    $provider_key,
+                    $flow_key,
+                    $variant_key,
+                    $seed,
+                    $allocation_version
                 )
-                ON DUPLICATE KEY UPDATE
-                    updated_at = VALUES(updated_at),
-                    provider_key = IF(provider_key = '', VALUES(provider_key), provider_key),
-                    flow_key = IF(flow_key = '', VALUES(flow_key), flow_key)",
-                $now,
-                $now,
-                $landing_key,
-                $service_key,
-                $provider_key,
-                $flow_key,
-                $variant_key,
-                $seed,
-                $allocation_version
-            )
-        );
+            );
 
-        if ($upsert_result === false) {
-            return false;
+            if ($upsert_result === false) {
+                return false;
+            }
         }
 
         $increment_result = $wpdb->query(
@@ -493,7 +543,7 @@ class Kiwi_Sms_Body_Variant_Repository
             )
         );
 
-        if ($increment_result === false) {
+        if ($increment_result !== 1) {
             return false;
         }
 

@@ -6,6 +6,30 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Nth_Premium_Sms_Normalizer
 {
+    /** Identify the original code from MO content before any click-attribution fallback. */
+    public static function sms_assignment_code(string $message, string $keyword, bool $require_unique = false): array
+    {
+        $parts = preg_split('/[\s+]+/', trim($message));
+        if (count($parts) < 2) {
+            return [];
+        }
+        $keyword_seed = static function (string $value): string {
+            $first = preg_split('/\s+/', trim($value))[0] ?? '';
+            return preg_replace('/[^A-Z0-9]/', '', strtoupper(rtrim($first, '*'))) ?? '';
+        };
+        $expected = $keyword_seed($keyword);
+        if ($expected !== '' && $keyword_seed($parts[0]) !== $expected) {
+            return [];
+        }
+        if (preg_match_all('/txn_[A-Za-z0-9_-]{8,120}/', $message, $matches)) {
+            if ($require_unique && count(array_unique($matches[0])) !== 1) {
+                return [];
+            }
+            return ['transaction_id' => $matches[0][0]];
+        }
+        return ['visible_token' => $parts[1]];
+    }
+
     private $config;
 
     public function __construct(Kiwi_Config $config)

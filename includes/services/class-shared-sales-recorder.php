@@ -15,6 +15,11 @@ class Kiwi_Shared_Sales_Recorder
 
     public function record_successful_one_off_sale(array $transaction, array $report_event): array
     {
+        return $this->record_successful_one_off_sale_with_result($transaction, $report_event)['row'];
+    }
+
+    public function record_successful_one_off_sale_with_result(array $transaction, array $report_event, ?callable $observe_insert = null): array
+    {
         $sale_reference = trim((string) ($transaction['sale_reference'] ?? $transaction['flow_reference'] ?? ''));
         $transaction_id = $this->resolve_transaction_id($transaction);
 
@@ -22,7 +27,7 @@ class Kiwi_Shared_Sales_Recorder
             $sale_reference = 'sale_' . md5(wp_json_encode([$transaction, $report_event]));
         }
 
-        return $this->sales_repository->upsert([
+        return $this->sales_repository->upsert_with_result([
             'sale_reference' => $sale_reference,
             'transaction_id' => $transaction_id,
             'provider_key' => 'nth',
@@ -48,7 +53,7 @@ class Kiwi_Shared_Sales_Recorder
                 'transaction' => $transaction,
                 'report_event' => $report_event,
             ],
-        ]);
+        ], $observe_insert);
     }
 
     private function resolve_transaction_id(array $transaction): string

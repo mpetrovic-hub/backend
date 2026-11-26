@@ -15,6 +15,7 @@ class Kiwi_Nth_Fr_One_Off_Service
     private $conversion_attribution_resolver;
     private $premium_sms_fraud_monitor_service;
     private $sms_body_variant_service;
+    private $sms_sale_evidence;
     private $completed_sale_cooldown_service;
     private $operational_event_service;
 
@@ -40,6 +41,8 @@ class Kiwi_Nth_Fr_One_Off_Service
         $this->conversion_attribution_resolver = $conversion_attribution_resolver;
         $this->premium_sms_fraud_monitor_service = $premium_sms_fraud_monitor_service;
         $this->sms_body_variant_service = $sms_body_variant_service;
+        $this->sms_sale_evidence = $sms_body_variant_service === null ? null
+            : new Kiwi_Nth_Sms_Sale_Evidence($flow_transaction_repository, $event_repository, $sms_body_variant_service);
         $this->completed_sale_cooldown_service = $completed_sale_cooldown_service;
         $this->operational_event_service = $operational_event_service;
     }
@@ -340,14 +343,31 @@ class Kiwi_Nth_Fr_One_Off_Service
         }
 
         $sale = null;
+        $inserted = false;
+        $observation = null;
         $fraud_source_event_key = $this->resolve_transaction_fraud_source_event_key($transaction);
 
         if (!empty($normalized_event['is_terminal']) && !empty($normalized_event['is_success'])) {
-            $sale = $this->sales_recorder->record_successful_one_off_sale($transaction, $normalized_event);
-            $update_data['sale_id'] = (int) ($sale['id'] ?? 0);
+            $observe_insert = $this->sms_sale_evidence === null ? null : fn () => $this->sms_sale_evidence->observe_insert($transaction);
+            $write = $this->sales_recorder->record_successful_one_off_sale_with_result($transaction, $normalized_event, $observe_insert);
+            $sale = $write['row'];
+            $inserted = $write['inserted'];
+            $observation = $write['observation'] ?? null;
+            if (!empty($sale['id'])) {
+                $update_data['sale_id'] = (int) $sale['id'];
+            }
         }
 
         $this->flow_transaction_repository->update((int) $transaction['id'], $update_data);
+        if ($inserted && $observation && $this->sms_sale_evidence !== null) {
+            // The completed sale is durable even when its derived statistics fail.
+            try {
+                $proof = $this->sms_sale_evidence->resolve($sale);
+                $this->sms_body_variant_service->record_confirmed_sale($proof, $observation);
+            } catch (Throwable $error) {
+                // A repeated delivery cannot contribute a second time or repair this undercount.
+            }
+        }
         $this->update_fraud_billing_outcome_non_blocking(
             $fraud_source_event_key,
             $this->build_notification_fraud_outcome($transaction, $normalized_event, $sale)
@@ -776,64 +796,16 @@ class Kiwi_Nth_Fr_One_Off_Service
 
     private function extract_transaction_id_from_mo_content(array $normalized_event, string $service_keyword): string
     {
-        $message_text = trim((string) ($normalized_event['message_text'] ?? ''));
-
-        if ($message_text === '') {
+        $code = Kiwi_Nth_Premium_Sms_Normalizer::sms_assignment_code(
+            (string) ($normalized_event['message_text'] ?? ''), $service_keyword
+        );
+        if (isset($code['transaction_id'])) {
+            return $code['transaction_id'];
+        }
+        if (!isset($code['visible_token']) || $this->sms_body_variant_service === null) {
             return '';
         }
-
-        $parts = preg_split('/[\s+]+/', $message_text);
-
-        if (!is_array($parts) || count($parts) < 2) {
-            return '';
-        }
-
-        $first_token = (string) ($parts[0] ?? '');
-        $expected_keyword = $this->normalize_keyword_seed($service_keyword);
-
-        if ($expected_keyword !== '' && $this->normalize_keyword_seed($first_token) !== $expected_keyword) {
-            return '';
-        }
-
-        if (preg_match('/(txn_[A-Za-z0-9_-]{8,120})/', $message_text, $matches)) {
-            return (string) ($matches[1] ?? '');
-        }
-
-        return $this->resolve_sms_body_variant_transaction_id($parts);
-    }
-
-    private function resolve_sms_body_variant_transaction_id(array $message_parts): string
-    {
-        if (!$this->sms_body_variant_service instanceof Kiwi_Sms_Body_Variant_Service) {
-            return '';
-        }
-
-        $visible_token = trim((string) ($message_parts[1] ?? ''));
-
-        if ($visible_token === '') {
-            return '';
-        }
-
-        $lookup = $this->sms_body_variant_service->resolve_assignment_from_visible_token($visible_token);
-        return $lookup['status'] === 'found' ? (string) $lookup['assignment']['transaction_id'] : '';
-    }
-
-    private function normalize_keyword_seed(string $keyword): string
-    {
-        $keyword = trim($keyword);
-
-        if ($keyword === '') {
-            return '';
-        }
-
-        $parts = preg_split('/\s+/', $keyword);
-        $keyword = is_array($parts) && !empty($parts)
-            ? (string) $parts[0]
-            : $keyword;
-        $keyword = rtrim($keyword, '*');
-        $keyword = strtoupper($keyword);
-
-        return preg_replace('/[^A-Z0-9]/', '', $keyword) ?? '';
+        return $this->sms_body_variant_service->resolve_transaction_id_from_visible_token($code['visible_token']);
     }
 
     private function resolve_attribution_transaction_id(string $service_key, string $reference_hint): string
