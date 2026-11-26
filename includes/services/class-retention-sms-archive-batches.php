@@ -40,15 +40,15 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             if (empty($gate['allowed'])) {
                 return ['status'=>'wait', 'reason'=>$gate['reason_code'] ?? 'archive_gate_active'];
             }
+            $limit = min(500, max(1, $limit), $this->config->get_retention_default_batch_limit());
             if (!isset($state['pending_archive'])) {
-                $limit = min(500, max(1,$limit), $this->config->get_retention_default_batch_limit());
                 $start = $this->plan_page($source, $run, $state, $limit);
                 if ($start !== null) { return $start; }
             }
             $this->validate_page($run, $state);
             return $state['pending_archive']['stage'] === 'copy'
-                ? $this->archive_page($source, $run, $state, $handle, $source_lock, $connection)
-                : $this->delete_page($source, $run, $state, $handle, $source_lock, $connection);
+                ? $this->archive_page($source, $run, $state, $handle, $source_lock, $connection, $limit)
+                : $this->delete_page($source, $run, $state, $handle, $source_lock, $connection, $limit);
         } catch (Throwable $error) {
             $reason = $error->getMessage();
             if ($reason === 'sms_archive_confirmed_file_missing') { return ['status'=>'wait', 'reason'=>$reason]; }
@@ -144,7 +144,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
         }
         $batch = $this->generate_archive_batch_id($source['source_key']);
         $state['pending_archive'] = ['stage'=>'copy', 'through'=>$through, 'members'=>$members, 'counted'=>[],
-            'hashes'=>[], 'batch_id'=>$batch];
+            'hashes'=>[], 'ready_ids'=>[], 'batch_id'=>$batch];
         $this->save($run,$state,['archive_batch_id'=>$batch]);
         return null;
     }
@@ -171,11 +171,17 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             || !is_array($page['hashes'] ?? null) || !is_array($page['counted'] ?? null)) {
             throw new RuntimeException('sms_archive_pending_invalid');
         }
+        $ready = $page['ready_ids'] ?? [];
+        if (!is_array($ready) || count($page['counted']) > 500
+            || count($page['counted']) > (int) $run['archived_rows']
+            || ($page['stage'] === 'delete' && (!$ready || $ready !== array_slice(array_keys($page['members']), 0, count($ready))))) {
+            throw new RuntimeException('sms_archive_unconfirmed_progress');
+        }
         foreach ($page['members'] as $id=>$group) {
             if (!is_int($id) || $id <= $cursor || $id > $through || !is_string($group)) {
                 throw new RuntimeException('sms_archive_pending_id_invalid');
             }
-            if ($page['stage'] === 'delete' && ($id > (int) $run['archive_last_primary_key']
+            if (in_array($id, $ready, true) && ($id > (int) $run['archive_last_primary_key']
                 || !in_array($id, $page['counted'], true) || empty($page['hashes'][$id]))) {
                 throw new RuntimeException('sms_archive_unconfirmed_progress');
             }
@@ -249,16 +255,20 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
     }
 
     private function archive_page(array $source, array $run, array $state, Kiwi_Retention_Archive_Lock_Handle $handle,
-        string $source_lock, int $connection): array
+        string $source_lock, int $connection, int $limit): array
     {
         $pending = &$state['pending_archive'];
         $batch = $pending['batch_id'];
         $path = $run['archive_db_path'];
-        $live = $this->originals($source,array_keys($pending['members']));
+        $members = array_slice($pending['members'], 0, $limit, true);
+        $live = $this->originals($source, array_keys($members));
         $eligible = [];
         $changed = [];
-        foreach ($pending['members'] as $id=>$old_group) {
-            if (!isset($live[$id]) || strcmp($live[$id]['created_at'],$run['cutoff_value']) >= 0) { continue; }
+        foreach ($members as $id=>$old_group) {
+            if (!isset($live[$id]) || strcmp($live[$id]['created_at'],$run['cutoff_value']) >= 0) {
+                unset($pending['members'][$id], $pending['hashes'][$id]);
+                continue;
+            }
             $key = Kiwi_Retention_Sms_Statistics::group_key($live[$id]);
             $group = Kiwi_Retention_Sms_Statistics::group_id($key);
             if ($group !== $old_group) {
@@ -267,6 +277,8 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
                 $pending['members'][$id] = $group;
             } elseif ($this->released($state,$group)) {
                 $eligible[$id] = $live[$id];
+            } else {
+                unset($pending['members'][$id], $pending['hashes'][$id]);
             }
         }
         if ($changed) {
@@ -275,11 +287,10 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             return $this->recheck(array_values($changed));
         }
         if (!$eligible) {
-            $this->finish_page($run,$state);
+            $this->save_page($run,$state);
             return ['status'=>'more'];
         }
         $ids = array_keys($eligible);
-        $pending['members'] = array_intersect_key($pending['members'],$eligible);
         $copies = $this->checked_copies($source,$run,$ids,$handle);
         $replace = [];
         foreach ($eligible as $id=>$row) {
@@ -317,15 +328,18 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             $pending['counted'] = array_merge($pending['counted'],$new_ids);
         }
         $pending['stage'] = 'delete';
+        $pending['ready_ids'] = $ids;
         $state['archive_target_existed'] = true;
         $this->save($run,$state,$changes);
         return ['status'=>'more'];
     }
 
-    private function finish_page(array &$run, array $state, array $changes = [], ?int $connection = null): void
+    private function save_page(array &$run, array $state, array $changes = [], ?int $connection = null): void
     {
-        $state['archive_scan_cursor'] = $state['pending_archive']['through'];
-        unset($state['pending_archive']);
+        if (!$state['pending_archive']['members']) {
+            $state['archive_scan_cursor'] = $state['pending_archive']['through'];
+            unset($state['pending_archive']);
+        }
         $this->save($run,$state,$changes,$connection);
     }
 
@@ -336,16 +350,17 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
         $state['pending_archive']['stage'] = 'copy';
         $state['pending_archive']['batch_id'] = $batch;
         $state['pending_archive']['hashes'] = [];
+        $state['pending_archive']['ready_ids'] = [];
         $this->save($run,$state,['archive_batch_id'=>$batch]);
         return ['status'=>'more', 'reason'=>'sms_archive_recopy_required'];
     }
 
     private function delete_page(array $source, array $run, array $state, Kiwi_Retention_Archive_Lock_Handle $handle,
-        string $source_lock, int $connection): array
+        string $source_lock, int $connection, int $limit): array
     {
         global $wpdb;
         $pending = $state['pending_archive'];
-        $ids = array_keys($pending['members']);
+        $ids = array_slice($pending['ready_ids'], 0, $limit);
         $path = $run['archive_db_path'];
         $copies = $this->checked_copies($source,$run,$ids,$handle);
         if ((string)$wpdb->get_var('SELECT @@session.in_transaction') !== '0' || $wpdb->query('START TRANSACTION') === false) {
@@ -382,12 +397,8 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
                 WHERE id IN ({$marks}) AND id<=%d AND created_at<%s AND @@session.in_transaction=1
                     AND CONNECTION_ID()=%d AND IS_USED_LOCK(%s)=CONNECTION_ID()", ...$arguments));
             if ($deleted !== count($ids)) { throw new RuntimeException('sms_archive_delete_count_mismatch'); }
-            $by_group = [];
-            foreach ($pending['members'] as $id=>$group) { $by_group[$group][] = $id; }
-            foreach ($by_group as $group=>$members) {
-                $state['deleted_batches'][] = ['batch_id'=>$pending['batch_id'],'group'=>$state['groups'][$group]['key'],'ids'=>$members];
-            }
-            $this->finish_page($run,$state,['deleted_rows'=>(int)$run['deleted_rows']+$deleted,
+            $this->record_deletions($state, $ids);
+            $this->save_page($run,$state,['deleted_rows'=>(int)$run['deleted_rows']+$deleted,
                 'delete_last_primary_key'=>max((int)$run['delete_last_primary_key'],max($ids)),
                 'delete_batches'=>(int)$run['delete_batches']+1], $connection);
             if ($wpdb->query('COMMIT') === false) { throw new RuntimeException('sms_archive_delete_commit_unknown'); }
@@ -397,5 +408,27 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             $wpdb->query('ROLLBACK');
             throw $error;
         }
+    }
+
+    private function record_deletions(array &$state, array $ids): void
+    {
+        $page = &$state['pending_archive'];
+        $state['deleted_batches'] ??= [];
+        $manifest = &$state['deleted_batches'];
+        $group_entries = [];
+        for ($i = count($manifest) - 1; $i >= 0 && $manifest[$i]['batch_id'] === $page['batch_id']; --$i) {
+            $group_entries[Kiwi_Retention_Sms_Statistics::group_id($manifest[$i]['group'])] = $i;
+        }
+        foreach ($ids as $id) {
+            $group = $page['members'][$id];
+            if (!isset($group_entries[$group])) {
+                $group_entries[$group] = count($manifest);
+                $manifest[] = ['batch_id'=>$page['batch_id'], 'group'=>$state['groups'][$group]['key'], 'ids'=>[]];
+            }
+            $manifest[$group_entries[$group]]['ids'][] = $id;
+            unset($page['members'][$id], $page['hashes'][$id]);
+        }
+        $page['ready_ids'] = array_slice($page['ready_ids'], count($ids));
+        if (!$page['ready_ids']) { $page['stage'] = 'copy'; }
     }
 }

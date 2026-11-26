@@ -329,3 +329,32 @@ $final = et_sms_batch_complete($f);
 $manifest=json_decode($final['gate_results_json'],true)['deleted_batches'];
 et_check($unknown['status']==='failed' && (int)$final['deleted_rows']===1 && count($manifest)===1 && $manifest[0]['ids']===[6],
     'A lost post-commit acknowledgement resumes from the exact already committed deletion and never repeats it');
+
+$f = et_sms_batch_fixture();
+foreach ([2,4,6,8] as $id) { et_sms_batch_insert($f,$id,$f['passed_group']); }
+et_sms_batch_step($f,4);
+$recorded = $f['repo']->find_run_by_id($f['run_id']);
+et_check((int)$recorded['archived_rows']===4 && (int)$recorded['deleted_rows']===0, 'All four receipts are durable before a budget change');
+et_sms_batch_step($f,1);
+$firstDelete = $f['repo']->find_run_by_id($f['run_id']);
+et_check((int)$firstDelete['deleted_rows']===1 && (int)$firstDelete['delete_last_primary_key']===2,
+    'A smaller resumed budget processes only the next archived original in ID order');
+$done = et_sms_batch_complete($f,1);
+$manifest = json_decode($done['gate_results_json'],true)['deleted_batches'];
+et_check((int)$done['archived_rows']===4 && (int)$done['deleted_rows']===4 && count($manifest)===1 && $manifest[0]['ids']===[2,4,6,8],
+    'Split deletion of one saved batch merges exact membership into its matching group receipt');
+
+$f = et_sms_batch_fixture();
+foreach ([2,4,6,8] as $id) { et_sms_batch_insert($f,$id,$f['passed_group']); }
+$f['archive']->after_commit = static function () use ($f): void {
+    $f['archive']->after_commit = null;
+    throw new RuntimeException('fixture_unacknowledged_archive');
+};
+et_sms_batch_step($f,4);
+et_sms_batch_step($f,1);
+$recovered = $f['repo']->find_run_by_id($f['run_id']);
+et_check((int)$recovered['archived_rows']===1 && (int)$recovered['deleted_rows']===0,
+    'Recovery reads back only a bounded prefix of an unacknowledged larger archive batch');
+$done = et_sms_batch_complete($f,1);
+et_check((int)$done['archived_rows']===4 && (int)$done['deleted_rows']===4 && (int)$done['archive_inserted_rows']===4,
+    'The remaining capped prefixes recover the same four SQLite receipts and delete each original once');
