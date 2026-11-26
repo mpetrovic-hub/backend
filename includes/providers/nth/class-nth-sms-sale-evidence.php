@@ -4,8 +4,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once __DIR__ . '/../../services/interface-sms-confirmed-sale-history.php';
+
 /** Resolve a persisted confirmed sale using its own NTH flow and original inbound SMS. */
-class Kiwi_Nth_Sms_Sale_Evidence
+class Kiwi_Nth_Sms_Sale_Evidence implements Kiwi_Sms_Confirmed_Sale_History
 {
     private $flows;
     private $events;
@@ -19,6 +21,45 @@ class Kiwi_Nth_Sms_Sale_Evidence
         $this->flows = $flows;
         $this->events = $events;
         $this->assignments = $assignments;
+    }
+
+    public static function for_assignments(Kiwi_Sms_Body_Variant_Service $assignments): self
+    {
+        return new self(new Kiwi_Nth_Flow_Transaction_Repository(), new Kiwi_Nth_Event_Repository(), $assignments);
+    }
+
+    public function max_sale_id(): int
+    {
+        global $wpdb;
+        $table = (new Kiwi_Sales_Repository())->get_table_name_for_schema();
+        $max = $wpdb->get_var("SELECT COALESCE(MAX(id),0) FROM {$table}");
+        if (!ctype_digit((string) $max) || (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('sms_sales_ceiling_failed');
+        }
+        return (int) $max;
+    }
+
+    public function confirmed_sales_page(array $services, int $after, int $max, int $limit): array
+    {
+        global $wpdb;
+        if (!$services || $after >= $max || $limit < 1) { return []; }
+        $table = (new Kiwi_Sales_Repository())->get_table_name_for_schema();
+        $marks = implode(',', array_fill(0, count($services), '%s'));
+        $sql = "SELECT id, created_at, service_key, provider_key, sale_type, status, sale_reference,
+                    external_sale_id, external_transaction_id, context_json FROM {$table}
+                WHERE id>%d AND id<=%d AND provider_key='nth' AND sale_type='premium_sms_one_off'
+                    AND status='completed' AND service_key IN ({$marks}) ORDER BY id LIMIT %d";
+        $args = array_merge([$after, $max], array_values($services), [$limit]);
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$args), ARRAY_A);
+        if (!is_array($rows) || (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('sms_sales_read_failed');
+        }
+        $sales = [];
+        foreach ($rows as $row) {
+            $sales[] = ['id' => (int) $row['id'], 'service_key' => $row['service_key'],
+                'created_at' => $row['created_at'], 'proof' => $this->resolve($row)];
+        }
+        return $sales;
     }
 
     /** Optional current MySQL read inside the new sale's transaction, without archive I/O. */
@@ -46,6 +87,7 @@ class Kiwi_Nth_Sms_Sale_Evidence
             || empty($sale['sale_reference']) || empty($sale['service_key'])) {
             return ['status' => 'not_found'];
         }
+        $code = [];
         try {
             $flows = $this->flows->find_for_sale_evidence($sale['sale_reference']);
             if (count($flows) > 1) {
@@ -101,12 +143,12 @@ class Kiwi_Nth_Sms_Sale_Evidence
             if ($result['status'] === 'found' && $result['assignment']['service_key'] !== $sale['service_key']) {
                 return ['status' => 'not_found'];
             }
-            if ($result['status'] === 'found') {
+            if (in_array($result['status'], ['found', 'ambiguous', 'read_error'], true)) {
                 $result['original_code'] = $code;
             }
             return $result;
         } catch (Throwable $error) {
-            return ['status' => 'read_error'];
+            return $code ? ['status' => 'read_error', 'original_code' => $code] : ['status' => 'read_error'];
         }
     }
 
