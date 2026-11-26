@@ -233,6 +233,17 @@ class Kiwi_Retention_Cleanup_Run_Repository
     /** Atomic engagement checkpoints without changing the shared source flow. */
     public function update_run_checkpoint(int $id, array $data, array $expected): bool
     {
+        return $this->write_checkpoint($id, $data, $expected, null);
+    }
+
+    /** A reconnect must not acknowledge a delete after its transaction rolled back. */
+    public function update_run_transaction_checkpoint(int $id, array $data, array $expected, int $connection_id): bool
+    {
+        return $connection_id > 0 && $this->write_checkpoint($id, $data, $expected, $connection_id);
+    }
+
+    private function write_checkpoint(int $id, array $data, array $expected, ?int $connection_id): bool
+    {
         if ($id <= 0) { return false; }
         global $wpdb;
         $row = $this->normalize_row(array_merge($data, ['updated_at' => $this->current_time_mysql()]));
@@ -247,6 +258,10 @@ class Kiwi_Retention_Cleanup_Run_Repository
         }
         $where = ['id=%d', 'finished_at IS NULL'];
         $args[] = $id;
+        if ($connection_id !== null) {
+            $where[] = '@@session.in_transaction=1 AND CONNECTION_ID()=%d';
+            $args[] = $connection_id;
+        }
         foreach ($guards as $column) {
             if (!array_key_exists($column, $expected)) { return false; }
             if ($raw_expected[$column] === null) {
