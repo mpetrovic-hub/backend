@@ -143,6 +143,14 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
                 : $this->scheduled($run);
         } catch (Throwable $error) {
             if (!isset($run['id'])) { return $this->scheduled([], 'sms_audit_read_failed'); }
+            if (empty($run['dry_run'])) {
+                // Preserve the evidence (including exact earlier deletions) even when its JSON cannot be decoded.
+                $stored = $this->store_progress($run, [], 'failed', ['status' => 'failed', 'gate_status' => 'blocked',
+                    'gate_results_json' => $run['gate_results_json'], 'finished_at' => $this->current_time_mysql(),
+                    'error_code' => 'sms_run_evidence_failed', 'error_message' => 'The SMS run evidence could not be verified.']);
+                return $stored === null ? $this->audit_wait($run) : ['success' => false, 'run_id' => $run['run_id'],
+                    'status' => 'failed', 'error_code' => 'sms_run_evidence_failed'];
+            }
             return $this->finish_run((int) $run['id'], ['success' => false, 'run_id' => $run['run_id'],
                 'status' => 'failed', 'gate_status' => 'blocked',
                 'error_code' => 'sms_statistics_failed', 'error_message' => 'The SMS statistics audit could not be verified.']);
@@ -165,11 +173,19 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
 
     private function live_step(array $run, array $state, string $lock): array
     {
-        if (($state['archive_scope'] ?? null) !== $this->archive_scope($run)) {
+        $source = $this->source_registry->get($run['source_key']);
+        if (empty($run['enabled']) || $run['source_table'] !== $source['source_table'] || $run['cutoff_column'] !== $source['cutoff_column']
+            || ($state['archive_scope'] ?? null) !== $this->archive_scope($run)) {
             throw new RuntimeException('sms_frozen_scope_changed');
         }
         if ((int) $run['worker_runs'] === 0) { $this->capture_growth($run, 'before_cleanup'); }
-        if (!$state['groups']) { return $this->complete($run, $state); }
+        if (!$state['groups']) {
+            if ((int) $run['eligible_rows'] !== 0) { throw new RuntimeException('sms_eligible_groups_missing'); }
+            return $this->complete($run, $state);
+        }
+        if ($run['worker_phase'] === 'sms_correcting') { return $this->interrupt_correction($run, $state); }
+        $inventory = $this->inventory_transition($run, $state);
+        if ($inventory !== null) { return $inventory; }
         switch ($run['worker_phase']) {
             case 'sms_archive':
                 if (!empty($state['recheck_groups'])) { return $this->start_recheck($run, $state); }
@@ -178,8 +194,6 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
                 return $this->review($run, $state);
             case 'sms_correction':
                 return $this->correct($run, $state, $lock);
-            case 'sms_correcting':
-                return $this->interrupt_correction($run, $state);
             case 'sms_remeasure':
                 return $this->after($run, $state);
             case 'sms_statistics':
@@ -189,6 +203,8 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         }
         $done = $this->measure($state);
         if ($done) {
+            $state['required_archive_paths'] = $state['progress']['files'] ?? [];
+            $state['archive_target_existed'] = in_array($run['archive_db_path'], $state['required_archive_paths'], true);
             foreach ($state['groups'] as &$group) {
                 $group['initial_mysql_baseline'] = $group['before']['mysql_baseline'];
             }
@@ -196,6 +212,48 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             $state['progress'] = ['phase' => 'correct', 'cursor' => 0, 'groups' => array_keys($state['groups'])];
         }
         return $this->continue_with($run, $state, $done ? 'sms_correction' : 'sms_statistics');
+    }
+
+    /** Remember observed generations even across a resumed or targeted recheck. */
+    private function inventory_transition(array $run, array $state): ?array
+    {
+        $required = $state['required_archive_paths'] ?? null;
+        if ($required === null) { return null; }
+        if (!is_array($required)) { throw new RuntimeException('sms_archive_inventory_invalid'); }
+        $target = $run['archive_db_path'];
+        if (!empty($state['archive_target_existed']) || (int) $run['archived_rows'] > 0 || (int) $run['deleted_rows'] > 0) {
+            $required[] = $target;
+        }
+        try {
+            $current = array_column($this->archive_service->list_archive_files(), 'path');
+        } catch (Throwable $error) {
+            return $this->wait_for_inventory($run, $state);
+        }
+        if (array_diff($required, $current)) { return $this->wait_for_inventory($run, $state); }
+        $added = array_diff($current, $required);
+        if (isset($state['pending_archive']) || (int) $run['archived_rows'] > 0) {
+            $added = array_diff($added, [$target]);
+        }
+        if ($added || !empty($state['inventory_interrupted'])) {
+            unset($state['inventory_interrupted']);
+            $state['required_archive_paths'] = $current;
+            $state['archive_target_existed'] = in_array($target, $current, true);
+            foreach ($state['groups'] as $id => $group) { $state['recheck_groups'][$id] = $group['key']; }
+            return $this->start_recheck($run, $state);
+        }
+        return null;
+    }
+
+    private function wait_for_inventory(array $run, array $state): array
+    {
+        if (empty($state['inventory_interrupted'])) {
+            $state['inventory_interrupted'] = true;
+            $stored = $this->store_progress($run, $state, $run['worker_phase'],
+                ['gate_status' => 'blocked', 'error_code' => 'sms_archive_history_missing']);
+            if ($stored === null) { return $this->audit_wait($run); }
+            $run = $stored;
+        }
+        return $this->audit_wait($run, 'sms_archive_history_missing');
     }
 
     /**
@@ -225,6 +283,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             $fresh = $runs->find_run_by_id((int) $run['id']);
             return $fresh !== null && $fresh['finished_at'] === null
                 && $runs->checkpoint_for_stored_run($fresh) === $runs->checkpoint_after_update($update, $checkpoint)
+                && (int) $wpdb->get_var('SELECT IF(@@session.in_transaction=1,CONNECTION_ID(),0)') === $connection
                 && $runs->owns_source_creation_lock($source_key, $lock);
         } catch (Throwable $error) {
             return false;
@@ -251,7 +310,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         unset($state['recheck_groups']);
         $state['measurement'] = $this->statistics->new_measurement($selected, $state['tolerance']);
         $state['progress'] = ['phase' => 'review'];
-        return $this->continue_with($run, $state, 'sms_recheck', ['gate_status' => 'pending']);
+        return $this->continue_with($run, $state, 'sms_recheck', ['gate_status' => 'pending', 'error_code' => '', 'error_message' => '']);
     }
 
     private function review(array $run, array $state): array
@@ -279,6 +338,13 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         $batch = array_slice($progress['groups'], $progress['cursor'], $limit);
         if (!$batch) { throw new RuntimeException('sms_correction_groups_missing'); }
         // Persist the write intent first. If PHP exits mid-attempt, another invocation must not replay it.
+        foreach ($batch as $id) {
+            if (!isset($state['groups'][$id]['before'], $state['groups'][$id]['key'])
+                || Kiwi_Retention_Sms_Statistics::group_id($state['groups'][$id]['key']) !== $id) {
+                throw new RuntimeException('sms_correction_group_invalid');
+            }
+            $state['groups'][$id]['correction'] = ['status' => 'unconfirmed', 'reason' => 'correction_attempt_started'];
+        }
         $state['progress']['in_flight'] = $batch;
         $reserved = $this->store_progress($run, $state, 'sms_correcting', []);
         if ($reserved === null) { return $this->audit_wait($run); }
@@ -328,6 +394,9 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         foreach ($state['measurement']['groups'] as $id => $group) {
             $state['groups'][$id]['after'] = $group['before'];
         }
+        $observed = $state['measurement']['progress']['files'] ?? [];
+        $state['required_archive_paths'] = array_values(array_unique(array_merge($state['required_archive_paths'] ?? [], $observed)));
+        $state['archive_target_existed'] = !empty($state['archive_target_existed']) || in_array($run['archive_db_path'], $observed, true);
         unset($state['measurement']);
         $state['progress'] = ['phase' => 'released'];
         return $this->continue_with($run, $state, 'sms_archive', ['gate_status' => $this->release_status($state['groups'])]);
@@ -347,12 +416,25 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         $batches = new Kiwi_Retention_Sms_Archive_Batches($this->config, $this->source_registry, $this->run_repository,
             $this->archive_service, $this->operational_event_service, $this->archive_lock, $this->corruption_safety_gate, $this->health_store);
         $result = $batches->advance($run, min(500, $this->config->get_retention_worker_row_limit()), $lock);
+        if ($result['status'] === 'recheck' || ($result['reason'] ?? '') === 'sms_archive_confirmed_file_missing') {
+            $fresh = $this->run_repository->find_run_by_id((int) $run['id']);
+            if (!$fresh || $fresh['finished_at'] !== null || $fresh['worker_phase'] !== 'sms_archive') { return $this->audit_wait($run); }
+            $state = json_decode($fresh['gate_results_json'], true, 512, JSON_THROW_ON_ERROR);
+            if (($result['reason'] ?? '') === 'sms_archive_confirmed_file_missing') {
+                return $this->wait_for_inventory($fresh, $state);
+            }
+            foreach ($result['groups'] ?? [$result['group']] as $key) {
+                $state['recheck_groups'][Kiwi_Retention_Sms_Statistics::group_id($key)] = $key;
+            }
+            return $this->start_recheck($fresh, $state);
+        }
         if ($result['status'] === 'failed') {
             return $this->audit_wait($run, $result['reason'] ?? 'sms_package_failed');
         }
-        if ($result['status'] !== 'done') {
+        if (in_array($result['status'], ['more', 'wait'], true)) {
             return $this->scheduled($run, $result['reason'] ?? '');
         }
+        if ($result['status'] !== 'done') { throw new RuntimeException('sms_archive_result_unknown'); }
         // A package owns its own archive/delete checkpoints. Finalize only the state read back after it.
         $fresh = $this->run_repository->find_run_by_id((int) $run['id']);
         if (!$fresh || $fresh['finished_at'] !== null || $fresh['worker_phase'] !== 'sms_archive') { return $this->audit_wait($run); }
@@ -391,7 +473,9 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
 
     private function store_progress(array $run, array $state, string $phase, array $fields): ?array
     {
-        $update = $fields + ['gate_results_json' => $state, 'worker_runs' => (int) $run['worker_runs'] + 1,
+        $json = array_key_exists('gate_results_json', $fields) ? $fields['gate_results_json'] : wp_json_encode($state);
+        if (!is_string($json) || $json === '') { return null; }
+        $update = $fields + ['gate_results_json' => $json, 'worker_runs' => (int) $run['worker_runs'] + 1,
             'worker_last_finished_at' => $this->current_time_mysql(), 'status' => 'running', 'worker_phase' => $phase];
         $prior = $this->run_repository->checkpoint_for_stored_run($run);
         $expected = $this->run_repository->checkpoint_after_update($update, $prior);
@@ -406,6 +490,8 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             return null;
         }
         if (!$stored || $this->run_repository->checkpoint_for_stored_run($stored) !== $expected
+            || $this->archive_scope($stored) !== $this->archive_scope($run)
+            || $stored['source_key'] !== $run['source_key'] || $stored['source_table'] !== $run['source_table']
             || $stored['worker_phase'] !== $phase || $stored['status'] !== $update['status']
             || ($stored['finished_at'] ?? null) !== ($update['finished_at'] ?? null)
             || $stored['gate_status'] !== ($update['gate_status'] ?? $run['gate_status'])) {

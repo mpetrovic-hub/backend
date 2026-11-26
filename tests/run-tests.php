@@ -459,6 +459,7 @@ require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.ph
 require_once __DIR__ . '/../includes/services/class-retention-sms-statistics.php';
 require_once __DIR__ . '/../includes/services/class-retention-sms-deletion-evidence.php';
 require_once __DIR__ . '/../includes/services/class-retention-sms-worker.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-archive-batches.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-reader.php';
 require_once __DIR__ . '/../includes/services/class-retention-engagement-worker.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';

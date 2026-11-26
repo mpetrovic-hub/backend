@@ -182,6 +182,23 @@ $compare = static function (int $actual, array $expected, string $status) use ($
 };
 $compare(10, [10,11], 'passed');
 $compare(8, [10,11], 'outside_tolerance');
+if (in_array('--sms-live-time', $argv, true)) {
+    et_create_health_options();
+    foreach ([8 => 'outside_tolerance', 10 => 'passed'] as $actual => $status) {
+        $wpdb->update($summary, ['conv' => $actual], ['allocation_version' => 'timed']);
+        $live = $preview(['enabled' => true, 'dry_run' => false]);
+        $state = json_decode($live['gate_results_json'], true, 512, JSON_THROW_ON_ERROR);
+        $group = $state['groups'][Kiwi_Retention_Sms_Statistics::group_id($timed_key)];
+        $left = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$source['source_table']} WHERE allocation_version='timed'");
+        et_check($group['correction']['counters']['conv'] === ['status' => 'skipped', 'reason' => 'sale_time_uncertain']
+            && $group['after']['counters']['conv']['actual'] === $actual && $group['after']['status'] === $status
+            && $group['after']['counters']['conv']['possible_expected'] === [10, 11],
+            'Live uncertain sale timing keeps conv=' . $actual . ' and records the fresh result for both exact possibilities');
+        et_check($left === ($actual === 8 ? 9 : 0),
+            'Actual ' . $actual . ' admits deletion only when each possible conv total is within tolerance');
+    }
+    return;
+}
 $wpdb->update($sales->get_table_name_for_schema(), ['created_at'=>'2026-07-14 02:00:00'], ['sale_reference'=>'timed-sale-2100']);
 $compare(10, [9,10,11], 'passed');
 $archive_db = new PDO('sqlite:' . $new);

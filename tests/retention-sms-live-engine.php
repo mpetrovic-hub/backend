@@ -20,6 +20,7 @@ $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
 $originals = new Kiwi_Sms_Body_Variant_Repository();
 $runs = new Kiwi_Retention_Cleanup_Run_Repository();
 $snapshots = new Kiwi_Retention_Table_Growth_Snapshot_Repository();
+et_create_health_options();
 foreach ([$originals, $runs, $snapshots, new Kiwi_Nth_Event_Repository(), new Kiwi_Nth_Flow_Transaction_Repository(),
     new Kiwi_Sales_Repository(), new Kiwi_Operational_Event_Repository()] as $repository) {
     $repository->create_table();
@@ -35,7 +36,7 @@ $start = static function () use ($plugin, $key, $runs, $wpdb): array {
     return $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $runs->get_table_name() . ' WHERE run_id=%s', $result['run_id']), ARRAY_A);
 };
 $step = static function (array $run) use ($plugin, $key, $runs): array {
-    $plugin->run_retention_cleanup_worker($key);
+    $GLOBALS['sms_live_last_step'] = $plugin->run_retention_cleanup_worker($key);
     return $runs->find_run_by_id((int) $run['id']);
 };
 $until = static function (array $run, callable $condition) use ($step): array {
@@ -44,7 +45,8 @@ $until = static function (array $run, callable $condition) use ($step): array {
         if ($run['finished_at'] !== null) { break; }
         $run = $step($run);
     }
-    throw new RuntimeException('Live run stopped before its expected checkpoint: ' . json_encode([$run['status'], $run['worker_phase'], $run['error_code']]));
+    throw new RuntimeException('Live run stopped before its expected checkpoint: ' . json_encode([$run['status'], $run['worker_phase'],
+        $run['error_code'], $GLOBALS['sms_live_last_step'] ?? []]));
 };
 $sample = $start();
 et_check(!empty($sample['archive_db_path']) && (int)$sample['dry_run'] === 0 && $sample['cutoff_value'] === '2026-07-14 00:00:00',
@@ -92,6 +94,8 @@ $blockedId = Kiwi_Retention_Sms_Statistics::group_id($both['blocked']['key']);
 $originalFinding = $released['groups'][$legacyId]['after'];
 $lock = $runs->acquire_source_creation_lock($key);
 try {
+    et_check(!Kiwi_Retention_Sms_Worker::invalidate_group($runs, $both['legacy']['key'], $lock),
+        'Manual repair invalidation requires an actual repair transaction on the source-lock connection');
     $wpdb->query('START TRANSACTION');
     $wpdb->update($summary, ['assignments'=>7], ['allocation_version'=>'legacy']);
     et_check(Kiwi_Retention_Sms_Worker::invalidate_group($runs, $both['legacy']['key'], $lock),
@@ -108,3 +112,95 @@ et_check($rechecked['groups'][$legacyId]['after']['status'] === 'outside_toleran
     && $rechecked['groups'][$legacyId]['reviews'][0]['after'] === $originalFinding
     && $rechecked['groups'][$blockedId]['after'] === $released['groups'][$blockedId]['after'],
     'The changed group receives a fresh before/correction/after while the separate group keeps its own finding');
+$run = $until($run, static fn(array $row): bool => $row['finished_at'] !== null);
+et_check((int)$run['deleted_rows']===0 && !is_file($run['archive_db_path']),
+    'A completed live run with only blocked groups keeps all originals and creates no archive file');
+
+$wpdb->update($summary, ['assignments'=>2], ['allocation_version'=>'legacy']);
+$archive = new Kiwi_Retention_Sqlite_Archive_Service(new Kiwi_Config());
+$otherArchive = $archive->get_archive_directory() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2025.sqlite';
+$archive->archive_snapshot_batch($source, [$originals->find_assignment_by_id(11)], '2026-07-14 00:00:00',
+    'live-original-187', $otherArchive);
+$loss=$until($start(), static fn(array $row): bool => $row['worker_phase']==='sms_archive');
+rename($otherArchive, $otherArchive . '.saved');
+$loss=$step($loss);
+et_check(!is_file($loss['archive_db_path']) && (int)$loss['deleted_rows']===0 && $originals->find_assignment_by_id(11)!==null,
+    'Loss of another observed archive generation invalidates the release before any new copy or deletion');
+rename($otherArchive . '.saved', $otherArchive);
+$loss=$step($loss);
+et_check($loss['worker_phase']==='sms_recheck', 'A returned archive generation requires fresh evidence before the old run can resume');
+$loss=$until($loss,static fn(array $row): bool => $row['finished_at']!==null);
+et_check($loss['status']==='completed' && (int)$loss['deleted_rows']===1 && $originals->find_assignment_by_id(11)===null
+    && $originals->find_assignment_by_id(12)!==null && $originals->find_assignment_by_id(13)!==null,
+    'After a full recheck the genuine eligible ID alone is archived and deleted');
+// The source-ID is still reconstructible from live and archived originals after the earlier run.
+$full(14,'legacy','2024-01-04 00:00:00');
+$full(15,'second','2024-01-05 00:00:00');
+$wpdb->insert($summary,['created_at'=>'2024-01-01','updated_at'=>'2024-01-02','landing_key'=>'fixture187',
+    'service_key'=>'sms187','variant_key'=>'bare_id','seed'=>'','allocation_version'=>'second','assignments'=>1]);
+$interrupted=$until($start(), static fn(array $row): bool => $row['worker_phase']==='sms_correction');
+$audit=$runs->get_table_name();
+$wpdb->pdo->exec("CREATE TRIGGER sms_fixture_lost_result BEFORE UPDATE ON {$audit} FOR EACH ROW
+    BEGIN IF OLD.worker_phase='sms_correcting' AND NEW.worker_phase='sms_remeasure'
+    THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='unavailable audit'; END IF; END");
+$interrupted=$step($interrupted);
+et_check($interrupted['worker_phase']==='sms_correcting' && (int)$wpdb->get_var("SELECT assignments FROM {$summary} WHERE allocation_version='legacy'")===3
+    && (int)$interrupted['archived_rows']===0 && (int)$interrupted['deleted_rows']===0,
+    'A durable correction whose result cannot be saved cannot archive any group, including another passing group');
+$wpdb->pdo->exec('DROP TRIGGER sms_fixture_lost_result');
+$interrupted=$step($interrupted);
+et_check($interrupted['status']==='failed' && $interrupted['error_code']==='sms_correction_interrupted'
+    && $originals->find_assignment_by_id(14)!==null && $originals->find_assignment_by_id(15)!==null,
+    'A worker restart closes the unconfirmed attempt and never resumes on its old findings');
+$retry=$until($start(),static fn(array $row): bool => $row['worker_phase']==='sms_archive');
+$body=json_decode($retry['gate_results_json'],true,512,JSON_THROW_ON_ERROR);
+$read=$byVersion($body);
+et_check($retry['run_id']!==$interrupted['run_id'] && $read['legacy']['before']['counters']['assignments']['actual']===3
+    && $read['legacy']['after']['counters']['assignments']['actual']===3 && $read['legacy']['correction']['counters']['assignments']['status']==='skipped',
+    'The next regular run reads the already saved correction before a new attempt, and cannot count it twice');
+$lock=$runs->acquire_source_creation_lock($key);
+try {
+    $wpdb->query('START TRANSACTION');
+    $wpdb->update($summary,['cta1'=>9],['allocation_version'=>'legacy']);
+    et_check(Kiwi_Retention_Sms_Worker::invalidate_group($runs,$read['legacy']['key'],$lock),'Known change is part of the same manual transaction');
+    $wpdb->query('COMMIT');
+} finally { $runs->release_source_creation_lock($lock); }
+$retry=$until($retry,static fn(array $row):bool=>$row['worker_phase']==='sms_remeasure');
+$wpdb->pdo->exec("CREATE TRIGGER sms_fixture_block_release BEFORE UPDATE ON {$audit} FOR EACH ROW
+    BEGIN IF NEW.worker_phase='sms_archive' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='unavailable release'; END IF; END");
+for ($i=0;$i<30;$i++) {
+    $retry=$step($retry);
+    if (($GLOBALS['sms_live_last_step']['error_code'] ?? '')==='sms_audit_unconfirmed') {break;}
+}
+et_check(($GLOBALS['sms_live_last_step']['error_code']??'')==='sms_audit_unconfirmed' && $retry['worker_phase']==='sms_remeasure'
+    && (int)$retry['archived_rows']===0 && $originals->find_assignment_by_id(15)!==null,
+    'A required release that fails to persist holds the different already passed group as well');
+$wpdb->pdo->exec('DROP TRIGGER sms_fixture_block_release');
+$retry=$until($retry,static fn(array $row):bool=>$row['worker_phase']==='sms_archive');
+// Normal writes after release do not force a full group recount on the next package.
+$beforeNormal=json_decode($retry['gate_results_json'],true,512,JSON_THROW_ON_ERROR);
+et_check($originals->mark_event_by_transaction_id('txn_live187_15','cta1'), 'A normal post-release click commits on a proven group');
+$wpdb->query($wpdb->prepare("UPDATE {$audit} SET updated_at='2020-01-01' WHERE id=%d",(int)$retry['id']));
+$continued=$start();
+et_check($continued['run_id']===$retry['run_id'], 'A stale wake-up with a stored release resumes the same frozen archive run');
+$continued=$until($continued,static fn(array $row):bool=>$row['finished_at']!==null);
+$final=json_decode($continued['gate_results_json'],true,512,JSON_THROW_ON_ERROR);
+$secondId=Kiwi_Retention_Sms_Statistics::group_id($read['second']['key']);
+et_check($continued['status']==='completed' && (int)$continued['deleted_rows']===1
+    && $final['groups'][$secondId]['after']===$beforeNormal['groups'][$secondId]['after']
+    && $originals->find_assignment_by_id(15)===null && $originals->find_assignment_by_id(14)!==null,
+    'The normal event preserves the saved group release, its original is archived and the blocked group stays in MySQL');
+$late = new PDO('sqlite:'.$continued['archive_db_path']);
+et_check((bool)$late->query('SELECT cta1_recorded_at FROM '.$source['source_table'].' WHERE id=15')->fetchColumn(),
+    'Row-level receipt proof catches the current click marker without invalidating the group');
+$late=null;
+$full(16,'second','2024-01-03 00:30:00');
+$replacementRun=$until($start(),static fn(array $row):bool=>$row['worker_phase']==='sms_archive');
+$alternative=dirname($replacementRun['archive_db_path']).DIRECTORY_SEPARATOR.'kiwi_retention_archive_2026_part_2.sqlite';
+et_check($runs->terminalize_open_run_for_manual_replacement($replacementRun['archive_db_path'],$alternative),
+    'The existing archive replacement transaction can close the open SMS run');
+$workerResult=$plugin->run_retention_cleanup_worker($key);
+$oldRun=$runs->find_run_by_id((int)$replacementRun['id']);
+et_check(($workerResult['error_code']??'')==='no_open_run' && $oldRun['status']==='failed'
+    && $oldRun['error_code']==='archive_manually_replaced' && $originals->find_assignment_by_id(16)!==null,
+    'A pending SMS worker cannot revive the frozen run or delete its original after an externally verified replacement');
