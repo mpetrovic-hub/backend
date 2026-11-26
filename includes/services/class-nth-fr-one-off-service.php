@@ -814,7 +814,8 @@ class Kiwi_Nth_Fr_One_Off_Service
             return '';
         }
 
-        return $this->sms_body_variant_service->resolve_transaction_id_from_visible_token($visible_token);
+        $lookup = $this->sms_body_variant_service->resolve_assignment_from_visible_token($visible_token);
+        return $lookup['status'] === 'found' ? (string) $lookup['assignment']['transaction_id'] : '';
     }
 
     private function normalize_keyword_seed(string $keyword): string

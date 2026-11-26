@@ -4218,6 +4218,18 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
         return null;
     }
 
+    public function find_visible_token_matches(string $token): array
+    {
+        return array_values(array_filter($this->assignments, static function (array $row) use ($token): bool {
+            return strcasecmp($row['visible_token'], $token) === 0;
+        }));
+    }
+
+    public function find_assignment_by_id(int $id): ?array
+    {
+        return $this->assignments[$id] ?? null;
+    }
+
     public function find_latest_by_landing_session(string $landing_key, string $session_token): ?array
     {
         $matches = [];
@@ -4460,6 +4472,7 @@ class Kiwi_Test_Device_Model_Brand_Map_Repository extends Kiwi_Device_Model_Bran
 class Kiwi_Test_Wpdb_Sms_Body_Variant
 {
     public $prefix = 'wp_';
+    public $last_error = '';
     public $tables = [];
 
     public function prepare($query, ...$args)
@@ -4493,6 +4506,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
         $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
         $rows = $this->tables[$assignment_table] ?? [];
+
+        if (strpos($query, 'WHERE id = %d') !== false) {
+            return $rows[(int) $args[0]] ?? null;
+        }
 
         if (strpos($query, 'transaction_id = %s') !== false) {
             $transaction_id = (string) ($args[0] ?? '');
@@ -4545,6 +4562,12 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $query = is_array($statement) ? $statement['query'] : $statement;
         $args = is_array($statement) ? $statement['args'] : [];
         preg_match_all('/(?:WHERE|AND) ([a-z_]+) = %s/', $query, $matches);
+        if (strpos($query, 'kiwi_sms_body_variant_assignments') !== false) {
+            $rows = array_values($this->tables[$this->prefix . 'kiwi_sms_body_variant_assignments'] ?? []);
+            return array_values(array_filter($rows, static function (array $row) use ($args): bool {
+                return strcasecmp($row['visible_token'], $args[0]) === 0;
+            }));
+        }
         foreach ($matches[1] as $i => $field) {
             $rows = array_values(array_filter($rows, static function (array $row) use ($field, $args, $i): bool {
                 return ($row[$field] ?? '') === $args[$i];
@@ -11011,6 +11034,8 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
         'Expected MO-correlated attribution to resolve original clickid for postback dispatch.'
     );
 });
+
+require __DIR__ . '/sms-assignment-lookup-tests.php';
 
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service resolves assigned visible SMS body tokens', function (): void {
     $config = new Kiwi_Test_Config(

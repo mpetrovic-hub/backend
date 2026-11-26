@@ -1766,6 +1766,10 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--sms-assignment-lookup', $argv, true)) {
+        require __DIR__ . '/retention-sms-assignment-lookup-engine.php';
+        return;
+    }
     if (in_array('--health-pending', $argv, true)) { et_health_pending_scenario(); return; }
     if (in_array('--tk-zero-day', $argv, true)) {
         et_tk_zero_day_scenarios(); echo 'TK_ZERO_DAY_TESTS_PASSED ', $GLOBALS['et_checks'], "\n"; return;

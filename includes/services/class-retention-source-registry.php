@@ -9,6 +9,29 @@ class Kiwi_Retention_Source_Registry
     public const SOURCE_LANDING_PAGE_SESSIONS = 'landing_page_sessions';
     public const SOURCE_LANDING_HANDOFF_EVENTS = 'landing_handoff_events';
     public const SOURCE_LANDING_SESSION_ENGAGEMENTS = 'landing_session_engagements';
+    public const SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS = 'sms_body_variant_assignments';
+
+    /** Archive contract used by SMS lookup independently of scheduled cleanup. */
+    public static function sms_body_variant_assignments(): array
+    {
+        global $wpdb;
+
+        return [
+            'source_key' => self::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
+            'source_table' => $wpdb->prefix . 'kiwi_sms_body_variant_assignments',
+            'primary_key' => 'id', 'cutoff_column' => 'created_at', 'mutable_snapshot' => true,
+            'archive_columns' => [
+                'id' => 'INTEGER', 'created_at' => 'TEXT', 'updated_at' => 'TEXT', 'landing_key' => 'TEXT',
+                'service_key' => 'TEXT', 'provider_key' => 'TEXT', 'flow_key' => 'TEXT', 'country' => 'TEXT',
+                'keyword' => 'TEXT', 'shortcode' => 'TEXT', 'pid' => 'TEXT', 'click_id' => 'TEXT',
+                'session_token' => 'TEXT', 'transaction_id' => 'TEXT', 'visible_token' => 'TEXT',
+                'variant_key' => 'TEXT', 'seed' => 'TEXT', 'allocation_version' => 'TEXT', 'sms_body' => 'TEXT',
+                'cta1_recorded_at' => 'TEXT', 'handoff_attempted_at' => 'TEXT', 'handoff_hidden_at' => 'TEXT',
+                'handoff_no_hide_at' => 'TEXT', 'handoff_returned_at' => 'TEXT', 'conv_recorded_at' => 'TEXT',
+                'raw_context' => 'TEXT',
+            ],
+        ];
+    }
 
     public function get_source_keys(): array
     {

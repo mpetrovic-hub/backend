@@ -105,7 +105,9 @@ class Kiwi_Sms_Body_Variant_Repository
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($assignments_sql);
         dbDelta($summary_sql);
     }
@@ -240,6 +242,32 @@ class Kiwi_Sms_Body_Variant_Repository
         );
 
         return is_array($row) ? $row : null;
+    }
+
+    public function find_visible_token_matches(string $token): array
+    {
+        global $wpdb;
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$this->get_assignments_table_name()} WHERE visible_token = %s LIMIT 2", $token
+        ), ARRAY_A);
+        if (!is_array($rows) || (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('sms_assignment_mysql_read_failed');
+        }
+        return $rows;
+    }
+
+    public function find_assignment_by_id(int $id): ?array
+    {
+        global $wpdb;
+
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$this->get_assignments_table_name()} WHERE id = %d LIMIT 1", $id
+        ), ARRAY_A);
+        if (($row !== null && !is_array($row)) || (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('sms_assignment_mysql_read_failed');
+        }
+        return $row;
     }
 
     public function find_latest_by_landing_session(string $landing_key, string $session_token): ?array

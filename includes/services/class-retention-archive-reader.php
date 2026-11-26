@@ -34,6 +34,9 @@ class Kiwi_Retention_Archive_Reader
         if (($source['source_key'] ?? '') === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
             return [$table . '_retention_day' => ['created_at', '_source_pk']];
         }
+        if (($source['source_key'] ?? '') === Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS) {
+            return [$table . '_retention_visible_token' => ['visible_token', '_source_pk']];
+        }
         return [];
     }
 
@@ -68,10 +71,10 @@ class Kiwi_Retention_Archive_Reader
         return true;
     }
 
-    /** Only pair membership folds ASCII case; snapshots keep original bytes. */
+    /** MySQL pair and SMS-token lookups fold ASCII case; snapshots retain original bytes. */
     private static function read_index_collation(string $column): string
     {
-        return in_array($column, ['landing_key', 'session_token'], true) ? 'NOCASE' : 'BINARY';
+        return in_array($column, ['landing_key', 'session_token', 'visible_token'], true) ? 'NOCASE' : 'BINARY';
     }
 
     public static function read_index_columns_sql(array $columns): string
@@ -204,12 +207,33 @@ class Kiwi_Retention_Archive_Reader
         return true;
     }
 
-    /** Verify Source-ID evidence; mutable engagements may have older versions. */
-    public function copies(array $source, int $source_pk, ?Kiwi_Retention_Archive_Lock_Handle $held_lock = null): array
+    /** Candidate IDs only. The caller must check the authoritative copy and live ownership. */
+    public function matching_source_ids(array $source, string $column, string $value): array
     {
-        if ($this->files !== null && array_column($this->archive_service->list_archive_files(), 'path') !== array_column($this->files, 'path')) {
-            throw new RuntimeException('archive_inventory_changed');
+        $ids = [];
+        $table = self::identifier($source['source_table']);
+        $column = self::identifier($column);
+        $collation = self::read_index_collation($column);
+        foreach ($this->files(true) as $file) {
+            $pdo = $this->open($file['path']);
+            if (!$this->has_source($pdo, $source)) { continue; }
+            $statement = $pdo->prepare('SELECT _source_pk FROM "' . $table . '" WHERE "' . $column . '"=? COLLATE ' . $collation);
+            $statement->execute([$value]);
+            while (($id = $statement->fetchColumn()) !== false) {
+                $ids[(int) $id] = (int) $id;
+            }
         }
+        $this->assert_inventory_unchanged();
+        return array_values($ids);
+    }
+
+    /** Verify Source-ID evidence; mutable snapshots may have older versions. */
+    public function copies(
+        array $source, int $source_pk, ?Kiwi_Retention_Archive_Lock_Handle $held_lock = null,
+        bool $require_complete_receipts = false
+    ): array
+    {
+        $this->assert_inventory_unchanged();
         $copies = [];
         $reference = null;
         foreach ($this->files() as $file) {
@@ -224,12 +248,18 @@ class Kiwi_Retention_Archive_Reader
             $statement->execute([$source_pk]);
             $row = $statement->fetch(PDO::FETCH_ASSOC);
             if (!$row) {
+                if ($require_complete_receipts) {
+                    $receipt = $pdo->prepare('SELECT 1 FROM archive_batches b CROSS JOIN archive_batch_rows r
+                        WHERE b.source_key=? AND b.source_table=? AND r.archive_batch_id=b.archive_batch_id AND r.source_pk=? LIMIT 1');
+                    $receipt->execute([$source['source_key'], $source['source_table'], $source_pk]);
+                    if ($receipt->fetchColumn()) { throw new RuntimeException('archive_reader_receipted_row_missing'); }
+                }
                 continue;
             }
-            $this->verify_row_receipt($pdo, $source, $row);
+            $this->verify_row_receipt($pdo, $source, $row, $require_complete_receipts);
             $snapshot = self::snapshot($source, $row);
             if ($reference !== null && $snapshot !== $reference
-                && ($source['source_key'] ?? '') !== Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
+                && empty($source['mutable_snapshot'])) {
                 throw new RuntimeException('archive_reader_snapshot_conflict');
             }
             $reference = $snapshot;
@@ -353,12 +383,21 @@ class Kiwi_Retention_Archive_Reader
         return $copies;
     }
 
-    private function verify_row_receipt(PDO $pdo, array $source, array $row): void
+    private function assert_inventory_unchanged(): void
+    {
+        if ($this->files !== null && array_column($this->archive_service->list_archive_files(), 'path') !== array_column($this->files, 'path')) {
+            throw new RuntimeException('archive_inventory_changed');
+        }
+    }
+
+    private function verify_row_receipt(PDO $pdo, array $source, array $row, bool $require_complete_batch = false): void
     {
         $statement = $pdo->prepare(
             'SELECT 1 FROM archive_batch_rows r INNER JOIN archive_batches b
              ON b.archive_batch_id=r.archive_batch_id WHERE r.source_pk=?
-             AND r.archive_batch_id=? AND b.source_key=? AND b.source_table=? LIMIT 1'
+             AND r.archive_batch_id=? AND b.source_key=? AND b.source_table=?'
+             . ($require_complete_batch ? " AND b.status='success' AND b.finished_at IS NOT NULL AND b.finished_at<>''" : '')
+             . ' LIMIT 1'
         );
         $statement->execute([$row['_source_pk'], $row['_archive_batch_id'], $source['source_key'], $source['source_table']]);
         if (!$statement->fetchColumn() || (int) $row['_source_pk'] !== (int) $row[$source['primary_key']]) {

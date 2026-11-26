@@ -8,11 +8,16 @@ class Kiwi_Sms_Body_Variant_Service
 {
     private $config;
     private $repository;
+    private $archive_reader;
 
-    public function __construct(Kiwi_Config $config, Kiwi_Sms_Body_Variant_Repository $repository)
-    {
+    public function __construct(
+        Kiwi_Config $config,
+        Kiwi_Sms_Body_Variant_Repository $repository,
+        ?Kiwi_Retention_Archive_Reader $archive_reader = null
+    ) {
         $this->config = $config;
         $this->repository = $repository;
+        $this->archive_reader = $archive_reader;
     }
 
     public function build_variant_body(
@@ -93,19 +98,66 @@ class Kiwi_Sms_Body_Variant_Service
 
     public function resolve_transaction_id_from_visible_token(string $visible_token): string
     {
-        $visible_token = $this->sanitize_token($visible_token, 140);
+        $result = $this->resolve_assignment_from_visible_token($visible_token);
+        return (string) ($result['assignment']['transaction_id'] ?? '');
+    }
 
-        if ($visible_token === '') {
-            return '';
+    /** A failed read must remain distinguishable from a successful lookup without a match. */
+    public function resolve_assignment_from_visible_token(string $visible_token): array
+    {
+        if (preg_match('/^[A-Za-z0-9_-]{1,140}$/D', $visible_token) !== 1) {
+            return ['status' => 'not_found'];
         }
-
-        $assignment = $this->repository->find_by_visible_token($visible_token);
-
-        if (!is_array($assignment)) {
-            return '';
+        try {
+            $live = $this->repository->find_visible_token_matches($visible_token);
+        } catch (Throwable $error) {
+            return ['status' => 'read_error', 'source' => 'mysql'];
         }
+        if ($live) {
+            return $this->assignment_lookup_result($live, 'mysql');
+        }
+        $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
+        $reader = $this->archive_reader ?? new Kiwi_Retention_Archive_Reader(new Kiwi_Retention_Sqlite_Archive_Service($this->config));
+        try {
+            $matches = [];
+            $match_source = 'archive';
+            foreach ($reader->matching_source_ids($source, 'visible_token', $visible_token) as $id) {
+                try {
+                    $live_row = $this->repository->find_assignment_by_id($id);
+                } catch (Throwable $error) {
+                    return ['status' => 'read_error', 'source' => 'mysql'];
+                }
+                if ($live_row !== null) {
+                    // An older archived code can still point to a row that changed in MySQL.
+                    $row = $live_row;
+                } else {
+                    $copies = $reader->copies($source, $id, null, true);
+                    if (!$copies) { throw new RuntimeException('sms_assignment_archive_copy_missing'); }
+                    $row = $copies[array_key_last($copies)];
+                }
+                if (strcasecmp((string) $row['visible_token'], $visible_token) === 0) {
+                    $matches[] = $row;
+                    $match_source = $live_row === null ? 'archive' : 'mysql';
+                    if (count($matches) === 2) { break; }
+                }
+            }
+            return $this->assignment_lookup_result($matches, $match_source);
+        } catch (Throwable $error) {
+            return ['status' => 'read_error', 'source' => 'archive'];
+        } finally {
+            $reader->close();
+        }
+    }
 
-        return $this->sanitize_token((string) ($assignment['transaction_id'] ?? ''), 120);
+    private function assignment_lookup_result(array $matches, string $source): array
+    {
+        if (!$matches) { return ['status' => 'not_found']; }
+        if (count($matches) > 1) { return ['status' => 'ambiguous', 'source' => $source]; }
+        $row = $matches[0];
+        if ((int) ($row['id'] ?? 0) < 1 || preg_match('/^[A-Za-z0-9_-]{1,120}$/D', (string) ($row['transaction_id'] ?? '')) !== 1) {
+            return ['status' => 'read_error', 'source' => $source];
+        }
+        return ['status' => 'found', 'source' => $source, 'assignment' => $row];
     }
 
     /** Select a complete entry using the supplied generation as the stable hash salt. */
