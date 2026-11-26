@@ -606,6 +606,14 @@ class Kiwi_Config
                 'dry_run' => (bool) ($source_settings['dry_run'] ?? $defaults['dry_run']),
                 'retention_days' => max(1, (int) ($source_settings['retention_days'] ?? $defaults['retention_days'])),
             ];
+            if (isset($defaults['tolerance_percent'])) {
+                $percent = $source_settings['tolerance_percent'] ?? $defaults['tolerance_percent'];
+                $absolute = $source_settings['tolerance_absolute'] ?? $defaults['tolerance_absolute'];
+                $normalized[$source_key]['tolerance_percent'] = is_numeric($percent) && is_finite((float) $percent) && $percent >= 0
+                    ? (float) $percent : $defaults['tolerance_percent'];
+                $normalized[$source_key]['tolerance_absolute'] = filter_var($absolute, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) !== false
+                    ? (int) $absolute : $defaults['tolerance_absolute'];
+            }
         }
 
         return $normalized;
@@ -674,6 +682,8 @@ class Kiwi_Config
                 'enabled' => false,
                 'dry_run' => true,
                 'retention_days' => 90,
+                'tolerance_percent' => 2.0,
+                'tolerance_absolute' => 2,
             ],
             'premium_sms_fraud_signals' => [
                 'enabled' => false,

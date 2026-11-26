@@ -271,6 +271,63 @@ class Kiwi_Retention_Archive_Reader
         return $copies;
     }
 
+    /** Keyset pages for a complete scan across yearly archives, without retaining all original IDs. */
+    public function original_ids_after(array $source, int $after, int $limit): array
+    {
+        $ids = [];
+        $table = self::identifier($source['source_table']);
+        $limit = min(500, max(1, $limit));
+        foreach ($this->files() as $file) {
+            $pdo = $this->open($file['path']);
+            if (!$this->has_source($pdo, $source)) { continue; }
+            $select = $pdo->prepare('SELECT _source_pk FROM "' . $table . '" WHERE _source_pk>? ORDER BY _source_pk LIMIT ' . $limit);
+            $select->execute([$after]);
+            foreach ($select->fetchAll(PDO::FETCH_COLUMN) as $id) { $ids[(int) $id] = (int) $id; }
+        }
+        sort($ids, SORT_NUMERIC);
+        return array_slice($ids, 0, $limit);
+    }
+
+    /** Read a bounded set with the same row/receipt/batch identity used for individual lookups. */
+    public function receipted_rows(array $source, string $path, array $ids): array
+    {
+        if (!$ids || count($ids) > 500) { throw new InvalidArgumentException('archive_receipt_page_size'); }
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) { return []; }
+        $table = self::identifier($source['source_table']);
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $sql = 'SELECT s.*, EXISTS (SELECT 1 FROM archive_batch_rows r JOIN archive_batches b
+            ON b.archive_batch_id=r.archive_batch_id WHERE r.source_pk=s._source_pk AND r.archive_batch_id=s._archive_batch_id
+            AND b.source_key=? AND b.source_table=? AND b.status=\'success\' AND b.finished_at IS NOT NULL AND b.finished_at<>\'\'
+            AND b.archive_db_path=?) AS verified FROM "' . $table . '" s WHERE s._source_pk IN (' . $marks . ')';
+        $query = $pdo->prepare($sql);
+        $query->execute(array_merge([$source['source_key'], $table, $path], $ids));
+        $rows = [];
+        while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
+            $id = (int) $row['_source_pk'];
+            $valid = (int) $row['verified'] === 1 && $id > 0 && $id === (int) $row[$source['primary_key']];
+            unset($row['verified']);
+            try { self::snapshot($source, $row); }
+            catch (RuntimeException $error) { $valid = false; }
+            $rows[$id] = ['row' => $row, 'verified' => $valid, 'path' => $path];
+        }
+        return $rows;
+    }
+
+    /** An orphaned source receipt can prove absence even when no readable row remains to enumerate. */
+    public function missing_original_ids(array $source, string $path, int $after, int $limit): array
+    {
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) { return []; }
+        $table = self::identifier($source['source_table']);
+        $query = $pdo->prepare('SELECT DISTINCT r.source_pk FROM archive_batches b JOIN archive_batch_rows r
+            ON b.archive_batch_id=r.archive_batch_id LEFT JOIN "' . $table . '" s ON s._source_pk=r.source_pk
+            WHERE b.source_key=? AND b.source_table=? AND r.source_pk>? AND s._source_pk IS NULL ORDER BY r.source_pk LIMIT '
+            . min(500, max(1, $limit)));
+        $query->execute([$source['source_key'], $table, $after]);
+        return array_map('intval', $query->fetchAll(PDO::FETCH_COLUMN));
+    }
+
     public function day_page(array $source, string $path, string $date, array $cursor, int $limit): array
     {
         $pdo = $this->open($path);

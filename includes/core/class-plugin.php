@@ -394,7 +394,8 @@ class Kiwi_Plugin
             $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
         }
 
-        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS
+        if (in_array($source_key, [Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS], true)
             && ($retry_context['retry_source'] ?? false) === true
             && in_array($retry_context['triggered_by'] ?? null, ['cron', 'manual', 'wp_cli'], true)
         ) {
@@ -1241,7 +1242,8 @@ TEXT;
             $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
         }
         $hook_args = [$source_key];
-        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS
+        if (in_array($source_key, [Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS], true)
             && ($retry_context['retry_source'] ?? false) === true
             && in_array($retry_context['triggered_by'] ?? null, ['cron', 'manual', 'wp_cli'], true)
         ) {

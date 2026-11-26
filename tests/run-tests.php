@@ -456,6 +456,9 @@ require_once __DIR__ . '/fixtures/retention-health-state-wpdb.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-worker-support.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-statistics.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-deletion-evidence.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-worker.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-reader.php';
 require_once __DIR__ . '/../includes/services/class-retention-engagement-worker.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';
@@ -12792,12 +12795,15 @@ kiwi_run_test('Kiwi_Retention_Source_Registry exposes stable session and handoff
     $registry = new Kiwi_Retention_Source_Registry();
     $sessions = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS);
     $handoffs = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS);
+    $sms = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS);
+    kiwi_assert_same('wp_kiwi_sms_body_variant_assignments', $sms['source_table'] ?? null, 'SMS retention uses the registered original table.');
 
     kiwi_assert_same(
         [
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
         ],
         $registry->get_source_keys(),
         'Expected registered retention sources to keep their stable scheduler order.'
@@ -13191,6 +13197,7 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
         ],
         array_keys($first['source_results'] ?? []),
         'Expected scheduler results in stable registry order.'
@@ -13200,9 +13207,11 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
             ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_session_engagements', 'triggered_by' => 'cron'],
+            ['source_key' => 'sms_body_variant_assignments', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_session_engagements', 'triggered_by' => 'cron'],
+            ['source_key' => 'sms_body_variant_assignments', 'triggered_by' => 'cron'],
         ],
         $service->run_source_calls,
         'Expected every daily scheduler pass to dispatch each registered source in order.'
@@ -13218,9 +13227,9 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
             return ($event['hook'] ?? '') === $worker_hook;
         }
     ));
-    kiwi_assert_same(3, count($worker_events), 'Expected source-key deduplication to keep exactly one pending worker per source.');
+    kiwi_assert_same(4, count($worker_events), 'Expected source-key deduplication to keep exactly one pending worker per source.');
     kiwi_assert_same(
-        [['landing_page_sessions'], ['landing_handoff_events'], ['landing_session_engagements']],
+        [['landing_page_sessions'], ['landing_handoff_events'], ['landing_session_engagements'], ['sms_body_variant_assignments']],
         array_column($worker_events, 'args'),
         'Expected every worker event to carry its source key.'
     );

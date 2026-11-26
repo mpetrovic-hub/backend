@@ -11,7 +11,7 @@ class Kiwi_Retention_Source_Registry
     public const SOURCE_LANDING_SESSION_ENGAGEMENTS = 'landing_session_engagements';
     public const SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS = 'sms_body_variant_assignments';
 
-    /** Archive contract used by SMS lookup independently of scheduled cleanup. */
+    /** Shared by incoming SMS lookup and the retention worker. */
     public static function sms_body_variant_assignments(): array
     {
         global $wpdb;
@@ -20,6 +20,8 @@ class Kiwi_Retention_Source_Registry
             'source_key' => self::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
             'source_table' => $wpdb->prefix . 'kiwi_sms_body_variant_assignments',
             'primary_key' => 'id', 'cutoff_column' => 'created_at', 'mutable_snapshot' => true,
+            'retention_days_default' => 90,
+            'retention_days_min' => 7,
             'archive_columns' => [
                 'id' => 'INTEGER', 'created_at' => 'TEXT', 'updated_at' => 'TEXT', 'landing_key' => 'TEXT',
                 'service_key' => 'TEXT', 'provider_key' => 'TEXT', 'flow_key' => 'TEXT', 'country' => 'TEXT',
@@ -39,6 +41,7 @@ class Kiwi_Retention_Source_Registry
             self::SOURCE_LANDING_PAGE_SESSIONS,
             self::SOURCE_LANDING_HANDOFF_EVENTS,
             self::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            self::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
         ];
     }
 
@@ -51,6 +54,10 @@ class Kiwi_Retention_Source_Registry
         }
 
         global $wpdb;
+
+        if ($source_key === self::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS) {
+            return self::sms_body_variant_assignments();
+        }
 
         if ($source_key === self::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
             return [

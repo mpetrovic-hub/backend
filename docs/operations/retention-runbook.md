@@ -38,9 +38,15 @@ After a real Session run has durably finalized as `skipped` with `error_code=cov
 
 Disabled Retention, lock-active invocations, Dry-Runs, and `landing_handoff_events` do not create this error incident. Handoff's explicit `coverage_gate_required=false` policy cannot synthesize `coverage_gate_failed`.
 
+## SMS assignment dry-run
+
+The source `sms_body_variant_assignments` starts disabled with a 90-day retention period. Once a dry-run is authorized and enabled, inspect its row in `wp_kiwi_retention_cleanup_runs` by `source_key` and `run_id`. Check the frozen cutoff, `eligible_rows`, `dry_run = 1` and zero archived and deleted rows. The worker leaves the original assignments and summary counters in place.
+
+In `gate_results_json.groups`, each entry's `key` field identifies the landing page, service, variant, seed and allocation version. The `before` finding gives the expected and actual values, distance, limit and result for each of the seven counters. When a required value is missing, inspect the reason for that group. When only the timing of an evidenced sale is uncertain, compare the actual `conv` with every reported possible total. Each total must be within its own inclusive tolerance. Shorter periods and activation follow the [post-deployment checklist](https://github.com/mpetrovic-hub/backend/issues/189).
+
 ## Scheduler and worker
 
-The daily retention cron is only a scheduler. The active recurring hook is `kiwi_retention_cleanup_scheduler_daily`; the legacy unbounded `kiwi_retention_cleanup_daily` hook is cleared during normal scheduling. Each daily pass enumerates `landing_page_sessions`, then `landing_handoff_events`, then `landing_session_engagements` in stable registry order. Every single-event `kiwi_retention_cleanup_worker` job carries its source key so pending jobs are deduplicated per source. An older argumentless worker invocation remains compatible and processes `landing_page_sessions` only.
+The active daily scheduler hook is `kiwi_retention_cleanup_scheduler_daily`. Normal scheduling clears the legacy unbounded `kiwi_retention_cleanup_daily` hook. Each daily pass enumerates `landing_page_sessions`, `landing_handoff_events`, `landing_session_engagements`, then `sms_body_variant_assignments` in stable registry order. Every single-event `kiwi_retention_cleanup_worker` job carries its source key so pending jobs are deduplicated per source. An older argumentless worker invocation remains compatible and processes `landing_page_sessions` only.
 
 The scheduler:
 

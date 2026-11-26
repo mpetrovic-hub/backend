@@ -7,7 +7,7 @@ if (!defined('ABSPATH')) {
 /** Read the MySQL deletion acknowledgements associated with verified SMS archive rows. */
 final class Kiwi_Retention_Sms_Deletion_Evidence
 {
-    private const GROUP_COLUMNS = ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'];
+    private const GROUP_COLUMNS = Kiwi_Sms_Body_Variant_Repository::SUMMARY_GROUP_COLUMNS;
     private const AUDIT_FIELDS = 'id,run_id,source_key,source_table,dry_run,status,started_at,finished_at,archive_db_path,deleted_rows';
     private const MANIFEST = "JSON_EXTRACT(IF(JSON_VALID(gate_results_json),gate_results_json,'{}'),'$.deleted_batches')";
     private const PAGE_SIZE = 8;

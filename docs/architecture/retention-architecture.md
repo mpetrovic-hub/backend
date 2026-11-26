@@ -15,8 +15,9 @@ The registered runtime sources are deliberately different only at their source b
 - `landing_page_sessions` retains 14 complete days by default and requires the existing Main/TK-zone summary coverage gate.
 - `landing_handoff_events` retains 21 complete days by default and has `coverage_gate_required=false`. It neither reads landing sessions nor treats the landing summaries as deletion evidence.
 - `landing_session_engagements` retains 14 complete WordPress calendar days after `updated_at`, with a minimum of seven. Any live MySQL session with the same `(landing_key, session_token)` protects the mutable engagement from this cleanup's archive and delete. Its original `created_at` day owns its separate Main/TK-zone engagement coverage.
+- `sms_body_variant_assignments` uses a strict `created_at` cutoff and retains 90 complete days by default. The assignments before the cutoff identify the groups to check. Each group is compared with its full history across MySQL, verified SQLite copies and confirmed sales with an evidenced original SMS. The per-group results belong to the same cleanup run. [SMS assignment dry-run](../operations/retention-runbook.md#sms-assignment-dry-run)
 
-All sources are disabled and dry-run by default, use a minimum explicit retention age of seven days, and share the same frozen-scope, receipt, lock, corruption, cursor, archive, and delete contracts below. Scheduler order is Sessions, Handoffs, then Engagements. The existing Session coverage policy remains unchanged.
+All sources are disabled and dry-run by default, use a minimum explicit retention age of seven days, and share the same frozen-scope, receipt, lock, corruption, cursor, archive, and delete contracts below. Scheduler order is Sessions, Handoffs, Engagements, then SMS assignments.
 
 ## Mutable engagement boundary
 

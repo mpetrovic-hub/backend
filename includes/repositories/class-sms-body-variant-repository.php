@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Sms_Body_Variant_Repository
 {
+    public const SUMMARY_GROUP_COLUMNS = ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'];
+
     private function get_assignments_table_name(): string
     {
         global $wpdb;

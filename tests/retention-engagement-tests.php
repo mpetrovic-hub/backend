@@ -9,7 +9,7 @@ define('DAY_IN_SECONDS', 86400);
 $GLOBALS['engagement_test_now'] = '2026-10-12 12:00:00';
 $GLOBALS['engagement_test_transients'] = [];
 function current_time($type, $gmt = false) { return $GLOBALS['engagement_test_now']; }
-function get_option($key, $default = false) { return $default; }
+function get_option($key, $default = false) { return $GLOBALS['retention_test_options'][$key] ?? $default; }
 function wp_json_encode($value, $flags = 0) { return json_encode($value, $flags); }
 function get_transient($key) { return $GLOBALS['engagement_test_transients'][$key] ?? false; }
 function set_transient($key, $value, $ttl = 0) { $GLOBALS['engagement_test_transients'][$key] = $value; return true; }
@@ -46,6 +46,8 @@ foreach (['core/class-config.php', 'core/class-database-table-names.php',
     'services/class-retention-archive-check-supervisor.php', 'services/class-retention-archive-health-controller.php',
     'services/class-retention-archive-health-service.php',
     'services/class-retention-cleanup-service.php',
+    'services/class-retention-sms-statistics.php', 'services/class-retention-sms-worker.php',
+    'services/class-retention-sms-deletion-evidence.php',
     'services/class-retention-archive-reader.php', 'services/class-retention-engagement-worker.php'] as $file) {
     require_once ABSPATH . 'includes/' . $file;
 }
@@ -1777,6 +1779,10 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--sms-preview', $argv, true)) {
+        require __DIR__ . '/retention-sms-preview-engine.php';
+        return;
+    }
     if (in_array('--sms-sale-booking', $argv, true)) {
         require __DIR__ . '/retention-sms-sale-booking-engine.php';
         return;
