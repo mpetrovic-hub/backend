@@ -126,6 +126,15 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $name));
     }
 
+    /** Verify the specific source lock on this connection before publishing an external change. */
+    public function owns_source_creation_lock(string $source_key, string $name): bool
+    {
+        global $wpdb;
+        if ($name !== $this->source_creation_lock_name($source_key)) { return false; }
+        $owned = $wpdb->get_var($wpdb->prepare('SELECT IS_USED_LOCK(%s)=CONNECTION_ID()', $name));
+        return (string) ($wpdb->last_error ?? '') === '' && (int) $owned === 1;
+    }
+
     /** A reconnect must not insert after losing the connection-owned lock. */
     public function create_run_with_source_lock(array $data, string $name): int
     {
@@ -369,6 +378,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $stale_after_minutes = max(1, $stale_after_minutes);
         $now = $this->current_time_mysql();
         $resumable_worker_phases = [
+            'sms_archive',
             'engagement_preparing',
             'engagement_archive',
             'engagement_after',

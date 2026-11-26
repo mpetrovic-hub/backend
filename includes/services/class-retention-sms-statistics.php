@@ -47,12 +47,21 @@ class Kiwi_Retention_Sms_Statistics
         $groups = [];
         foreach ($rows as $row) {
             $key = self::group_key($row);
-            $groups[self::group_id($key)] = ['key' => $key, 'eligible_rows' => (int) $row['eligible_rows'],
+            $groups[self::group_id($key)] = ['key' => $key, 'eligible_rows' => (int) $row['eligible_rows']];
+        }
+        return $this->new_measurement($groups, ['percent' => (float) ($settings['tolerance_percent'] ?? 2),
+            'absolute' => (int) ($settings['tolerance_absolute'] ?? 2)]);
+    }
+
+    /** Repeat the full historical check for specified groups without changing the deletion scope. */
+    public function new_measurement(array $groups, array $tolerance): array
+    {
+        foreach ($groups as $id => $group) {
+            $groups[$id] = ['key' => $group['key'], 'eligible_rows' => $group['eligible_rows'],
                 'archive_counts' => array_fill_keys(array_keys(self::MARKERS), 0), 'late_sales' => 0,
                 'uncertain_sales' => 0, 'reasons' => []];
         }
-        return ['version' => 1, 'tolerance' => ['percent' => (float) ($settings['tolerance_percent'] ?? 2),
-            'absolute' => (int) ($settings['tolerance_absolute'] ?? 2)], 'groups' => $groups,
+        return ['version' => 1, 'tolerance' => $tolerance, 'groups' => $groups,
             'progress' => ['phase' => $groups ? 'archive' : 'done', 'cursor' => 0, 'file' => 0, 'files' => null]];
     }
 

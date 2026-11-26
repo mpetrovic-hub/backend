@@ -1779,6 +1779,10 @@ $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE ut
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--sms-live', $argv, true)) {
+        require __DIR__ . '/retention-sms-live-engine.php';
+        return;
+    }
     if (in_array('--sms-preview', $argv, true)) {
         require __DIR__ . '/retention-sms-preview-engine.php';
         return;

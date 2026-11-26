@@ -1844,7 +1844,7 @@ class Kiwi_Retention_Cleanup_Service extends Kiwi_Retention_Worker_Support
         return new Kiwi_Retention_Sms_Worker(
             $statistics, $this->config, $this->source_registry, $this->run_repository,
             $this->archive_service, $this->operational_event_service,
-            $this->archive_lock, $this->corruption_safety_gate, $this->health_store
+            $this->archive_lock, $this->corruption_safety_gate, $this->health_store, $this->snapshot_repository
         );
     }
 }
