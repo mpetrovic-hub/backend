@@ -31,11 +31,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             if (!empty($state['recheck_groups'])) {
                 return $this->recheck(array_values($state['recheck_groups']));
             }
-            clearstatcache(true, $path);
-            if (!is_file($path) && (!empty($state['archive_target_existed'])
-                || (int) $run['archived_rows'] > 0 || (int) $run['deleted_rows'] > 0)) {
-                throw new RuntimeException('sms_archive_confirmed_file_missing');
-            }
+            $this->assert_required_files($run, $state);
             if (is_file($path) && empty($state['archive_target_existed'])) {
                 $state['archive_target_existed'] = true;
                 $this->save($run, $state);
@@ -55,6 +51,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
                 : $this->delete_page($source, $run, $state, $handle, $source_lock, $connection);
         } catch (Throwable $error) {
             $reason = $error->getMessage();
+            if ($reason === 'sms_archive_confirmed_file_missing') { return ['status'=>'wait', 'reason'=>$reason]; }
             return ['status'=>'failed', 'reason'=>str_starts_with($reason, 'sms_archive_') ? $reason : 'sms_archive_batch_failed'];
         } finally {
             if ($handle !== null) { $this->archive_lock->release($handle); }
@@ -65,6 +62,20 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
     {
         return ['run_id'=>$run['run_id'], 'cutoff_value'=>$run['cutoff_value'],
             'target_max_primary_key'=>(int) $run['target_max_primary_key'], 'archive_db_path'=>$run['archive_db_path']];
+    }
+
+    private function assert_required_files(array $run, array $state): void
+    {
+        $paths = $state['required_archive_paths'] ?? [];
+        if (!is_array($paths)) { throw new RuntimeException('sms_archive_inventory_invalid'); }
+        if (!empty($state['archive_target_existed']) || (int) $run['archived_rows'] > 0 || (int) $run['deleted_rows'] > 0) {
+            $paths[] = $run['archive_db_path'];
+        }
+        foreach ($paths as $path) {
+            $this->archive_service->resolve_existing_archive_db_path_read_only($path);
+            clearstatcache(true, $path);
+            if (!is_file($path) || is_link($path)) { throw new RuntimeException('sms_archive_confirmed_file_missing'); }
+        }
     }
 
     private function lock_owner(string $source_lock): int
@@ -107,9 +118,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
         } else {
             $this->run_repository->update_run_transaction_checkpoint((int) $run['id'], $changes, $expected, $connection);
         }
-        $next = array_replace($run, $changes);
-        $next['gate_results_json'] = wp_json_encode($state);
-        $run = $this->confirmed_run($next);
+        $run = $this->confirmed_run(array_replace($run, $changes));
     }
 
     private function plan_page(array $source, array &$run, array &$state, int $limit): ?array
@@ -283,6 +292,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             }
         }
         if ($replace) {
+            $this->assert_required_files($run,$state);
             if ($this->lock_owner($source_lock) !== $connection) { throw new RuntimeException('sms_archive_source_lock_lost'); }
             $gate = $this->inspect_archive_write_gate($path);
             if (empty($gate['allowed'])) { return ['status'=>'wait','reason'=>$gate['reason_code'] ?? 'archive_gate_active']; }
@@ -307,6 +317,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             $pending['counted'] = array_merge($pending['counted'],$new_ids);
         }
         $pending['stage'] = 'delete';
+        $state['archive_target_existed'] = true;
         $this->save($run,$state,$changes);
         return ['status'=>'more'];
     }
@@ -343,6 +354,8 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
         try {
             $this->confirmed_run($run,true);
             $live = $this->originals($source,$ids,true);
+            // These locks hold the byte-exact originals and the release until DELETE and its audit commit together.
+            // The SQL connection guard prevents wpdb from replaying a DELETE in autocommit after reconnecting.
             $tables = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM information_schema.TABLES
                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (%s,%s) AND ENGINE='InnoDB'",
                 $source['source_table'], $this->run_repository->get_table_name()));
@@ -357,6 +370,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
                     return $this->recopy($run,$state);
                 }
             }
+            $this->assert_required_files($run,$state);
             $gate = $this->inspect_archive_write_gate($path);
             if (empty($gate['allowed'])) {
                 $wpdb->query('ROLLBACK');

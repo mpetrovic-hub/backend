@@ -278,6 +278,10 @@ class Kiwi_Retention_Cleanup_Run_Repository
             . ' SET ' . implode(',', $set) . ' WHERE ' . implode(' AND ', $where), ...$args));
         if ($result === false) { return false; }
         if ((int) $result === 1) { return true; }
+        if ($connection_id !== null && (int) $wpdb->get_var(
+            'SELECT IF(@@session.in_transaction=1,CONNECTION_ID(),0)') !== $connection_id) {
+            return false;
+        }
         // MySQL returns zero for an identical write. Accept only that exact
         // no-op, never a checkpoint advanced by a different invocation.
         $current = $this->find_run_by_id($id);
