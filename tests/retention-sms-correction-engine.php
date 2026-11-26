@@ -223,6 +223,25 @@ try {
     $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $guard));
 }
 $wpdb->update($summary_table, ['cta1' => 97], ['id' => $row['id']]);
+
+$overflow_group = array_replace($group, ['allocation_version' => 'many-late-sales']);
+$wpdb->insert($summary_table, $overflow_group + ['created_at' => '2026-01-01', 'updated_at' => '2026-02-01',
+    'assignments' => 200, 'cta1' => 1, 'conv' => 999]);
+$rare_row = $variants->get_summary_rows($overflow_group)[0];
+$rare = ['summary_id' => $rare_row['id'], 'status' => 'passed', 'reasons' => [], 'counters' => []];
+foreach (array_keys($targets) as $counter) {
+    $count = (int) $rare_row[$counter];
+    $rare['counters'][$counter] = ['status' => 'passed', 'actual' => $count, 'expected' => $counter === 'conv' ? 1000 : $count];
+}
+try {
+    $wpdb->pdo->exec("SET SESSION sql_mode=''");
+    $rate_overflow = $variants->correct_summary_counters($overflow_group, $rare);
+} finally {
+    $wpdb->pdo->exec('SET SESSION sql_mode=' . $wpdb->pdo->quote($old_sql_mode));
+}
+et_check((int) $variants->get_summary_rows($overflow_group)[0]['conv'] === 999
+    && $rate_overflow['counters']['conv'] === ['status' => 'failed', 'reason' => 'rate_out_of_range'],
+    'A correction which would overflow the stored conversion rate fails without partially changing the counter');
 $measured_before_delete = $measure();
 $wpdb->pdo->exec("DELETE FROM {$summary_table} WHERE id=" . (int) $row['id']);
 $absent = $variants->correct_summary_counters($group, $measured_before_delete);

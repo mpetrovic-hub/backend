@@ -10,6 +10,7 @@ class Kiwi_Sms_Body_Variant_Repository
     private const SUMMARY_COUNTERS = ['assignments', 'cta1', 'handoff_attempted', 'handoff_hidden',
         'handoff_no_hide', 'handoff_returned', 'conv'];
     private const MAX_SUMMARY_COUNT = 4294967295; // Summary columns are INT UNSIGNED.
+    private const MAX_SUMMARY_RATE = '99999.99'; // The five stored rates are DECIMAL(7,2).
 
     private function get_assignments_table_name(): string
     {
@@ -483,10 +484,13 @@ class Kiwi_Sms_Body_Variant_Repository
         $table = $this->get_summary_table_name();
         $where = implode(' AND ', array_map(static fn ($field) => $field . ' = %s', self::SUMMARY_GROUP_COLUMNS));
         // Substitute the target in the rates so evaluation order inside SET cannot change them.
-        $rates = $this->summary_rate_assignments([$counter => (string) $expected]);
-        $sql = "UPDATE {$table} SET {$counter} = %d, updated_at = %s, {$rates}
-                WHERE id = %d AND {$where} AND {$counter} = %d";
-        $args = array_merge([$expected, $this->current_time_mysql(), $summary_id], $group_values, [$actual]);
+        $rate_values = $this->summary_rate_values([$counter => (string) $expected]);
+        $rates = $this->summary_rate_assignments($rate_values);
+        $fits = 'GREATEST(' . implode(', ', $rate_values) . ') <= ' . self::MAX_SUMMARY_RATE;
+        $match = "id = %d AND {$where} AND {$counter} = %d";
+        $match_args = array_merge([$summary_id], $group_values, [$actual]);
+        $sql = "UPDATE {$table} SET {$counter} = %d, updated_at = %s, {$rates} WHERE {$match} AND {$fits}";
+        $args = array_merge([$expected, $this->current_time_mysql()], $match_args);
         if ($source_lock !== null) {
             $sql .= ' AND IS_USED_LOCK(%s) = CONNECTION_ID()';
             $args[] = $source_lock;
@@ -500,6 +504,11 @@ class Kiwi_Sms_Body_Variant_Repository
                 )) !== 1) {
                     return ['status' => 'failed', 'reason' => 'source_lock_lost'];
                 }
+                $overflow = $wpdb->get_var($wpdb->prepare(
+                    "SELECT 1 FROM {$table} WHERE {$match} AND NOT ({$fits})", ...$match_args
+                ));
+                if ((string) ($wpdb->last_error ?? '') !== '') { return ['status' => 'failed', 'reason' => 'summary_write_failed']; }
+                if ((int) $overflow === 1) { return ['status' => 'failed', 'reason' => 'rate_out_of_range']; }
                 return ['status' => 'skipped', 'reason' => 'summary_changed'];
             }
         } catch (Throwable $error) {
@@ -508,7 +517,7 @@ class Kiwi_Sms_Body_Variant_Repository
         return ['status' => 'failed', 'reason' => 'summary_write_failed'];
     }
 
-    private function summary_rate_assignments(array $values = []): string
+    private function summary_rate_values(array $values = []): array
     {
         $ratios = [
             'cta1_cr' => ['cta1', 'assignments'],
@@ -517,12 +526,19 @@ class Kiwi_Sms_Body_Variant_Repository
             'conv_per_cta1_cr' => ['conv', 'cta1'],
             'conv_per_hidden_cr' => ['conv', 'handoff_hidden'],
         ];
-        $assignments = [];
+        $expressions = [];
         foreach ($ratios as $rate => [$numerator, $denominator]) {
             $top = $values[$numerator] ?? $numerator;
             $bottom = $values[$denominator] ?? $denominator;
-            $assignments[] = "{$rate} = CASE WHEN {$bottom} > 0 THEN ROUND(({$top} / {$bottom}) * 100, 2) ELSE 0 END";
+            $expressions[$rate] = "CASE WHEN {$bottom} > 0 THEN ROUND(({$top} / {$bottom}) * 100, 2) ELSE 0 END";
         }
+        return $expressions;
+    }
+
+    private function summary_rate_assignments(array $expressions): string
+    {
+        $assignments = [];
+        foreach ($expressions as $rate => $value) { $assignments[] = "{$rate} = {$value}"; }
         return implode(', ', $assignments);
     }
 
@@ -643,7 +659,7 @@ class Kiwi_Sms_Body_Variant_Repository
             return false;
         }
 
-        $rates = $this->summary_rate_assignments();
+        $rates = $this->summary_rate_assignments($this->summary_rate_values());
         $rate_result = $wpdb->query(
             $wpdb->prepare(
                 "UPDATE {$table_name}
