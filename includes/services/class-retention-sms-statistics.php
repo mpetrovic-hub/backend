@@ -393,6 +393,14 @@ class Kiwi_Retention_Sms_Statistics
                         elseif ($known === null) { throw new RuntimeException('sale_candidate_group_unknown'); }
                     }
                 }
+                if (!$identified && ($found['reason'] ?? '') === Kiwi_Sms_Body_Variant_Service::DELETED_ORIGINAL_UNAVAILABLE) {
+                    // No readable assignment matched this code. The completed manifest pass identifies the missing files' own groups.
+                    $files = $state['progress']['files'];
+                    foreach ($state['progress']['known_gaps'] ?? [] as $gap) {
+                        $path = $this->gap_path($gap, $files);
+                        if ($path !== null && !in_array($path, $files, true)) { $identified[$gap['group']] = true; }
+                    }
+                }
                 if ($identified) { $candidates = $identified; }
             } catch (Throwable $error) {
                 // Without a readable candidate inventory, the service is the narrowest evidenced scope.

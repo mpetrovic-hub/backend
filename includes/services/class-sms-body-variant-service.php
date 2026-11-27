@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Sms_Body_Variant_Service
 {
+    public const DELETED_ORIGINAL_UNAVAILABLE = 'sms_deleted_original_unavailable';
+
     private $config;
     private $repository;
     private $archive_reader;
@@ -154,7 +156,6 @@ class Kiwi_Sms_Body_Variant_Service
             $matches = [];
             $match_source = 'archive';
             $ids = $reader->matching_source_ids($source, $column, $code, $accept);
-            $this->verify_search_inventory($reader, $source);
             foreach ($ids as $id) {
                 try {
                     $live_row = $this->repository->find_assignment_by_id($id);
@@ -175,6 +176,9 @@ class Kiwi_Sms_Body_Variant_Service
                     if (count($matches) === 2) { break; }
                 }
             }
+            if ($this->lookup_depends_on_missing_original($reader, $source, $matches ? $ids : [])) {
+                return ['status' => 'read_error', 'source' => 'archive', 'reason' => self::DELETED_ORIGINAL_UNAVAILABLE];
+            }
             $reader->assert_inventory_unchanged();
             return $this->assignment_lookup_result($matches, $match_source);
         } catch (Throwable $error) {
@@ -184,20 +188,22 @@ class Kiwi_Sms_Body_Variant_Service
         }
     }
 
-    /** A lost generation may contain the requested code under another ID. All its acknowledged IDs must still be searchable. */
-    private function verify_search_inventory(Kiwi_Retention_Archive_Reader $reader, array $source): void
+    /** Check a proven code's candidate IDs for superseding deletions. A miss can depend on any unavailable original. */
+    private function lookup_depends_on_missing_original(Kiwi_Retention_Archive_Reader $reader, array $source, array $candidates): bool
     {
         $paths = array_column($reader->files(), 'path');
         $deletions = new Kiwi_Retention_Sms_Deletion_Evidence();
         foreach ($deletions->missing_search_batches($paths) as [$missing_path, $ids]) {
+            if ($candidates) { $ids = array_values(array_intersect($candidates, $ids)); }
             foreach ($this->repository->missing_original_ids($ids) as $id) {
                 $copies = $reader->copies($source, $id, null, true);
                 $latest = array_key_last($copies);
                 if ($latest === null || Kiwi_Retention_Archive_Name::compare_paths($latest, $missing_path) <= 0) {
-                    throw new RuntimeException('sms_archive_search_incomplete');
+                    return true;
                 }
             }
         }
+        return false;
     }
 
     public function observe_sale_insert(array $code): array

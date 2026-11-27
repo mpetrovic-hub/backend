@@ -78,6 +78,14 @@ try {
         'An independent live code remains authoritative while one historical generation is missing');
     $archive->archive_snapshot_batch($source, [$independent], '2026-01-01 00:00:00', 'sms-other-42', $path);
     $wpdb->query('DELETE FROM ' . $table . ' WHERE id=42');
+    $separate = $lookup->resolve_assignment_from_visible_token('Other42');
+    et_check($separate['status'] === 'found' && (int)$separate['assignment']['id'] === 42,
+        'A full archived code for a different original remains provable while ID 19 is absent');
+    $archive->archive_snapshot_batch($source, [array_replace($independent, ['visible_token' => $row['visible_token']])],
+        '2026-01-01 00:00:00', 'sms-observed-overlap', $path);
+    et_check($lookup->resolve_assignment_from_visible_token($row['visible_token'])['status'] === 'read_error',
+        'The same code observed on an unavailable candidate and on a separate original cannot identify the separate original');
+    $archive->archive_snapshot_batch($source, [$independent], '2026-01-01 00:00:00', 'sms-other-42-restored', $path);
     $wpdb->insert($table, $newer);
     $independent_match = $lookup->resolve_assignment_from_visible_token('Other42');
     et_check($independent_match['status'] === 'found' && $independent_match['source'] === 'archive'

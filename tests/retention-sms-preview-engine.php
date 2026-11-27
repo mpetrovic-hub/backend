@@ -162,14 +162,17 @@ $wpdb->insert($summary, $summary_row + ['allocation_version'=>'timed','assignmen
 $events = new Kiwi_Nth_Event_Repository();
 $flows = new Kiwi_Nth_Flow_Transaction_Repository();
 $sales = new Kiwi_Sales_Repository();
-foreach ([2100,2111] as $n) {
-    $ref = 'timed-sale-' . $n;
+$confirmed_sale = static function (string $ref, string $code) use ($events, $sales, $flows): array {
     $mo = $events->insert_if_new(['provider'=>'nth','service_key'=>'sms','event_type'=>'mo_callback','direction'=>'inbound',
-        'keyword'=>'PLAY','message_text'=>'PLAY code' . $n,'dedupe_key'=>'timed-mo-' . $n])['row'];
+        'keyword'=>'PLAY','message_text'=>'PLAY ' . $code,'dedupe_key'=>$ref])['row'];
     $sale = $sales->upsert(['sale_reference'=>$ref,'provider_key'=>'nth','service_key'=>'sms','sale_type'=>'premium_sms_one_off',
         'status'=>'completed','transaction_id'=>'txn_unrelated_click']);
     $flows->create(['flow_reference'=>$ref,'sale_reference'=>$ref,'service_key'=>'sms','keyword'=>'PLAY',
         'sale_id'=>(int)$sale['id'],'mo_event_id'=>(int)$mo['id']]);
+    return $sale;
+};
+foreach ([2100,2111] as $n) {
+    $sale = $confirmed_sale('timed-sale-' . $n, 'code' . $n);
     $wpdb->update($sales->get_table_name_for_schema(), ['created_at'=>'2026-07-14 02:00:01'], ['id'=>$sale['id']]);
 }
 $compare = static function (int $actual, array $expected, string $status) use ($wpdb,$summary,$read_group,$preview): void {
@@ -269,6 +272,29 @@ try {
         'A missing newer file cannot reassign an original ID to the group of an older remaining copy');
 } finally {
     rename($missing_file, $new);
+}
+
+$insert(2300, '2025-01-01 00:00:00', 'lost-file');
+$gone = $insert(2301, '2025-01-01 00:00:00', 'lost-file');
+$lost_archive = dirname($new) . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2019.sqlite';
+$archive->archive_snapshot_batch($source, [$gone], '2026-07-14 00:00:00', 'lost-2301', $lost_archive);
+$wpdb->query('DELETE FROM ' . $source['source_table'] . ' WHERE id=2301');
+$wpdb->insert($summary, $summary_row + ['allocation_version' => 'lost-file', 'assignments' => 2]);
+$runs->create_run(['run_id' => 'lost-2301', 'source_key' => $key, 'source_table' => $source['source_table'],
+    'status' => 'completed', 'enabled' => 1, 'dry_run' => 0, 'archive_db_path' => $lost_archive, 'deleted_rows' => 1,
+    'gate_results_json' => ['deleted_batches' => [['batch_id' => 'lost-2301', 'group' => array_replace($timed_key,
+        ['allocation_version' => 'lost-file']), 'ids' => [2301]]]]]);
+$confirmed_sale('confirmed-with-unmatched-code', 'NoOriginal2301');
+$intact = $read_group($preview(['enabled' => true]), 'timed');
+rename($lost_archive, $lost_archive . '.missing');
+try {
+    $audit = $preview(['enabled' => true]);
+    $loss = $read_group($audit, 'lost-file');
+    $separate = $read_group($audit, 'timed');
+    et_check($intact['status'] === 'passed' && $separate === $intact && $loss['status'] === 'incomplete',
+        'A known lost ID and an unmatched confirmed SMS leave the independent same-service group and its possible conversion totals intact');
+} finally {
+    rename($lost_archive . '.missing', $lost_archive);
 }
 require_once __DIR__ . '/retention-sms-deletion-evidence-engine.php';
 et_sms_deletion_evidence();
