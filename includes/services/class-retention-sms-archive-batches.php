@@ -27,7 +27,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker
             $busy = $this->lock_archives(array_merge($required, [$path]), $handles);
             if ($busy !== null) { return ['status'=>'wait', 'reason'=>$busy, 'history_blocked'=>true]; }
             $handle = $handles[$path];
-            $this->assert_release_basis($run, $state);
+            $this->assert_release_basis($run, $state, $handles);
             if (!empty($state['recheck_groups'])) {
                 return $this->recheck(array_values($state['recheck_groups']));
             }
@@ -48,8 +48,10 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker
             }
             $this->validate_page($run, $state);
             return $state['pending_archive']['stage'] === 'copy'
-                ? $this->archive_page($source, $run, $state, $handle, $source_lock, $connection, $limit)
-                : $this->delete_page($source, $run, $state, $handle, $source_lock, $connection, $limit);
+                ? $this->archive_page($source, $run, $state, $handle, $source_lock, $connection, $limit, $handles)
+                : $this->delete_page($source, $run, $state, $handle, $source_lock, $connection, $limit, $handles);
+        } catch (Kiwi_Retention_Sms_Basis_Changed $error) {
+            return $this->recheck(array_column($state['groups'], 'key'));
         } catch (Kiwi_Retention_Sms_History_Blocked $error) {
             return ['status'=>'wait', 'reason'=>$error->getMessage(), 'history_blocked'=>true];
         } catch (Throwable $error) {
@@ -60,11 +62,12 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker
         }
     }
 
-    private function assert_release_basis(array $run, array $state): void
+    private function assert_release_basis(array $run, array $state, array $handles): void
     {
         Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
         $blocked = $this->historical_block($this->required_archive_paths($run, $state));
         if ($blocked !== null) { throw new Kiwi_Retention_Sms_History_Blocked($blocked); }
+        if ($this->archive_basis_changed($run, $state, $handles)) { throw new Kiwi_Retention_Sms_Basis_Changed(); }
     }
 
     private function lock_owner(string $source_lock): int
@@ -244,7 +247,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker
     }
 
     private function archive_page(array $source, array $run, array $state, Kiwi_Retention_Archive_Lock_Handle $handle,
-        string $source_lock, int $connection, int $limit): array
+        string $source_lock, int $connection, int $limit, array $handles): array
     {
         $pending = &$state['pending_archive'];
         $batch = $pending['batch_id'];
@@ -292,11 +295,14 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker
             }
         }
         if ($replace) {
-            $this->assert_release_basis($run,$state);
+            $this->assert_release_basis($run,$state,$handles);
             if ($this->lock_owner($source_lock) !== $connection) { throw new RuntimeException('sms_archive_source_lock_lost'); }
             $gate = $this->inspect_archive_write_gate($path);
             if (empty($gate['allowed'])) { return ['status'=>'wait','reason'=>$gate['reason_code'] ?? 'archive_gate_active']; }
             $this->archive_service->archive_snapshot_batch($source,$replace,$run['cutoff_value'],$batch,$path);
+            // Only this successful write may advance its token; every other generation keeps its measured basis.
+            $state['archive_basis'][$path] = Kiwi_Retention_Archive_Reader::file_basis($path, $handle);
+            uksort($state['archive_basis'], [Kiwi_Retention_Archive_Name::class, 'compare_paths']);
         }
         $copies = $this->checked_copies($source,$run,$ids,$handle);
         $current = $this->originals($source,$ids);
@@ -345,7 +351,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker
     }
 
     private function delete_page(array $source, array $run, array $state, Kiwi_Retention_Archive_Lock_Handle $handle,
-        string $source_lock, int $connection, int $limit): array
+        string $source_lock, int $connection, int $limit, array $handles): array
     {
         global $wpdb;
         $pending = $state['pending_archive'];
@@ -378,7 +384,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker
                     return $this->recopy($run,$state);
                 }
             }
-            $this->assert_release_basis($run,$state);
+            $this->assert_release_basis($run,$state,$handles);
             $gate = $this->inspect_archive_write_gate($path);
             if (empty($gate['allowed'])) {
                 $wpdb->query('ROLLBACK');

@@ -1799,7 +1799,7 @@ try {
         return;
     }
     if (in_array($argv[1] ?? '', ['--sms-live', '--sms-group-incidents', '--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary',
-        '--sms-live-mixed-ci', '--sms-live-schema-change', '--sms-live-delete-schema-change'], true)) {
+        '--sms-live-mixed-ci', '--sms-live-schema-change', '--sms-live-delete-schema-change', '--sms-inventory'], true)) {
         require __DIR__ . '/retention-sms-live-engine.php';
         return;
     }

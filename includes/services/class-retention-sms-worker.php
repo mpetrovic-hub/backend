@@ -204,6 +204,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Sms_Worker_Support
         $done = $this->measure($state);
         if ($done) {
             $state['required_archive_paths'] = $state['progress']['files'] ?? [];
+            $state['archive_basis'] = $state['progress']['archive_basis'] ?? null;
             $state['archive_target_existed'] = in_array($run['archive_db_path'], $state['required_archive_paths'], true);
             foreach ($state['groups'] as &$group) {
                 $group['initial_mysql_baseline'] = $group['before']['mysql_baseline'];
@@ -215,31 +216,34 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Sms_Worker_Support
     }
 
     /** Remember observed generations even across a resumed or targeted recheck. */
-    private function inventory_transition(array $run, array $state): ?array
+    private function inventory_transition(array $run, array $state, ?array $held_handles = null): ?array
     {
         if (!isset($state['required_archive_paths'])) { return null; }
         $required = $this->required_archive_paths($run, $state);
         $target = $run['archive_db_path'];
+        $handles = $held_handles ?? [];
         try {
+            $blocked = ($held_handles === null ? $this->lock_archives($required, $handles) : null)
+                ?? $this->historical_block($required);
             $current = array_column($this->archive_service->list_archive_files(), 'path');
+            if (array_diff($required, $current)) { return $this->wait_for_inventory($run, $state); }
+            $basis = $blocked === null ? $this->current_archive_basis($current, $handles) : null;
+            $basis_changed = $basis === null || ($state['archive_basis'] ?? null) !== $basis;
         } catch (Throwable $error) {
             return $this->wait_for_inventory($run, $state);
-        }
-        if (array_diff($required, $current)) { return $this->wait_for_inventory($run, $state); }
-        $handles = [];
-        try {
-            $blocked = $this->lock_archives($required, $handles) ?? $this->historical_block($required);
         } finally {
-            $this->release_archives($handles);
+            if ($held_handles === null) { $this->release_archives($handles); }
         }
         if ($blocked !== null) { return $this->wait_for_inventory($run, $state, $blocked); }
         $added = array_diff($current, $required);
         if (isset($state['pending_archive']) || (int) $run['archived_rows'] > 0) {
             $added = array_diff($added, [$target]);
         }
-        if ($added || !empty($state['inventory_interrupted'])) {
+        if ($added || $basis_changed || !empty($state['inventory_interrupted'])) {
             unset($state['inventory_interrupted']);
             $state['required_archive_paths'] = $current;
+            // This is the next full measurement's anchor, never a release of the discarded findings.
+            $state['archive_basis'] = $basis;
             $state['archive_target_existed'] = in_array($target, $current, true);
             foreach ($state['groups'] as $id => $group) { $state['recheck_groups'][$id] = $group['key']; }
             return $this->start_recheck($run, $state);
@@ -313,6 +317,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Sms_Worker_Support
         }
         unset($state['recheck_groups']);
         $state['measurement'] = $this->statistics->new_measurement($selected, $state['tolerance'], $state['group_schema']);
+        $state['measurement']['progress']['archive_basis'] = $state['archive_basis'] ?? null;
         $state['progress'] = ['phase' => 'review'];
         return $this->continue_with($run, $state, 'sms_recheck', ['gate_status' => 'pending', 'error_code' => '', 'error_message' => '']);
     }
@@ -327,6 +332,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Sms_Worker_Support
                 $state['groups'][$id]['initial_mysql_baseline'] = $group['before']['mysql_baseline'];
             }
         }
+        $state['archive_basis'] = $state['measurement']['progress']['archive_basis'] ?? null;
         unset($state['measurement']);
         $state['progress'] = ['phase' => 'correct', 'cursor' => 0, 'groups' => $selected];
         return $this->continue_with($run, $state, 'sms_correction');
@@ -339,6 +345,8 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Sms_Worker_Support
         try {
             $reason = $this->lock_archives($paths, $handles) ?? $this->historical_block($paths);
             if ($reason !== null) { return $this->wait_for_inventory($run, $state, $reason); }
+            $transition = $this->inventory_transition($run, $state, $handles);
+            if ($transition !== null) { return $transition; }
             return $this->apply_corrections($run, $state, $lock);
         } finally {
             $this->release_archives($handles);
@@ -389,6 +397,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Sms_Worker_Support
         }
         $selected = array_intersect_key($state['groups'], array_flip($progress['groups']));
         $state['measurement'] = $this->statistics->new_measurement($selected, $state['tolerance'], $state['group_schema']);
+        $state['measurement']['progress']['archive_basis'] = $state['archive_basis'] ?? null;
         $state['progress'] = ['phase' => 'remeasure'];
         return $this->continue_with($reserved, $state, 'sms_remeasure');
     }
@@ -416,6 +425,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Sms_Worker_Support
             $state['pending_group_events'] ?? [], array_keys($state['measurement']['groups'])
         )));
         $observed = $state['measurement']['progress']['files'] ?? [];
+        $state['archive_basis'] = $state['measurement']['progress']['archive_basis'] ?? null;
         $state['required_archive_paths'] = array_values(array_unique(array_merge($state['required_archive_paths'] ?? [], $observed)));
         $state['archive_target_existed'] = !empty($state['archive_target_existed']) || in_array($run['archive_db_path'], $observed, true);
         unset($state['measurement']);

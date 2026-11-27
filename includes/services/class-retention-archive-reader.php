@@ -114,6 +114,45 @@ class Kiwi_Retention_Archive_Reader
         return $this->files;
     }
 
+    /** A bounded change token, read under the generation lock; never a substitute for row receipts. */
+    public static function file_basis(string $path, Kiwi_Retention_Archive_Lock_Handle $handle): array
+    {
+        if ($handle->get_lock_path() !== $path . '.lock') { throw new RuntimeException('archive_reader_lock_identity_mismatch'); }
+        foreach (['-wal', '-journal'] as $suffix) {
+            $sidecar = $path . $suffix;
+            clearstatcache(true, $sidecar);
+            if (is_link($sidecar) || (file_exists($sidecar) && (!is_readable($sidecar) || filesize($sidecar) !== 0))) {
+                throw new RuntimeException('archive_reader_uncheckpointed_state');
+            }
+        }
+        clearstatcache(true, $path);
+        $stream = !is_link($path) && is_file($path) ? @fopen($path, 'rb') : false;
+        if ($stream === false) { throw new RuntimeException('archive_reader_path_unreadable'); }
+        try {
+            $stat = fstat($stream);
+            $header = fread($stream, 100);
+            if ($stat === false || strlen($header) !== 100 || substr($header, 0, 16) !== "SQLite format 3\0") {
+                throw new RuntimeException('archive_reader_header_invalid');
+            }
+            // SQLite updates its header change counter even for same-size commits within one timestamp tick.
+            return ['dev'=>$stat['dev'], 'ino'=>$stat['ino'], 'size'=>$stat['size'],
+                'mtime'=>$stat['mtime'], 'ctime'=>$stat['ctime'], 'header'=>bin2hex($header)];
+        } finally { fclose($stream); }
+    }
+
+    /** Retain every discovered generation lock until close(), including through the caller's read page. */
+    public function basis(): array
+    {
+        $paths = array_column($this->files(true), 'path');
+        $basis = [];
+        foreach ($paths as $path) {
+            $this->open($path);
+            $basis[$path] = self::file_basis($path, $this->handles[$path]);
+        }
+        if (array_column($this->files(true), 'path') !== $paths) { throw new RuntimeException('archive_inventory_changed'); }
+        return $basis;
+    }
+
     public function open(string $path, ?Kiwi_Retention_Archive_Lock_Handle $held_lock = null): PDO
     {
         $path = $this->archive_service->resolve_existing_archive_db_path_read_only($path);

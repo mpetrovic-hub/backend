@@ -38,6 +38,25 @@ abstract class Kiwi_Retention_Sms_Worker_Support extends Kiwi_Retention_Worker_S
         return null;
     }
 
+    protected function archive_basis_changed(array $run, array $state, array $handles): bool
+    {
+        $current = array_column($this->archive_service->list_archive_files(), 'path');
+        $required = $this->required_archive_paths($run, $state);
+        if (array_diff($required, $current)) { throw new Kiwi_Retention_Sms_History_Blocked('sms_archive_history_missing'); }
+        $basis = $this->current_archive_basis($current, $handles);
+        return $basis === null || ($state['archive_basis'] ?? null) !== $basis;
+    }
+
+    protected function current_archive_basis(array $current, array $handles): ?array
+    {
+        $basis = [];
+        foreach ($current as $path) {
+            if (!isset($handles[$path])) { return null; }
+            $basis[$path] = Kiwi_Retention_Archive_Reader::file_basis($path, $handles[$path]);
+        }
+        return $basis;
+    }
+
     /** Acquire in discovery order without waiting. The caller releases partial acquisitions in finally. */
     protected function lock_archives(array $paths, array &$handles): ?string
     {
@@ -64,3 +83,4 @@ abstract class Kiwi_Retention_Sms_Worker_Support extends Kiwi_Retention_Worker_S
 }
 
 final class Kiwi_Retention_Sms_History_Blocked extends RuntimeException {}
+final class Kiwi_Retention_Sms_Basis_Changed extends RuntimeException {}

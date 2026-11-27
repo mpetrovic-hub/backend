@@ -14,7 +14,7 @@ register_shutdown_function(static function () use ($root): void {
     if (is_dir($root)) { rmdir($root); }
 });
 define('KIWI_RETENTION_ARCHIVE_ROOT', $root);
-define('KIWI_RETENTION_WORKER_ROW_LIMIT', 3);
+define('KIWI_RETENTION_WORKER_ROW_LIMIT', ($argv[2] ?? '') === 'targeted-fast' ? 100 : 3);
 $key = Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS;
 $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
 $originals = new Kiwi_Sms_Body_Variant_Repository();
@@ -50,6 +50,10 @@ $until = static function (array $run, callable $condition) use ($step): array {
 };
 if (($argv[1] ?? '') === '--sms-group-incidents') {
     require __DIR__ . '/retention-sms-group-incidents-engine.php';
+    return;
+}
+if (($argv[1] ?? '') === '--sms-inventory') {
+    require __DIR__ . '/retention-sms-inventory-engine.php';
     return;
 }
 if (in_array($argv[1] ?? '', ['--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary', '--sms-live-mixed-ci',

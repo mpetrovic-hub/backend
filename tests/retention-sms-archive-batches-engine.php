@@ -28,7 +28,8 @@ function et_sms_batch_fixture(): array
     }
     $scope = ['run_id'=>'r187-', 'cutoff_value'=>'2026-07-14 00:00:00',
         'target_max_primary_key'=>12, 'archive_db_path'=>$fixture['archive']->resolve_archive_db_path()];
-    $state = ['version'=>1, 'group_schema'=>$groupSchema, 'progress'=>['phase'=>'released'], 'groups'=>$groups, 'archive_scope'=>$scope];
+    $state = ['version'=>1, 'group_schema'=>$groupSchema, 'progress'=>['phase'=>'released'], 'groups'=>$groups, 'archive_scope'=>$scope,
+        'required_archive_paths'=>[], 'archive_basis'=>[]];
     $run_id = $fixture['repo']->create_run($scope + ['source_key'=>$source['source_key'], 'source_table'=>$source['source_table'],
         'cutoff_column'=>'created_at', 'dry_run'=>0, 'enabled'=>1, 'triggered_by'=>'cron', 'status'=>'running',
         'worker_phase'=>'sms_archive', 'gate_status'=>'partial', 'gate_results_json'=>$state]);
@@ -66,6 +67,19 @@ function et_sms_batch_complete(array $f, int $limit=2): array
         if ($result['status'] !== 'more') { throw new RuntimeException('unexpected SMS batch result '.json_encode($result)); }
     }
     throw new RuntimeException('SMS batch fixture did not finish');
+}
+
+// This suite supplies group releases at the public package seam. Real remeasurement is covered by --sms-inventory.
+function et_sms_batch_confirm_basis(array $f): void
+{
+    $reader = new Kiwi_Retention_Archive_Reader($f['archive'], $f['lock'], $f['gate']);
+    try { $basis = $reader->basis(); }
+    finally { $reader->close(); }
+    $row = $f['repo']->find_run_by_id($f['run_id']);
+    $state = json_decode($row['gate_results_json'], true, 512, JSON_THROW_ON_ERROR);
+    $state['archive_basis'] = $basis;
+    $state['required_archive_paths'] = array_keys($basis);
+    $f['repo']->update_run($f['run_id'], ['gate_results_json'=>$state]);
 }
 
 $f = et_sms_batch_fixture();
@@ -108,9 +122,10 @@ $other->exec("UPDATE ".$f['source']['source_table']." SET raw_context='changed s
 $nosql = new PDO('sqlite:'.$f['path']);
 $nosql->exec("UPDATE ".$f['source']['source_table']." SET raw_context='changed since checkpoint',cta1_recorded_at='2026-10-12 09:00:00' WHERE id=5");
 $nosql = null;
-et_sms_batch_step($f);
+et_check(et_sms_batch_step($f)['status'] === 'recheck', 'A changed archive basis returns to group measurement before receipt recovery');
 et_check((int)$other->query('SELECT COUNT(*) FROM '.$f['source']['source_table'].' WHERE id=5')->fetchColumn() === 1,
     'Content changed on both sides after the confirmed checkpoint requires fresh proof before DELETE');
+et_sms_batch_confirm_basis($f);
 $changedRun = et_sms_batch_complete($f);
 $nosql = new PDO('sqlite:'.$f['path']);
 et_check($nosql->query('SELECT raw_context FROM '.$f['source']['source_table'].' WHERE id=5')->fetchColumn() === 'changed since checkpoint'
@@ -145,9 +160,10 @@ $copied = $f['repo']->find_run_by_id($f['run_id']);
 $nosql = new PDO('sqlite:'.$f['path']);
 $nosql->exec("UPDATE archive_batches SET cutoff_value='2026-07-01 00:00:00'");
 $nosql = null;
-et_sms_batch_step($f);
+et_check(et_sms_batch_step($f)['status'] === 'recheck', 'Changed receipt metadata invalidates the saved group basis');
 et_check((int)$other->query('SELECT COUNT(*) FROM '.$f['source']['source_table'])->fetchColumn()===1,
     'A receipt with a different frozen cutoff cannot authorize an original deletion');
+et_sms_batch_confirm_basis($f);
 $finished = et_sms_batch_complete($f);
 $nosql = new PDO('sqlite:'.$f['path']);
 $currentBatch = $nosql->query('SELECT _archive_batch_id FROM '.$f['source']['source_table'])->fetchColumn();
@@ -229,6 +245,8 @@ et_check($unconfirmed['status']==='failed' && (int)$audit['archived_rows']===0 &
     && (int)$nosql->query('SELECT COUNT(*) FROM archive_batch_rows')->fetchColumn()===1,
     'Loss of acknowledgement after the SQLite commit leaves a resumption record and never deletes an unconfirmed ID');
 $nosql = null;
+et_check(et_sms_batch_step($f)['status'] === 'recheck', 'An unacknowledged SQLite write requires a new group basis before package recovery');
+et_sms_batch_confirm_basis($f);
 $resumed = et_sms_batch_complete($f);
 $nosql = new PDO('sqlite:'.$f['path']);
 et_check((int)$resumed['archived_rows']===1 && (int)$resumed['deleted_rows']===1
@@ -352,6 +370,8 @@ $f['archive']->after_commit = static function () use ($f): void {
     throw new RuntimeException('fixture_unacknowledged_archive');
 };
 et_sms_batch_step($f,4);
+et_check(et_sms_batch_step($f,1)['status'] === 'recheck', 'A larger unacknowledged batch also invalidates its prior group basis');
+et_sms_batch_confirm_basis($f);
 et_sms_batch_step($f,1);
 $recovered = $f['repo']->find_run_by_id($f['run_id']);
 et_check((int)$recovered['archived_rows']===1 && (int)$recovered['deleted_rows']===0,
@@ -382,9 +402,10 @@ $nosql = new PDO('sqlite:'.$f['path']);
 $nosql->exec('DELETE FROM archive_batch_rows WHERE source_pk=2');
 $nosql->exec('DELETE FROM '.$f['source']['source_table'].' WHERE _source_pk=3');
 $nosql = null;
-et_sms_batch_step($f);
+et_check(et_sms_batch_step($f)['status'] === 'recheck', 'Missing receipt or payload changes the archive basis before row recovery');
 et_check((int)$other->query('SELECT COUNT(*) FROM '.$f['source']['source_table'])->fetchColumn()===2,
     'Neither a missing single-ID receipt nor a missing archive row authorizes DELETE');
+et_sms_batch_confirm_basis($f);
 $repaired = et_sms_batch_complete($f);
 $nosql = new PDO('sqlite:'.$f['path']);
 $repairedCount = $nosql->query('SELECT COUNT(*) FROM '.$f['source']['source_table'].' s JOIN archive_batch_rows r

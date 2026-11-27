@@ -105,6 +105,32 @@ class Kiwi_Retention_Sms_Statistics
     /** Advance the read-only examination by one bounded page and report the work consumed. */
     public function advance(array &$state, int $limit): int
     {
+        if (($state['progress']['phase'] ?? '') === 'done') { return 0; }
+        try {
+            if (empty($state['progress']['inventory_error'])) {
+                try {
+                    // Old checkpoints without a change token cannot certify their already accumulated pages.
+                    if (!isset($state['progress']['archive_basis']) && $state['progress']['files'] !== null) {
+                        $state = array_replace($state, $this->new_measurement($state['groups'], $state['tolerance'], $state['group_schema']));
+                    }
+                    $basis = $this->reader->basis();
+                    if (isset($state['progress']['archive_basis']) && $state['progress']['archive_basis'] !== $basis) {
+                        throw new RuntimeException('archive_basis_changed');
+                    }
+                    $state['progress']['archive_basis'] = $basis;
+                } catch (Throwable $error) {
+                    $this->note($state, null, 'archive_history_unavailable');
+                    $state['progress']['inventory_error'] = true;
+                    $state['progress']['phase'] = 'measure';
+                    $state['progress']['cursor'] = 0;
+                }
+            }
+            return $this->advance_page($state, $limit);
+        } finally { $this->reader->close(); }
+    }
+
+    private function advance_page(array &$state, int $limit): int
+    {
         if ($this->checked_group_schema === null || $this->checked_group_schema !== ($state['group_schema'] ?? null)) {
             self::verify_group_schema($state);
             $this->checked_group_schema = $state['group_schema'];
