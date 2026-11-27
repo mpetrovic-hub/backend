@@ -149,6 +149,9 @@ for ($n = 2101; $n < 2110; ++$n) {
     $insert($n, '2025-06-01 12:00:00', 'timed', ['conv_recorded_at' => '2025-06-02 09:00:00']);
 }
 $unknown = $insert(2111, '2025-06-01 00:00:00', 'timed');
+$wpdb->query('UPDATE ' . $source['source_table'] . ' SET service_key=UPPER(service_key) WHERE id IN (2100,2111)');
+$timed = $originals->find_assignment_by_id(2100);
+$unknown = $originals->find_assignment_by_id(2111);
 $archive->archive_snapshot_batch($source, [$timed, $unknown], '2026-07-14 00:00:00', 'timed-batch', $new);
 $wpdb->query('DELETE FROM ' . $source['source_table'] . ' WHERE id IN(2100,2111)');
 $archive_db = new PDO('sqlite:' . $new);
@@ -273,6 +276,7 @@ try {
 } finally {
     rename($missing_file, $new);
 }
+$archive->archive_snapshot_batch($source, [$member], '2026-07-14 00:00:00', 'after-change', $new);
 
 $insert(2300, '2025-01-01 00:00:00', 'lost-file');
 $gone = $insert(2301, '2025-01-01 00:00:00', 'lost-file');
@@ -285,16 +289,85 @@ $runs->create_run(['run_id' => 'lost-2301', 'source_key' => $key, 'source_table'
     'gate_results_json' => ['deleted_batches' => [['batch_id' => 'lost-2301', 'group' => array_replace($timed_key,
         ['allocation_version' => 'lost-file']), 'ids' => [2301]]]]]);
 $confirmed_sale('confirmed-with-unmatched-code', 'NoOriginal2301');
-$intact = $read_group($preview(['enabled' => true]), 'timed');
+$other = $insert(2302, '2025-01-01 00:00:00', 'original-group');
+$live = $insert(2303, '2025-01-01 00:00:00', 'original-group', ['visible_token' => 'NoOriginal2301']);
+$archive->archive_snapshot_batch($source, [$other, $live], '2026-07-14 00:00:00', 'independent-2302', $old);
+$wpdb->query('DELETE FROM ' . $source['source_table'] . ' WHERE id=2302');
+$wpdb->update($source['source_table'], ['visible_token' => 'DifferentCurrentCode'], ['id' => 2303]);
+$wpdb->update($summary, ['assignments' => 3], ['allocation_version' => 'original-group']);
+$complete = $preview(['enabled' => true]);
+$intact = $read_group($complete, 'timed');
+$independent = $read_group($complete, 'original-group');
 rename($lost_archive, $lost_archive . '.missing');
 try {
     $audit = $preview(['enabled' => true]);
     $loss = $read_group($audit, 'lost-file');
-    $separate = $read_group($audit, 'timed');
-    et_check($intact['status'] === 'passed' && $separate === $intact && $loss['status'] === 'incomplete',
-        'A known lost ID and an unmatched confirmed SMS leave the independent same-service group and its possible conversion totals intact');
+    $candidate = $read_group($audit, 'timed');
+    et_check($intact['status'] === 'passed' && $candidate['status'] === 'incomplete' && $loss['status'] === 'incomplete'
+        && in_array('sale_original_read_error', array_column($candidate['reasons'], 'code'), true)
+        && in_array('sale_original_read_error', array_column($loss['reasons'], 'code'), true)
+        && $independent['status'] === 'passed' && $read_group($audit, 'original-group') === $independent,
+        'Only possible sale candidates and the absent original group lose proof when an archived code is unknown');
 } finally {
     rename($lost_archive . '.missing', $lost_archive);
+}
+$returned = $preview(['enabled' => true]);
+et_check($read_group($returned, 'timed') === $intact && $read_group($returned, 'lost-file')['status'] === 'passed',
+    'Restoring the actual code evidence recovers the possible timed totals and the missing group');
+$archive_version = static function (int $id, string $version, string $path) use ($insert,$archive,$source,$runs,$key,$timed_key,$wpdb): void {
+    $restored = $insert($id, '2025-01-01 00:00:00', $version, ['visible_token' => $version . $id]);
+    $batch = 'restored-' . $id . '-' . $version;
+    $archive->archive_snapshot_batch($source, [$restored], '2026-07-14 00:00:00', $batch, $path);
+    $runs->create_run(['run_id' => $batch, 'source_key' => $key, 'source_table' => $source['source_table'],
+        'status' => str_ends_with($version, 'former') ? 'completed' : 'failed', 'enabled' => 1, 'dry_run' => 0, 'started_at' => '2026-07-14 00:00:00',
+        'finished_at' => '2026-07-14 02:00:00', 'archive_db_path' => $path, 'deleted_rows' => 1,
+        'gate_results_json' => ['deleted_batches' => [['batch_id' => $batch, 'group' => array_replace($timed_key,
+            ['allocation_version' => $version]), 'ids' => [$id]]]]]);
+    $wpdb->query('DELETE FROM ' . $source['source_table'] . ' WHERE id=' . $id);
+};
+$versions = [];
+foreach (['former' => 2016, 'current' => 2017] as $version => $year) {
+    $insert($year + 3000, '2025-01-01 00:00:00', $version);
+    $path = dirname($new) . DIRECTORY_SEPARATOR . Kiwi_Retention_Archive_Name::build((string)$year);
+    $archive_version(2399, $version, $path);
+    $wpdb->insert($summary, $summary_row + ['allocation_version' => $version, 'assignments' => $version === 'former' ? 1 : 2]);
+    $versions[$version] = $path;
+}
+foreach ($versions as $absent => $path) {
+    rename($path, $path . '.missing');
+    try {
+        $audit = $preview(['enabled' => true]);
+        $former = $read_group($audit, 'former');
+        $current = $read_group($audit, 'current');
+        et_check($former['status'] === 'passed' && $former['counters']['assignments']['expected'] === 1
+            && ($absent === 'former' ? $current['status'] === 'passed' && $current['counters']['assignments']['expected'] === 2
+                : $current['status'] === 'incomplete'),
+            'Only loss of the required current version can block a repeatedly archived original: missing ' . $absent);
+    } finally { rename($path . '.missing', $path); }
+}
+$same = dirname($new) . DIRECTORY_SEPARATOR . Kiwi_Retention_Archive_Name::build('2018');
+foreach (['same-former' => 2400, 'same-current' => 2401] as $version => $live_id) {
+    $insert($live_id, '2025-01-01 00:00:00', $version);
+    $archive_version(2398, $version, $same);
+    $wpdb->insert($summary, $summary_row + ['allocation_version' => $version, 'assignments' => $version === 'same-former' ? 1 : 2]);
+    if ($version === 'same-former') { copy($same, $same . '.former'); }
+}
+$lookup = new Kiwi_Sms_Body_Variant_Service($config, $originals);
+$current_run = $preview(['enabled' => true]);
+et_check($read_group($current_run, 'same-former')['status'] === 'passed' && $read_group($current_run, 'same-current')['status'] === 'passed'
+    && $lookup->resolve_assignment_from_visible_token('same-current2398')['status'] === 'found',
+    'The later acknowledged payload for a reused ID supersedes its earlier batch in the same file');
+rename($same, $same . '.latest');
+rename($same . '.former', $same);
+try {
+    $old_run = $preview(['enabled' => true]);
+    et_check($read_group($old_run, 'same-former')['status'] === 'passed' && $read_group($old_run, 'same-current')['status'] === 'incomplete'
+        && $lookup->resolve_assignment_from_visible_token('same-former2398')['status'] === 'read_error',
+        'Restoring the earlier same-file batch cannot revive its code or count its superseded ID in the former group');
+} finally {
+    rename($same, $same . '.former');
+    rename($same . '.latest', $same);
+    unlink($same . '.former');
 }
 require_once __DIR__ . '/retention-sms-deletion-evidence-engine.php';
 et_sms_deletion_evidence();

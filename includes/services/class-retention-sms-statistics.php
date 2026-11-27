@@ -268,13 +268,17 @@ class Kiwi_Retention_Sms_Statistics
                     $copy = $rows[$id] ?? null;
                     if (!$copy || !$copy['verified'] || $copy['row']['_archive_batch_id'] !== $batch['batch_id']
                         || self::group_id($copy['row']) !== $group) {
+                        $canonical = $latest[$id] ?? null;
+                        $order = $this->deletion_version_order($canonical, $path, (int)$run['id']);
+                        if ($order !== null && $order > 0) { continue; }
                         $this->note($state, $group, 'deleted_original_receipt_missing_or_mismatched', $id);
                         $known = $this->gap_path($state['progress']['known_gaps'][$id] ?? null, $paths);
                         if ($this->discard_superseded_copy($state, $id, $path, $latest[$id] ?? null)
                             && ($known === null || $this->at_least_as_new($path, $known))) {
-                            $state['progress']['known_gaps'][$id] = ['group' => $group, 'path' => $path];
+                            $state['progress']['known_gaps'][$id] = ['group' => $group, 'path' => $path,
+                                'payload_missing' => !$copy || (int)$copy['row']['id'] !== $id || $copy['row']['_archive_batch_id'] !== $batch['batch_id']];
                         }
-                        if ($copy && self::group_id($copy['row']) !== $group) {
+                        if ($copy && ($order === null || $order >= 0) && self::group_id($copy['row']) !== $group) {
                             $this->note($state, self::group_id($copy['row']), 'deleted_original_group_conflict', $id);
                         }
                         continue;
@@ -284,12 +288,7 @@ class Kiwi_Retention_Sms_Statistics
                         && Kiwi_Retention_Archive_Reader::snapshot($this->source, $canonical['row'])
                             !== Kiwi_Retention_Archive_Reader::snapshot($this->source, $copy['row'])) {
                         $current = self::group_key($canonical['row']);
-                        try {
-                            $bound = $this->deletions->finished_after_deletion($canonical['row'], $canonical['path'], $current);
-                        } catch (Throwable $error) {
-                            $bound = null;
-                        }
-                        if ($bound === null) {
+                        if (($this->deletion_version_order($canonical, $path, (int)$run['id']) ?? 0) <= 0) {
                             $this->note($state, self::group_id($current), 'deleted_original_version_conflict', $id);
                             if ($group !== self::group_id($current)) { $this->note($state, $group, 'deleted_original_version_conflict', $id); }
                         }
@@ -307,6 +306,18 @@ class Kiwi_Retention_Sms_Statistics
             unset($state['progress']['audit_cursor']);
         }
         return min($limit, 4);
+    }
+
+    private function deletion_version_order(?array $copy, string $path, int $audit_id): ?int
+    {
+        if (empty($copy['verified'])) { return null; }
+        try {
+            $receipt = $this->deletions->deletion_receipt($copy['row'], $copy['path'], self::group_key($copy['row']));
+            if ($receipt === null) { return null; }
+            return Kiwi_Retention_Archive_Name::compare_paths($copy['path'], $path) ?: $receipt['audit_id'] <=> $audit_id;
+        } catch (Throwable $error) {
+            return null;
+        }
     }
 
     private function accumulate_sales(array &$state, int $limit): int
@@ -340,13 +351,14 @@ class Kiwi_Retention_Sms_Statistics
             $original = $found['assignment'];
             $group = self::group_id($original);
             if (!isset($state['groups'][$group])) { continue; }
-            $copies = $this->reader->copies($this->source, (int) $original['id'], null, true);
-            $path = array_key_last($copies);
-            if ($path === null || $copies[$path] !== $original) {
+            $id = (int)$original['id'];
+            $copy = $this->latest($progress['files'], [$id])[$id] ?? null;
+            if (empty($copy['verified']) || $copy['row'] !== $original) {
                 $this->note($state, $group, 'sale_original_changed', (int) $sale['id'], 'conv');
                 continue;
             }
-            $gap = $this->gap_path($progress['known_gaps'][$original['id']] ?? null, $progress['files']);
+            $path = $copy['path'];
+            $gap = $this->gap_path($progress['known_gaps'][$id] ?? null, $progress['files']);
             if ($gap !== null && $this->at_least_as_new($gap, $path)) { continue; }
             $created = $this->timestamp($sale['created_at'] ?? null);
             $copied = $this->timestamp($original['_archived_at'] ?? null);
@@ -380,8 +392,9 @@ class Kiwi_Retention_Sms_Statistics
                 $ids = $this->reader->matching_source_ids($this->source, $column, $code[$column], $matches);
                 $identified = [];
                 foreach (array_chunk($ids, 250) as $page) {
-                    $rows = $this->latest($state['progress']['files'], $page);
-                    foreach ($page as $id) {
+                    $archived = $this->absent_from_mysql($page);
+                    $rows = $this->latest($state['progress']['files'], $archived);
+                    foreach ($archived as $id) {
                         $known = $state['progress']['known_gaps'][$id] ?? null;
                         if ($known !== null) { $identified[$known['group']] = true; }
                         if (isset($rows[$id])) {
@@ -393,12 +406,10 @@ class Kiwi_Retention_Sms_Statistics
                         elseif ($known === null) { throw new RuntimeException('sale_candidate_group_unknown'); }
                     }
                 }
-                if (!$identified && ($found['reason'] ?? '') === Kiwi_Sms_Body_Variant_Service::DELETED_ORIGINAL_UNAVAILABLE) {
-                    // No readable assignment matched this code. The completed manifest pass identifies the missing files' own groups.
-                    $files = $state['progress']['files'];
+                if (($found['reason'] ?? '') === Kiwi_Sms_Body_Variant_Service::DELETED_ORIGINAL_UNAVAILABLE) {
+                    // A missing payload can hide another ID with the same code as a readable candidate.
                     foreach ($state['progress']['known_gaps'] ?? [] as $gap) {
-                        $path = $this->gap_path($gap, $files);
-                        if ($path !== null && !in_array($path, $files, true)) { $identified[$gap['group']] = true; }
+                        if ($gap['payload_missing'] ?? true) { $identified[$gap['group']] = true; }
                     }
                 }
                 if ($identified) { $candidates = $identified; }
@@ -407,7 +418,7 @@ class Kiwi_Retention_Sms_Statistics
             }
         }
         foreach ($state['groups'] as $key => $group) {
-            if (self::group_id(array_replace($group['key'], ['service_key' => $sale['service_key']])) !== $key) { continue; }
+            if (!Kiwi_Sms_Body_Variant_Repository::group_matches_service($group['key'], $sale['service_key'])) { continue; }
             if ($candidates !== null ? !isset($candidates[$key]) : $group['archive_counts']['assignments'] === 0) { continue; }
             $this->note($state, $key, 'sale_original_' . $found['status'], (int) $sale['id'], 'conv');
         }
@@ -427,11 +438,7 @@ class Kiwi_Retention_Sms_Statistics
 
     private function latest(array $paths, array $ids): array
     {
-        $latest = [];
-        foreach ($paths as $path) {
-            $latest = array_replace($latest, $this->reader->receipted_rows($this->source, $path, $ids));
-        }
-        return $latest;
+        return $this->reader->latest_receipted_rows($this->source, $paths, $ids);
     }
 
     private function note(array &$state, ?string $group_id, string $code, ?int $id = null, ?string $counter = null): void

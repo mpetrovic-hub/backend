@@ -56,6 +56,18 @@ $flowId = $flows->create($flow);
 $found = $proof->resolve($sale);
 et_check($found['status'] === 'found' && $found['source'] === 'mysql' && $found['assignment']['id'] === $assignment['id'],
     'The original direct transaction ID in the linked MO proves the live assignment despite a different sale attribution ID');
+$original_table = Kiwi_Retention_Source_Registry::sms_body_variant_assignments()['source_table'];
+$summary_table = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
+$wpdb->update($original_table, ['service_key' => strtoupper($group['service_key'])], ['id' => $assignment['id']]);
+et_check($proof->resolve($sale)['status'] === 'found', 'Native case-equivalent service spellings preserve a proven sale original');
+$wpdb->query("ALTER TABLE {$summary_table} MODIFY service_key VARCHAR(100) COLLATE utf8mb4_bin NOT NULL DEFAULT ''");
+Kiwi_Sms_Body_Variant_Repository::group_comparison(true);
+et_check($proof->resolve($sale)['status'] === 'not_found', 'A binary Summary service key keeps the two service spellings separate');
+$wpdb->query("ALTER TABLE {$summary_table} MODIFY service_key VARCHAR(100) COLLATE utf8mb4_unicode_520_ci NOT NULL DEFAULT ''");
+Kiwi_Sms_Body_Variant_Repository::group_comparison(true);
+$wpdb->update($original_table, ['service_key' => 'different_service'], ['id' => $assignment['id']]);
+et_check($proof->resolve($sale)['status'] === 'not_found', 'An original belonging to a different service cannot prove a sale');
+$wpdb->update($original_table, ['service_key' => $group['service_key']], ['id' => $assignment['id']]);
 $foreignMo = array_merge($mo, ['dedupe_key' => 'different-mo', 'message_text' => 'PLAY otherabcdefgh']);
 $wpdb->update('t72_kiwi_nth_events', ['normalized_payload' => json_encode($foreignMo)], ['id' => $moRow['id']]);
 et_check($proof->resolve($sale)['status'] === 'ambiguous', 'A normalized MO payload with a different event identity cannot prove this sale');
@@ -184,6 +196,78 @@ try {
         'An independently locked original cannot delay or veto the committed sale while the optional observation is unavailable');
 } finally {
     $contender->rollBack();
+}
+
+$code = ['transaction_id' => 'txn_reused_after_retention', 'visible_token' => 'RepeatedFullCode'];
+$run_repo = new Kiwi_Retention_Cleanup_Run_Repository();
+$wpdb->query('ALTER TABLE ' . $source['source_table'] . ' AUTO_INCREMENT=10000');
+foreach (['first' => '2022', 'second' => '2023'] as $version => $year) {
+    $row = $variants->insert_if_new($group + $code + ['allocation_version' => $version])['row'];
+    $generation = dirname($path) . DIRECTORY_SEPARATOR . Kiwi_Retention_Archive_Name::build($year);
+    $batch = 'reused-' . $version;
+    $archive->archive_snapshot_batch($source, [$row], '2027-01-01 00:00:00', $batch, $generation);
+    if ($version === 'second') {
+        $independent = array_replace($row, ['id' => 9000700, 'visible_token' => 'IndependentStoredCode', 'transaction_id' => 'txn_independent_stored']);
+        $archive->archive_snapshot_batch($source, [$independent], '2027-01-01 00:00:00', 'independent-existing-batch', $generation);
+        $page = [];
+        foreach (range(1000,1499) as $id) {
+            $page[] = array_replace($row, ['id' => $id, 'visible_token' => 'Other' . $id, 'transaction_id' => 'txn_other_' . $id]);
+        }
+        $archive->archive_snapshot_batch($source, $page, '2027-01-01 00:00:00', $batch, $generation);
+    }
+    $run_repo->create_run(['run_id' => $batch, 'source_key' => $source['source_key'], 'source_table' => $source['source_table'],
+        'status' => 'completed', 'enabled' => 1, 'dry_run' => 0, 'deleted_rows' => 1, 'archive_db_path' => $generation,
+        'gate_results_json' => ['deleted_batches' => [['batch_id' => $batch, 'group' => array_intersect_key($row,
+            array_flip(Kiwi_Sms_Body_Variant_Repository::SUMMARY_GROUP_COLUMNS)), 'ids' => [(int)$row['id']]]]]]);
+    $wpdb->query('DELETE FROM ' . $source['source_table'] . ' WHERE id=' . (int)$row['id']);
+}
+$lookup_codes = static fn(): array => [$lookup->resolve_assignment_from_visible_token($code['visible_token'])['status'],
+    $lookup->resolve_assignment_from_transaction_id($code['transaction_id'])['status']];
+et_check($lookup_codes() === ['ambiguous', 'ambiguous'], 'Distinct original IDs can reuse both full codes across successive MySQL deletions');
+foreach (['file', 'row', 'row_and_receipt', 'batch'] as $loss) {
+    if ($loss === 'file') { rename($generation, $generation . '.missing'); }
+    else {
+        $sqlite = new PDO('sqlite:' . $generation);
+        if ($loss === 'batch') {
+            $sqlite->prepare('DELETE FROM ' . $source['source_table'] . ' WHERE _archive_batch_id=?')->execute([$batch]);
+            $sqlite->prepare('DELETE FROM archive_batch_rows WHERE archive_batch_id=?')->execute([$batch]);
+            $sqlite->prepare('DELETE FROM archive_batches WHERE archive_batch_id=?')->execute([$batch]);
+        } else {
+            // The missing original is beyond the first 500 keys. The table and batch totals still match.
+            $sqlite->exec('UPDATE ' . $source['source_table'] . " SET _source_pk=9000710,id=9000710,
+                visible_token='OtherStoredCode',transaction_id='txn_other_stored' WHERE _source_pk=" . (int)$row['id']);
+            if ($loss === 'row_and_receipt') {
+                $sqlite->prepare('UPDATE archive_batch_rows SET source_pk=9000710 WHERE archive_batch_id=? AND source_pk=?')
+                    ->execute([$batch, $row['id']]);
+            }
+        }
+        $sqlite = null;
+    }
+    try {
+        et_check($lookup_codes() === ['read_error', 'read_error'], 'Losing the only searchable second code cannot make the first ID unique: ' . $loss);
+        foreach ($code as $field => $value) {
+            $ref = 'reuse-' . $field . '-' . $loss;
+            $createFlow($ref, 'PLAY ' . $value);
+            $saved = $nth->handle_notification($group['service_key'], $reportFor($ref, $ref . '-report'));
+            et_check(!empty($saved['sale']['id']) && !empty($saved['success'])
+                && (int)$wpdb->get_var("SELECT SUM(conv) FROM {$summary_table} WHERE allocation_version IN ('first','second')") === 0,
+                'The confirmed sale survives without crediting either possible group: ' . $field . ' / ' . $loss);
+        }
+    } finally {
+        if ($loss === 'file') { rename($generation . '.missing', $generation); }
+        else {
+            $sqlite = new PDO('sqlite:' . $generation);
+            $sqlite->exec('DELETE FROM ' . $source['source_table'] . ' WHERE _source_pk=9000710');
+            if ($loss === 'row_and_receipt') {
+                $sqlite->prepare('UPDATE archive_batch_rows SET source_pk=? WHERE archive_batch_id=? AND source_pk=9000710')
+                    ->execute([$row['id'], $batch]);
+            }
+            $sqlite = null;
+            if ($loss === 'batch') { $archive->archive_snapshot_batch($source, $page, '2027-01-01 00:00:00', $batch, $generation); }
+            $archive->archive_snapshot_batch($source, [$row], '2027-01-01 00:00:00', $batch, $generation);
+        }
+    }
+    et_check($lookup_codes() === ['ambiguous', 'ambiguous'], 'Returning the original evidence reveals both matching IDs again: ' . $loss);
 }
 $reader->close();
 foreach (glob($archive->get_archive_directory() . '/*') ?: [] as $file) { unlink($file); }

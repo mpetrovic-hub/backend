@@ -26,26 +26,25 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
         }
     }
 
-    /** Page only actual deletions in generations absent from the search. The first unresolved ID ends the caller's search. */
-    public function missing_search_batches(array $available): iterable
+    /** A committed deletion identifies the exact original a restored or absent archive must cover. */
+    public function acknowledged_id_batches(float $deadline): iterable
     {
         global $wpdb;
         $source = Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS;
-        $marks = implode(',', array_fill(0, count($available), '%s'));
-        $missing = $available ? " AND (archive_db_path IS NULL OR BINARY archive_db_path NOT IN ({$marks}))" : '';
         $before = null;
         do {
+            if (microtime(true) >= $deadline) { throw new RuntimeException('archive_code_search_timeout'); }
             $cursor = $before === null ? '' : ' AND id<%d';
-            $args = array_merge([$source], $available, $before === null ? [] : [$before], [self::PAGE_SIZE]);
+            $args = $before === null ? [$source, self::PAGE_SIZE] : [$source, $before, self::PAGE_SIZE];
             $rows = $this->read_rows($wpdb->prepare('SELECT ' . self::AUDIT_FIELDS . ',' . self::MANIFEST
                 . " AS manifest FROM {$this->runs->get_table_name()} WHERE source_key=%s AND dry_run=0 AND deleted_rows>0
-                {$missing}{$cursor} ORDER BY id DESC LIMIT %d", ...$args));
+                {$cursor} ORDER BY id DESC LIMIT %d", ...$args));
             foreach ($rows as $run) {
                 $before = (int) $run['id'];
                 foreach ($this->entries($run, (string) $run['manifest']) as $batch) {
                     if (isset($batch['error'])) { throw new RuntimeException($batch['error']); }
                     foreach (array_chunk($batch['ids'], 500) as $ids) {
-                        yield [(string) $run['archive_db_path'], $ids];
+                        yield [(string) $run['archive_db_path'], $batch['batch_id'], $ids, (int)$run['id']];
                     }
                 }
             }
@@ -220,20 +219,26 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
     /** The caller supplies the newest row already verified by the archive reader. */
     public function finished_after_deletion(array $archived_row, string $archive_path, array $group): ?string
     {
+        return $this->deletion_receipt($archived_row, $archive_path, $group)['finished_at'] ?? null;
+    }
+
+    /** The committed per-ID receipt can establish membership even when its run supplies no usable upper time bound. */
+    public function deletion_receipt(array $archived_row, string $archive_path, array $group): ?array
+    {
         global $wpdb;
 
         $batch_id = $archived_row['_archive_batch_id'] ?? null;
         $id = $this->positive_id($archived_row['id'] ?? null);
         if (!is_string($batch_id) || $batch_id === '' || $id === null || $archive_path === '') { return null; }
         $key = $this->group_key($this->group($group));
+        if ($key === '' || $key !== $this->group_key($this->group($archived_row))
+            || $id !== $this->positive_id($archived_row['_source_pk'] ?? null)) { return null; }
         $found = null;
-        $claimed = false;
-        $match = function (array $run, array $batch) use ($batch_id, $id, $key, $archived_row, $archive_path, $group, &$found, &$claimed): void {
+        $match = function (array $run, array $batch) use ($batch_id, $id, $key, $archived_row, $archive_path, $group, &$found): void {
             if ($batch['batch_id'] !== $batch_id || $this->group_key($batch['group']) !== $key
                 || !in_array($id, $batch['ids'], true)) { return; }
-            if ($claimed) { throw new RuntimeException('sms_deletion_conflicting_runs'); }
-            $claimed = true;
-            $found = $this->completed_bound($run, $batch, $archived_row, $archive_path, $group);
+            if ($found !== null) { throw new RuntimeException('sms_deletion_conflicting_runs'); }
+            $found = ['audit_id' => (int)$run['id'], 'finished_at' => $this->completed_bound($run, $batch, $archived_row, $archive_path, $group)];
         };
         $incomplete = function (array $run, ?array $affected, string $reason) use ($key): void {
             if ($affected === null || $this->group_key($affected) === $key) { throw new RuntimeException($reason); }

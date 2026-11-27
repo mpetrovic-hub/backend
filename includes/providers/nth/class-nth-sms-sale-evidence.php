@@ -143,7 +143,8 @@ class Kiwi_Nth_Sms_Sale_Evidence implements Kiwi_Sms_Confirmed_Sale_History
             $result = isset($code['transaction_id'])
                 ? $this->assignments->resolve_assignment_from_transaction_id($code['transaction_id'])
                 : $this->assignments->resolve_assignment_from_visible_token($code['visible_token'] ?? '');
-            if ($result['status'] === 'found' && $result['assignment']['service_key'] !== $sale['service_key']) {
+            if ($result['status'] === 'found'
+                && !Kiwi_Sms_Body_Variant_Repository::group_matches_service($result['assignment'], $sale['service_key'])) {
                 return ['status' => 'not_found'];
             }
             if (in_array($result['status'], ['found', 'ambiguous', 'read_error'], true)) {

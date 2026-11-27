@@ -79,8 +79,8 @@ try {
     $archive->archive_snapshot_batch($source, [$independent], '2026-01-01 00:00:00', 'sms-other-42', $path);
     $wpdb->query('DELETE FROM ' . $table . ' WHERE id=42');
     $separate = $lookup->resolve_assignment_from_visible_token('Other42');
-    et_check($separate['status'] === 'found' && (int)$separate['assignment']['id'] === 42,
-        'A full archived code for a different original remains provable while ID 19 is absent');
+    et_check($separate['status'] === 'read_error',
+        'With ID 19 unavailable its unknown current code cannot be excluded as a second match for ID 42');
     $archive->archive_snapshot_batch($source, [array_replace($independent, ['visible_token' => $row['visible_token']])],
         '2026-01-01 00:00:00', 'sms-observed-overlap', $path);
     et_check($lookup->resolve_assignment_from_visible_token($row['visible_token'])['status'] === 'read_error',

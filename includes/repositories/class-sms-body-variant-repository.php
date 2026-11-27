@@ -19,6 +19,13 @@ class Kiwi_Sms_Body_Variant_Repository
             self::SUMMARY_GROUP_COLUMNS, $refresh, true);
     }
 
+    public static function group_matches_service(array $group, string $service): bool
+    {
+        if ($group['service_key'] === $service) { return true; }
+        $comparison = self::group_comparison();
+        return $comparison->key($group) === $comparison->key(array_replace($group, ['service_key' => $service]));
+    }
+
     private function get_assignments_table_name(): string
     {
         global $wpdb;

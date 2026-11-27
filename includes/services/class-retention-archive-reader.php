@@ -311,13 +311,65 @@ class Kiwi_Retention_Archive_Reader
         return $rows;
     }
 
+    /** Newest available row per ID. A bad newer receipt must remain visible to the caller. */
+    public function latest_receipted_rows(array $source, array $paths, array $ids): array
+    {
+        $latest = [];
+        foreach (array_reverse($paths) as $path) {
+            $remaining = array_values(array_diff($ids, array_keys($latest)));
+            if (!$remaining) { break; }
+            $latest += $this->receipted_rows($source, $path, $remaining);
+        }
+        return $latest;
+    }
+
+    /** Check external deletion IDs even when the restored generation has lost the entire batch. */
+    public function missing_batch_payloads(array $source, string $path, string $batch, array $ids): array
+    {
+        if (!$ids || count($ids) > 500) { throw new InvalidArgumentException('archive_receipt_page_size'); }
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) { return $ids; }
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $query = $pdo->prepare('SELECT _source_pk FROM "' . self::identifier($source['source_table'])
+            . '" WHERE _archive_batch_id=? AND "' . self::identifier($source['primary_key']) . '"=_source_pk AND _source_pk IN (' . $marks . ')');
+        $query->execute(array_merge([$batch], $ids));
+        return array_values(array_diff($ids, array_map('intval', $query->fetchAll(PDO::FETCH_COLUMN))));
+    }
+
+    /** Inspect only receipt keys and the unique source-ID index. Limit the keys visited before testing for absent rows. */
+    public function missing_snapshot_batches(array $source, array $paths, float $deadline): iterable
+    {
+        $table = self::identifier($source['source_table']);
+        foreach ($paths as $path) {
+            $pdo = $this->open($path);
+            if (!$this->has_source($pdo, $source)) { continue; }
+            $batches = $pdo->prepare('SELECT archive_batch_id FROM archive_batches WHERE source_key=? AND source_table=?');
+            $batches->execute([$source['source_key'], $table]);
+            $page = $pdo->prepare('SELECT MAX(r.source_pk) AS last_id, COUNT(*) AS visited,
+                GROUP_CONCAT(CASE WHEN s._source_pk IS NULL THEN r.source_pk END) AS missing
+                FROM (SELECT source_pk FROM archive_batch_rows WHERE archive_batch_id=? AND source_pk>?
+                    ORDER BY source_pk LIMIT 500) r
+                LEFT JOIN "' . $table . '" s ON s._source_pk=r.source_pk');
+            while (($batch = $batches->fetchColumn()) !== false) {
+                $after = 0;
+                do {
+                    if (microtime(true) >= $deadline) { throw new RuntimeException('archive_code_search_timeout'); }
+                    $page->execute([$batch, $after]);
+                    $result = $page->fetch(PDO::FETCH_ASSOC);
+                    if ($result['missing'] !== null) { yield [$path, array_map('intval', explode(',', $result['missing']))]; }
+                    $after = (int)$result['last_id'];
+                } while ((int)$result['visited'] === 500);
+            }
+        }
+    }
+
     /** An orphaned source receipt can prove absence even when no readable row remains to enumerate. */
     public function missing_original_ids(array $source, string $path, int $after, int $limit): array
     {
         $pdo = $this->open($path);
         if (!$this->has_source($pdo, $source)) { return []; }
         $table = self::identifier($source['source_table']);
-        $query = $pdo->prepare('SELECT DISTINCT r.source_pk FROM archive_batches b JOIN archive_batch_rows r
+        $query = $pdo->prepare('SELECT DISTINCT r.source_pk FROM archive_batches b CROSS JOIN archive_batch_rows r
             ON b.archive_batch_id=r.archive_batch_id LEFT JOIN "' . $table . '" s ON s._source_pk=r.source_pk
             WHERE b.source_key=? AND b.source_table=? AND r.source_pk>? AND s._source_pk IS NULL ORDER BY r.source_pk LIMIT '
             . min(500, max(1, $limit)));

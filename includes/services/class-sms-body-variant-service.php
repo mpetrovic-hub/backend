@@ -156,6 +156,10 @@ class Kiwi_Sms_Body_Variant_Service
             $matches = [];
             $match_source = 'archive';
             $ids = $reader->matching_source_ids($source, $column, $code, $accept);
+            $paths = array_column($reader->files(), 'path');
+            if ($this->lookup_depends_on_missing_original($reader, $source, $paths)) {
+                return ['status' => 'read_error', 'source' => 'archive', 'reason' => self::DELETED_ORIGINAL_UNAVAILABLE];
+            }
             foreach ($ids as $id) {
                 try {
                     $live_row = $this->repository->find_assignment_by_id($id);
@@ -166,18 +170,15 @@ class Kiwi_Sms_Body_Variant_Service
                     // An older archived code can still point to a row that changed in MySQL.
                     $row = $live_row;
                 } else {
-                    $copies = $reader->copies($source, $id, null, true);
-                    if (!$copies) { throw new RuntimeException('sms_assignment_archive_copy_missing'); }
-                    $row = $copies[array_key_last($copies)];
+                    $copy = $reader->latest_receipted_rows($source, $paths, [$id])[$id] ?? null;
+                    if (empty($copy['verified'])) { throw new RuntimeException('sms_assignment_archive_copy_missing'); }
+                    $row = $copy['row'];
                 }
                 if ($accept((string) $row[$column])) {
                     $matches[] = $row;
                     $match_source = $live_row === null ? 'archive' : 'mysql';
                     if (count($matches) === 2) { break; }
                 }
-            }
-            if ($this->lookup_depends_on_missing_original($reader, $source, $matches ? $ids : [])) {
-                return ['status' => 'read_error', 'source' => 'archive', 'reason' => self::DELETED_ORIGINAL_UNAVAILABLE];
             }
             $reader->assert_inventory_unchanged();
             return $this->assignment_lookup_result($matches, $match_source);
@@ -188,22 +189,44 @@ class Kiwi_Sms_Body_Variant_Service
         }
     }
 
-    /** Check a proven code's candidate IDs for superseding deletions. A miss can depend on any unavailable original. */
-    private function lookup_depends_on_missing_original(Kiwi_Retention_Archive_Reader $reader, array $source, array $candidates): bool
+    /** A lost original can hide a second matching code. Only a live or a verified later row supplies its current codes. */
+    private function lookup_depends_on_missing_original(Kiwi_Retention_Archive_Reader $reader, array $source, array $paths): bool
     {
-        $paths = array_column($reader->files(), 'path');
+        $deadline = microtime(true) + $this->config->get_retention_worker_time_limit_seconds();
+        $request_limit = (int)ini_get('max_execution_time');
+        if ($request_limit > 0 && isset($_SERVER['REQUEST_TIME_FLOAT'])) {
+            $deadline = min($deadline, (float)$_SERVER['REQUEST_TIME_FLOAT'] + $request_limit);
+        }
         $deletions = new Kiwi_Retention_Sms_Deletion_Evidence();
-        foreach ($deletions->missing_search_batches($paths) as [$missing_path, $ids]) {
-            if ($candidates) { $ids = array_values(array_intersect($candidates, $ids)); }
-            foreach ($this->repository->missing_original_ids($ids) as $id) {
-                $copies = $reader->copies($source, $id, null, true);
-                $latest = array_key_last($copies);
-                if ($latest === null || Kiwi_Retention_Archive_Name::compare_paths($latest, $missing_path) <= 0) {
-                    return true;
+        foreach ($this->missing_archive_originals($reader, $deletions, $source, $paths, $deadline) as [$missing_path, $ids, $audit_id]) {
+            if (microtime(true) >= $deadline) { throw new RuntimeException('archive_code_search_timeout'); }
+            $absent = $this->repository->missing_original_ids($ids);
+            if (!$absent) { continue; }
+            $possible = array_filter($paths, static fn(string $path): bool => Kiwi_Retention_Archive_Name::compare_paths($path, $missing_path) >= 0);
+            $copies = $reader->latest_receipted_rows($source, $possible, $absent);
+            foreach ($absent as $id) {
+                $copy = $copies[$id] ?? null;
+                if (empty($copy['verified'])) { return true; }
+                if ($copy['path'] === $missing_path) {
+                    // Within one generation a restore can reveal an older valid batch for the same ID.
+                    $replacement = $deletions->deletion_receipt($copy['row'], $copy['path'], $copy['row']);
+                    if ($audit_id === null || ($replacement['audit_id'] ?? 0) <= $audit_id) { return true; }
                 }
             }
         }
         return false;
+    }
+
+    private function missing_archive_originals(Kiwi_Retention_Archive_Reader $reader, Kiwi_Retention_Sms_Deletion_Evidence $deletions,
+        array $source, array $paths, float $deadline): iterable
+    {
+        $available = array_fill_keys($paths, true);
+        foreach ($deletions->acknowledged_id_batches($deadline) as [$path, $batch, $ids, $audit_id]) {
+            if (microtime(true) >= $deadline) { throw new RuntimeException('archive_code_search_timeout'); }
+            if (isset($available[$path])) { $ids = $reader->missing_batch_payloads($source, $path, $batch, $ids); }
+            if ($ids) { yield [$path, $ids, $audit_id]; }
+        }
+        foreach ($reader->missing_snapshot_batches($source, $paths, $deadline) as [$path, $ids]) { yield [$path, $ids, null]; }
     }
 
     public function observe_sale_insert(array $code): array
