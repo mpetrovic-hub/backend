@@ -6,7 +6,7 @@ This document defines the stable data-safety contract shared by every retention 
 
 ## Shared archive and source boundary
 
-Retention uses one configured SQLite archive root and generation file, with a separate archive table and Source-ID receipt evidence for each registered retention source. The shared archive and safety services stay source-neutral. Each source owns only its source table, cutoff column, eligibility rule, retention age, coverage rule, archive mapping, and cleanup-run audit context.
+Retention uses one configured SQLite archive root and generation file, with a separate archive table and Source-ID receipt evidence for each registered retention source. The shared archive and safety services stay source-neutral. Each source owns its source table, cutoff column, eligibility rule, retention age, coverage rule, archive mapping, read-index definitions and cleanup-run audit context. The registry declares the indexed column order and which columns use SQLite’s ASCII case-insensitive comparison.
 
 A future retention source must provide a normalized registry contract, a stable primary key, a deterministic archive mapping, source-specific coverage tests, and crash/regression evidence. Aggregator-, country-, flow-, or table-specific behavior must not leak into the shared lock, health, receipt, or delete gates.
 
@@ -75,7 +75,7 @@ Receipt commit, partial MySQL delete, or later finalization failure remains resu
 
 ## Lean archive-health capability
 
-Archive health owns the durable protection around a generation-bound verification attempt and translates explicit read-only SQLite checks into compact operational outcomes. The canonical archive, its locks and all three retention writers remain on Production. The capability is independent of Aggregator, country, MNO, Billing and Flow.
+Archive health owns the durable protection around a generation-bound verification attempt and translates explicit read-only SQLite checks into compact operational outcomes. The Production host owns the canonical archive, its locks and all four registered cleanup writers for Sessions, Handoffs, Engagements and SMS assignments. The capability is independent of Aggregator, country, MNO, Billing and Flow.
 
 The public WP-CLI surface includes:
 
@@ -96,7 +96,7 @@ All writes use the same database-scoped MySQL named lock with a five-second maxi
 
 The internal `with_new_attempt` capability acquires the real generation lock, revalidates the target and size, and commits the attempt and Pending together before invoking the archive operation. There is no separate public start command. At most one attempt is active. An unsuccessful or competing start releases no archive bytes and creates no new Pending. Missing, malformed, contradictory or unreadable state blocks dependent work. The shared flat-JSON decoder rejects duplicate stored keys, including escaped aliases; a later null value cannot hide an active attempt.
 
-Session, Handoff and Engagement cleanup check Pending under the generation lock before archive writes/receipt repair and immediately before MySQL deletion, including resumed runs with verified receipts. Pending applies to its canonical generation; corrupt/unreadable state fails closed. Raw-data compaction and Operational Event cleanup do not gain a global Health gate. Existing coverage, Source-ID receipts, frozen generations and corruption protections remain independent requirements.
+Every registered cleanup writer checks Pending under the generation lock before writing an archive, repairing receipts or deleting MySQL originals, including on resume. SMS assignment cleanup also locks the historical generations used for its group counters during automatic correction and each archive or delete package. If a required generation becomes unavailable, Pending or corrupt, the worker waits and measures the groups again after recovery. Unreadable protection state blocks the dependent work. Raw-data compaction and Operational Event cleanup do not gain a global Health gate. Existing coverage, Source-ID receipts, frozen generations and corruption protections remain independent requirements.
 
 Technical failure and explicit manual abort first persist invalidation, then secure the existing `retention_archive_health_unavailable` error Incident (`area=retention`), then close the attempt and clear Pending. New technical cases use `health_run_failed`; `health_child_timeout` is preserved. Failed persistence leaves Pending intact. Repeating an already completed abort returns its original closure. A stored corruption outcome cannot be overwritten. Neither elapsed time nor source-process death closes an attempt. Conversely, even after a safe abort, a still living source keeps its actual OS lock until it ends.
 

@@ -215,22 +215,43 @@ class Kiwi_Retention_Sms_Statistics
         $copies = $absent ? $this->latest($paths, $absent) : [];
         foreach ($absent as $id) {
             $copy = $copies[$id] ?? null;
-            if ($copy && array_search($copy['path'], $paths, true) > $progress['file'] && $copy['verified']) { continue; }
-            // A missing newer snapshot can change group. Its deletion manifest can identify the affected group.
-            $group = $progress['known_gaps'][$id]['group'] ?? null;
-            if ($copy && $copy['verified'] && !isset($progress['discounted_ids'][$id])) {
-                $obsolete = self::group_id($copy['row']);
-                if (isset($state['groups'][$obsolete])) {
-                    foreach (self::MARKERS as $counter => $field) {
-                        if ($copy['row'][$field] !== null) { --$state['groups'][$obsolete]['archive_counts'][$counter]; }
-                    }
-                }
-                $progress['discounted_ids'][$id] = true;
-            }
+            if (!$this->discard_superseded_copy($state, $id, $path, $copy)) { continue; }
+            $gap = $progress['known_gaps'][$id] ?? null;
+            $known_path = $this->gap_path($gap, $paths);
+            $group = $known_path !== null && $this->at_least_as_new($known_path, $path) ? $gap['group'] : null;
             $this->note($state, $group, 'archive_receipted_original_missing', $id);
         }
         $progress['cursor'] = max($ids);
         return count($ids);
+    }
+
+    /** Compare even a missing generation with the surviving files in the same archive. */
+    private function at_least_as_new(string $path, string $other): bool
+    {
+        return Kiwi_Retention_Archive_Name::compare_paths($path, $other) >= 0;
+    }
+
+    private function gap_path(?array $gap, array $paths): ?string
+    {
+        // Earlier checkpoints stored an index into the frozen inventory.
+        return $gap['path'] ?? $paths[$gap['file'] ?? -1] ?? null;
+    }
+
+    /** Return false when a verified later generation already supersedes the missing evidence. */
+    private function discard_superseded_copy(array &$state, int $id, string $path, ?array $copy): bool
+    {
+        if (!$copy || !$copy['verified']) { return true; }
+        if (!$this->at_least_as_new($path, $copy['path'])) { return false; }
+        if (empty($state['progress']['discounted_ids'][$id])) {
+            $group = self::group_id($copy['row']);
+            if (isset($state['groups'][$group])) {
+                foreach (self::MARKERS as $counter => $field) {
+                    if ($copy['row'][$field] !== null) { --$state['groups'][$group]['archive_counts'][$counter]; }
+                }
+            }
+            $state['progress']['discounted_ids'][$id] = true;
+        }
+        return true;
     }
 
     private function check_deletion_evidence(array &$state, array $paths, int $limit): int
@@ -242,15 +263,16 @@ class Kiwi_Retention_Sms_Statistics
                 $ids = $this->absent_from_mysql($chunk);
                 if (!$ids) { continue; }
                 $rows = in_array($path, $paths, true) ? $this->reader->receipted_rows($this->source, $path, $ids) : [];
-                $latest = $rows && end($paths) !== $path ? $this->latest($paths, $ids) : $rows;
+                $latest = end($paths) === $path && count($rows) === count($ids) ? $rows : $this->latest($paths, $ids);
                 foreach ($ids as $id) {
                     $copy = $rows[$id] ?? null;
                     if (!$copy || !$copy['verified'] || $copy['row']['_archive_batch_id'] !== $batch['batch_id']
                         || self::group_id($copy['row']) !== $group) {
                         $this->note($state, $group, 'deleted_original_receipt_missing_or_mismatched', $id);
-                        $position = array_search($path, $paths, true);
-                        if ($position !== false && $position >= ($state['progress']['known_gaps'][$id]['file'] ?? -1)) {
-                            $state['progress']['known_gaps'][$id] = ['group' => $group, 'file' => $position];
+                        $known = $this->gap_path($state['progress']['known_gaps'][$id] ?? null, $paths);
+                        if ($this->discard_superseded_copy($state, $id, $path, $latest[$id] ?? null)
+                            && ($known === null || $this->at_least_as_new($path, $known))) {
+                            $state['progress']['known_gaps'][$id] = ['group' => $group, 'path' => $path];
                         }
                         if ($copy && self::group_id($copy['row']) !== $group) {
                             $this->note($state, self::group_id($copy['row']), 'deleted_original_group_conflict', $id);
@@ -324,6 +346,8 @@ class Kiwi_Retention_Sms_Statistics
                 $this->note($state, $group, 'sale_original_changed', (int) $sale['id'], 'conv');
                 continue;
             }
+            $gap = $this->gap_path($progress['known_gaps'][$original['id']] ?? null, $progress['files']);
+            if ($gap !== null && $this->at_least_as_new($gap, $path)) { continue; }
             $created = $this->timestamp($sale['created_at'] ?? null);
             $copied = $this->timestamp($original['_archived_at'] ?? null);
             try {
@@ -361,8 +385,8 @@ class Kiwi_Retention_Sms_Statistics
                         $known = $state['progress']['known_gaps'][$id] ?? null;
                         if ($known !== null) { $identified[$known['group']] = true; }
                         if (isset($rows[$id])) {
-                            $file = array_search($rows[$id]['path'], $state['progress']['files'], true);
-                            if (($known === null || $file > $known['file']) && $matches($rows[$id]['row'][$column])) {
+                            $gap = $this->gap_path($known, $state['progress']['files']);
+                            if (($gap === null || !$this->at_least_as_new($gap, $rows[$id]['path'])) && $matches($rows[$id]['row'][$column])) {
                                 $identified[self::group_id($rows[$id]['row'])] = true;
                             }
                         }
@@ -390,12 +414,7 @@ class Kiwi_Retention_Sms_Statistics
 
     private function absent_from_mysql(array $ids): array
     {
-        global $wpdb;
-        $marks = implode(',', array_fill(0, count($ids), '%d'));
-        $active = $wpdb->get_col($wpdb->prepare('SELECT id FROM ' . $this->source['source_table']
-            . ' WHERE id IN (' . $marks . ')', ...$ids));
-        if (!is_array($active) || (string) $wpdb->last_error !== '') { throw new RuntimeException('sms_original_lookup_failed'); }
-        return array_values(array_diff($ids, array_map('intval', $active)));
+        return (new Kiwi_Sms_Body_Variant_Repository())->missing_original_ids($ids);
     }
 
     private function latest(array $paths, array $ids): array

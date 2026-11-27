@@ -309,6 +309,16 @@ class Kiwi_Sms_Body_Variant_Repository
         return $row;
     }
 
+    public function missing_original_ids(array $ids): array
+    {
+        global $wpdb;
+        if (!$ids) { return []; }
+        $marks = implode(',', array_fill(0, count($ids), '%d'));
+        $active = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$this->get_assignments_table_name()} WHERE id IN ({$marks})", ...$ids));
+        if (!is_array($active) || (string) $wpdb->last_error !== '') { throw new RuntimeException('sms_original_lookup_failed'); }
+        return array_values(array_diff($ids, array_map('intval', $active)));
+    }
+
     public function find_latest_by_landing_session(string $landing_key, string $session_token): ?array
     {
         return $this->landing_session_matches($landing_key, $session_token, 1)[0] ?? null;

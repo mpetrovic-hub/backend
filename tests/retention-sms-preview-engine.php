@@ -182,6 +182,13 @@ $compare = static function (int $actual, array $expected, string $status) use ($
 };
 $compare(10, [10,11], 'passed');
 $compare(8, [10,11], 'outside_tolerance');
+$sales_table = $sales->get_table_name_for_schema();
+$wpdb->query("ALTER TABLE {$sales_table} MODIFY service_key VARCHAR(100) COLLATE utf8mb4_bin NOT NULL DEFAULT ''");
+$wpdb->query("UPDATE {$source['source_table']} SET service_key=UPPER(service_key)");
+$compare(10, [10,11], 'passed');
+$compare(8, [10,11], 'outside_tolerance');
+$wpdb->query("UPDATE {$source['source_table']} SET service_key=LOWER(service_key)");
+$wpdb->query("ALTER TABLE {$sales_table} MODIFY service_key VARCHAR(100) COLLATE utf8mb4_unicode_520_ci NOT NULL DEFAULT ''");
 if (in_array('--sms-live-time', $argv, true)) {
     et_create_health_options();
     foreach ([8 => 'outside_tolerance', 10 => 'passed'] as $actual => $status) {
@@ -251,6 +258,18 @@ et_check($damaged['status'] === 'incomplete' && $damaged['counters']['assignment
 $old_group = $read_group($audit,'original-group');
 et_check($old_group['status'] === 'passed' && $old_group['counters']['assignments']['expected'] === 1,
     'An older copy cannot add a phantom contribution to its former group when the newer original is missing');
+$missing_file = $new . '.test-missing';
+rename($new, $missing_file);
+try {
+    $audit = $preview(['enabled' => true]);
+    $old_group = $read_group($audit, 'original-group');
+    $latest_group = $read_group($audit, 'legacy');
+    et_check($old_group['status'] === 'passed' && $old_group['counters']['assignments']['expected'] === 1
+        && $latest_group['status'] === 'incomplete',
+        'A missing newer file cannot reassign an original ID to the group of an older remaining copy');
+} finally {
+    rename($missing_file, $new);
+}
 require_once __DIR__ . '/retention-sms-deletion-evidence-engine.php';
 et_sms_deletion_evidence();
 require __DIR__ . '/retention-sms-group-collation-engine.php';

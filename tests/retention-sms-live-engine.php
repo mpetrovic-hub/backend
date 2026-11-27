@@ -130,6 +130,45 @@ $archive = new Kiwi_Retention_Sqlite_Archive_Service(new Kiwi_Config());
 $otherArchive = $archive->get_archive_directory() . DIRECTORY_SEPARATOR . 'kiwi_retention_archive_2025.sqlite';
 $archive->archive_snapshot_batch($source, [$originals->find_assignment_by_id(11)], '2026-07-14 00:00:00',
     'live-original-187', $otherArchive);
+$generation_lock = new Kiwi_Retention_Archive_Lock();
+$health = new Kiwi_Retention_Archive_Health_Service();
+foreach (['pending', 'corruption', 'correction'] as $protection) {
+    if ($protection === 'pending') {
+        $attempt = bin2hex(random_bytes(16));
+        $opened = $health->with_new_attempt($attempt, 'manual', basename($otherArchive), filesize($otherArchive));
+        et_check($opened['_exit_code'] === 0, 'The older historical generation has a real open verification attempt: ' . ($opened['reason_code'] ?? 'ok'));
+        $protected = $start();
+    } else {
+        $phase = $protection === 'correction' ? 'sms_correction' : 'sms_archive';
+        if ($protection === 'correction') { $wpdb->update($summary, ['assignments'=>1], ['allocation_version'=>'legacy']); }
+        $protected = $until($start(), static fn(array $row): bool => $row['worker_phase'] === $phase);
+        $handle = $generation_lock->acquire_for_archive($otherArchive)['handle'];
+        et_check($handle->persist_write_blocked(), 'The older historical generation has a durable corruption block');
+        $generation_lock->release($handle);
+    }
+    for ($i = 0; $i < 30 && $protected['finished_at'] === null; ++$i) { $protected = $step($protected); }
+    if ($protection === 'correction') {
+        et_check((int)$wpdb->get_var("SELECT assignments FROM {$summary} WHERE allocation_version='legacy'") === 1,
+            'An available positive Q27 correction waits while its historical source is protected');
+    }
+    et_check((int)$protected['deleted_rows'] === 0 && !is_file($protected['archive_db_path'])
+        && $originals->find_assignment_by_id(11) !== null,
+        'A protected historical input holds all dependent target mutations: ' . $protection);
+    $wpdb->update($summary, ['assignments'=>7], ['allocation_version'=>'legacy']);
+    if ($protection === 'pending') {
+        $health->abort($attempt, true);
+    } else {
+        $handle = $generation_lock->acquire_for_archive($otherArchive)['handle'];
+        $handle->clear_write_blocked();
+        $generation_lock->release($handle);
+    }
+    $protected = $until($protected, static fn(array $row): bool => $row['finished_at'] !== null);
+    $findings = $byVersion(json_decode($protected['gate_results_json'], true, 512, JSON_THROW_ON_ERROR));
+    et_check($findings['legacy']['after']['counters']['assignments']['actual'] === 7
+        && $findings['legacy']['after']['status'] === 'outside_tolerance' && (int)$protected['deleted_rows'] === 0,
+        'Clearing the historical protection requires a fresh checking basis: ' . $protection);
+    $wpdb->update($summary, ['assignments'=>2], ['allocation_version'=>'legacy']);
+}
 $loss=$until($start(), static fn(array $row): bool => $row['worker_phase']==='sms_archive');
 rename($otherArchive, $otherArchive . '.saved');
 $loss=$step($loss);

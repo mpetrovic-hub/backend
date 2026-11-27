@@ -22,6 +22,11 @@ class Kiwi_Retention_Source_Registry
             'primary_key' => 'id', 'cutoff_column' => 'created_at', 'mutable_snapshot' => true,
             'retention_days_default' => 90,
             'retention_days_min' => 7,
+            'archive_read_indexes' => [
+                'retention_visible_token' => ['visible_token', '_source_pk'],
+                'retention_transaction_id' => ['transaction_id', '_source_pk'],
+            ],
+            'archive_nocase_columns' => ['visible_token', 'transaction_id'],
             'archive_columns' => [
                 'id' => 'INTEGER', 'created_at' => 'TEXT', 'updated_at' => 'TEXT', 'landing_key' => 'TEXT',
                 'service_key' => 'TEXT', 'provider_key' => 'TEXT', 'flow_key' => 'TEXT', 'country' => 'TEXT',
@@ -69,6 +74,7 @@ class Kiwi_Retention_Source_Registry
                 'retention_days_min' => 7,
                 'coverage_gate_required' => true,
                 'mutable_snapshot' => true,
+                'archive_read_indexes' => ['retention_day' => ['created_at', '_source_pk']],
                 'archive_columns' => [
                     'id' => 'INTEGER', 'created_at' => 'TEXT', 'updated_at' => 'TEXT',
                     'provider_key' => 'TEXT', 'service_key' => 'TEXT', 'flow_key' => 'TEXT',
@@ -139,6 +145,8 @@ class Kiwi_Retention_Source_Registry
             'retention_days_min' => 7,
             'coverage_gate_required' => true,
             'accepted_missing_metric_dates' => $this->build_accepted_landing_page_session_gap_dates(),
+            'archive_read_indexes' => ['retention_pair' => ['landing_key', 'session_token', 'created_at', '_source_pk', 'pid']],
+            'archive_nocase_columns' => ['landing_key', 'session_token'],
             'archive_columns' => [
                 'id' => 'INTEGER',
                 'created_at' => 'TEXT',

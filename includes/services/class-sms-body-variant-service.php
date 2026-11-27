@@ -153,7 +153,9 @@ class Kiwi_Sms_Body_Variant_Service
         try {
             $matches = [];
             $match_source = 'archive';
-            foreach ($reader->matching_source_ids($source, $column, $code, $accept) as $id) {
+            $ids = $reader->matching_source_ids($source, $column, $code, $accept);
+            $this->verify_search_inventory($reader, $source);
+            foreach ($ids as $id) {
                 try {
                     $live_row = $this->repository->find_assignment_by_id($id);
                 } catch (Throwable $error) {
@@ -173,11 +175,28 @@ class Kiwi_Sms_Body_Variant_Service
                     if (count($matches) === 2) { break; }
                 }
             }
+            $reader->assert_inventory_unchanged();
             return $this->assignment_lookup_result($matches, $match_source);
         } catch (Throwable $error) {
             return ['status' => 'read_error', 'source' => $comparison_failed ? 'mysql' : 'archive'];
         } finally {
             $reader->close();
+        }
+    }
+
+    /** A lost generation may contain the requested code under another ID. All its acknowledged IDs must still be searchable. */
+    private function verify_search_inventory(Kiwi_Retention_Archive_Reader $reader, array $source): void
+    {
+        $paths = array_column($reader->files(), 'path');
+        $deletions = new Kiwi_Retention_Sms_Deletion_Evidence();
+        foreach ($deletions->missing_search_batches($paths) as [$missing_path, $ids]) {
+            foreach ($this->repository->missing_original_ids($ids) as $id) {
+                $copies = $reader->copies($source, $id, null, true);
+                $latest = array_key_last($copies);
+                if ($latest === null || Kiwi_Retention_Archive_Name::compare_paths($latest, $missing_path) <= 0) {
+                    throw new RuntimeException('sms_archive_search_incomplete');
+                }
+            }
         }
     }
 

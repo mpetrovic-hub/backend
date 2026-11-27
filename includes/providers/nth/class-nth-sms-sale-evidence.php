@@ -44,11 +44,14 @@ class Kiwi_Nth_Sms_Sale_Evidence implements Kiwi_Sms_Confirmed_Sale_History
         global $wpdb;
         if (!$services || $after >= $max || $limit < 1) { return []; }
         $table = (new Kiwi_Sales_Repository())->get_table_name_for_schema();
+        // The candidate services are Summary group values. A Sale column may compare their spellings differently.
+        $sales_comparison = Kiwi_Mysql_Text_Comparison::for_columns($table, ['service_key'], true);
+        $service_column = Kiwi_Sms_Body_Variant_Repository::group_comparison()->column_sql('service_key', 'service_key', $sales_comparison);
         $marks = implode(',', array_fill(0, count($services), '%s'));
         $sql = "SELECT id, created_at, service_key, provider_key, sale_type, status, sale_reference,
                     external_sale_id, external_transaction_id, context_json FROM {$table}
                 WHERE id>%d AND id<=%d AND provider_key='nth' AND sale_type='premium_sms_one_off'
-                    AND status='completed' AND service_key IN ({$marks}) ORDER BY id LIMIT %d";
+                    AND status='completed' AND {$service_column} IN ({$marks}) ORDER BY id LIMIT %d";
         $args = array_merge([$after, $max], array_values($services), [$limit]);
         $rows = $wpdb->get_results($wpdb->prepare($sql, ...$args), ARRAY_A);
         if (!is_array($rows) || (string) ($wpdb->last_error ?? '') !== '') {

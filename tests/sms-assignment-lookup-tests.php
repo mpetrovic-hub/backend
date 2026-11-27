@@ -31,7 +31,25 @@ function kiwi_sms_lookup_fixture(callable $test): void
 {
     global $wpdb;
     $previous = $wpdb;
-    $wpdb = new Kiwi_Test_Wpdb_Sms_Body_Variant();
+    $wpdb = new class extends Kiwi_Test_Wpdb_Sms_Body_Variant {
+        public $audit_read_failed = false;
+
+        public function prepare($query, ...$args)
+        {
+            // These lookup fixtures have archived copies but no productive cleanup audit rows.
+            if (str_contains($query, 'FROM ' . $this->prefix . 'kiwi_retention_cleanup_runs')) { return $query; }
+            return parent::prepare($query, ...$args);
+        }
+
+        public function get_results($statement, $output = null): array
+        {
+            if (is_string($statement) && str_contains($statement, 'FROM ' . $this->prefix . 'kiwi_retention_cleanup_runs')) {
+                $this->last_error = $this->audit_read_failed ? 'fixture audit unavailable' : '';
+                return [];
+            }
+            return parent::get_results($statement, $output);
+        }
+    };
     $root = kiwi_create_temp_directory('kiwi_sms_lookup');
     try {
         $config = new Kiwi_Test_Retention_Sqlite_Archive_Config($root);
@@ -52,12 +70,7 @@ function kiwi_sms_lookup_archive(Kiwi_Retention_Sqlite_Archive_Service $archive,
 {
     $archive->resolve_archive_db_path();
     $path = $archive->get_archive_directory() . DIRECTORY_SEPARATOR . $name;
-    $columns = array_fill_keys(array_keys($rows[0]), 'TEXT');
-    $columns['id'] = 'INTEGER';
-    $source = [
-        'source_key' => 'sms_body_variant_assignments', 'source_table' => 'wp_kiwi_sms_body_variant_assignments',
-        'primary_key' => 'id', 'cutoff_column' => 'created_at', 'mutable_snapshot' => true, 'archive_columns' => $columns,
-    ];
+    $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
     $archive->archive_snapshot_batch($source, $rows, '2026-01-01 00:00:00', $name . '-' . $rows[0]['id'], $path);
     return $path;
 }
@@ -167,6 +180,11 @@ kiwi_run_test('SMS assignment lookup reaches the NTH fallback for missing ambigu
         $assert_fallback($token, 'read_error', 'mysql');
         kiwi_assert_true(strpos(kiwi_sms_lookup_nth($service, 'txn_direct_12345678', true), 'txn_direct_12345678-') === 0,
             'A matching txn_ in the SMS still works with unavailable assignment storage.');
+        $wpdb->last_error = '';
+        $wpdb->audit_read_failed = true;
+        kiwi_assert_same('read_error', $service->resolve_assignment_from_visible_token($token)['status'],
+            'An unreadable cleanup history prevents an unverified archive hit.');
+        $wpdb->audit_read_failed = false;
         $wpdb->last_error = '';
         kiwi_sms_lookup_archive($archive, 'kiwi_retention_archive_2026.sqlite', [
             kiwi_sms_lookup_row(2, $token, 'txn_two_12345678'),

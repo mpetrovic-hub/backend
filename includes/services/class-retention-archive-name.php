@@ -31,6 +31,21 @@ final class Kiwi_Retention_Archive_Name
         return self::parse($archive_name) !== null ? $archive_name : '';
     }
 
+    public static function compare_generations(array $left, array $right): int
+    {
+        return strcmp($left['year'], $right['year']) ?: $left['generation'] <=> $right['generation'];
+    }
+
+    public static function compare_paths(string $left, string $right): int
+    {
+        $a = self::parse(basename($left));
+        $b = self::parse(basename($right));
+        if ($a === null || $b === null || dirname($left) !== dirname($right)) {
+            throw new RuntimeException('archive_generation_not_comparable');
+        }
+        return self::compare_generations($a, $b);
+    }
+
     public static function build(string $year, int $generation = 1): string
     {
         if (preg_match('/^[0-9]{4}$/', $year) !== 1 || $generation < 1) {

@@ -26,6 +26,32 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
         }
     }
 
+    /** Page only actual deletions in generations absent from the search. The first unresolved ID ends the caller's search. */
+    public function missing_search_batches(array $available): iterable
+    {
+        global $wpdb;
+        $source = Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS;
+        $marks = implode(',', array_fill(0, count($available), '%s'));
+        $missing = $available ? " AND (archive_db_path IS NULL OR BINARY archive_db_path NOT IN ({$marks}))" : '';
+        $before = null;
+        do {
+            $cursor = $before === null ? '' : ' AND id<%d';
+            $args = array_merge([$source], $available, $before === null ? [] : [$before], [self::PAGE_SIZE]);
+            $rows = $this->read_rows($wpdb->prepare('SELECT ' . self::AUDIT_FIELDS . ',' . self::MANIFEST
+                . " AS manifest FROM {$this->runs->get_table_name()} WHERE source_key=%s AND dry_run=0 AND deleted_rows>0
+                {$missing}{$cursor} ORDER BY id DESC LIMIT %d", ...$args));
+            foreach ($rows as $run) {
+                $before = (int) $run['id'];
+                foreach ($this->entries($run, (string) $run['manifest']) as $batch) {
+                    if (isset($batch['error'])) { throw new RuntimeException($batch['error']); }
+                    foreach (array_chunk($batch['ids'], 500) as $ids) {
+                        yield [(string) $run['archive_db_path'], $ids];
+                    }
+                }
+            }
+        } while (count($rows) === self::PAGE_SIZE);
+    }
+
     /** A persisted cursor bounds visits to individual batches, including inside a large run. */
     public function visit_page(array &$cursor, int $limit, callable $visitor, ?callable $incomplete = null): bool
     {

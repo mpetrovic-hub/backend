@@ -2,32 +2,31 @@
 
 if (!defined('ABSPATH')) { exit; }
 
+require_once __DIR__ . '/class-retention-sms-worker-support.php';
+
 /** One bounded archive or delete step, called while the SMS source and worker locks are held. */
-final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Support
+final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Sms_Worker_Support
 {
     public function advance(array $run, int $limit, string $source_lock): array
     {
-        $handle = null;
+        $handles = [];
         try {
             $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
             $connection = $this->lock_owner($source_lock);
             $path = $this->archive_service->resolve_existing_archive_db_path_read_only((string) $run['archive_db_path']);
-            $lock = $this->archive_lock->acquire_for_archive($path);
-            if (empty($lock['acquired'])) {
-                return ['status'=>'wait', 'reason'=>$lock['error_code'] ?? 'archive_lock_active'];
-            }
-            $handle = $lock['handle'];
             $run = $this->confirmed_run($run);
             $state = json_decode($run['gate_results_json'], true, 512, JSON_THROW_ON_ERROR);
-            foreach ($this->scope($run) as $field=>$value) {
-                if (($state['archive_scope'][$field] ?? null) !== $value) { throw new RuntimeException('sms_archive_scope_invalid'); }
-            }
-            if ($run['source_key'] !== $source['source_key'] || $run['source_table'] !== $source['source_table']
+            if (($state['archive_scope'] ?? null) !== $this->archive_scope($run)
+                || $run['source_key'] !== $source['source_key'] || $run['source_table'] !== $source['source_table']
                 || $run['cutoff_column'] !== $source['cutoff_column'] || (int) $run['enabled'] !== 1
                 || (int) $run['dry_run'] !== 0 || ($state['progress']['phase'] ?? '') !== 'released'
                 || !is_array($state['groups'] ?? null)) {
                 throw new RuntimeException('sms_archive_scope_invalid');
             }
+            $required = $this->required_archive_paths($run, $state);
+            $busy = $this->lock_archives(array_merge($required, [$path]), $handles);
+            if ($busy !== null) { return ['status'=>'wait', 'reason'=>$busy, 'history_blocked'=>true]; }
+            $handle = $handles[$path];
             $this->assert_release_basis($run, $state);
             if (!empty($state['recheck_groups'])) {
                 return $this->recheck(array_values($state['recheck_groups']));
@@ -51,34 +50,21 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             return $state['pending_archive']['stage'] === 'copy'
                 ? $this->archive_page($source, $run, $state, $handle, $source_lock, $connection, $limit)
                 : $this->delete_page($source, $run, $state, $handle, $source_lock, $connection, $limit);
+        } catch (Kiwi_Retention_Sms_History_Blocked $error) {
+            return ['status'=>'wait', 'reason'=>$error->getMessage(), 'history_blocked'=>true];
         } catch (Throwable $error) {
             $reason = $error->getMessage();
-            if ($reason === 'sms_archive_confirmed_file_missing') { return ['status'=>'wait', 'reason'=>$reason]; }
             return ['status'=>'failed', 'reason'=>str_starts_with($reason, 'sms_archive_') ? $reason : 'sms_archive_batch_failed'];
         } finally {
-            if ($handle !== null) { $this->archive_lock->release($handle); }
+            $this->release_archives($handles);
         }
-    }
-
-    private function scope(array $run): array
-    {
-        return ['run_id'=>$run['run_id'], 'cutoff_value'=>$run['cutoff_value'],
-            'target_max_primary_key'=>(int) $run['target_max_primary_key'], 'archive_db_path'=>$run['archive_db_path']];
     }
 
     private function assert_release_basis(array $run, array $state): void
     {
         Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
-        $paths = $state['required_archive_paths'] ?? [];
-        if (!is_array($paths)) { throw new RuntimeException('sms_archive_inventory_invalid'); }
-        if (!empty($state['archive_target_existed']) || (int) $run['archived_rows'] > 0 || (int) $run['deleted_rows'] > 0) {
-            $paths[] = $run['archive_db_path'];
-        }
-        foreach ($paths as $path) {
-            $this->archive_service->resolve_existing_archive_db_path_read_only($path);
-            clearstatcache(true, $path);
-            if (!is_file($path) || is_link($path)) { throw new RuntimeException('sms_archive_confirmed_file_missing'); }
-        }
+        $blocked = $this->historical_block($this->required_archive_paths($run, $state));
+        if ($blocked !== null) { throw new Kiwi_Retention_Sms_History_Blocked($blocked); }
     }
 
     private function lock_owner(string $source_lock): int
@@ -104,7 +90,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             || (int) $row['enabled'] !== 1 || (int) $row['dry_run'] !== 0
             || $row['source_key'] !== $expected['source_key'] || $row['source_table'] !== $expected['source_table']
             || $row['cutoff_column'] !== $expected['cutoff_column']
-            || $this->scope($row) !== $this->scope($expected)
+            || $this->archive_scope($row) !== $this->archive_scope($expected)
             || $this->run_repository->checkpoint_for_stored_run($row) !== $this->run_repository->checkpoint_for_stored_run($expected)) {
             throw new RuntimeException('sms_archive_audit_readback_failed');
         }
@@ -226,7 +212,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
     {
         $path = $run['archive_db_path'];
         if (!is_file($path) && (int) $run['archived_rows'] > 0) {
-            throw new RuntimeException('sms_archive_confirmed_file_missing');
+            throw new Kiwi_Retention_Sms_History_Blocked('sms_archive_confirmed_file_missing');
         }
         if (!is_file($path)) { return []; }
         $reader = new Kiwi_Retention_Archive_Reader($this->archive_service,$this->archive_lock,$this->corruption_safety_gate);

@@ -25,7 +25,7 @@ function et_sms_codes_after_archive(bool $binary_visible, bool $binary_txn): voi
         $sales = new Kiwi_Sales_Repository();
         $flows = new Kiwi_Nth_Flow_Transaction_Repository();
         $events = new Kiwi_Nth_Event_Repository();
-        foreach ([$variants, $sales, $flows, $events] as $repository) { $repository->create_table(); }
+        foreach ([$variants, $sales, $flows, $events, new Kiwi_Retention_Cleanup_Run_Repository()] as $repository) { $repository->create_table(); }
         $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
         $table = $source['source_table'];
         $visible_collation = $binary_visible ? 'utf8mb4_bin' : 'utf8mb4_unicode_520_ci';

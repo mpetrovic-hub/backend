@@ -4,6 +4,7 @@ require_once ABSPATH . 'includes/repositories/class-sales-repository.php';
 
 $sales = new Kiwi_Sales_Repository();
 $sales->create_table();
+(new Kiwi_Retention_Cleanup_Run_Repository())->create_table();
 require __DIR__ . '/retention-sms-sale-concurrency-engine.php';
 $data = ['sale_reference' => 'sms-185-distinct', 'sale_type' => 'premium_sms_one_off', 'status' => 'completed'];
 $first = $sales->upsert_with_result($data);
