@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) {
 require_once __DIR__ . '/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/core/class-config.php';
 require_once __DIR__ . '/core/class-database-table-names.php';
+require_once __DIR__ . '/core/class-mysql-text-comparison.php';
 require_once __DIR__ . '/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/core/class-plugin.php';
 

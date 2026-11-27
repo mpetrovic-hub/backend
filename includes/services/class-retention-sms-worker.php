@@ -130,6 +130,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
                 'worker_last_finished_at' => $this->current_time_mysql(), 'status' => $done ? 'completed' : 'running',
                 'worker_phase' => $done ? 'completed' : 'sms_statistics'];
             if ($done) {
+                Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
                 $update['finished_at'] = $this->current_time_mysql();
                 $update['gate_status'] = 'passed';
                 foreach ($state['groups'] as $group) {
@@ -310,7 +311,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             unset($group);
         }
         unset($state['recheck_groups']);
-        $state['measurement'] = $this->statistics->new_measurement($selected, $state['tolerance']);
+        $state['measurement'] = $this->statistics->new_measurement($selected, $state['tolerance'], $state['group_schema']);
         $state['progress'] = ['phase' => 'review'];
         return $this->continue_with($run, $state, 'sms_recheck', ['gate_status' => 'pending', 'error_code' => '', 'error_message' => '']);
     }
@@ -373,7 +374,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             return $this->continue_with($reserved, $state, 'sms_correction');
         }
         $selected = array_intersect_key($state['groups'], array_flip($progress['groups']));
-        $state['measurement'] = $this->statistics->new_measurement($selected, $state['tolerance']);
+        $state['measurement'] = $this->statistics->new_measurement($selected, $state['tolerance'], $state['group_schema']);
         $state['progress'] = ['phase' => 'remeasure'];
         return $this->continue_with($reserved, $state, 'sms_remeasure');
     }

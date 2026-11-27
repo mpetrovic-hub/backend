@@ -33,6 +33,7 @@ function wp_schedule_single_event($timestamp, $hook, $args = []): bool
 }
 
 foreach (['core/class-config.php', 'core/class-database-table-names.php',
+    'core/class-mysql-text-comparison.php',
     'repositories/class-retention-archive-health-store.php', 'repositories/class-operational-event-repository.php',
     'repositories/interface-statistics-read-repository.php',
     'repositories/class-landing-session-engagement-repository.php', 'repositories/class-landing-page-session-repository.php',

@@ -211,7 +211,7 @@ class Kiwi_Retention_Archive_Reader
     }
 
     /** Candidate IDs only. The caller must check the authoritative copy and live ownership. */
-    public function matching_source_ids(array $source, string $column, string $value): array
+    public function matching_source_ids(array $source, string $column, string $value, ?callable $accept_value = null): array
     {
         $ids = [];
         $table = self::identifier($source['source_table']);
@@ -220,10 +220,12 @@ class Kiwi_Retention_Archive_Reader
         foreach ($this->files(true) as $file) {
             $pdo = $this->open($file['path']);
             if (!$this->has_source($pdo, $source)) { continue; }
-            $statement = $pdo->prepare('SELECT _source_pk FROM "' . $table . '" WHERE "' . $column . '"=? COLLATE ' . $collation);
+            $statement = $pdo->prepare('SELECT _source_pk,"' . $column . '" FROM "' . $table . '" WHERE "' . $column . '"=? COLLATE ' . $collation);
             $statement->execute([$value]);
-            while (($id = $statement->fetchColumn()) !== false) {
-                $ids[(int) $id] = (int) $id;
+            while ($candidate = $statement->fetch(PDO::FETCH_NUM)) {
+                if ($accept_value === null || $accept_value((string) $candidate[1])) {
+                    $ids[(int) $candidate[0]] = (int) $candidate[0];
+                }
             }
         }
         $this->assert_inventory_unchanged();

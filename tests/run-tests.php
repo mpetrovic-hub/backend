@@ -374,6 +374,7 @@ if (!class_exists('WP_REST_Response')) {
 require_once __DIR__ . '/../includes/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/../includes/core/class-config.php';
 require_once __DIR__ . '/../includes/core/class-database-table-names.php';
+require_once __DIR__ . '/../includes/core/class-mysql-text-comparison.php';
 require_once __DIR__ . '/../includes/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
