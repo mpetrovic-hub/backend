@@ -46,6 +46,16 @@ In `gate_results_json.groups`, each entry's `key` field identifies the landing p
 
 ## SMS assignment live run
 
+### Accepted code-reuse limitation
+
+On 27 November 2026 the operator accepted PR #190 review point 2 as a statistics limitation. If an original assignment has been archived and deleted from MySQL, and a new MySQL assignment reuses its full visible token or tracking ID, the successful MySQL match remains authoritative for the lookup without an additional archive search. A late sale can therefore credit the newer assignment/group, or miss a variant contribution if that live assignment already has its conversion marker. Confirmed sales remain stored; automatic repair of these statistics is not guaranteed. If both originals later exist only in the archive, the existing ambiguity checks can prevent further group cleanup.
+
+This preserves the current tracking/cookie behavior and fast MySQL-hit path. It does not waive archive receipts, delete guards, failures or ambiguity detected by the lookup, or the archive search after a successful MySQL miss. The condition depends on completed archival/deletion, not an additional hard-coded 90-day cutoff. Reassess the accepted trade-off before shortening the retention period or if reused-code cases become materially relevant.
+
+The [Wayfinder production analysis](https://github.com/mpetrovic-hub/backend/issues/179#issuecomment-7107884725) found one confirmed sale after about 102 days among 5,476 attributable inbound SMS; 15 further SMS had no determinable assignment age. This is evidence about late SMS, not a measured count of archive/live code collisions. The [local reproduction](https://github.com/mpetrovic-hub/backend/pull/190#discussion_r4721338282) establishes the latter path. The accepted scope is recorded in [specification #183, ID-13a](https://github.com/mpetrovic-hub/backend/issues/183#id-13a-akzeptierte-code-wiederverwendung).
+
+### Archive lookup after a MySQL miss
+
 A visible token or direct transaction ID can be reused after its first original has left MySQL. The archived code lookup compares committed MySQL deletion IDs with the named file and batch and looks for SQLite receipts whose payload is missing. This also detects a restored annual file that predates an entire acknowledged batch. A live row or a verified later snapshot can supply the missing original codes. Until the codes can be accounted for, NTH uses its fallback and retains confirmed sales without crediting an unproved variant. The check processes receipt and original IDs in pages of up to 500. An exceeded lookup time budget also triggers the fallback.
 
 In the group audit, inspect the groups of both the readable code candidates and the missing originals. Other groups can retain their own verified results. Restoring the missing records can reveal multiple IDs with the same full code. For an ID that was restored, reassigned and deleted again, the newer verified snapshot and its exact deletion receipt establish the current group even when the older file is missing.
