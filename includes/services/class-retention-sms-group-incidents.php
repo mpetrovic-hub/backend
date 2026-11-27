@@ -68,8 +68,8 @@ final class Kiwi_Retention_Sms_Group_Incidents
             'event_type' => 'retention_cleanup_group_blocked', 'area' => 'retention',
             'reference_type' => 'retention_cleanup_run', 'after_id' => $cursor,
         ], $limit);
-        foreach ($open ?? [] as $event) {
-            if ($cursor > 0 && microtime(true) >= $deadline) { return $cursor; }
+        foreach ($open ?? [] as $index => $event) {
+            if ($index > 0 && microtime(true) >= $deadline) { return $cursor; }
             $cursor = (int) $event['id'];
             if (!preg_match('/^' . self::CORRELATION_PREFIX . '([a-f0-9]{64})$/D', $event['correlation_key'], $match)) { continue; }
             $id = $match[1];
