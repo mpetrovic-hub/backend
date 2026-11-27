@@ -70,7 +70,11 @@ class Kiwi_Retention_Table_Growth_Snapshot_Repository
         $source_table = (string) ($source['source_table'] ?? '');
         $cutoff_column = (string) ($source['cutoff_column'] ?? '');
         $sizes = $this->get_table_sizes($source_table);
+        if (trim((string) ($wpdb->last_error ?? '')) !== '') { return 0; }
         $min_max = $this->get_cutoff_min_max($source_table, $cutoff_column);
+        if (trim((string) ($wpdb->last_error ?? '')) !== '') { return 0; }
+        $count = $this->count_total_rows($source_table);
+        if (trim((string) ($wpdb->last_error ?? '')) !== '') { return 0; }
         $snapshot_at = $this->current_time_mysql();
         $snapshot_date = substr($snapshot_at, 0, 10);
         $row = [
@@ -82,12 +86,12 @@ class Kiwi_Retention_Table_Growth_Snapshot_Repository
             'retention_days_effective' => $retention_days,
             'cutoff_column' => $cutoff_column,
             'cutoff_value' => $cutoff_value,
-            'row_count_total' => $this->count_total_rows($source_table),
+            'row_count_total' => $count,
             'data_size_bytes' => (int) ($sizes['data_size_bytes'] ?? 0),
             'index_size_bytes' => (int) ($sizes['index_size_bytes'] ?? 0),
             'total_size_bytes' => (int) ($sizes['total_size_bytes'] ?? 0),
-            'min_cutoff_value' => (string) ($min_max['min_cutoff_value'] ?? ''),
-            'max_cutoff_value' => (string) ($min_max['max_cutoff_value'] ?? ''),
+            'min_cutoff_value' => $min_max['min_cutoff_value'] ?? null,
+            'max_cutoff_value' => $min_max['max_cutoff_value'] ?? null,
             'eligible_rows_at_cutoff' => $eligible_rows,
             'archived_rows_last_run' => $archived_rows,
             'deleted_rows_last_run' => $deleted_rows,

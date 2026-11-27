@@ -54,7 +54,9 @@ class Kiwi_Nth_Event_Repository
             KEY created_at (created_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 
@@ -138,6 +140,16 @@ class Kiwi_Nth_Event_Repository
             'inserted' => true,
             'row' => $this->get_by_id((int) $wpdb->insert_id),
         ];
+    }
+
+    public function get_for_sale_evidence(int $id): ?array
+    {
+        global $wpdb;
+        $event = $this->get_by_id($id);
+        if ($event === null && !empty($wpdb->last_error)) {
+            throw new RuntimeException('nth_sale_mo_read_failed');
+        }
+        return $event;
     }
 
     public function get_by_id(int $id): ?array

@@ -98,17 +98,77 @@ class Kiwi_Sales_Repository
 
     public function upsert(array $data): array
     {
-        $existing = $this->find_by_sale_reference((string) ($data['sale_reference'] ?? ''));
+        return $this->upsert_with_result($data)['row'];
+    }
 
-        if (is_array($existing)) {
-            $this->update((int) $existing['id'], $data, $existing);
+    /** The unique sale reference picks one winner when confirmations arrive together. */
+    public function upsert_with_result(array $data, ?callable $observe_insert = null): array
+    {
+        $reference = (string) ($data['sale_reference'] ?? '');
+        $existing = $this->find_by_sale_reference($reference);
+        if ($existing === null) {
+            [$id, $observation] = $this->insert_with_observation($data, $observe_insert);
+            if ($id > 0) {
+                $row = $this->get_by_id($id);
+                if ($row === null && $observe_insert !== null) {
+                    // A connection loss or rolled-back transaction can leave an insert ID without a sale.
+                    return $this->upsert_with_result($data);
+                }
+                return ['row' => $row ?? [], 'inserted' => $row !== null, 'observation' => $observation];
+            }
 
-            return $this->find_by_sale_reference((string) ($data['sale_reference'] ?? '')) ?? $existing;
+            // A concurrent writer can win between the lookup and our INSERT.
+            $existing = $this->find_by_sale_reference($reference);
+            if ($existing === null) {
+                return ['row' => [], 'inserted' => false, 'observation' => null];
+            }
         }
+        $this->update((int) $existing['id'], $data, $existing);
+        return ['row' => $this->find_by_sale_reference($reference) ?? $existing, 'inserted' => false, 'observation' => null];
+    }
 
-        $id = $this->insert($data);
+    /** An optional locking read sees related data in commit order. It cannot veto a sale. */
+    private function insert_with_observation(array $data, ?callable $observe_insert): array
+    {
+        global $wpdb;
+        if ($observe_insert === null || !$this->begin_observed_insert()) {
+            return [$this->insert($data), null];
+        }
+        try {
+            $id = $this->insert($data);
+            if ($id < 1) {
+                $wpdb->query('ROLLBACK');
+                return [0, null];
+            }
+            try {
+                $observation = $observe_insert();
+            } catch (Throwable $error) {
+                $observation = null;
+            }
+            if ($wpdb->query('COMMIT') !== false) {
+                return [$id, $observation];
+            }
+        } catch (Throwable $error) {
+            $wpdb->query('ROLLBACK');
+            throw $error;
+        }
+        // An uncertain commit is never evidence for statistics. Preserve or retry the actual sale.
+        $wpdb->query('ROLLBACK');
+        if ($this->find_by_sale_reference((string) $data['sale_reference']) !== null) {
+            return [0, null];
+        }
+        return [$this->insert($data), null];
+    }
 
-        return $this->get_by_id($id) ?? [];
+    private function begin_observed_insert(): bool
+    {
+        global $wpdb;
+        try {
+            // Do not end or take ownership of a caller's existing transaction.
+            return (string) $wpdb->get_var('SELECT @@session.in_transaction') === '0' && $wpdb->query('START TRANSACTION') !== false;
+        } catch (Throwable $error) {
+            return false;
+        }
     }
 
     public function find_by_sale_reference(string $sale_reference): ?array
@@ -184,7 +244,7 @@ class Kiwi_Sales_Repository
 
         $now = $this->current_time_mysql();
 
-        $wpdb->insert(
+        $inserted = $wpdb->insert(
             $this->get_table_name(),
             [
                 'created_at' => $now,
@@ -264,7 +324,7 @@ class Kiwi_Sales_Repository
             ]
         );
 
-        return (int) $wpdb->insert_id;
+        return (int) $inserted === 1 ? (int) $wpdb->insert_id : 0;
     }
 
     private function update(int $id, array $data, array $existing = []): bool

@@ -394,7 +394,8 @@ class Kiwi_Plugin
             $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
         }
 
-        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS
+        if (in_array($source_key, [Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS], true)
             && ($retry_context['retry_source'] ?? false) === true
             && in_array($retry_context['triggered_by'] ?? null, ['cron', 'manual', 'wp_cli'], true)
         ) {
@@ -911,8 +912,7 @@ TEXT;
             $affiliate_postback_dispatcher,
             $landing_kpi_service,
             $sales_repository,
-            $sms_body_variant_repository,
-            $sales_snapshot_builder
+            sales_snapshot_builder: $sales_snapshot_builder
         );
         $nth_fr_one_off_service = new Kiwi_Nth_Fr_One_Off_Service(
             $config,
@@ -1242,7 +1242,8 @@ TEXT;
             $source_key = Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS;
         }
         $hook_args = [$source_key];
-        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS
+        if (in_array($source_key, [Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS], true)
             && ($retry_context['retry_source'] ?? false) === true
             && in_array($retry_context['triggered_by'] ?? null, ['cron', 'manual', 'wp_cli'], true)
         ) {

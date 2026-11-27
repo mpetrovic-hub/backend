@@ -31,6 +31,9 @@ class Kiwi_Retention_Cleanup_Service extends Kiwi_Retention_Worker_Support
 
     public function run_source(string $source_key, string $triggered_by = 'cron'): array
     {
+        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS) {
+            return $this->sms_worker()->run_source($source_key, $triggered_by);
+        }
         if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
             return $this->engagement_worker()->run_source($source_key, $triggered_by);
         }
@@ -445,6 +448,9 @@ class Kiwi_Retention_Cleanup_Service extends Kiwi_Retention_Worker_Support
 
     public function run_worker(string $source_key): array
     {
+        if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS) {
+            return $this->sms_worker()->run_worker($source_key);
+        }
         if ($source_key === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
             return $this->engagement_worker()->run_worker($source_key);
         }
@@ -1827,6 +1833,18 @@ class Kiwi_Retention_Cleanup_Service extends Kiwi_Retention_Worker_Support
             $this->config, $this->source_registry, $this->run_repository,
             $this->archive_service, $this->operational_event_service,
             $this->archive_lock, $this->corruption_safety_gate, $this->health_store
+        );
+    }
+
+    protected function sms_worker(): Kiwi_Retention_Sms_Worker
+    {
+        $reader = new Kiwi_Retention_Archive_Reader($this->archive_service, $this->archive_lock, $this->corruption_safety_gate);
+        $assignments = new Kiwi_Sms_Body_Variant_Service($this->config, new Kiwi_Sms_Body_Variant_Repository(), $reader);
+        $statistics = new Kiwi_Retention_Sms_Statistics($reader, $this->run_repository, Kiwi_Nth_Sms_Sale_Evidence::for_assignments($assignments));
+        return new Kiwi_Retention_Sms_Worker(
+            $statistics, $this->config, $this->source_registry, $this->run_repository,
+            $this->archive_service, $this->operational_event_service,
+            $this->archive_lock, $this->corruption_safety_gate, $this->health_store, $this->snapshot_repository
         );
     }
 }

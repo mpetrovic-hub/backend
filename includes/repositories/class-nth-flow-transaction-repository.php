@@ -60,7 +60,9 @@ class Kiwi_Nth_Flow_Transaction_Repository
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($sql);
     }
 
@@ -189,6 +191,20 @@ class Kiwi_Nth_Flow_Transaction_Repository
         );
 
         return $result !== false;
+    }
+
+    /** Multiple matching flows cannot prove one sale's original SMS. */
+    public function find_for_sale_evidence(string $sale_reference): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, sale_id, sale_reference, flow_reference, service_key, mo_event_id, keyword
+             FROM {$this->get_table_name()} WHERE sale_reference = %s LIMIT 2", $sale_reference
+        ), ARRAY_A);
+        if (!is_array($rows) || !empty($wpdb->last_error)) {
+            throw new RuntimeException('nth_sale_flow_read_failed');
+        }
+        return $rows;
     }
 
     public function get_by_id(int $id): ?array

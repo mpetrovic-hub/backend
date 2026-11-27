@@ -7,6 +7,11 @@ if (!defined('ABSPATH')) {
 /** Read-only pages under the existing generation and corruption gates. */
 class Kiwi_Retention_Archive_Reader
 {
+    private const SOURCE_RECEIPT = 'SELECT 1 FROM archive_batch_rows r JOIN archive_batches b
+        ON b.archive_batch_id=r.archive_batch_id WHERE b.source_key=? AND b.source_table=?';
+    private const COMPLETED_FILE = " AND b.status='success' AND b.finished_at IS NOT NULL
+        AND b.finished_at<>'' AND b.archive_db_path=?";
+
     private $archive_service;
     private $lock_service;
     private $safety_gate;
@@ -28,19 +33,17 @@ class Kiwi_Retention_Archive_Reader
     public static function read_indexes(array $source): array
     {
         $table = self::identifier((string) ($source['source_table'] ?? ''));
-        if (($source['source_key'] ?? '') === Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS) {
-            return [$table . '_retention_pair' => ['landing_key', 'session_token', 'created_at', '_source_pk', 'pid']];
+        $indexes = [];
+        foreach ($source['archive_read_indexes'] ?? [] as $suffix => $columns) {
+            $indexes[$table . '_' . self::identifier($suffix)] = $columns;
         }
-        if (($source['source_key'] ?? '') === Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
-            return [$table . '_retention_day' => ['created_at', '_source_pk']];
-        }
-        return [];
+        return $indexes;
     }
 
     /** Check the complete index definition, including order and collation. */
-    public static function index_matches(PDO $pdo, string $table, string $name, array $columns): bool
+    public static function index_matches(PDO $pdo, array $source, string $name, array $columns): bool
     {
-        $table = self::identifier($table);
+        $table = self::identifier($source['source_table']);
         $name = self::identifier($name);
         $found = false;
         foreach ($pdo->query('PRAGMA index_list("' . $table . '")')->fetchAll(PDO::FETCH_ASSOC) as $index) {
@@ -61,23 +64,22 @@ class Kiwi_Retention_Archive_Reader
         }
         foreach ($keys as $i => $key) {
             if ($key['name'] !== $columns[$i] || (int) $key['desc'] !== 0
-                || $key['coll'] !== self::read_index_collation($columns[$i])) {
+                || $key['coll'] !== self::read_index_collation($source, $columns[$i])) {
                 return false;
             }
         }
         return true;
     }
 
-    /** Only pair membership folds ASCII case; snapshots keep original bytes. */
-    private static function read_index_collation(string $column): string
+    private static function read_index_collation(array $source, string $column): string
     {
-        return in_array($column, ['landing_key', 'session_token'], true) ? 'NOCASE' : 'BINARY';
+        return in_array($column, $source['archive_nocase_columns'] ?? [], true) ? 'NOCASE' : 'BINARY';
     }
 
-    public static function read_index_columns_sql(array $columns): string
+    public static function read_index_columns_sql(array $source, array $columns): string
     {
-        return implode(',', array_map(static function (string $column): string {
-            return '"' . self::identifier($column) . '" COLLATE ' . self::read_index_collation($column) . ' ASC';
+        return implode(',', array_map(static function (string $column) use ($source): string {
+            return '"' . self::identifier($column) . '" COLLATE ' . self::read_index_collation($source, $column) . ' ASC';
         }, $columns));
     }
 
@@ -112,6 +114,39 @@ class Kiwi_Retention_Archive_Reader
         return $this->files;
     }
 
+    /** A bounded change token, read under the generation lock; never a substitute for row receipts. */
+    public static function file_basis(string $path, Kiwi_Retention_Archive_Lock_Handle $handle): array
+    {
+        if ($handle->get_lock_path() !== $path . '.lock') { throw new RuntimeException('archive_reader_lock_identity_mismatch'); }
+        self::assert_checkpointed($path);
+        clearstatcache(true, $path);
+        $stream = !is_link($path) && is_file($path) ? @fopen($path, 'rb') : false;
+        if ($stream === false) { throw new RuntimeException('archive_reader_path_unreadable'); }
+        try {
+            $stat = fstat($stream);
+            $header = fread($stream, 100);
+            if ($stat === false || strlen($header) !== 100 || substr($header, 0, 16) !== "SQLite format 3\0") {
+                throw new RuntimeException('archive_reader_header_invalid');
+            }
+            // SQLite updates its header change counter even for same-size commits within one timestamp tick.
+            return ['dev'=>$stat['dev'], 'ino'=>$stat['ino'], 'size'=>$stat['size'],
+                'mtime'=>$stat['mtime'], 'ctime'=>$stat['ctime'], 'header'=>bin2hex($header)];
+        } finally { fclose($stream); }
+    }
+
+    /** Retain every discovered generation lock until close(), including through the caller's read page. */
+    public function basis(): array
+    {
+        $paths = array_column($this->files(true), 'path');
+        $basis = [];
+        foreach ($paths as $path) {
+            $this->open($path);
+            $basis[$path] = self::file_basis($path, $this->handles[$path]);
+        }
+        if (array_column($this->files(true), 'path') !== $paths) { throw new RuntimeException('archive_inventory_changed'); }
+        return $basis;
+    }
+
     public function open(string $path, ?Kiwi_Retention_Archive_Lock_Handle $held_lock = null): PDO
     {
         $path = $this->archive_service->resolve_existing_archive_db_path_read_only($path);
@@ -131,14 +166,7 @@ class Kiwi_Retention_Archive_Reader
         if (empty($this->safety_gate->inspect($path, false)['allowed'])) {
             throw new RuntimeException('archive_reader_corruption_gate');
         }
-        // immutable must never ignore a committed WAL or an unfinished journal.
-        foreach (['-wal', '-journal'] as $suffix) {
-            $sidecar = $path . $suffix;
-            clearstatcache(true, $sidecar);
-            if (is_link($sidecar) || (file_exists($sidecar) && (!is_readable($sidecar) || filesize($sidecar) !== 0))) {
-                throw new RuntimeException('archive_reader_uncheckpointed_state');
-            }
-        }
+        self::assert_checkpointed($path);
         $real = realpath($path);
         if ($real === false || is_link($path) || !is_file($real) || !is_readable($real)) {
             throw new RuntimeException('archive_reader_path_unreadable');
@@ -155,6 +183,18 @@ class Kiwi_Retention_Archive_Reader
             return $pdo;
         } catch (Throwable $error) {
             throw new RuntimeException('archive_reader_open_failed');
+        }
+    }
+
+    /** Immutable reads and basis tokens must not ignore a WAL commit or an unfinished journal. */
+    private static function assert_checkpointed(string $path): void
+    {
+        foreach (['-wal', '-journal'] as $suffix) {
+            $sidecar = $path . $suffix;
+            clearstatcache(true, $sidecar);
+            if (is_link($sidecar) || (file_exists($sidecar) && (!is_readable($sidecar) || filesize($sidecar) !== 0))) {
+                throw new RuntimeException('archive_reader_uncheckpointed_state');
+            }
         }
     }
 
@@ -195,7 +235,7 @@ class Kiwi_Retention_Archive_Reader
         }
         if ($require_indexes) {
             foreach (self::read_indexes($source) as $name => $definition) {
-                if (!self::index_matches($pdo, $table, $name, $definition)) {
+                if (!self::index_matches($pdo, $source, $name, $definition)) {
                     throw new RuntimeException('archive_reader_indexes_missing');
                 }
             }
@@ -204,12 +244,35 @@ class Kiwi_Retention_Archive_Reader
         return true;
     }
 
-    /** Verify Source-ID evidence; mutable engagements may have older versions. */
-    public function copies(array $source, int $source_pk, ?Kiwi_Retention_Archive_Lock_Handle $held_lock = null): array
+    /** Candidate IDs only. The caller must check the authoritative copy and live ownership. */
+    public function matching_source_ids(array $source, string $column, string $value, ?callable $accept_value = null): array
     {
-        if ($this->files !== null && array_column($this->archive_service->list_archive_files(), 'path') !== array_column($this->files, 'path')) {
-            throw new RuntimeException('archive_inventory_changed');
+        $ids = [];
+        $table = self::identifier($source['source_table']);
+        $column = self::identifier($column);
+        $collation = self::read_index_collation($source, $column);
+        foreach ($this->files(true) as $file) {
+            $pdo = $this->open($file['path']);
+            if (!$this->has_source($pdo, $source)) { continue; }
+            $statement = $pdo->prepare('SELECT _source_pk,"' . $column . '" FROM "' . $table . '" WHERE "' . $column . '"=? COLLATE ' . $collation);
+            $statement->execute([$value]);
+            while ($candidate = $statement->fetch(PDO::FETCH_NUM)) {
+                if ($accept_value === null || $accept_value((string) $candidate[1])) {
+                    $ids[(int) $candidate[0]] = (int) $candidate[0];
+                }
+            }
         }
+        $this->assert_inventory_unchanged();
+        return array_values($ids);
+    }
+
+    /** Verify Source-ID evidence; mutable snapshots may have older versions. */
+    public function copies(
+        array $source, int $source_pk, ?Kiwi_Retention_Archive_Lock_Handle $held_lock = null,
+        bool $require_complete_receipts = false
+    ): array
+    {
+        $this->assert_inventory_unchanged();
         $copies = [];
         $reference = null;
         foreach ($this->files() as $file) {
@@ -224,18 +287,132 @@ class Kiwi_Retention_Archive_Reader
             $statement->execute([$source_pk]);
             $row = $statement->fetch(PDO::FETCH_ASSOC);
             if (!$row) {
+                if ($require_complete_receipts) {
+                    $receipt = $pdo->prepare('SELECT 1 FROM archive_batches b CROSS JOIN archive_batch_rows r
+                        WHERE b.source_key=? AND b.source_table=? AND r.archive_batch_id=b.archive_batch_id AND r.source_pk=? LIMIT 1');
+                    $receipt->execute([$source['source_key'], $source['source_table'], $source_pk]);
+                    if ($receipt->fetchColumn()) { throw new RuntimeException('archive_reader_receipted_row_missing'); }
+                }
                 continue;
             }
-            $this->verify_row_receipt($pdo, $source, $row);
+            $this->verify_row_receipt($pdo, $source, $row, $require_complete_receipts ? $path : null);
             $snapshot = self::snapshot($source, $row);
             if ($reference !== null && $snapshot !== $reference
-                && ($source['source_key'] ?? '') !== Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
+                && empty($source['mutable_snapshot'])) {
                 throw new RuntimeException('archive_reader_snapshot_conflict');
             }
             $reference = $snapshot;
             $copies[$path] = $row;
         }
         return $copies;
+    }
+
+    /** Keyset pages for a complete scan across yearly archives, without retaining all original IDs. */
+    public function original_ids_after(array $source, int $after, int $limit): array
+    {
+        $ids = [];
+        $table = self::identifier($source['source_table']);
+        $limit = min(500, max(1, $limit));
+        foreach ($this->files() as $file) {
+            $pdo = $this->open($file['path']);
+            if (!$this->has_source($pdo, $source)) { continue; }
+            $select = $pdo->prepare('SELECT _source_pk FROM "' . $table . '" WHERE _source_pk>? ORDER BY _source_pk LIMIT ' . $limit);
+            $select->execute([$after]);
+            foreach ($select->fetchAll(PDO::FETCH_COLUMN) as $id) { $ids[(int) $id] = (int) $id; }
+        }
+        sort($ids, SORT_NUMERIC);
+        return array_slice($ids, 0, $limit);
+    }
+
+    /** Read a bounded set with the same row/receipt/batch identity used for individual lookups. */
+    public function receipted_rows(array $source, string $path, array $ids): array
+    {
+        if (!$ids || count($ids) > 500) { throw new InvalidArgumentException('archive_receipt_page_size'); }
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) { return []; }
+        $table = self::identifier($source['source_table']);
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $sql = 'SELECT s.*, EXISTS (' . self::SOURCE_RECEIPT . self::COMPLETED_FILE
+            . ' AND r.source_pk=s._source_pk AND r.archive_batch_id=s._archive_batch_id) AS verified
+            FROM "' . $table . '" s WHERE s._source_pk IN (' . $marks . ')';
+        $query = $pdo->prepare($sql);
+        $query->execute(array_merge([$source['source_key'], $table, $path], $ids));
+        $rows = [];
+        while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
+            $id = (int) $row['_source_pk'];
+            $valid = (int) $row['verified'] === 1 && $id > 0 && $id === (int) $row[$source['primary_key']];
+            unset($row['verified']);
+            try { self::snapshot($source, $row); }
+            catch (RuntimeException $error) { $valid = false; }
+            $rows[$id] = ['row' => $row, 'verified' => $valid, 'path' => $path];
+        }
+        return $rows;
+    }
+
+    /** Newest available row per ID. A bad newer receipt must remain visible to the caller. */
+    public function latest_receipted_rows(array $source, array $paths, array $ids): array
+    {
+        $latest = [];
+        foreach (array_reverse($paths) as $path) {
+            $remaining = array_values(array_diff($ids, array_keys($latest)));
+            if (!$remaining) { break; }
+            $latest += $this->receipted_rows($source, $path, $remaining);
+        }
+        return $latest;
+    }
+
+    /** Check external deletion IDs even when the restored generation has lost the entire batch. */
+    public function missing_batch_payloads(array $source, string $path, string $batch, array $ids): array
+    {
+        if (!$ids || count($ids) > 500) { throw new InvalidArgumentException('archive_receipt_page_size'); }
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) { return $ids; }
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $query = $pdo->prepare('SELECT _source_pk FROM "' . self::identifier($source['source_table'])
+            . '" WHERE _archive_batch_id=? AND "' . self::identifier($source['primary_key']) . '"=_source_pk AND _source_pk IN (' . $marks . ')');
+        $query->execute(array_merge([$batch], $ids));
+        return array_values(array_diff($ids, array_map('intval', $query->fetchAll(PDO::FETCH_COLUMN))));
+    }
+
+    /** Inspect only receipt keys and the unique source-ID index. Limit the keys visited before testing for absent rows. */
+    public function missing_snapshot_batches(array $source, array $paths, float $deadline): iterable
+    {
+        $table = self::identifier($source['source_table']);
+        foreach ($paths as $path) {
+            $pdo = $this->open($path);
+            if (!$this->has_source($pdo, $source)) { continue; }
+            $batches = $pdo->prepare('SELECT archive_batch_id FROM archive_batches WHERE source_key=? AND source_table=?');
+            $batches->execute([$source['source_key'], $table]);
+            $page = $pdo->prepare('SELECT MAX(r.source_pk) AS last_id, COUNT(*) AS visited,
+                GROUP_CONCAT(CASE WHEN s._source_pk IS NULL THEN r.source_pk END) AS missing
+                FROM (SELECT source_pk FROM archive_batch_rows WHERE archive_batch_id=? AND source_pk>?
+                    ORDER BY source_pk LIMIT 500) r
+                LEFT JOIN "' . $table . '" s ON s._source_pk=r.source_pk');
+            while (($batch = $batches->fetchColumn()) !== false) {
+                $after = 0;
+                do {
+                    if (microtime(true) >= $deadline) { throw new RuntimeException('archive_code_search_timeout'); }
+                    $page->execute([$batch, $after]);
+                    $result = $page->fetch(PDO::FETCH_ASSOC);
+                    if ($result['missing'] !== null) { yield [$path, array_map('intval', explode(',', $result['missing']))]; }
+                    $after = (int)$result['last_id'];
+                } while ((int)$result['visited'] === 500);
+            }
+        }
+    }
+
+    /** An orphaned source receipt can prove absence even when no readable row remains to enumerate. */
+    public function missing_original_ids(array $source, string $path, int $after, int $limit): array
+    {
+        $pdo = $this->open($path);
+        if (!$this->has_source($pdo, $source)) { return []; }
+        $table = self::identifier($source['source_table']);
+        $query = $pdo->prepare('SELECT DISTINCT r.source_pk FROM archive_batches b CROSS JOIN archive_batch_rows r
+            ON b.archive_batch_id=r.archive_batch_id LEFT JOIN "' . $table . '" s ON s._source_pk=r.source_pk
+            WHERE b.source_key=? AND b.source_table=? AND r.source_pk>? AND s._source_pk IS NULL ORDER BY r.source_pk LIMIT '
+            . min(500, max(1, $limit)));
+        $query->execute([$source['source_key'], $table, $after]);
+        return array_map('intval', $query->fetchAll(PDO::FETCH_COLUMN));
     }
 
     public function day_page(array $source, string $path, string $date, array $cursor, int $limit): array
@@ -353,14 +530,23 @@ class Kiwi_Retention_Archive_Reader
         return $copies;
     }
 
-    private function verify_row_receipt(PDO $pdo, array $source, array $row): void
+    public function assert_inventory_unchanged(): void
     {
-        $statement = $pdo->prepare(
-            'SELECT 1 FROM archive_batch_rows r INNER JOIN archive_batches b
-             ON b.archive_batch_id=r.archive_batch_id WHERE r.source_pk=?
-             AND r.archive_batch_id=? AND b.source_key=? AND b.source_table=? LIMIT 1'
-        );
-        $statement->execute([$row['_source_pk'], $row['_archive_batch_id'], $source['source_key'], $source['source_table']]);
+        if ($this->files !== null && array_column($this->archive_service->list_archive_files(), 'path') !== array_column($this->files, 'path')) {
+            throw new RuntimeException('archive_inventory_changed');
+        }
+    }
+
+    private function verify_row_receipt(PDO $pdo, array $source, array $row, ?string $file = null): void
+    {
+        $query = self::SOURCE_RECEIPT;
+        $args = [$source['source_key'], $source['source_table']];
+        if ($file !== null) {
+            $query .= self::COMPLETED_FILE;
+            $args[] = $file;
+        }
+        $statement = $pdo->prepare($query . ' AND r.source_pk=? AND r.archive_batch_id=? LIMIT 1');
+        $statement->execute(array_merge($args, [$row['_source_pk'], $row['_archive_batch_id']]));
         if (!$statement->fetchColumn() || (int) $row['_source_pk'] !== (int) $row[$source['primary_key']]) {
             throw new RuntimeException('archive_reader_receipt_missing');
         }

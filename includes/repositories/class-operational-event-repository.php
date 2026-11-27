@@ -306,6 +306,12 @@ class Kiwi_Operational_Event_Repository
             $args[] = $value;
         }
 
+        $order = 'latest.occurred_at DESC, latest.id DESC';
+        if (isset($filters['after_id'])) {
+            $clauses[] = 'latest.id > %d';
+            $args[] = max(0, (int) $filters['after_id']);
+            $order = 'latest.id ASC';
+        }
         $args[] = min(500, max(1, $limit));
         $clauses[] = "NOT EXISTS (
             SELECT 1
@@ -319,7 +325,7 @@ class Kiwi_Operational_Event_Repository
         $sql = "SELECT latest.*
                 FROM {$this->get_table_name()} latest
                 WHERE " . implode(' AND ', $clauses) . "
-                ORDER BY latest.occurred_at DESC, latest.id DESC
+                ORDER BY {$order}
                 LIMIT %d";
 
         $rows = $wpdb->get_results($wpdb->prepare($sql, ...$args), ARRAY_A);

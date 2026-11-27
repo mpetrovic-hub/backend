@@ -101,14 +101,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
             ]);
         }
 
-        usort($archives, static function (array $left, array $right): int {
-            $year_compare = strcmp((string) ($left['year'] ?? ''), (string) ($right['year'] ?? ''));
-            if ($year_compare !== 0) {
-                return $year_compare;
-            }
-
-            return (int) ($left['generation'] ?? 0) <=> (int) ($right['generation'] ?? 0);
-        });
+        usort($archives, [Kiwi_Retention_Archive_Name::class, 'compare_generations']);
 
         return $archives;
     }
@@ -926,7 +919,7 @@ class Kiwi_Retention_Sqlite_Archive_Service
         if ($new_source_table && class_exists('Kiwi_Retention_Archive_Reader')) {
             foreach (Kiwi_Retention_Archive_Reader::read_indexes($source) as $name => $columns) {
                 $pdo->exec('CREATE INDEX ' . $this->quote_identifier($name) . ' ON ' . $archive_table
-                    . ' (' . Kiwi_Retention_Archive_Reader::read_index_columns_sql($columns) . ')');
+                    . ' (' . Kiwi_Retention_Archive_Reader::read_index_columns_sql($source, $columns) . ')');
             }
         }
     }

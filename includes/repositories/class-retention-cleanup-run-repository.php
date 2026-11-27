@@ -126,6 +126,15 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $name));
     }
 
+    /** Verify the specific source lock on this connection before publishing an external change. */
+    public function owns_source_creation_lock(string $source_key, string $name): bool
+    {
+        global $wpdb;
+        if ($name !== $this->source_creation_lock_name($source_key)) { return false; }
+        $owned = $wpdb->get_var($wpdb->prepare('SELECT IS_USED_LOCK(%s)=CONNECTION_ID()', $name));
+        return (string) ($wpdb->last_error ?? '') === '' && (int) $owned === 1;
+    }
+
     /** A reconnect must not insert after losing the connection-owned lock. */
     public function create_run_with_source_lock(array $data, string $name): int
     {
@@ -224,6 +233,17 @@ class Kiwi_Retention_Cleanup_Run_Repository
     /** Atomic engagement checkpoints without changing the shared source flow. */
     public function update_run_checkpoint(int $id, array $data, array $expected): bool
     {
+        return $this->write_checkpoint($id, $data, $expected, null);
+    }
+
+    /** A reconnect must not acknowledge a delete after its transaction rolled back. */
+    public function update_run_transaction_checkpoint(int $id, array $data, array $expected, int $connection_id): bool
+    {
+        return $connection_id > 0 && $this->write_checkpoint($id, $data, $expected, $connection_id);
+    }
+
+    private function write_checkpoint(int $id, array $data, array $expected, ?int $connection_id): bool
+    {
         if ($id <= 0) { return false; }
         global $wpdb;
         $row = $this->normalize_row(array_merge($data, ['updated_at' => $this->current_time_mysql()]));
@@ -238,6 +258,10 @@ class Kiwi_Retention_Cleanup_Run_Repository
         }
         $where = ['id=%d', 'finished_at IS NULL'];
         $args[] = $id;
+        if ($connection_id !== null) {
+            $where[] = '@@session.in_transaction=1 AND CONNECTION_ID()=%d';
+            $args[] = $connection_id;
+        }
         foreach ($guards as $column) {
             if (!array_key_exists($column, $expected)) { return false; }
             if ($raw_expected[$column] === null) {
@@ -254,6 +278,10 @@ class Kiwi_Retention_Cleanup_Run_Repository
             . ' SET ' . implode(',', $set) . ' WHERE ' . implode(' AND ', $where), ...$args));
         if ($result === false) { return false; }
         if ((int) $result === 1) { return true; }
+        if ($connection_id !== null && (int) $wpdb->get_var(
+            'SELECT IF(@@session.in_transaction=1,CONNECTION_ID(),0)') !== $connection_id) {
+            return false;
+        }
         // MySQL returns zero for an identical write. Accept only that exact
         // no-op, never a checkpoint advanced by a different invocation.
         $current = $this->find_run_by_id($id);
@@ -369,6 +397,7 @@ class Kiwi_Retention_Cleanup_Run_Repository
         $stale_after_minutes = max(1, $stale_after_minutes);
         $now = $this->current_time_mysql();
         $resumable_worker_phases = [
+            'sms_archive',
             'engagement_preparing',
             'engagement_archive',
             'engagement_after',

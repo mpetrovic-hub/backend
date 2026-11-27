@@ -374,6 +374,7 @@ if (!class_exists('WP_REST_Response')) {
 require_once __DIR__ . '/../includes/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/../includes/core/class-config.php';
 require_once __DIR__ . '/../includes/core/class-database-table-names.php';
+require_once __DIR__ . '/../includes/core/class-mysql-text-comparison.php';
 require_once __DIR__ . '/../includes/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/../includes/core/class-plugin.php';
 require_once __DIR__ . '/../includes/exporters/class-csv-exporter.php';
@@ -456,10 +457,15 @@ require_once __DIR__ . '/fixtures/retention-health-state-wpdb.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/../includes/services/class-retention-worker-support.php';
 require_once __DIR__ . '/../includes/services/class-retention-cleanup-service.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-statistics.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-deletion-evidence.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-worker.php';
+require_once __DIR__ . '/../includes/services/class-retention-sms-archive-batches.php';
 require_once __DIR__ . '/../includes/services/class-retention-archive-reader.php';
 require_once __DIR__ . '/../includes/services/class-retention-engagement-worker.php';
 require_once __DIR__ . '/../includes/services/class-premium-sms-landing-engagement-soft-flag-service.php';
 require_once __DIR__ . '/../includes/providers/nth/class-nth-primary-cta-adapter.php';
+require_once __DIR__ . '/../includes/providers/nth/class-nth-sms-sale-evidence.php';
 require_once __DIR__ . '/../includes/services/class-nth-fr-one-off-service.php';
 require_once __DIR__ . '/../includes/http/class-landing-page-router.php';
 require_once __DIR__ . '/../includes/http/class-nth-rest-routes.php';
@@ -3334,6 +3340,11 @@ class Kiwi_Test_Nth_Flow_Transaction_Repository extends Kiwi_Nth_Flow_Transactio
     public $rows = [];
     private $next_id = 1;
 
+    public function find_for_sale_evidence(string $sale_reference): array
+    {
+        return array_values(array_filter($this->rows, static fn ($flow) => $flow['sale_reference'] === $sale_reference));
+    }
+
     public function create(array $data): int
     {
         $id = $this->next_id++;
@@ -4218,6 +4229,24 @@ class Kiwi_Test_Sms_Body_Variant_Repository extends Kiwi_Sms_Body_Variant_Reposi
         return null;
     }
 
+    public function find_visible_token_matches(string $token): array
+    {
+        return array_values(array_filter($this->assignments, static function (array $row) use ($token): bool {
+            return strcasecmp($row['visible_token'], $token) === 0;
+        }));
+    }
+
+    public function find_transaction_id_matches(string $transaction_id): array
+    {
+        $row = $this->find_by_transaction_id($transaction_id);
+        return $row ? [$row] : [];
+    }
+
+    public function find_assignment_by_id(int $id): ?array
+    {
+        return $this->assignments[$id] ?? null;
+    }
+
     public function find_latest_by_landing_session(string $landing_key, string $session_token): ?array
     {
         $matches = [];
@@ -4460,6 +4489,7 @@ class Kiwi_Test_Device_Model_Brand_Map_Repository extends Kiwi_Device_Model_Bran
 class Kiwi_Test_Wpdb_Sms_Body_Variant
 {
     public $prefix = 'wp_';
+    public $last_error = '';
     public $tables = [];
 
     public function prepare($query, ...$args)
@@ -4493,6 +4523,10 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $args = is_array($statement) ? (array) ($statement['args'] ?? []) : [];
         $assignment_table = $this->prefix . 'kiwi_sms_body_variant_assignments';
         $rows = $this->tables[$assignment_table] ?? [];
+
+        if (strpos($query, 'WHERE id = %d') !== false) {
+            return $rows[(int) $args[0]] ?? null;
+        }
 
         if (strpos($query, 'transaction_id = %s') !== false) {
             $transaction_id = (string) ($args[0] ?? '');
@@ -4545,6 +4579,13 @@ class Kiwi_Test_Wpdb_Sms_Body_Variant
         $query = is_array($statement) ? $statement['query'] : $statement;
         $args = is_array($statement) ? $statement['args'] : [];
         preg_match_all('/(?:WHERE|AND) ([a-z_]+) = %s/', $query, $matches);
+        if (strpos($query, 'kiwi_sms_body_variant_assignments') !== false) {
+            $rows = array_values($this->tables[$this->prefix . 'kiwi_sms_body_variant_assignments'] ?? []);
+            foreach ($matches[1] as $i => $column) {
+                $rows = array_values(array_filter($rows, static fn ($row) => strcasecmp($row[$column], $args[$i]) === 0));
+            }
+            return $rows;
+        }
         foreach ($matches[1] as $i => $field) {
             $rows = array_values(array_filter($rows, static function (array $row) use ($field, $args, $i): bool {
                 return ($row[$field] ?? '') === $args[$i];
@@ -5092,13 +5133,13 @@ class Kiwi_Test_Sales_Repository extends Kiwi_Sales_Repository
     {
     }
 
-    public function upsert(array $data): array
+    public function upsert_with_result(array $data, ?callable $observe_insert = null): array
     {
         $this->upsert_calls[] = $data;
         $row = array_merge(['id' => $this->next_id++], $data);
         $this->rows[] = $row;
 
-        return $row;
+        return ['row' => $row, 'inserted' => true];
     }
 
     public function find_by_sale_reference(string $sale_reference): ?array
@@ -5246,11 +5287,11 @@ class Kiwi_Test_Failing_Sales_Repository extends Kiwi_Sales_Repository
     {
     }
 
-    public function upsert(array $data): array
+    public function upsert_with_result(array $data, ?callable $observe_insert = null): array
     {
         $this->upsert_calls[] = $data;
 
-        return [];
+        return ['row' => [], 'inserted' => false];
     }
 
     public function find_by_sale_reference(string $sale_reference): ?array
@@ -5278,7 +5319,7 @@ class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
     {
     }
 
-    public function record_successful_one_off_sale(array $transaction, array $report_event): array
+    public function record_successful_one_off_sale_with_result(array $transaction, array $report_event, ?callable $observe_insert = null): array
     {
         $sale = [
             'id' => $this->next_id++,
@@ -5293,7 +5334,7 @@ class Kiwi_Test_Shared_Sales_Recorder extends Kiwi_Shared_Sales_Recorder
             'sale' => $sale,
         ];
 
-        return $sale;
+        return ['row' => $sale, 'inserted' => true];
     }
 }
 
@@ -6536,7 +6577,7 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver preserves landing session wh
     kiwi_assert_same('provider-session-1', (string) ($updated['external_ref'] ?? ''), 'Expected provider external ref to remain available for conversion matching.');
 });
 
-kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant conversion once', function (): void {
+kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records landing conversions independently of the original SMS', function (): void {
     $repository = new Kiwi_Test_Click_Attribution_Repository();
     $dispatcher = new Kiwi_Test_Affiliate_Postback_Dispatcher(new Kiwi_Test_Attribution_Config());
     $kpi_summary_repository = new Kiwi_Test_Landing_Kpi_Summary_Repository();
@@ -6605,7 +6646,8 @@ kiwi_run_test('Kiwi_Conversion_Attribution_Resolver records SMS body variant con
     ]);
     $variant_summary = $variant_repository->get_summary_rows()[0] ?? [];
 
-    kiwi_assert_same(1, (int) ($variant_summary['conv'] ?? 0), 'Expected SMS body variant conversion counter to increment once across duplicate confirmed callbacks.');
+    kiwi_assert_same(0, (int) ($variant_summary['conv'] ?? 0), 'A confirmed click alone cannot credit an original SMS variant.');
+    kiwi_assert_same(1, (int) ($kpi_summary_repository->rows['lp2-fr']['conv'] ?? 0), 'The general landing conversion remains recorded once.');
 });
 
 kiwi_run_test('Kiwi_Conversion_Attribution_Resolver appends custom_field1 from persisted sales operator_name', function (): void {
@@ -11012,6 +11054,8 @@ kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service correlates MO content transaction_id 
     );
 });
 
+require __DIR__ . '/sms-assignment-lookup-tests.php';
+
 kiwi_run_test('Kiwi_Nth_Fr_One_Off_Service resolves assigned visible SMS body tokens', function (): void {
     $config = new Kiwi_Test_Config(
         100,
@@ -12753,12 +12797,15 @@ kiwi_run_test('Kiwi_Retention_Source_Registry exposes stable session and handoff
     $registry = new Kiwi_Retention_Source_Registry();
     $sessions = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS);
     $handoffs = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS);
+    $sms = $registry->get(Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS);
+    kiwi_assert_same('wp_kiwi_sms_body_variant_assignments', $sms['source_table'] ?? null, 'SMS retention uses the registered original table.');
 
     kiwi_assert_same(
         [
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
         ],
         $registry->get_source_keys(),
         'Expected registered retention sources to keep their stable scheduler order.'
@@ -13152,6 +13199,7 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_PAGE_SESSIONS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_HANDOFF_EVENTS,
             Kiwi_Retention_Source_Registry::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            Kiwi_Retention_Source_Registry::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
         ],
         array_keys($first['source_results'] ?? []),
         'Expected scheduler results in stable registry order.'
@@ -13161,9 +13209,11 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
             ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_session_engagements', 'triggered_by' => 'cron'],
+            ['source_key' => 'sms_body_variant_assignments', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_page_sessions', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_handoff_events', 'triggered_by' => 'cron'],
             ['source_key' => 'landing_session_engagements', 'triggered_by' => 'cron'],
+            ['source_key' => 'sms_body_variant_assignments', 'triggered_by' => 'cron'],
         ],
         $service->run_source_calls,
         'Expected every daily scheduler pass to dispatch each registered source in order.'
@@ -13179,9 +13229,9 @@ kiwi_run_test('Kiwi_Plugin dispatches source-keyed retention scheduler and worke
             return ($event['hook'] ?? '') === $worker_hook;
         }
     ));
-    kiwi_assert_same(3, count($worker_events), 'Expected source-key deduplication to keep exactly one pending worker per source.');
+    kiwi_assert_same(4, count($worker_events), 'Expected source-key deduplication to keep exactly one pending worker per source.');
     kiwi_assert_same(
-        [['landing_page_sessions'], ['landing_handoff_events'], ['landing_session_engagements']],
+        [['landing_page_sessions'], ['landing_handoff_events'], ['landing_session_engagements'], ['sms_body_variant_assignments']],
         array_column($worker_events, 'args'),
         'Expected every worker event to carry its source key.'
     );

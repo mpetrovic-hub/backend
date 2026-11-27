@@ -6,6 +6,26 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Sms_Body_Variant_Repository
 {
+    public const SUMMARY_GROUP_COLUMNS = ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'];
+    private const SUMMARY_COUNTERS = ['assignments', 'cta1', 'handoff_attempted', 'handoff_hidden',
+        'handoff_no_hide', 'handoff_returned', 'conv'];
+    private const MAX_SUMMARY_COUNT = 4294967295; // Summary columns are INT UNSIGNED.
+    private const MAX_SUMMARY_RATE = '99999.99'; // The five stored rates are DECIMAL(7,2).
+
+    public static function group_comparison(bool $refresh = false): Kiwi_Mysql_Text_Comparison
+    {
+        global $wpdb;
+        return Kiwi_Mysql_Text_Comparison::for_columns($wpdb->prefix . 'kiwi_sms_body_variant_summary',
+            self::SUMMARY_GROUP_COLUMNS, $refresh, true);
+    }
+
+    public static function group_matches_service(array $group, string $service): bool
+    {
+        if ($group['service_key'] === $service) { return true; }
+        $comparison = self::group_comparison();
+        return $comparison->key($group) === $comparison->key(array_replace($group, ['service_key' => $service]));
+    }
+
     private function get_assignments_table_name(): string
     {
         global $wpdb;
@@ -105,7 +125,9 @@ class Kiwi_Sms_Body_Variant_Repository
             KEY updated_at (updated_at)
         ) {$charset_collate};";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
         dbDelta($assignments_sql);
         dbDelta($summary_sql);
     }
@@ -242,7 +264,74 @@ class Kiwi_Sms_Body_Variant_Repository
         return is_array($row) ? $row : null;
     }
 
+    public function find_visible_token_matches(string $token): array
+    {
+        return $this->find_code_matches('visible_token', $token);
+    }
+
+    public function find_transaction_id_matches(string $transaction_id): array
+    {
+        return $this->find_code_matches('transaction_id', $transaction_id);
+    }
+
+    /** Called after an INSERT and before its COMMIT, on the same connection. */
+    public function lock_original_for_sale(string $column, string $code): array
+    {
+        global $wpdb;
+        if (!in_array($column, ['transaction_id', 'visible_token'], true) || preg_match('/^[A-Za-z0-9_-]{1,140}$/D', $code) !== 1) {
+            return [];
+        }
+        $rows = $wpdb->get_col($wpdb->prepare(
+            "SELECT id FROM {$this->get_assignments_table_name()} WHERE {$column} = %s LIMIT 2 FOR UPDATE NOWAIT", $code
+        ));
+        if (!is_array($rows) || !empty($wpdb->last_error) || count($rows) > 1) {
+            return [];
+        }
+        return ['code' => [$column => $code], 'live_id' => $rows ? (int) $rows[0] : null];
+    }
+
+    private function find_code_matches(string $column, string $value): array
+    {
+        global $wpdb;
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$this->get_assignments_table_name()} WHERE {$column} = %s LIMIT 2", $value
+        ), ARRAY_A);
+        if (!is_array($rows) || (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('sms_assignment_mysql_read_failed');
+        }
+        return $rows;
+    }
+
+    public function find_assignment_by_id(int $id): ?array
+    {
+        global $wpdb;
+
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$this->get_assignments_table_name()} WHERE id = %d LIMIT 1", $id
+        ), ARRAY_A);
+        if (($row !== null && !is_array($row)) || (string) ($wpdb->last_error ?? '') !== '') {
+            throw new RuntimeException('sms_assignment_mysql_read_failed');
+        }
+        return $row;
+    }
+
+    public function missing_original_ids(array $ids): array
+    {
+        global $wpdb;
+        if (!$ids) { return []; }
+        $marks = implode(',', array_fill(0, count($ids), '%d'));
+        $active = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$this->get_assignments_table_name()} WHERE id IN ({$marks})", ...$ids));
+        if (!is_array($active) || (string) $wpdb->last_error !== '') { throw new RuntimeException('sms_original_lookup_failed'); }
+        return array_values(array_diff($ids, array_map('intval', $active)));
+    }
+
     public function find_latest_by_landing_session(string $landing_key, string $session_token): ?array
+    {
+        return $this->landing_session_matches($landing_key, $session_token, 1)[0] ?? null;
+    }
+
+    private function landing_session_matches(string $landing_key, string $session_token, int $limit): array
     {
         global $wpdb;
 
@@ -250,38 +339,50 @@ class Kiwi_Sms_Body_Variant_Repository
         $session_token = $this->sanitize_session_token($session_token);
 
         if ($landing_key === '' || $session_token === '') {
-            return null;
+            return [];
         }
 
-        $row = $wpdb->get_row(
+        $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT *
                  FROM {$this->get_assignments_table_name()}
                  WHERE landing_key = %s
                    AND session_token = %s
                  ORDER BY id DESC
-                 LIMIT 1",
+                 LIMIT %d",
                 $landing_key,
-                $session_token
+                $session_token,
+                $limit
             ),
             ARRAY_A
         );
 
-        return is_array($row) ? $row : null;
+        return is_array($rows) && empty($wpdb->last_error) ? $rows : [];
     }
 
     public function mark_event_by_landing_session(string $landing_key, string $session_token, string $event_key): bool
     {
-        $assignment = $this->find_latest_by_landing_session($landing_key, $session_token);
+        $matches = $this->landing_session_matches($landing_key, $session_token, 2);
 
-        if (!is_array($assignment)) {
+        if (count($matches) !== 1) {
             return false;
         }
 
-        return $this->mark_event_by_transaction_id((string) ($assignment['transaction_id'] ?? ''), $event_key);
+        return $this->mark_event_for_original($matches[0], $event_key);
+    }
+
+    public function mark_event_for_original(array $assignment, string $event_key): bool
+    {
+        $id = (int) ($assignment['id'] ?? 0);
+        return $id > 0 && $this->mark_event((string) $assignment['transaction_id'], $event_key, $id);
     }
 
     public function mark_event_by_transaction_id(string $transaction_id, string $event_key): bool
+    {
+        return $this->mark_event($transaction_id, $event_key);
+    }
+
+    private function mark_event(string $transaction_id, string $event_key, ?int $original_id = null): bool
     {
         global $wpdb;
 
@@ -300,7 +401,7 @@ class Kiwi_Sms_Body_Variant_Repository
                  SET updated_at = %s,
                      {$field} = %s
                  WHERE transaction_id = %s
-                   AND {$field} IS NULL",
+                   AND {$field} IS NULL" . ($original_id === null ? '' : ' AND id = ' . $original_id),
                 $now,
                 $now,
                 $transaction_id
@@ -313,7 +414,7 @@ class Kiwi_Sms_Body_Variant_Repository
 
         $row = $this->find_by_transaction_id($transaction_id);
 
-        if (!is_array($row)) {
+        if (!is_array($row) || ($original_id !== null && (int) $row['id'] !== $original_id)) {
             return false;
         }
 
@@ -354,7 +455,118 @@ class Kiwi_Sms_Body_Variant_Repository
         return is_array($rows) ? $rows : [];
     }
 
-    private function increment_summary_counter(array $assignment, string $counter): bool
+    public function increment_archived_conversion(array $assignment): bool
+    {
+        return $this->increment_summary_counter($assignment, 'conv', false);
+    }
+
+    /** Correct only deficits from the recorded group assessment, preserving intervening increments. */
+    public function correct_summary_counters(array $group, array $before, ?string $source_lock = null): array
+    {
+        $values = array_map(static fn ($field) => $group[$field] ?? null, self::SUMMARY_GROUP_COLUMNS);
+        $summary_id = filter_var($before['summary_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $skip = null;
+        if (count(array_filter($values, 'is_string')) !== count(self::SUMMARY_GROUP_COLUMNS)) {
+            $skip = 'group_key_incomplete';
+        } elseif ($summary_id === false) {
+            $skip = 'summary_row_missing';
+        } elseif (!in_array($before['status'] ?? '', ['passed', 'outside_tolerance'], true) || ($before['reasons'] ?? null) !== []) {
+            $skip = 'group_incomplete';
+        }
+        if ($skip !== null) {
+            return ['status' => 'skipped', 'counters' => array_fill_keys(self::SUMMARY_COUNTERS,
+                ['status' => 'skipped', 'reason' => $skip])];
+        }
+
+        $outcomes = [];
+        foreach (self::SUMMARY_COUNTERS as $counter) {
+            $measure = $before['counters'][$counter] ?? [];
+            $outcomes[$counter] = $this->correct_summary_counter($summary_id, $values, $counter,
+                is_array($measure) ? $measure : [], $source_lock);
+        }
+        $statuses = array_column($outcomes, 'status');
+        $status = in_array('corrected', $statuses, true) ? 'corrected' : 'skipped';
+        if (in_array('failed', $statuses, true)) { $status = 'failed'; }
+        return ['status' => $status, 'counters' => $outcomes];
+    }
+
+    private function correct_summary_counter(int $summary_id, array $group_values, string $counter, array $measure, ?string $source_lock): array
+    {
+        global $wpdb;
+        if ($counter === 'conv' && isset($measure['possible_expected'])) {
+            return ['status' => 'skipped', 'reason' => 'sale_time_uncertain'];
+        }
+        $actual = $measure['actual'] ?? null;
+        $expected = $measure['expected'] ?? null;
+        if (!in_array($measure['status'] ?? '', ['passed', 'outside_tolerance'], true)
+            || !is_int($actual) || !is_int($expected) || $actual < 0 || $expected < 0) {
+            return ['status' => 'skipped', 'reason' => 'counter_unproven'];
+        }
+        if ($expected <= $actual) { return ['status' => 'skipped', 'reason' => 'no_deficit']; }
+        if ($expected > self::MAX_SUMMARY_COUNT) { return ['status' => 'failed', 'reason' => 'counter_out_of_range']; }
+
+        $table = $this->get_summary_table_name();
+        $where = implode(' AND ', array_map(static fn ($field) => $field . ' = %s', self::SUMMARY_GROUP_COLUMNS));
+        // Substitute the target in the rates so evaluation order inside SET cannot change them.
+        $rate_values = $this->summary_rate_values([$counter => (string) $expected]);
+        $rates = $this->summary_rate_assignments($rate_values);
+        $fits = 'GREATEST(' . implode(', ', $rate_values) . ') <= ' . self::MAX_SUMMARY_RATE;
+        $match = "id = %d AND {$where} AND {$counter} = %d";
+        $match_args = array_merge([$summary_id], $group_values, [$actual]);
+        $sql = "UPDATE {$table} SET {$counter} = %d, updated_at = %s, {$rates} WHERE {$match} AND {$fits}";
+        $args = array_merge([$expected, $this->current_time_mysql()], $match_args);
+        if ($source_lock !== null) {
+            $sql .= ' AND IS_USED_LOCK(%s) = CONNECTION_ID()';
+            $args[] = $source_lock;
+        }
+        try {
+            $written = $wpdb->query($wpdb->prepare($sql, ...$args));
+            if ($written === 1) { return ['status' => 'corrected']; }
+            if ($written === 0) {
+                if ($source_lock !== null && (int) $wpdb->get_var($wpdb->prepare(
+                    'SELECT IS_USED_LOCK(%s) = CONNECTION_ID()', $source_lock
+                )) !== 1) {
+                    return ['status' => 'failed', 'reason' => 'source_lock_lost'];
+                }
+                $overflow = $wpdb->get_var($wpdb->prepare(
+                    "SELECT 1 FROM {$table} WHERE {$match} AND NOT ({$fits})", ...$match_args
+                ));
+                if ((string) ($wpdb->last_error ?? '') !== '') { return ['status' => 'failed', 'reason' => 'summary_write_failed']; }
+                if ((int) $overflow === 1) { return ['status' => 'failed', 'reason' => 'rate_out_of_range']; }
+                return ['status' => 'skipped', 'reason' => 'summary_changed'];
+            }
+        } catch (Throwable $error) {
+            // The worker records a failed attempt and obtains a fresh assessment.
+        }
+        return ['status' => 'failed', 'reason' => 'summary_write_failed'];
+    }
+
+    private function summary_rate_values(array $values = []): array
+    {
+        $ratios = [
+            'cta1_cr' => ['cta1', 'assignments'],
+            'handoff_hidden_cr' => ['handoff_hidden', 'handoff_attempted'],
+            'conv_cr' => ['conv', 'assignments'],
+            'conv_per_cta1_cr' => ['conv', 'cta1'],
+            'conv_per_hidden_cr' => ['conv', 'handoff_hidden'],
+        ];
+        $expressions = [];
+        foreach ($ratios as $rate => [$numerator, $denominator]) {
+            $top = $values[$numerator] ?? $numerator;
+            $bottom = $values[$denominator] ?? $denominator;
+            $expressions[$rate] = "CASE WHEN {$bottom} > 0 THEN ROUND(({$top} / {$bottom}) * 100, 2) ELSE 0 END";
+        }
+        return $expressions;
+    }
+
+    private function summary_rate_assignments(array $expressions): string
+    {
+        $assignments = [];
+        foreach ($expressions as $rate => $value) { $assignments[] = "{$rate} = {$value}"; }
+        return implode(', ', $assignments);
+    }
+
+    private function increment_summary_counter(array $assignment, string $counter, bool $create_missing = true): bool
     {
         global $wpdb;
 
@@ -379,71 +591,73 @@ class Kiwi_Sms_Body_Variant_Repository
         $now = $this->current_time_mysql();
         $table_name = $this->get_summary_table_name();
 
-        $upsert_result = $wpdb->query(
-            $wpdb->prepare(
-                "INSERT INTO {$table_name} (
-                    created_at,
-                    updated_at,
-                    landing_key,
-                    service_key,
-                    provider_key,
-                    flow_key,
-                    variant_key,
-                    seed,
-                    allocation_version,
-                    assignments,
-                    cta1,
-                    handoff_attempted,
-                    handoff_hidden,
-                    handoff_no_hide,
-                    handoff_returned,
-                    conv,
-                    cta1_cr,
-                    handoff_hidden_cr,
-                    conv_cr,
-                    conv_per_cta1_cr,
-                    conv_per_hidden_cr
-                ) VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0
+        if ($create_missing) {
+            $upsert_result = $wpdb->query(
+                $wpdb->prepare(
+                    "INSERT INTO {$table_name} (
+                        created_at,
+                        updated_at,
+                        landing_key,
+                        service_key,
+                        provider_key,
+                        flow_key,
+                        variant_key,
+                        seed,
+                        allocation_version,
+                        assignments,
+                        cta1,
+                        handoff_attempted,
+                        handoff_hidden,
+                        handoff_no_hide,
+                        handoff_returned,
+                        conv,
+                        cta1_cr,
+                        handoff_hidden_cr,
+                        conv_cr,
+                        conv_per_cta1_cr,
+                        conv_per_hidden_cr
+                    ) VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        updated_at = VALUES(updated_at),
+                        provider_key = IF(provider_key = '', VALUES(provider_key), provider_key),
+                        flow_key = IF(flow_key = '', VALUES(flow_key), flow_key)",
+                    $now,
+                    $now,
+                    $landing_key,
+                    $service_key,
+                    $provider_key,
+                    $flow_key,
+                    $variant_key,
+                    $seed,
+                    $allocation_version
                 )
-                ON DUPLICATE KEY UPDATE
-                    updated_at = VALUES(updated_at),
-                    provider_key = IF(provider_key = '', VALUES(provider_key), provider_key),
-                    flow_key = IF(flow_key = '', VALUES(flow_key), flow_key)",
-                $now,
-                $now,
-                $landing_key,
-                $service_key,
-                $provider_key,
-                $flow_key,
-                $variant_key,
-                $seed,
-                $allocation_version
-            )
-        );
+            );
 
-        if ($upsert_result === false) {
-            return false;
+            if ($upsert_result === false) {
+                return false;
+            }
         }
 
         $increment_result = $wpdb->query(
@@ -465,19 +679,15 @@ class Kiwi_Sms_Body_Variant_Repository
             )
         );
 
-        if ($increment_result === false) {
+        if ($increment_result !== 1) {
             return false;
         }
 
+        $rates = $this->summary_rate_assignments($this->summary_rate_values());
         $rate_result = $wpdb->query(
             $wpdb->prepare(
                 "UPDATE {$table_name}
-                 SET updated_at = %s,
-                     cta1_cr = CASE WHEN assignments > 0 THEN ROUND((cta1 / assignments) * 100, 2) ELSE 0 END,
-                     handoff_hidden_cr = CASE WHEN handoff_attempted > 0 THEN ROUND((handoff_hidden / handoff_attempted) * 100, 2) ELSE 0 END,
-                     conv_cr = CASE WHEN assignments > 0 THEN ROUND((conv / assignments) * 100, 2) ELSE 0 END,
-                     conv_per_cta1_cr = CASE WHEN cta1 > 0 THEN ROUND((conv / cta1) * 100, 2) ELSE 0 END,
-                     conv_per_hidden_cr = CASE WHEN handoff_hidden > 0 THEN ROUND((conv / handoff_hidden) * 100, 2) ELSE 0 END
+                 SET updated_at = %s, {$rates}
                  WHERE landing_key = %s
                    AND service_key = %s
                    AND variant_key = %s
@@ -527,15 +737,7 @@ class Kiwi_Sms_Body_Variant_Repository
     {
         $counter = strtolower(trim($counter));
 
-        return in_array($counter, [
-            'assignments',
-            'cta1',
-            'handoff_attempted',
-            'handoff_hidden',
-            'handoff_no_hide',
-            'handoff_returned',
-            'conv',
-        ], true) ? $counter : '';
+        return in_array($counter, self::SUMMARY_COUNTERS, true) ? $counter : '';
     }
 
     private function is_supported_variant_key(string $variant_key): bool

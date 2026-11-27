@@ -9,7 +9,7 @@ define('DAY_IN_SECONDS', 86400);
 $GLOBALS['engagement_test_now'] = '2026-10-12 12:00:00';
 $GLOBALS['engagement_test_transients'] = [];
 function current_time($type, $gmt = false) { return $GLOBALS['engagement_test_now']; }
-function get_option($key, $default = false) { return $default; }
+function get_option($key, $default = false) { return $GLOBALS['retention_test_options'][$key] ?? $default; }
 function wp_json_encode($value, $flags = 0) { return json_encode($value, $flags); }
 function get_transient($key) { return $GLOBALS['engagement_test_transients'][$key] ?? false; }
 function set_transient($key, $value, $ttl = 0) { $GLOBALS['engagement_test_transients'][$key] = $value; return true; }
@@ -33,6 +33,7 @@ function wp_schedule_single_event($timestamp, $hook, $args = []): bool
 }
 
 foreach (['core/class-config.php', 'core/class-database-table-names.php',
+    'core/class-mysql-text-comparison.php',
     'repositories/class-retention-archive-health-store.php', 'repositories/class-operational-event-repository.php',
     'repositories/interface-statistics-read-repository.php',
     'repositories/class-landing-session-engagement-repository.php', 'repositories/class-landing-page-session-repository.php',
@@ -46,6 +47,8 @@ foreach (['core/class-config.php', 'core/class-database-table-names.php',
     'services/class-retention-archive-check-supervisor.php', 'services/class-retention-archive-health-controller.php',
     'services/class-retention-archive-health-service.php',
     'services/class-retention-cleanup-service.php',
+    'services/class-retention-sms-statistics.php', 'services/class-retention-sms-worker.php',
+    'services/class-retention-sms-deletion-evidence.php', 'services/class-retention-sms-archive-batches.php',
     'services/class-retention-archive-reader.php', 'services/class-retention-engagement-worker.php'] as $file) {
     require_once ABSPATH . 'includes/' . $file;
 }
@@ -153,7 +156,7 @@ final class Engagement_Test_Wpdb
         $values = array_map(fn($v) => $v === null ? 'NULL' : $this->pdo->quote((string) $v), array_values($row));
         return $this->query('INSERT INTO ' . $table . ' (`' . implode('`,`', array_keys($row)) . '`) VALUES (' . implode(',', $values) . ')') !== false;
     }
-    public function update(string $table, array $row, array $where, array $formats = [], array $where_formats = [])
+    public function update(string $table, array $row, array $where, ?array $formats = null, ?array $where_formats = null)
     {
         $set = []; $clauses = [];
         foreach ($row as $name => $value) { $set[] = '`' . $name . '`=' . ($value === null ? 'NULL' : $this->pdo->quote((string) $value)); }
@@ -293,6 +296,16 @@ function et_session(int $id, int $engagement_id, string $date = '2026-07-06 12:0
     return array_merge(['id' => $id, 'created_at' => $date, 'landing_key' => 'fixture-landing',
         'session_token' => 'fixture-' . $engagement_id, 'pid' => '106'], $changes);
 }
+function et_create_health_options(): void
+{
+    global $wpdb;
+    $wpdb->pdo->exec('CREATE TABLE t72_options (option_name VARCHAR(191) PRIMARY KEY, option_value LONGTEXT NOT NULL, autoload VARCHAR(20) NOT NULL) ENGINE=InnoDB');
+    $wpdb->insert('t72_options', ['option_name' => Kiwi_Retention_Archive_Health_Store::STATE_OPTION,
+        'option_value' => json_encode(['format_version' => 1, 'revision' => 0, 'activated_at' => null,
+            'active_attempt_id' => null, 'last_confirmed_attempt_id' => null,
+            'last_freshness_completed_at' => null, 'last_attempt_sequence' => 0]), 'autoload' => 'no']);
+}
+
 function et_fixture(Engagement_Test_Config $config): array
 {
     global $wpdb;
@@ -300,11 +313,7 @@ function et_fixture(Engagement_Test_Config $config): array
     $GLOBALS['engagement_test_cron'] = []; $GLOBALS['engagement_test_actions'] = [];
     foreach (['kiwi_landing_session_engagements', 'kiwi_landing_page_sessions', 'kiwi_retention_cleanup_runs',
         'kiwi_landing_funnel_daily_summary', 'kiwi_landing_funnel_daily_tkzone_summary', 'kiwi_sales', 'options'] as $name) { $wpdb->pdo->exec('DROP TABLE IF EXISTS t72_' . $name); }
-    $wpdb->pdo->exec('CREATE TABLE t72_options (option_name VARCHAR(191) PRIMARY KEY, option_value LONGTEXT NOT NULL, autoload VARCHAR(20) NOT NULL) ENGINE=InnoDB');
-    $wpdb->insert('t72_options', ['option_name' => Kiwi_Retention_Archive_Health_Store::STATE_OPTION,
-        'option_value' => json_encode(['format_version' => 1, 'revision' => 0, 'activated_at' => null,
-            'active_attempt_id' => null, 'last_confirmed_attempt_id' => null,
-            'last_freshness_completed_at' => null, 'last_attempt_sequence' => 0]), 'autoload' => 'no']);
+    et_create_health_options();
     (new Kiwi_Landing_Session_Engagement_Repository())->create_table();
     (new Kiwi_Landing_Page_Session_Repository())->create_table();
     (new Kiwi_Retention_Cleanup_Run_Repository())->create_table();
@@ -1728,10 +1737,25 @@ if (!is_string($settings['dsn'] ?? null)
     || (int) $dsn_match[1] > 65535
 ) { throw new RuntimeException('Only an explicit loopback TCP test instance is allowed.'); }
 
-if (($argv[1] ?? '') === '--writer') {
+if (in_array($argv[1] ?? '', ['--writer', '--sms-sale-writer', '--sms-correction-peer'], true)) {
     $database = getenv('KIWI_RETENTION_TEST_DATABASE');
     if (preg_match('/^codex_test_72_[a-z0-9_]+$/D', $database) !== 1) { throw new RuntimeException('Invalid private test database.'); }
     $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
+    if ($argv[1] === '--sms-correction-peer') {
+        require __DIR__ . '/retention-sms-correction-engine.php';
+        exit;
+    }
+    if ($argv[1] === '--sms-sale-writer') {
+        require_once ABSPATH . 'includes/repositories/class-sales-repository.php';
+        echo (int) $wpdb->get_var('SELECT CONNECTION_ID()'), "\n";
+        flush();
+        $write = (new Kiwi_Sales_Repository())->upsert_with_result(
+            ['sale_reference' => 'parallel-sms-185', 'status' => 'completed', 'sale_type' => 'premium_sms_one_off'],
+            static fn () => true
+        );
+        echo json_encode(['id' => (int) ($write['row']['id'] ?? 0), 'inserted' => $write['inserted']]), "\n";
+        exit;
+    }
     try {
         (new Kiwi_Landing_Session_Engagement_Repository(new Engagement_Test_Evaluator()))
             ->upsert_event(['landing_key' => 'fixture-landing', 'session_token' => 'fixture-1', 'cta_step' => 'cta1'], 'cta_click');
@@ -1760,12 +1784,47 @@ if (($argv[1] ?? '') === '--resume-existing') {
     throw new RuntimeException('Restarted worker did not finish.');
 }
 
+if (($argv[1] ?? '') === '--sms-publication-peer') {
+    $database = getenv('KIWI_RETENTION_TEST_DATABASE');
+    if (preg_match('/^codex_test_72_[a-z0-9_]+$/D', (string) $database) !== 1) { throw new RuntimeException('Invalid publication test database'); }
+    $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
+    $request = json_decode(trim(fgets(STDIN)), true, 512, JSON_THROW_ON_ERROR);
+    define('KIWI_RETENTION_ARCHIVE_ROOT', $request['root']);
+    require __DIR__ . '/retention-sms-publication-peer.php';
+    exit;
+}
+
 $database = 'codex_test_72_' . bin2hex(random_bytes(8));
 $admin = et_connection($settings);
 $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
 $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
 $other = et_connection($settings, $database);
 try {
+    if (in_array('--sms-correction', $argv, true)) {
+        require __DIR__ . '/retention-sms-correction-engine.php';
+        return;
+    }
+    if (in_array('--sms-archive-batches', $argv, true)) {
+        require __DIR__ . '/retention-sms-archive-batches-engine.php';
+        return;
+    }
+    if (in_array($argv[1] ?? '', ['--sms-live', '--sms-group-incidents', '--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary',
+        '--sms-live-mixed-ci', '--sms-live-schema-change', '--sms-live-delete-schema-change', '--sms-inventory'], true)) {
+        require __DIR__ . '/retention-sms-live-engine.php';
+        return;
+    }
+    if (in_array('--sms-preview', $argv, true) || in_array('--sms-live-time', $argv, true)) {
+        require __DIR__ . '/retention-sms-preview-engine.php';
+        return;
+    }
+    if (in_array('--sms-sale-booking', $argv, true)) {
+        require __DIR__ . '/retention-sms-sale-booking-engine.php';
+        return;
+    }
+    if (in_array('--sms-assignment-lookup', $argv, true)) {
+        require __DIR__ . '/retention-sms-assignment-lookup-engine.php';
+        return;
+    }
     if (in_array('--health-pending', $argv, true)) { et_health_pending_scenario(); return; }
     if (in_array('--tk-zero-day', $argv, true)) {
         et_tk_zero_day_scenarios(); echo 'TK_ZERO_DAY_TESTS_PASSED ', $GLOBALS['et_checks'], "\n"; return;

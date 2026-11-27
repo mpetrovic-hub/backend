@@ -65,13 +65,13 @@ class Kiwi_Retention_Archive_Read_Indexes_Migration_Service
                 if (!$reader->has_source($read_pdo, $source, false)) { continue; }
                 $names = array_column($read_pdo->query('PRAGMA index_list("' . $source['source_table'] . '")')->fetchAll(PDO::FETCH_ASSOC), 'name');
                 foreach (Kiwi_Retention_Archive_Reader::read_indexes($source) as $name => $columns) {
-                    $matches = Kiwi_Retention_Archive_Reader::index_matches($read_pdo, $source['source_table'], $name, $columns);
+                    $matches = Kiwi_Retention_Archive_Reader::index_matches($read_pdo, $source, $name, $columns);
                     $exists = in_array($name, $names, true);
                     $result['indexes'][$name] = ['source_key' => $key, 'columns' => $columns,
-                        'definition' => Kiwi_Retention_Archive_Reader::read_index_columns_sql($columns),
+                        'definition' => Kiwi_Retention_Archive_Reader::read_index_columns_sql($source, $columns),
                         'ready' => $matches, 'replacement_required' => $exists && !$matches];
                     if (!$matches) {
-                        $missing[] = ['table' => $source['source_table'], 'name' => $name, 'columns' => $columns, 'replace' => $exists];
+                        $missing[] = ['source' => $source, 'name' => $name, 'columns' => $columns, 'replace' => $exists];
                     }
                 }
             }
@@ -97,9 +97,9 @@ class Kiwi_Retention_Archive_Read_Indexes_Migration_Service
                     // Only this approved read index may be replaced, atomically.
                     // Payloads, receipts and the source-PK unique index stay intact.
                     if ($index['replace']) { $pdo->exec('DROP INDEX "' . $index['name'] . '"'); }
-                    $pdo->exec('CREATE INDEX "' . $index['name'] . '" ON "' . $index['table'] . '" ('
-                        . Kiwi_Retention_Archive_Reader::read_index_columns_sql($index['columns']) . ')');
-                    if (!Kiwi_Retention_Archive_Reader::index_matches($pdo, $index['table'], $index['name'], $index['columns'])) {
+                    $pdo->exec('CREATE INDEX "' . $index['name'] . '" ON "' . $index['source']['source_table'] . '" ('
+                        . Kiwi_Retention_Archive_Reader::read_index_columns_sql($index['source'], $index['columns']) . ')');
+                    if (!Kiwi_Retention_Archive_Reader::index_matches($pdo, $index['source'], $index['name'], $index['columns'])) {
                         throw new RuntimeException('archive_read_index_postcondition_failed');
                     }
                     $result['indexes'][$index['name']]['ready'] = true;

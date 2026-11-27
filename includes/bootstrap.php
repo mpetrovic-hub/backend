@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) {
 require_once __DIR__ . '/landing-pages/class-landing-page-registry.php';
 require_once __DIR__ . '/core/class-config.php';
 require_once __DIR__ . '/core/class-database-table-names.php';
+require_once __DIR__ . '/core/class-mysql-text-comparison.php';
 require_once __DIR__ . '/core/class-frontend-auth-gate.php';
 require_once __DIR__ . '/core/class-plugin.php';
 
@@ -85,6 +86,10 @@ require_once __DIR__ . '/repositories/class-retention-archive-health-store.php';
 require_once __DIR__ . '/services/class-retention-archive-health-service.php';
 require_once __DIR__ . '/services/class-retention-worker-support.php';
 require_once __DIR__ . '/services/class-retention-cleanup-service.php';
+require_once __DIR__ . '/services/class-retention-sms-statistics.php';
+require_once __DIR__ . '/services/class-retention-sms-deletion-evidence.php';
+require_once __DIR__ . '/services/class-retention-sms-worker.php';
+require_once __DIR__ . '/services/class-retention-sms-archive-batches.php';
 require_once __DIR__ . '/services/class-retention-archive-reader.php';
 require_once __DIR__ . '/services/class-retention-engagement-worker.php';
 require_once __DIR__ . '/services/class-landing-page-gallery-service.php';
@@ -96,6 +101,7 @@ require_once __DIR__ . '/services/class-premium-sms-completed-sale-cooldown-serv
 require_once __DIR__ . '/services/class-premium-sms-fraud-monitor-service.php';
 require_once __DIR__ . '/services/class-sms-body-variant-service.php';
 require_once __DIR__ . '/providers/nth/class-nth-primary-cta-adapter.php';
+require_once __DIR__ . '/providers/nth/class-nth-sms-sale-evidence.php';
 require_once __DIR__ . '/services/class-nth-fr-one-off-service.php';
 
 /**

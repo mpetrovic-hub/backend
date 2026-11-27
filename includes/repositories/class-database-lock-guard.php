@@ -8,7 +8,7 @@ final class Kiwi_Database_Lock_Guard
 
     public function __construct(string $name, int $connection_id)
     {
-        if (preg_match('/^[A-Za-z0-9_]{1,64}$/D', $name) !== 1 || $connection_id < 1) {
+        if (preg_match('/^[A-Za-z0-9_-]{1,64}$/D', $name) !== 1 || $connection_id < 1) {
             throw new InvalidArgumentException('Invalid database lock identity.');
         }
         $this->name = $name;

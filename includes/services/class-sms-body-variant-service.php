@@ -6,13 +6,20 @@ if (!defined('ABSPATH')) {
 
 class Kiwi_Sms_Body_Variant_Service
 {
+    public const DELETED_ORIGINAL_UNAVAILABLE = 'sms_deleted_original_unavailable';
+
     private $config;
     private $repository;
+    private $archive_reader;
 
-    public function __construct(Kiwi_Config $config, Kiwi_Sms_Body_Variant_Repository $repository)
-    {
+    public function __construct(
+        Kiwi_Config $config,
+        Kiwi_Sms_Body_Variant_Repository $repository,
+        ?Kiwi_Retention_Archive_Reader $archive_reader = null
+    ) {
         $this->config = $config;
         $this->repository = $repository;
+        $this->archive_reader = $archive_reader;
     }
 
     public function build_variant_body(
@@ -93,19 +100,166 @@ class Kiwi_Sms_Body_Variant_Service
 
     public function resolve_transaction_id_from_visible_token(string $visible_token): string
     {
-        $visible_token = $this->sanitize_token($visible_token, 140);
+        $result = $this->resolve_assignment_from_visible_token($visible_token);
+        return (string) ($result['assignment']['transaction_id'] ?? '');
+    }
 
-        if ($visible_token === '') {
-            return '';
+    /** A failed read must remain distinguishable from a successful lookup without a match. */
+    public function resolve_assignment_from_visible_token(string $visible_token): array
+    {
+        return $this->resolve_assignment('visible_token', $visible_token);
+    }
+
+    public function resolve_assignment_from_transaction_id(string $transaction_id): array
+    {
+        return $this->resolve_assignment('transaction_id', $transaction_id);
+    }
+
+    /** Narrow the indexed ASCII candidates using the original MySQL column's equality rules. */
+    public static function original_code_matcher(array $source, string $column, string $code): callable
+    {
+        $comparison = null;
+        $wanted = null;
+        return static function (string $candidate) use ($source, $column, $code, &$comparison, &$wanted): bool {
+            if ($candidate === $code) { return true; }
+            if (strcasecmp($candidate, $code) !== 0) { return false; }
+            $comparison ??= Kiwi_Mysql_Text_Comparison::for_columns($source['source_table'], [$column]);
+            $wanted ??= $comparison->key([$column => $code]);
+            return $comparison->key([$column => $candidate]) === $wanted;
+        };
+    }
+
+    private function resolve_assignment(string $column, string $code): array
+    {
+        if (preg_match('/^[A-Za-z0-9_-]{1,140}$/D', $code) !== 1) {
+            return ['status' => 'not_found'];
         }
-
-        $assignment = $this->repository->find_by_visible_token($visible_token);
-
-        if (!is_array($assignment)) {
-            return '';
+        try {
+            $rows = $column === 'visible_token'
+                ? $this->repository->find_visible_token_matches($code)
+                : $this->repository->find_transaction_id_matches($code);
+        } catch (Throwable $error) {
+            return ['status' => 'read_error', 'source' => 'mysql'];
         }
+        if ($rows) {
+            return $this->assignment_lookup_result($rows, 'mysql');
+        }
+        $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
+        $reader = $this->archive_reader ?? new Kiwi_Retention_Archive_Reader(new Kiwi_Retention_Sqlite_Archive_Service($this->config));
+        $matches_code = self::original_code_matcher($source, $column, $code);
+        $comparison_failed = false;
+        $accept = static function (string $candidate) use ($matches_code, &$comparison_failed): bool {
+            try { return $matches_code($candidate); }
+            catch (Throwable $error) { $comparison_failed = true; throw $error; }
+        };
+        try {
+            $matches = [];
+            $match_source = 'archive';
+            $ids = $reader->matching_source_ids($source, $column, $code, $accept);
+            $paths = array_column($reader->files(), 'path');
+            if ($this->lookup_depends_on_missing_original($reader, $source, $paths)) {
+                return ['status' => 'read_error', 'source' => 'archive', 'reason' => self::DELETED_ORIGINAL_UNAVAILABLE];
+            }
+            foreach ($ids as $id) {
+                try {
+                    $live_row = $this->repository->find_assignment_by_id($id);
+                } catch (Throwable $error) {
+                    return ['status' => 'read_error', 'source' => 'mysql'];
+                }
+                if ($live_row !== null) {
+                    // An older archived code can still point to a row that changed in MySQL.
+                    $row = $live_row;
+                } else {
+                    $copy = $reader->latest_receipted_rows($source, $paths, [$id])[$id] ?? null;
+                    if (empty($copy['verified'])) { throw new RuntimeException('sms_assignment_archive_copy_missing'); }
+                    $row = $copy['row'];
+                }
+                if ($accept((string) $row[$column])) {
+                    $matches[] = $row;
+                    $match_source = $live_row === null ? 'archive' : 'mysql';
+                    if (count($matches) === 2) { break; }
+                }
+            }
+            $reader->assert_inventory_unchanged();
+            return $this->assignment_lookup_result($matches, $match_source);
+        } catch (Throwable $error) {
+            return ['status' => 'read_error', 'source' => $comparison_failed ? 'mysql' : 'archive'];
+        } finally {
+            $reader->close();
+        }
+    }
 
-        return $this->sanitize_token((string) ($assignment['transaction_id'] ?? ''), 120);
+    /** A lost original can hide a second matching code. Only a live or a verified later row supplies its current codes. */
+    private function lookup_depends_on_missing_original(Kiwi_Retention_Archive_Reader $reader, array $source, array $paths): bool
+    {
+        $deadline = microtime(true) + $this->config->get_retention_worker_time_limit_seconds();
+        $request_limit = (int)ini_get('max_execution_time');
+        if ($request_limit > 0 && isset($_SERVER['REQUEST_TIME_FLOAT'])) {
+            $deadline = min($deadline, (float)$_SERVER['REQUEST_TIME_FLOAT'] + $request_limit);
+        }
+        $deletions = new Kiwi_Retention_Sms_Deletion_Evidence();
+        foreach ($this->missing_archive_originals($reader, $deletions, $source, $paths, $deadline) as [$missing_path, $ids, $audit_id]) {
+            if (microtime(true) >= $deadline) { throw new RuntimeException('archive_code_search_timeout'); }
+            $absent = $this->repository->missing_original_ids($ids);
+            if (!$absent) { continue; }
+            $possible = array_filter($paths, static fn(string $path): bool => Kiwi_Retention_Archive_Name::compare_paths($path, $missing_path) >= 0);
+            $copies = $reader->latest_receipted_rows($source, $possible, $absent);
+            foreach ($absent as $id) {
+                $copy = $copies[$id] ?? null;
+                if (empty($copy['verified'])) { return true; }
+                if ($copy['path'] === $missing_path) {
+                    // Within one generation a restore can reveal an older valid batch for the same ID.
+                    $replacement = $deletions->deletion_receipt($copy['row'], $copy['path'], $copy['row']);
+                    if ($audit_id === null || ($replacement['audit_id'] ?? 0) <= $audit_id) { return true; }
+                }
+            }
+        }
+        return false;
+    }
+
+    private function missing_archive_originals(Kiwi_Retention_Archive_Reader $reader, Kiwi_Retention_Sms_Deletion_Evidence $deletions,
+        array $source, array $paths, float $deadline): iterable
+    {
+        $available = array_fill_keys($paths, true);
+        foreach ($deletions->acknowledged_id_batches($deadline) as [$path, $batch, $ids, $audit_id]) {
+            if (microtime(true) >= $deadline) { throw new RuntimeException('archive_code_search_timeout'); }
+            if (isset($available[$path])) { $ids = $reader->missing_batch_payloads($source, $path, $batch, $ids); }
+            if ($ids) { yield [$path, $ids, $audit_id]; }
+        }
+        foreach ($reader->missing_snapshot_batches($source, $paths, $deadline) as [$path, $ids]) { yield [$path, $ids, null]; }
+    }
+
+    public function observe_sale_insert(array $code): array
+    {
+        if (!$code) {
+            return [];
+        }
+        $field = array_key_first($code);
+        return $this->repository->lock_original_for_sale($field, $code[$field]);
+    }
+
+    public function record_confirmed_sale(array $proof, array $observation): bool
+    {
+        if (($proof['status'] ?? '') !== 'found' || ($observation['code'] ?? null) !== $proof['original_code']) {
+            return false;
+        }
+        if ($proof['source'] === 'mysql') {
+            return $observation['live_id'] === (int) $proof['assignment']['id']
+                && $this->repository->mark_event_for_original($proof['assignment'], 'conv');
+        }
+        return $proof['source'] === 'archive' && $observation['live_id'] === null
+            && $this->repository->increment_archived_conversion($proof['assignment']);
+    }
+
+    private function assignment_lookup_result(array $matches, string $source): array
+    {
+        if (!$matches) { return ['status' => 'not_found']; }
+        if (count($matches) > 1) { return ['status' => 'ambiguous', 'source' => $source]; }
+        $row = $matches[0];
+        if ((int) ($row['id'] ?? 0) < 1 || preg_match('/^[A-Za-z0-9_-]{1,120}$/D', (string) ($row['transaction_id'] ?? '')) !== 1) {
+            return ['status' => 'read_error', 'source' => $source];
+        }
+        return ['status' => 'found', 'source' => $source, 'assignment' => $row];
     }
 
     /** Select a complete entry using the supplied generation as the stable hash salt. */

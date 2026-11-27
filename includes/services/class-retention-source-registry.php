@@ -9,6 +9,36 @@ class Kiwi_Retention_Source_Registry
     public const SOURCE_LANDING_PAGE_SESSIONS = 'landing_page_sessions';
     public const SOURCE_LANDING_HANDOFF_EVENTS = 'landing_handoff_events';
     public const SOURCE_LANDING_SESSION_ENGAGEMENTS = 'landing_session_engagements';
+    public const SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS = 'sms_body_variant_assignments';
+
+    /** Shared by incoming SMS lookup and the retention worker. */
+    public static function sms_body_variant_assignments(): array
+    {
+        global $wpdb;
+
+        return [
+            'source_key' => self::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
+            'source_table' => $wpdb->prefix . 'kiwi_sms_body_variant_assignments',
+            'primary_key' => 'id', 'cutoff_column' => 'created_at', 'mutable_snapshot' => true,
+            'retention_days_default' => 90,
+            'retention_days_min' => 7,
+            'archive_read_indexes' => [
+                'retention_visible_token' => ['visible_token', '_source_pk'],
+                'retention_transaction_id' => ['transaction_id', '_source_pk'],
+            ],
+            'archive_nocase_columns' => ['visible_token', 'transaction_id'],
+            'archive_columns' => [
+                'id' => 'INTEGER', 'created_at' => 'TEXT', 'updated_at' => 'TEXT', 'landing_key' => 'TEXT',
+                'service_key' => 'TEXT', 'provider_key' => 'TEXT', 'flow_key' => 'TEXT', 'country' => 'TEXT',
+                'keyword' => 'TEXT', 'shortcode' => 'TEXT', 'pid' => 'TEXT', 'click_id' => 'TEXT',
+                'session_token' => 'TEXT', 'transaction_id' => 'TEXT', 'visible_token' => 'TEXT',
+                'variant_key' => 'TEXT', 'seed' => 'TEXT', 'allocation_version' => 'TEXT', 'sms_body' => 'TEXT',
+                'cta1_recorded_at' => 'TEXT', 'handoff_attempted_at' => 'TEXT', 'handoff_hidden_at' => 'TEXT',
+                'handoff_no_hide_at' => 'TEXT', 'handoff_returned_at' => 'TEXT', 'conv_recorded_at' => 'TEXT',
+                'raw_context' => 'TEXT',
+            ],
+        ];
+    }
 
     public function get_source_keys(): array
     {
@@ -16,6 +46,7 @@ class Kiwi_Retention_Source_Registry
             self::SOURCE_LANDING_PAGE_SESSIONS,
             self::SOURCE_LANDING_HANDOFF_EVENTS,
             self::SOURCE_LANDING_SESSION_ENGAGEMENTS,
+            self::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS,
         ];
     }
 
@@ -29,6 +60,10 @@ class Kiwi_Retention_Source_Registry
 
         global $wpdb;
 
+        if ($source_key === self::SOURCE_SMS_BODY_VARIANT_ASSIGNMENTS) {
+            return self::sms_body_variant_assignments();
+        }
+
         if ($source_key === self::SOURCE_LANDING_SESSION_ENGAGEMENTS) {
             return [
                 'source_key' => self::SOURCE_LANDING_SESSION_ENGAGEMENTS,
@@ -39,6 +74,7 @@ class Kiwi_Retention_Source_Registry
                 'retention_days_min' => 7,
                 'coverage_gate_required' => true,
                 'mutable_snapshot' => true,
+                'archive_read_indexes' => ['retention_day' => ['created_at', '_source_pk']],
                 'archive_columns' => [
                     'id' => 'INTEGER', 'created_at' => 'TEXT', 'updated_at' => 'TEXT',
                     'provider_key' => 'TEXT', 'service_key' => 'TEXT', 'flow_key' => 'TEXT',
@@ -109,6 +145,8 @@ class Kiwi_Retention_Source_Registry
             'retention_days_min' => 7,
             'coverage_gate_required' => true,
             'accepted_missing_metric_dates' => $this->build_accepted_landing_page_session_gap_dates(),
+            'archive_read_indexes' => ['retention_pair' => ['landing_key', 'session_token', 'created_at', '_source_pk', 'pid']],
+            'archive_nocase_columns' => ['landing_key', 'session_token'],
             'archive_columns' => [
                 'id' => 'INTEGER',
                 'created_at' => 'TEXT',
