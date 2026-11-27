@@ -29,14 +29,19 @@ $control = $wpdb->pdo->query("SELECT seed COLLATE {$summaryCollation} AS summary
 et_check(count($control) === count($storedCounts), 'The real group index distinguishes exactly the expected seed spellings');
 $run = $until($start(), static fn(array $row): bool => $row['worker_phase'] === 'sms_archive');
 $findings = json_decode($run['gate_results_json'], true, 512, JSON_THROW_ON_ERROR)['groups'];
-if (in_array('--sms-live-schema-change', $argv, true)) {
+if (in_array($mode, ['--sms-live-schema-change', '--sms-live-delete-schema-change'], true)) {
+    $already_archived = $mode === '--sms-live-delete-schema-change';
+    if ($already_archived) {
+        $run = $until($run, static fn(array $row): bool => (int)$row['archived_rows'] === 2 && (int)$row['deleted_rows'] === 0);
+    }
     foreach ([$originalTable, $summary] as $table) {
         $wpdb->pdo->exec("ALTER TABLE {$table} MODIFY seed VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT ''");
     }
     $run = $step($run);
-    et_check($run['status'] === 'failed' && (int)$run['archived_rows'] === 0 && (int)$run['deleted_rows'] === 0
-        && !is_file($run['archive_db_path']) && (int)$wpdb->get_var("SELECT COUNT(*) FROM {$originalTable}") === 2,
-        'Changed database group equality closes the old release before copying or deleting either original');
+    et_check($run['status'] === 'failed' && $run['error_code'] === 'sms_group_schema_changed'
+        && (int)$run['archived_rows'] === ($already_archived ? 2 : 0) && (int)$run['deleted_rows'] === 0
+        && is_file($run['archive_db_path']) === $already_archived && (int)$wpdb->get_var("SELECT COUNT(*) FROM {$originalTable}") === 2,
+        'Changed database group equality closes the old release, preserves confirmed copy progress and retains both originals');
     return;
 }
 et_check((int) $run['eligible_rows'] === 2 && count($findings) === count($control),

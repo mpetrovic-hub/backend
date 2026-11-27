@@ -1798,7 +1798,8 @@ try {
         require __DIR__ . '/retention-sms-archive-batches-engine.php';
         return;
     }
-    if (in_array($argv[1] ?? '', ['--sms-live', '--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary', '--sms-live-mixed-ci', '--sms-live-schema-change'], true)) {
+    if (in_array($argv[1] ?? '', ['--sms-live', '--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary',
+        '--sms-live-mixed-ci', '--sms-live-schema-change', '--sms-live-delete-schema-change'], true)) {
         require __DIR__ . '/retention-sms-live-engine.php';
         return;
     }

@@ -146,11 +146,12 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             if (!isset($run['id'])) { return $this->scheduled([], 'sms_audit_read_failed'); }
             if (empty($run['dry_run'])) {
                 // Preserve the evidence (including exact earlier deletions) even when its JSON cannot be decoded.
+                $reason = $error->getMessage() === 'sms_group_schema_changed' ? 'sms_group_schema_changed' : 'sms_run_evidence_failed';
                 $stored = $this->store_progress($run, [], 'failed', ['status' => 'failed', 'gate_status' => 'blocked',
                     'gate_results_json' => $run['gate_results_json'], 'finished_at' => $this->current_time_mysql(),
-                    'error_code' => 'sms_run_evidence_failed', 'error_message' => 'The SMS run evidence could not be verified.']);
+                    'error_code' => $reason, 'error_message' => 'The SMS run evidence could not be verified.']);
                 return $stored === null ? $this->audit_wait($run) : ['success' => false, 'run_id' => $run['run_id'],
-                    'status' => 'failed', 'error_code' => 'sms_run_evidence_failed'];
+                    'status' => 'failed', 'error_code' => $reason];
             }
             return $this->finish_run((int) $run['id'], ['success' => false, 'run_id' => $run['run_id'],
                 'status' => 'failed', 'gate_status' => 'blocked',

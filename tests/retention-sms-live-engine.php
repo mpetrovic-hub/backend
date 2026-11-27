@@ -48,7 +48,8 @@ $until = static function (array $run, callable $condition) use ($step): array {
     throw new RuntimeException('Live run stopped before its expected checkpoint: ' . json_encode([$run['status'], $run['worker_phase'],
         $run['error_code'], $GLOBALS['sms_live_last_step'] ?? []]));
 };
-if (in_array($argv[1] ?? '', ['--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary', '--sms-live-mixed-ci', '--sms-live-schema-change'], true)) {
+if (in_array($argv[1] ?? '', ['--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary', '--sms-live-mixed-ci',
+    '--sms-live-schema-change', '--sms-live-delete-schema-change'], true)) {
     require __DIR__ . '/retention-sms-live-group-identity-engine.php';
     return;
 }
