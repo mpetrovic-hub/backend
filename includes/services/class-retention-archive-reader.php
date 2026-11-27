@@ -118,13 +118,7 @@ class Kiwi_Retention_Archive_Reader
     public static function file_basis(string $path, Kiwi_Retention_Archive_Lock_Handle $handle): array
     {
         if ($handle->get_lock_path() !== $path . '.lock') { throw new RuntimeException('archive_reader_lock_identity_mismatch'); }
-        foreach (['-wal', '-journal'] as $suffix) {
-            $sidecar = $path . $suffix;
-            clearstatcache(true, $sidecar);
-            if (is_link($sidecar) || (file_exists($sidecar) && (!is_readable($sidecar) || filesize($sidecar) !== 0))) {
-                throw new RuntimeException('archive_reader_uncheckpointed_state');
-            }
-        }
+        self::assert_checkpointed($path);
         clearstatcache(true, $path);
         $stream = !is_link($path) && is_file($path) ? @fopen($path, 'rb') : false;
         if ($stream === false) { throw new RuntimeException('archive_reader_path_unreadable'); }
@@ -172,14 +166,7 @@ class Kiwi_Retention_Archive_Reader
         if (empty($this->safety_gate->inspect($path, false)['allowed'])) {
             throw new RuntimeException('archive_reader_corruption_gate');
         }
-        // immutable must never ignore a committed WAL or an unfinished journal.
-        foreach (['-wal', '-journal'] as $suffix) {
-            $sidecar = $path . $suffix;
-            clearstatcache(true, $sidecar);
-            if (is_link($sidecar) || (file_exists($sidecar) && (!is_readable($sidecar) || filesize($sidecar) !== 0))) {
-                throw new RuntimeException('archive_reader_uncheckpointed_state');
-            }
-        }
+        self::assert_checkpointed($path);
         $real = realpath($path);
         if ($real === false || is_link($path) || !is_file($real) || !is_readable($real)) {
             throw new RuntimeException('archive_reader_path_unreadable');
@@ -196,6 +183,18 @@ class Kiwi_Retention_Archive_Reader
             return $pdo;
         } catch (Throwable $error) {
             throw new RuntimeException('archive_reader_open_failed');
+        }
+    }
+
+    /** Immutable reads and basis tokens must not ignore a WAL commit or an unfinished journal. */
+    private static function assert_checkpointed(string $path): void
+    {
+        foreach (['-wal', '-journal'] as $suffix) {
+            $sidecar = $path . $suffix;
+            clearstatcache(true, $sidecar);
+            if (is_link($sidecar) || (file_exists($sidecar) && (!is_readable($sidecar) || filesize($sidecar) !== 0))) {
+                throw new RuntimeException('archive_reader_uncheckpointed_state');
+            }
         }
     }
 
