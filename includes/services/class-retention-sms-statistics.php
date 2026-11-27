@@ -343,9 +343,7 @@ class Kiwi_Retention_Sms_Statistics
         $column = array_key_first($code);
         if (($found['source'] ?? null) === 'archive' && in_array($column, ['transaction_id', 'visible_token'], true)) {
             try {
-                $comparison = Kiwi_Mysql_Text_Comparison::for_columns($this->source['source_table'], [$column]);
-                $wanted = $comparison->key($code);
-                $matches = static fn (string $value): bool => $comparison->key([$column => $value]) === $wanted;
+                $matches = Kiwi_Sms_Body_Variant_Service::original_code_matcher($this->source, $column, $code[$column]);
                 $ids = $this->reader->matching_source_ids($this->source, $column, $code[$column], $matches);
                 $identified = [];
                 foreach (array_chunk($ids, 250) as $page) {
