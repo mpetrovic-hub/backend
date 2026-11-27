@@ -1,6 +1,7 @@
 <?php
 
-// Public worker, real database/archive services, with scheduling controlled only at the OS-lock boundary.
+// Public worker with real database/archive services. Direct mutation cases intentionally inject out-of-contract faults.
+// Supported concurrent restorations use the guarded publisher and separate processes in the publication cases.
 final class Sms_Inventory_Test_Lock extends Kiwi_Retention_Archive_Lock
 {
     public $before_acquire;
@@ -14,8 +15,19 @@ final class Sms_Inventory_Test_Lock extends Kiwi_Retention_Archive_Lock
     }
 }
 
+final class Sms_Inventory_After_List_Archive extends Kiwi_Retention_Sqlite_Archive_Service
+{
+    public $after_inventory;
+    public function list_archive_files(): array
+    {
+        $files = parent::list_archive_files();
+        if ($this->after_inventory !== null) { ($this->after_inventory)(); }
+        return $files;
+    }
+}
+
 $config = new Kiwi_Config();
-$archive = new Kiwi_Retention_Sqlite_Archive_Service($config);
+$archive = new Sms_Inventory_After_List_Archive($config);
 $archive->resolve_archive_db_path();
 $generationLock = new Sms_Inventory_Test_Lock();
 $events = new Kiwi_Operational_Event_Service();
@@ -60,7 +72,7 @@ $newPath = $archive->get_archive_directory() . DIRECTORY_SEPARATOR . 'kiwi_reten
 $archive->archive_snapshot_batch($source, $history, '2026-07-14 00:00:00', 'inventory-original', $oldPath);
 $wpdb->query('DELETE FROM ' . $source['source_table'] . ' WHERE id<10');
 $summary = $wpdb->prefix . 'kiwi_sms_body_variant_summary';
-$deleting = str_starts_with($case, 'delete');
+$deleting = str_starts_with($case, 'delete') || $case === 'publication-delete';
 $initialActual = $deleting || str_starts_with($case, 'targeted') ? 5 : 0;
 $wpdb->insert($summary, $groupKey + ['created_at'=>'2025-01-01', 'updated_at'=>'2025-01-01', 'assignments'=>$initialActual]);
 if (str_starts_with($case, 'targeted')) {
@@ -119,6 +131,10 @@ if ($deleting) {
     $run = $step($run);
     et_check((int) $run['archived_rows'] === 1 && (int) $run['deleted_rows'] === 0,
         'The public worker confirms the candidate receipt before the delete-race fixture');
+}
+if (str_starts_with($case, 'publication')) {
+    require __DIR__ . '/retention-sms-publication-engine.php';
+    return;
 }
 $published = false;
 $acquisitions = 0;

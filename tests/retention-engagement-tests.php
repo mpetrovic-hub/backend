@@ -1784,6 +1784,16 @@ if (($argv[1] ?? '') === '--resume-existing') {
     throw new RuntimeException('Restarted worker did not finish.');
 }
 
+if (($argv[1] ?? '') === '--sms-publication-peer') {
+    $database = getenv('KIWI_RETENTION_TEST_DATABASE');
+    if (preg_match('/^codex_test_72_[a-z0-9_]+$/D', (string) $database) !== 1) { throw new RuntimeException('Invalid publication test database'); }
+    $wpdb = new Engagement_Test_Wpdb(et_connection($settings, $database));
+    $request = json_decode(trim(fgets(STDIN)), true, 512, JSON_THROW_ON_ERROR);
+    define('KIWI_RETENTION_ARCHIVE_ROOT', $request['root']);
+    require __DIR__ . '/retention-sms-publication-peer.php';
+    exit;
+}
+
 $database = 'codex_test_72_' . bin2hex(random_bytes(8));
 $admin = et_connection($settings);
 $admin->exec('CREATE DATABASE ' . $database . ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');

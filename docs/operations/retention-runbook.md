@@ -60,6 +60,29 @@ The persisted checking basis includes MySQL's actual comparison rules for the fi
 
 The same audit now retains `archive_basis` for the canonical files used by the SMS measurement. Inventory and file-change checks run again under the correction/package locks. Newly appearing or changed files trigger a fresh group check before more corrections or deletions; missing or protected required files keep the run waiting. A run saved by older code without this evidence is also remeasured. Successful writes from the current package update only its own target token. After a lost SQLite commit acknowledgement, the worker remeasures before recovering the existing receipts. These checks read file metadata and the small SQLite header, not the complete archive; see the [archive-basis contract](../architecture/retention-architecture.md#shared-archive-and-source-boundary).
 
+### External SMS archive restoration
+
+Every separately authorized external restoration, replacement or publication of an archive containing or potentially containing SMS assignment history must use `tools/database/class-retention-sms-archive-publication-service.php`. This includes returning a missing canonical file, replacing an existing file, or adding another canonical generation. Ordinary SMS workers already hold the same `sms_body_variant_assignments` source lock. Using only a new file's generation lock, or copying/renaming/linking directly into the canonical inventory, is no longer a supported restoration path.
+
+Prepare and independently verify the restored SQLite file outside runtime before publication. Keep it in the configured `sqlite` directory under a **non-canonical** name such as `.sms-restore-<unique>.ready`. Close every SQLite/writing handle, finish checkpointing, and remove only the prepared file's already reconciled sidecars. The file must remain private and unchanged until publication. Verify complete payloads, receipts, indexes and the intended final `archive_batches.archive_db_path` bindings during that separately approved preparation; the publication guard does not scan or rewrite them. In particular, publishing a copy under a new generation name does not automatically rewrite its old batch paths.
+
+From the authorized external PHP/WordPress maintenance process, with the plugin classes loaded, invoke:
+
+```php
+require_once WP_PLUGIN_DIR . '/backend/tools/database/class-retention-sms-archive-publication-service.php';
+$result = (new Kiwi_Retention_Sms_Archive_Publication_Service())->publish(
+    $prepared_absolute_path,
+    $approved_canonical_absolute_path,
+    $replace_existing // false for exclusive insertion; true only for explicitly authorized restoration/replacement
+);
+```
+
+Both paths must be in the configured archive directory; staging must not have a canonical archive name. The service takes the non-waiting SMS source lock first, then the existing inventory and destination generation locks in generation order. It confirms the original database connection/lock ownership and rechecks file identity, the small SQLite header and sidecars immediately before the short filesystem publication. A busy/failed lock, changed staging/destination, invalid path or sidecar aborts. It performs no full-file scan, automatic retry, repair, incident resolution or protection-marker removal.
+
+With `replace_existing=false`, an existing or protected destination is a conflict. With `true`, an existing canonical file is first retained under the returned non-canonical `backup_archive_path`, then the prepared file replaces it while the locks remain held. Expected corruption/transition protection may remain active during this explicit restoration; it is preserved, not bypassed or cleared. A protected missing destination can likewise be restored with `true`. A failed replacement keeps the old file and any created backup. Existing files are never removed to make a publication succeed. The normal separately confirmed full-integrity `archive-health unblock` procedure remains required for protected archives after restoration; do not unblock a corrupt file merely to permit replacement.
+
+Inspect `success`, `published`, `reason_code`, `backup_archive_path` and (on success) `staging_retained`. A failure with `published=true` means publication occurred but its final lock confirmation failed: retain the files and inspect the exact operation before any retry. A successful new publication normally consumes the staging name. If `staging_retained=true`, that name is an alias of the published file and must not be edited; remove only that reviewed alias later. Keep the returned prior-file backup until its separately authorized retention/disposition is settled. This procedure is not permission to restore production data or activate cleanup.
+
 ### Blocked SMS groups
 
 Run `wp kiwi retention archive-health status` to see open `retention_cleanup_group_blocked` incidents. The message identifies the group and the reason. Its `retention_cleanup_run` reference points to the responsible `run_id`. In `wp_kiwi_operational_events.context_json`, read `group`, `reason_code`, `reasons` and `counters` for the measured values and limits. For an uncertain sale time, the event includes the range of possible totals and a failing comparison when applicable. The full set of comparisons belongs to the run's saved `after` finding.
@@ -254,7 +277,7 @@ The supervisor never terminates a started child at its timeout boundary, includi
 
 The supervisor still requires the [native read-brake bundle](../../tools/database/archive-health-read-brake/README.md) in the child only. Before a full target PRAGMA, that same child proves two complete synthetic fixture checks at 700/350 covered 4-KiB read units/s through its actual PDO/SQLite/VFS path, then locks the target rate at 700. Missing/incompatible/ineffective loading, unsupported reads or lost binding is a technical failure; no unbraked fallback exists. Run at most one full manual Hostinger archive check at a time across generations: separate generation locks do not combine read budgets. This local pacing proof is not a Hostinger Account/LVE bound.
 
-Confirmed corruption does not rename, quarantine, repair, copy, replace or switch an archive automatically. Preserve its archive and safety evidence. Repair or build replacement data outside runtime under the separately approved procedure, then use the exact confirmed `unblock` command; its full integrity verification remains mandatory. If a child survives timeout, inspect its process and lock evidence. Never remove a lock file, kill unrelated PHP processes or erase Pending/sentinels to force progress.
+Confirmed corruption does not rename, quarantine, repair, copy, replace or switch an archive automatically. Preserve its archive and safety evidence. Repair or build replacement data outside runtime under the separately approved procedure, publish SMS-containing history through the [guarded restoration path](#external-sms-archive-restoration), then use the exact confirmed `unblock` command; its full integrity verification remains mandatory. If a child survives timeout, inspect its process and lock evidence. Never remove a lock file, kill unrelated PHP processes or erase Pending/sentinels to force progress.
 
 ### Regular Hostinger check retirement evidence
 
