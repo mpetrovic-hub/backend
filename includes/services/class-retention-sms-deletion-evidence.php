@@ -173,7 +173,7 @@ final class Kiwi_Retention_Sms_Deletion_Evidence
 
     private function group_key(?array $group): string
     {
-        return $group === null ? '' : json_encode(array_map('strtolower', $group), JSON_THROW_ON_ERROR);
+        return $group === null ? '' : Kiwi_Sms_Body_Variant_Repository::group_comparison()->key($group);
     }
 
     private function positive_id($value): ?int

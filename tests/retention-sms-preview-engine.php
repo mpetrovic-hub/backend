@@ -223,3 +223,4 @@ et_check($old_group['status'] === 'passed' && $old_group['counters']['assignment
     'An older copy cannot add a phantom contribution to its former group when the newer original is missing');
 require_once __DIR__ . '/retention-sms-deletion-evidence-engine.php';
 et_sms_deletion_evidence();
+require __DIR__ . '/retention-sms-group-collation-engine.php';

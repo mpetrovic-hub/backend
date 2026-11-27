@@ -14,6 +14,7 @@ class Kiwi_Retention_Sms_Statistics
     private $reader;
     private $deletions;
     private $sales;
+    private $checked_group_schema;
 
     public function __construct(Kiwi_Retention_Archive_Reader $reader, Kiwi_Retention_Cleanup_Run_Repository $runs,
         Kiwi_Sms_Confirmed_Sale_History $sales)
@@ -27,31 +28,67 @@ class Kiwi_Retention_Sms_Statistics
     public static function group_key(array $row): array
     {
         $key = [];
-        foreach (self::DIMENSIONS as $column) { $key[$column] = (string) $row[$column]; }
+        foreach (self::DIMENSIONS as $column) {
+            if (!is_string($row[$column] ?? null)) { throw new RuntimeException('sms_group_dimension_unknown'); }
+            $key[$column] = $row[$column];
+        }
         return $key;
     }
 
     public static function group_id(array $key): string
     {
-        // All five stored domain keys use ASCII; the MySQL summary's unique key folds case.
-        return hash('sha256', strtolower(json_encode(self::group_key($key), JSON_THROW_ON_ERROR)));
+        return Kiwi_Sms_Body_Variant_Repository::group_comparison()->key(self::group_key($key));
+    }
+
+    private static function source_comparison(bool $refresh = false): Kiwi_Mysql_Text_Comparison
+    {
+        $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
+        return Kiwi_Mysql_Text_Comparison::for_columns($source['source_table'], self::DIMENSIONS, $refresh);
+    }
+
+    public static function current_group_schema(): string
+    {
+        return hash('sha256', Kiwi_Sms_Body_Variant_Repository::group_comparison(true)->fingerprint()
+            . self::source_comparison(true)->fingerprint());
+    }
+
+    public static function verify_group_schema(array $state): void
+    {
+        if (!is_string($state['group_schema'] ?? null) || !hash_equals($state['group_schema'], self::current_group_schema())) {
+            throw new RuntimeException('sms_group_schema_changed');
+        }
+    }
+
+    private function source_group_columns(): array
+    {
+        $summary = Kiwi_Sms_Body_Variant_Repository::group_comparison();
+        $source = self::source_comparison();
+        $expressions = [];
+        foreach (self::DIMENSIONS as $column) { $expressions[$column] = $summary->column_sql($column, $column, $source); }
+        return $expressions;
     }
 
     public function begin(string $cutoff, int $max_id, array $settings): array
     {
         global $wpdb;
-        $keys = implode(',', self::DIMENSIONS);
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT {$keys}, COUNT(*) AS eligible_rows
-            FROM {$this->source['source_table']} WHERE id<=%d AND created_at<%s GROUP BY {$keys}", $max_id, $cutoff), ARRAY_A);
+        $schema = self::current_group_schema();
+        $expressions = $this->source_group_columns();
+        $select = [];
+        foreach ($expressions as $column => $expression) { $select[] = $expression . ' AS `' . $column . '`'; }
+        $rows = $wpdb->get_results($wpdb->prepare('SELECT ' . implode(',', $select) . ', COUNT(*) AS eligible_rows FROM '
+            . $this->source['source_table'] . ' WHERE id<=%d AND created_at<%s GROUP BY ' . implode(',', $expressions),
+            $max_id, $cutoff), ARRAY_A);
         if (!is_array($rows) || (string) $wpdb->last_error !== '') { throw new RuntimeException('sms_candidates_read_failed'); }
         $groups = [];
         foreach ($rows as $row) {
             $key = self::group_key($row);
-            $groups[self::group_id($key)] = ['key' => $key, 'eligible_rows' => (int) $row['eligible_rows'],
+            $id = self::group_id($key);
+            if (isset($groups[$id])) { throw new RuntimeException('sms_group_identity_conflict'); }
+            $groups[$id] = ['key' => $key, 'eligible_rows' => (int) $row['eligible_rows'],
                 'archive_counts' => array_fill_keys(array_keys(self::MARKERS), 0), 'late_sales' => 0,
                 'uncertain_sales' => 0, 'reasons' => []];
         }
-        return ['version' => 1, 'tolerance' => ['percent' => (float) ($settings['tolerance_percent'] ?? 2),
+        return ['version' => 1, 'group_schema' => $schema, 'tolerance' => ['percent' => (float) ($settings['tolerance_percent'] ?? 2),
             'absolute' => (int) ($settings['tolerance_absolute'] ?? 2)], 'groups' => $groups,
             'progress' => ['phase' => $groups ? 'archive' : 'done', 'cursor' => 0, 'file' => 0, 'files' => null]];
     }
@@ -59,6 +96,10 @@ class Kiwi_Retention_Sms_Statistics
     /** Advance the read-only examination by one bounded page and report the work consumed. */
     public function advance(array &$state, int $limit): int
     {
+        if ($this->checked_group_schema === null || $this->checked_group_schema !== ($state['group_schema'] ?? null)) {
+            self::verify_group_schema($state);
+            $this->checked_group_schema = $state['group_schema'];
+        }
         $progress = &$state['progress'];
         if (!in_array($progress['phase'], ['archive', 'evidence', 'orphans', 'sales', 'measure', 'done'], true)
             || !is_int($progress['cursor']) || $progress['cursor'] < 0 || $limit < 1) {
@@ -302,7 +343,10 @@ class Kiwi_Retention_Sms_Statistics
         $column = array_key_first($code);
         if (($found['source'] ?? null) === 'archive' && in_array($column, ['transaction_id', 'visible_token'], true)) {
             try {
-                $ids = $this->reader->matching_source_ids($this->source, $column, $code[$column]);
+                $comparison = Kiwi_Mysql_Text_Comparison::for_columns($this->source['source_table'], [$column]);
+                $wanted = $comparison->key($code);
+                $matches = static fn (string $value): bool => $comparison->key([$column => $value]) === $wanted;
+                $ids = $this->reader->matching_source_ids($this->source, $column, $code[$column], $matches);
                 $identified = [];
                 foreach (array_chunk($ids, 250) as $page) {
                     $rows = $this->latest($state['progress']['files'], $page);
@@ -311,7 +355,9 @@ class Kiwi_Retention_Sms_Statistics
                         if ($known !== null) { $identified[$known['group']] = true; }
                         if (isset($rows[$id])) {
                             $file = array_search($rows[$id]['path'], $state['progress']['files'], true);
-                            if ($known === null || $file > $known['file']) { $identified[self::group_id($rows[$id]['row'])] = true; }
+                            if (($known === null || $file > $known['file']) && $matches($rows[$id]['row'][$column])) {
+                                $identified[self::group_id($rows[$id]['row'])] = true;
+                            }
                         }
                         elseif ($known === null) { throw new RuntimeException('sale_candidate_group_unknown'); }
                     }
@@ -322,7 +368,7 @@ class Kiwi_Retention_Sms_Statistics
             }
         }
         foreach ($state['groups'] as $key => $group) {
-            if (strcasecmp($group['key']['service_key'], $sale['service_key']) !== 0) { continue; }
+            if (self::group_id(array_replace($group['key'], ['service_key' => $sale['service_key']])) !== $key) { continue; }
             if ($candidates !== null ? !isset($candidates[$key]) : $group['archive_counts']['assignments'] === 0) { continue; }
             $this->note($state, $key, 'sale_original_' . $found['status'], (int) $sale['id'], 'conv');
         }
@@ -369,7 +415,7 @@ class Kiwi_Retention_Sms_Statistics
     private function measure_live(array $group, array $tolerance): array
     {
         global $wpdb;
-        $predicate = implode(' AND ', array_map(static fn ($field) => $field . '=%s', self::DIMENSIONS));
+        $predicate = implode(' AND ', array_map(static fn ($field) => $field . '=%s', $this->source_group_columns()));
         $aggregates = [];
         $actuals = [];
         foreach (self::MARKERS as $counter => $field) {

@@ -8,6 +8,13 @@ class Kiwi_Sms_Body_Variant_Repository
 {
     public const SUMMARY_GROUP_COLUMNS = ['landing_key', 'service_key', 'variant_key', 'seed', 'allocation_version'];
 
+    public static function group_comparison(bool $refresh = false): Kiwi_Mysql_Text_Comparison
+    {
+        global $wpdb;
+        return Kiwi_Mysql_Text_Comparison::for_columns($wpdb->prefix . 'kiwi_sms_body_variant_summary',
+            self::SUMMARY_GROUP_COLUMNS, $refresh, true);
+    }
+
     private function get_assignments_table_name(): string
     {
         global $wpdb;

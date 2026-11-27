@@ -107,6 +107,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
                 'worker_last_finished_at' => $this->current_time_mysql(), 'status' => $done ? 'completed' : 'running',
                 'worker_phase' => $done ? 'completed' : 'sms_statistics'];
             if ($done) {
+                Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
                 $update['finished_at'] = $this->current_time_mysql();
                 $update['gate_status'] = 'passed';
                 foreach ($state['groups'] as $group) {
