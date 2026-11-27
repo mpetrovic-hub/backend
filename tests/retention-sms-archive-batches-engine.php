@@ -16,6 +16,7 @@ function et_sms_batch_fixture(): array
     $wpdb->query('DROP TABLE IF EXISTS t72_kiwi_sms_body_variant_assignments, t72_kiwi_sms_body_variant_summary');
     (new Kiwi_Sms_Body_Variant_Repository())->create_table();
     $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
+    $groupSchema = Kiwi_Retention_Sms_Statistics::current_group_schema();
     $first = ['landing_key'=>'sms-batch','service_key'=>'sms-test','variant_key'=>'game_word','seed'=>'Hero','allocation_version'=>'legacy'];
     $blocked = array_replace($first, ['allocation_version'=>'blocked']);
     $groups = [];
@@ -27,7 +28,7 @@ function et_sms_batch_fixture(): array
     }
     $scope = ['run_id'=>'r187-', 'cutoff_value'=>'2026-07-14 00:00:00',
         'target_max_primary_key'=>12, 'archive_db_path'=>$fixture['archive']->resolve_archive_db_path()];
-    $state = ['version'=>1, 'progress'=>['phase'=>'released'], 'groups'=>$groups, 'archive_scope'=>$scope];
+    $state = ['version'=>1, 'group_schema'=>$groupSchema, 'progress'=>['phase'=>'released'], 'groups'=>$groups, 'archive_scope'=>$scope];
     $run_id = $fixture['repo']->create_run($scope + ['source_key'=>$source['source_key'], 'source_table'=>$source['source_table'],
         'cutoff_column'=>'created_at', 'dry_run'=>0, 'enabled'=>1, 'triggered_by'=>'cron', 'status'=>'running',
         'worker_phase'=>'sms_archive', 'gate_status'=>'partial', 'gate_results_json'=>$state]);

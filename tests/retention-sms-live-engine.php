@@ -48,6 +48,10 @@ $until = static function (array $run, callable $condition) use ($step): array {
     throw new RuntimeException('Live run stopped before its expected checkpoint: ' . json_encode([$run['status'], $run['worker_phase'],
         $run['error_code'], $GLOBALS['sms_live_last_step'] ?? []]));
 };
+if (in_array($argv[1] ?? '', ['--sms-live-binary', '--sms-live-ci', '--sms-live-mixed-binary', '--sms-live-mixed-ci', '--sms-live-schema-change'], true)) {
+    require __DIR__ . '/retention-sms-live-group-identity-engine.php';
+    return;
+}
 $sample = $start();
 et_check(!empty($sample['archive_db_path']) && (int)$sample['dry_run'] === 0 && $sample['cutoff_value'] === '2026-07-14 00:00:00',
     'A live run freezes its archive target and the WordPress-calendar cutoff before any package');

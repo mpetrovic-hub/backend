@@ -28,12 +28,12 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
                 || !is_array($state['groups'] ?? null)) {
                 throw new RuntimeException('sms_archive_scope_invalid');
             }
+            $this->assert_release_basis($run, $state);
             if (!empty($state['recheck_groups'])) {
                 return $this->recheck(array_values($state['recheck_groups']));
             }
             // An incomplete audit is run-wide even when this page contains only other groups.
             foreach (array_keys($state['groups']) as $group) { $this->released($state, $group); }
-            $this->assert_required_files($run, $state);
             if (is_file($path) && empty($state['archive_target_existed'])) {
                 $state['archive_target_existed'] = true;
                 $this->save($run, $state);
@@ -66,8 +66,9 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             'target_max_primary_key'=>(int) $run['target_max_primary_key'], 'archive_db_path'=>$run['archive_db_path']];
     }
 
-    private function assert_required_files(array $run, array $state): void
+    private function assert_release_basis(array $run, array $state): void
     {
+        Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
         $paths = $state['required_archive_paths'] ?? [];
         if (!is_array($paths)) { throw new RuntimeException('sms_archive_inventory_invalid'); }
         if (!empty($state['archive_target_existed']) || (int) $run['archived_rows'] > 0 || (int) $run['deleted_rows'] > 0) {
@@ -305,7 +306,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
             }
         }
         if ($replace) {
-            $this->assert_required_files($run,$state);
+            $this->assert_release_basis($run,$state);
             if ($this->lock_owner($source_lock) !== $connection) { throw new RuntimeException('sms_archive_source_lock_lost'); }
             $gate = $this->inspect_archive_write_gate($path);
             if (empty($gate['allowed'])) { return ['status'=>'wait','reason'=>$gate['reason_code'] ?? 'archive_gate_active']; }
@@ -371,6 +372,10 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
         try {
             $this->confirmed_run($run,true);
             $live = $this->originals($source,$ids,true);
+            // Hold the summary table's column definitions through this short delete transaction.
+            // The originals query already holds the same metadata protection on the source.
+            $wpdb->get_var('SELECT id FROM ' . $wpdb->prefix . 'kiwi_sms_body_variant_summary LIMIT 1');
+            if ((string) ($wpdb->last_error ?? '') !== '') { throw new RuntimeException('sms_archive_group_schema_unconfirmed'); }
             // These locks hold the byte-exact originals and the release until DELETE and its audit commit together.
             // The SQL connection guard prevents wpdb from replaying a DELETE in autocommit after reconnecting.
             $tables = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM information_schema.TABLES
@@ -387,7 +392,7 @@ final class Kiwi_Retention_Sms_Archive_Batches extends Kiwi_Retention_Worker_Sup
                     return $this->recopy($run,$state);
                 }
             }
-            $this->assert_required_files($run,$state);
+            $this->assert_release_basis($run,$state);
             $gate = $this->inspect_archive_write_gate($path);
             if (empty($gate['allowed'])) {
                 $wpdb->query('ROLLBACK');

@@ -173,6 +173,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
 
     private function live_step(array $run, array $state, string $lock): array
     {
+        Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
         $source = $this->source_registry->get($run['source_key']);
         if (empty($run['enabled']) || $run['source_table'] !== $source['source_table'] || $run['cutoff_column'] !== $source['cutoff_column']
             || ($state['archive_scope'] ?? null) !== $this->archive_scope($run)) {
@@ -274,6 +275,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             $run = $runs->find_open_run_for_source($source_key);
             if ($run === null || !empty($run['dry_run'])) { return true; }
             $state = json_decode($run['gate_results_json'], true, 512, JSON_THROW_ON_ERROR);
+            Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
             $id = Kiwi_Retention_Sms_Statistics::group_id($key);
             if (!isset($state['groups'][$id])) { return true; }
             $state['recheck_groups'][$id] = Kiwi_Retention_Sms_Statistics::group_key($key);
@@ -351,6 +353,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         $repository = new Kiwi_Sms_Body_Variant_Repository();
         $deadline = microtime(true) + $this->config->get_retention_worker_time_limit_seconds();
         foreach ($batch as $id) {
+            Kiwi_Retention_Sms_Statistics::verify_group_schema($state);
             $group = &$state['groups'][$id];
             if (isset($state['recheck_groups'][$id])) {
                 $group['correction'] = ['status' => 'skipped', 'reason' => 'group_basis_changed'];
