@@ -2,6 +2,8 @@
 
 if (!defined('ABSPATH')) { exit; }
 
+require_once __DIR__ . '/class-retention-sms-group-incidents.php';
+
 /** One source-owned run freezes its cutoff, candidate ceiling and settings at admission. */
 class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
 {
@@ -184,7 +186,7 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         if ((int) $run['worker_runs'] === 0) { $this->capture_growth($run, 'before_cleanup'); }
         if (!$state['groups']) {
             if ((int) $run['eligible_rows'] !== 0) { throw new RuntimeException('sms_eligible_groups_missing'); }
-            return $this->complete($run, $state);
+            return $this->complete($run, $state, $lock);
         }
         if ($run['worker_phase'] === 'sms_correcting') { return $this->interrupt_correction($run, $state); }
         $inventory = $this->inventory_transition($run, $state);
@@ -399,6 +401,9 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
         foreach ($state['measurement']['groups'] as $id => $group) {
             $state['groups'][$id]['after'] = $group['before'];
         }
+        $state['pending_group_events'] = array_values(array_unique(array_merge(
+            $state['pending_group_events'] ?? [], array_keys($state['measurement']['groups'])
+        )));
         $observed = $state['measurement']['progress']['files'] ?? [];
         $state['required_archive_paths'] = array_values(array_unique(array_merge($state['required_archive_paths'] ?? [], $observed)));
         $state['archive_target_existed'] = !empty($state['archive_target_existed']) || in_array($run['archive_db_path'], $observed, true);
@@ -415,8 +420,14 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
                 throw new RuntimeException('sms_group_release_missing');
             }
         }
+        if (!empty($state['pending_group_events'])) {
+            $stored = $this->report_groups($run, $state, $lock);
+            if ($stored === null) { return $this->audit_wait($run); }
+            $run = $stored;
+            if (!empty($state['pending_group_events'])) { return $this->scheduled($run); }
+        }
         if ($this->release_status($state['groups']) === 'blocked' && empty($state['pending_archive'])) {
-            return $this->complete($run, $state);
+            return $this->complete($run, $state, $lock);
         }
         $batches = new Kiwi_Retention_Sms_Archive_Batches($this->config, $this->source_registry, $this->run_repository,
             $this->archive_service, $this->operational_event_service, $this->archive_lock, $this->corruption_safety_gate, $this->health_store);
@@ -448,11 +459,55 @@ class Kiwi_Retention_Sms_Worker extends Kiwi_Retention_Worker_Support
             || ($state['progress']['phase'] ?? '') !== 'released' || !empty($state['recheck_groups']) || !empty($state['pending_archive'])) {
             return $this->audit_wait($fresh);
         }
-        return $this->complete($fresh, $state);
+        return $this->complete($fresh, $state, $lock);
     }
 
-    private function complete(array $run, array $state): array
+    private function group_incidents(string $lock): Kiwi_Retention_Sms_Group_Incidents
     {
+        global $wpdb;
+        $connection = $wpdb->get_var($wpdb->prepare('SELECT IF(IS_USED_LOCK(%s)=CONNECTION_ID(),CONNECTION_ID(),0)', $lock));
+        $guard = new Kiwi_Database_Lock_Guard($lock, (int) $connection);
+        return new Kiwi_Retention_Sms_Group_Incidents($this->operational_event_service, $this->run_repository, $guard);
+    }
+
+    /** A pending report survives a crash between confirming the group and attempting its separate incident. */
+    private function report_groups(array $run, array &$state, string $lock): ?array
+    {
+        try {
+            $reporter = $this->group_incidents($lock);
+        } catch (Throwable $error) {
+            return null;
+        }
+        $limit = min(25, $this->config->get_retention_worker_row_limit());
+        $deadline = microtime(true) + $this->config->get_retention_worker_time_limit_seconds();
+        $attempted = 0;
+        foreach (array_slice($state['pending_group_events'], 0, $limit) as $id) {
+            try {
+                $reporter->report($id, $state['groups'][$id], $run['run_id']);
+            } catch (Throwable $error) {
+                // The saved finding remains authoritative. The next regular run evaluates the group again.
+            }
+            ++$attempted;
+            if (microtime(true) >= $deadline) { break; }
+        }
+        $state['pending_group_events'] = array_slice($state['pending_group_events'], $attempted);
+        if (!$state['pending_group_events']) { unset($state['pending_group_events']); }
+        if (!$this->run_repository->owns_source_creation_lock($run['source_key'], $lock)) { return null; }
+        return $this->store_progress($run, $state, 'sms_archive', []);
+    }
+
+    private function complete(array $run, array $state, string $lock): array
+    {
+        try {
+            $next = $this->group_incidents($lock)->retry_open($run, $state, (int) ($state['open_incident_cursor'] ?? 0),
+                min(25, $this->config->get_retention_worker_row_limit()), microtime(true) + $this->config->get_retention_worker_time_limit_seconds());
+        } catch (Throwable $error) { $next = null; }
+        if (!$this->run_repository->owns_source_creation_lock($run['source_key'], $lock)) { return $this->audit_wait($run); }
+        if ($next !== null) {
+            $state['open_incident_cursor'] = $next;
+            return $this->continue_with($run, $state, $run['worker_phase']);
+        }
+        unset($state['open_incident_cursor']);
         $this->capture_growth($run, 'after_cleanup');
         $stored = $this->store_progress($run, $state, 'completed', ['status' => 'completed',
             'gate_status' => $this->release_status($state['groups']), 'finished_at' => $this->current_time_mysql()]);

@@ -189,6 +189,19 @@ if (in_array('--sms-live-time', $argv, true)) {
         $live = $preview(['enabled' => true, 'dry_run' => false]);
         $state = json_decode($live['gate_results_json'], true, 512, JSON_THROW_ON_ERROR);
         $group = $state['groups'][Kiwi_Retention_Sms_Statistics::group_id($timed_key)];
+        $incident = $wpdb->get_row($wpdb->prepare('SELECT message,context_json,lifecycle_action FROM '
+            . (new Kiwi_Operational_Event_Repository())->get_table_name() . ' WHERE reference_id=%s AND correlation_key=%s',
+            $live['run_id'], 'retention_sms_group_' . Kiwi_Retention_Sms_Statistics::group_id($timed_key)), ARRAY_A);
+        $details = json_decode($incident['context_json'] ?? '{}', true)['counters']['conv'] ?? [];
+        if ($actual === 8) {
+            et_check($incident['lifecycle_action'] === 'raised' && $details['possible_expected_range'] === [10,11]
+                && $details['failing_comparison'] === ['expected'=>11,'distance'=>3,'limit'=>2,'status'=>'outside_tolerance']
+                && str_contains($incident['message'], 'möglicher Sollwert 11'),
+                'The group incident identifies the failing alternative for a time-uncertain confirmed sale');
+        } else {
+            et_check($incident['lifecycle_action'] === 'resolved' && $details['possible_expected_range'] === [10,11],
+                'The saved assessment that passes every possible total resolves the same conv incident');
+        }
         $left = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$source['source_table']} WHERE allocation_version='timed'");
         et_check($group['correction']['counters']['conv'] === ['status' => 'skipped', 'reason' => 'sale_time_uncertain']
             && $group['after']['counters']['conv']['actual'] === $actual && $group['after']['status'] === $status

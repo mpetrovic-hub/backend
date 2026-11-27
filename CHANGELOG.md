@@ -2,6 +2,9 @@
 
 Changes are listed by date (newest first). Only medium-impact or higher updates are included.
 
+2026-11-27:
+- [SMS assignment retention] Add a disabled-by-default 90-day cleanup for SMS variant assignments. Dry-runs measure all seven group counters across MySQL and verified SQLite history. Live runs use the approved conditional correction, store the group finding and verify each original before deletion. Late SMS and confirmed sales retain their original variant association. Blocked groups appear in the retention status. Deployment, the production dry-run and activation follow the separate checklist in #189. (#183–#188)
+
 2026-11-12:
 - [DB Retention Archive Health] Implement the weekly VPS copy-verification capability with bounded restricted SSH export, durable generation-bound Pending/results, safe abort, idempotent acceptance and independent daily freshness monitoring. Prepare the controlled runner, limits and inactive scheduling artifacts; retire the regular Hostinger check while retaining explicit diagnosis, confirmed recovery, native read brake and all retention protection. Deployment, live functional checks and activation remain separate pending operations. (#157, #160–#165)
 
