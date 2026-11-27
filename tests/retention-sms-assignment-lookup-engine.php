@@ -43,3 +43,5 @@ try {
     if (is_dir($archive->get_archive_directory())) { rmdir($archive->get_archive_directory()); }
     if (is_dir($config->root)) { rmdir($config->root); }
 }
+
+require __DIR__ . '/retention-sms-code-collation-engine.php';
