@@ -113,6 +113,20 @@ class Kiwi_Sms_Body_Variant_Service
         return $this->resolve_assignment('transaction_id', $transaction_id);
     }
 
+    /** Narrow the indexed ASCII candidates using the original MySQL column's equality rules. */
+    public static function original_code_matcher(array $source, string $column, string $code): callable
+    {
+        $comparison = null;
+        $wanted = null;
+        return static function (string $candidate) use ($source, $column, $code, &$comparison, &$wanted): bool {
+            if ($candidate === $code) { return true; }
+            if (strcasecmp($candidate, $code) !== 0) { return false; }
+            $comparison ??= Kiwi_Mysql_Text_Comparison::for_columns($source['source_table'], [$column]);
+            $wanted ??= $comparison->key([$column => $code]);
+            return $comparison->key([$column => $candidate]) === $wanted;
+        };
+    }
+
     private function resolve_assignment(string $column, string $code): array
     {
         if (preg_match('/^[A-Za-z0-9_-]{1,140}$/D', $code) !== 1) {
@@ -130,10 +144,16 @@ class Kiwi_Sms_Body_Variant_Service
         }
         $source = Kiwi_Retention_Source_Registry::sms_body_variant_assignments();
         $reader = $this->archive_reader ?? new Kiwi_Retention_Archive_Reader(new Kiwi_Retention_Sqlite_Archive_Service($this->config));
+        $matches_code = self::original_code_matcher($source, $column, $code);
+        $comparison_failed = false;
+        $accept = static function (string $candidate) use ($matches_code, &$comparison_failed): bool {
+            try { return $matches_code($candidate); }
+            catch (Throwable $error) { $comparison_failed = true; throw $error; }
+        };
         try {
             $matches = [];
             $match_source = 'archive';
-            foreach ($reader->matching_source_ids($source, $column, $code) as $id) {
+            foreach ($reader->matching_source_ids($source, $column, $code, $accept) as $id) {
                 try {
                     $live_row = $this->repository->find_assignment_by_id($id);
                 } catch (Throwable $error) {
@@ -147,7 +167,7 @@ class Kiwi_Sms_Body_Variant_Service
                     if (!$copies) { throw new RuntimeException('sms_assignment_archive_copy_missing'); }
                     $row = $copies[array_key_last($copies)];
                 }
-                if (strcasecmp((string) $row[$column], $code) === 0) {
+                if ($accept((string) $row[$column])) {
                     $matches[] = $row;
                     $match_source = $live_row === null ? 'archive' : 'mysql';
                     if (count($matches) === 2) { break; }
@@ -155,7 +175,7 @@ class Kiwi_Sms_Body_Variant_Service
             }
             return $this->assignment_lookup_result($matches, $match_source);
         } catch (Throwable $error) {
-            return ['status' => 'read_error', 'source' => 'archive'];
+            return ['status' => 'read_error', 'source' => $comparison_failed ? 'mysql' : 'archive'];
         } finally {
             $reader->close();
         }
